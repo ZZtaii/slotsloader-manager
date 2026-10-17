@@ -51,6 +51,7 @@ namespace SlotsInstaller
                 check("event format: one JSON object per line (UTC time, kind, mode, source + identity stamp, name, character/slot or replacement id, options); unknown and half-written lines are skipped; the file is only appended", "format", Format);
                 check("replacement events at the engine: install, switch (same source in place: prev_id + prev_options), disable/enable, priority move, uninstall, restore of a removed copy, restore original game files, tool mods, journal recovery of an interrupted change", "replace", ReplaceEvents);
                 check("extra outfit events at the store: install, update (same name, other options), disable/enable, uninstall, removed-set uninstall, Undo's restore (recover), preset restore (install); deleted sources keep their rows", "outfits", OutfitEvents);
+                check("source rename history: A to B to A, chained and case-only renames preserve installed state, dates and folded plays; old names count once per launch and never form alias cycles", "rename", RenameHistory);
                 check("Undo writes its own event and never deletes history; a failing history write never fails the change", "undo", UndoEvent);
                 check("probe sessions (FakeProcessProbe through the window's PollGame): start records the active set (enabled extra outfits + enabled replacements and tool mods), stop the duration; closing the Manager while SF6 runs ends it; one launch seen by the probe and in Slotsloader's log counts once", "sessions", Sessions);
                 check("Slotsloader log backfill: fixture log with several runs (built, up to date, a slot left out, variants, an ignored add-on, a manual archive, a stray folder); slots mapped to installed outfits through the history and the current manifests; replacements enabled at the time count; incremental by byte offset; a half-written run waits; a rewritten (truncated) log restarts without recording a launch twice; the log is never written", "backfill", Backfill);
@@ -320,6 +321,47 @@ namespace SlotsInstaller
             ModHistory hb = index.Find(History.Normalize(boots));
             Require(hb.Plays == 6 && hb.LastPlayed.HasValue && index.Launches == 7, "plays from the log: Boots " + hb.Plays + ", launches " + index.Launches);
             Note("backfill fixture: " + index.Launches + " launches, " + index.SlotUses + " slot-uses, Boots played " + hb.Plays + " times");
+        }
+
+        // ---- source renames (pure index replay: no library or game files)
+        private static void RenameHistory(string dir)
+        {
+            string a = Path.Combine(dir, "A.zip"), b = Path.Combine(dir, "B.zip"), c = Path.Combine(dir, "C.zip");
+            DateTime t = new DateTime(2026, 10, 1, 8, 0, 0, DateTimeKind.Utc), first = t.AddDays(-3), installed = t.AddDays(-2), played = t;
+            var events = new List<HistoryEvent>
+            {
+                new HistoryEvent { Utc = t.AddDays(-1), Kind = HistoryKinds.Summary, Source = a, Name = "Outfit", Mode = HistoryModes.Extra, Character = "Juri", Slot = "Juri/Outfit", Events = 3, Plays = 2, FirstInstalled = first, LastInstalled = installed, LastPlayed = t.AddDays(-1), InstalledSlots = new List<string> { "Juri/Outfit" }, DisabledSlots = new List<string> { "Juri/Outfit" } },
+                new HistoryEvent { Utc = t, Kind = HistoryKinds.Launch, Mods = new List<HistoryMod> { new HistoryMod { Source = a, Mode = HistoryModes.Extra, Slot = "Juri/Outfit" } } }
+            };
+            string current = a;
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { a };
+            Action<string> rename = delegate(string target)
+            {
+                t = t.AddHours(1);
+                events.Add(new HistoryEvent { Utc = t, Kind = HistoryKinds.Rename, PrevId = current, Source = target, Name = Path.GetFileNameWithoutExtension(target) });
+                current = target; names.Add(target);
+                HistoryIndex index = HistoryIndex.Build(events);
+                ModHistory mod = index.Find(current);
+                Require(mod != null && index.Mods.Count == 1 && mod.Key == current && mod.Source == current, "rename lost the current source: " + current);
+                Require(mod.Events == 3 && mod.Plays == 3 && mod.FirstInstalled == first && mod.LastInstalled == installed && mod.LastPlayed == played, "rename changed dates or totals: " + current);
+                Require(mod.Slots.SetEquals(new[] { "Juri/Outfit" }) && mod.Disabled.SetEquals(new[] { "Juri/Outfit" }), "rename changed installed/disabled state: " + current);
+                foreach (string name in names) Require(String.Equals(index.Resolve(name), current, StringComparison.OrdinalIgnoreCase), "old name resolves elsewhere: " + name);
+                var aliases = Get<Dictionary<string, string>>(index, "renamed");
+                Require(!aliases.ContainsKey(current) && aliases.Values.All(value => String.Equals(value, current, StringComparison.OrdinalIgnoreCase)), "rename made a cycle or an alias chain: " + current);
+            };
+            rename(b); rename(a);                         // the reported A -> B -> A regression
+            rename(b); rename(c); rename(a);              // returning through a longer chain
+            rename(Path.Combine(dir, "a.zip"));           // case-only: update spelling without a self-alias
+            rename(b); rename(Path.Combine(dir, "b.zip"));
+            for (int i = 0; i < 40; i++) rename(Path.Combine(dir, "Renamed " + i + ".zip"));
+            rename(a);                                   // old plays survive more than the old 32-hop limit
+            t = t.AddHours(1);
+            events.Add(new HistoryEvent { Utc = t, Kind = HistoryKinds.Enable, Source = a, Mode = HistoryModes.Extra, Slot = "Juri/Outfit" });
+            t = t.AddHours(1);
+            events.Add(new HistoryEvent { Utc = t, Kind = HistoryKinds.Launch, Mods = names.Select(name => new HistoryMod { Source = name, Mode = HistoryModes.Extra, Slot = "Juri/Outfit" }).ToList() });
+            HistoryIndex final = HistoryIndex.Build(events.Select(e => HistoryJson.Read(HistoryJson.Write(e))));
+            ModHistory restored = final.Find(a);
+            Require(final.Mods.Count == 1 && restored != null && restored.Enabled && restored.Events == 4 && restored.Plays == 4 && restored.LastPlayed == t, "state or plays did not follow the restored filename; duplicate names must count once per launch");
         }
 
         // ---- compaction

@@ -112,7 +112,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-17-1.10.3-slotsloader-fork";
+static const char* LOADER_BUILD_ID = "2026-10-18-1.10.4-slotsloader-fork";
 
 // ============================================================================
 // Utility
@@ -739,6 +739,48 @@ static std::vector<uint8_t> g_cmd_reference;
 static std::unordered_set<std::string> g_tex_repaired_files, g_tex_bad_files;
 static std::unordered_set<std::string> g_layout_upgraded_files;
 
+// Official base/DLC reader only. It never includes generated/mod patch PAKs or loose files.
+static PakReader* g_swap_official = nullptr;
+static std::unordered_map<std::string, std::vector<uint8_t>> g_swap_donors;
+static std::unordered_set<std::string> g_swap_reported;
+// 1.10.4: swap repairs run only while the Manager's setting is on (swap_repairs.txt beside variant_choices.json).
+static bool g_swap_repairs = false;
+static std::string swap_sha256(const std::vector<uint8_t>& data) {
+    BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_HASH_HANDLE hash = nullptr;
+    uint8_t digest[32]; std::string out;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) return out;
+    if (BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) >= 0) {
+        if (data.size() <= ULONG_MAX && BCryptHashData(hash, (PUCHAR)data.data(), (ULONG)data.size(), 0) >= 0
+            && BCryptFinishHash(hash, digest, sizeof digest, 0) >= 0) {
+            const char* hex = "0123456789abcdef";
+            for (uint8_t b : digest) { out += hex[b >> 4]; out += hex[b & 15]; }
+        }
+        BCryptDestroyHash(hash);
+    }
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return out;
+}
+static std::vector<uint8_t> swap_official(const std::string& path) {
+    auto found = g_swap_donors.find(path);
+    if (found != g_swap_donors.end()) return found->second;
+    std::vector<uint8_t> data;
+    if (g_swap_official) {
+        try { if (auto* e = g_swap_official->find(pak_path_hash(std::string_view(path)))) data = g_swap_official->read(*e); }
+        catch (const std::exception&) { data.clear(); }
+    }
+    g_swap_donors[path] = data;
+    return data;
+}
+static size_t repair_mod_swap(std::vector<uint8_t>& data, const std::string& path, const std::string& source, bool* known_user = nullptr) {
+    if (known_user) *known_user = false;
+    if (!g_swap_repairs) return 0;
+    SwapRepairResult result = repair_swap_file(data, path, swap_official, swap_sha256);
+    if (known_user) *known_user = str_ends_with(path, ".user.2") && (result.state == SwapRepairState::Repaired || result.reason == "documented swap USER already current");
+    if (result.state != SwapRepairState::Unchanged && g_swap_reported.insert(source + "\n" + result.reason).second)
+        printf("      %sswap repair: %s (%s)\n", result.state == SwapRepairState::Refused ? "WARN " : "", result.reason.c_str(), source.c_str());
+    return result.state == SwapRepairState::Repaired ? result.changes : 0;
+}
+
 static const char* type_label(uint32_t t) {
     switch (t) {
         case 0x9E32F1F4: return "app.CostumeMaterialData.MaterialData";
@@ -748,6 +790,7 @@ static const char* type_label(uint32_t t) {
 }
 
 static void load_current_crcs(PakReader& base_pak) {
+    g_swap_official = &base_pak; g_swap_donors.clear(); g_swap_reported.clear();
     g_current_crc.clear(); g_crc_upgraded_files.clear(); g_crc_stale_files.clear();
     g_cmd_reference.clear(); g_layout_upgraded_files.clear();
     g_tex_repaired_files.clear(); g_tex_bad_files.clear();
@@ -860,6 +903,7 @@ struct ModFileRef {
     PakReader* pak = nullptr;
     uint64_t hash = 0;
     std::string disk_path;  // non-empty -> disk source
+    std::string pak_path;   // canonical source path: recipes run before private-slot relocation
 
     bool is_disk() const { return !disk_path.empty(); }
 
@@ -870,8 +914,9 @@ struct ModFileRef {
     }
 
     // Read decompressed data (from pak or disk). User files come back with current type signatures.
-    std::vector<uint8_t> read_data() const {
+    std::vector<uint8_t> read_data(bool* known_swap_user = nullptr) const {
         auto d = disk_path.empty() ? pak->read(*pak->find(hash)) : read_file_long(disk_path);
+        repair_mod_swap(d, pak_path, source(), known_swap_user);
         upgrade_mod_user(d, source());
         return d;
     }
@@ -887,9 +932,11 @@ struct ModFileRef {
             return;
         }
         auto* e = pak->find(hash);
-        if (e->decompressed_size <= (1 << 20) || (e->attributes & 0xFF) == 0) {
+        if (e->decompressed_size <= (1 << 20) || (e->attributes & 0xFF) == 0 || (g_swap_repairs && (str_ends_with(pak_path, ".scn.20") || str_ends_with(pak_path, ".user.2")))) {
             auto d = pak->read(*e);
-            if (upgrade_mod_user(d, source()) > 0) {
+            size_t fixed = repair_mod_swap(d, pak_path, source());
+            fixed += upgrade_mod_user(d, source());
+            if (fixed > 0) {
                 out = std::move(d); attrib = 0; dsize = (int64_t)out.size();
                 return;
             }
@@ -1197,7 +1244,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
         auto it = inv.hash_to_paths.find(h);
         if (it != inv.hash_to_paths.end()) {
             for (auto& path : it->second)
-                known[path] = {&mod_pak, h};
+                known[path] = {&mod_pak, h, {}, path};
         } else {
             unknown_set.insert(h);
         }
@@ -1220,7 +1267,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
                     uint64_t oh = pak_path_hash(std::string_view(old_path));
                     if (unknown_set.count(oh)) {
                         // Found! Register under the CURRENT-suffix path
-                        known[vp] = {&mod_pak, oh};
+                        known[vp] = {&mod_pak, oh, {}, vp};
                         upgraded_tex[oh] = vp; // remember for renaming
                         unknown_set.erase(oh);
                         upgraded++;
@@ -1235,11 +1282,17 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
     int from_scene = 0;
     for (auto& [path, mf] : std::unordered_map<std::string,ModFileRef>(known)) {
         if (!is_costume_scene(str_lower(path))) continue;
-        for (auto& r : scene_model_refs(mf.read_data())) {
+        const auto scene_data = mf.read_data();
+        auto refs = scene_model_refs(scene_data);
+        if (g_swap_repairs) {   // the scene's USER files too, so their swap repair runs before private-slot relocation
+            const auto users = scene_model_refs(scene_data, true);
+            refs.insert(refs.end(), users.begin(), users.end());
+        }
+        for (auto& r : refs) {
             std::string pp = scene_ref_pak_path(r.text, inv.suffixes);
             uint64_t h = pp.empty() ? 0 : pak_path_hash(std::string_view(pp));
             if (h && unknown_set.count(h)) {
-                known[pp] = {&mod_pak, h};
+                known[pp] = {&mod_pak, h, {}, pp};
                 unknown_set.erase(h);
                 from_scene++;
             }
@@ -1260,7 +1313,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
             std::string pak_p = "natives/stm/" + lp + "." + tex_ver;
             uint64_t th = pak_path_hash(std::string_view(pak_p));
             if (unknown_set.count(th)) {
-                known[pak_p] = {&mod_pak, th};
+                known[pak_p] = {&mod_pak, th, {}, pak_p};
                 unknown_set.erase(th);
                 discovered++;
             }
@@ -1269,7 +1322,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
                 std::string old_pak_p = "natives/stm/" + lp + "." + OLD_TEX_SUFFIXES[oi];
                 uint64_t oh = pak_path_hash(std::string_view(old_pak_p));
                 if (unknown_set.count(oh)) {
-                    known[pak_p] = {&mod_pak, oh};
+                    known[pak_p] = {&mod_pak, oh, {}, pak_p};
                     upgraded_tex[oh] = pak_p;
                     unknown_set.erase(oh);
                     discovered++;
@@ -1290,7 +1343,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
         std::string sp = std::string(STREAM_PFX) + path.substr(bp);
         uint64_t sh = pak_path_hash(std::string_view(sp));
         if (unknown_set.count(sh)) {
-            known[sp] = {&mod_pak, sh};
+            known[sp] = {&mod_pak, sh, {}, sp};
             unknown_set.erase(sh);
             streaming_resolved++;
         }
@@ -2854,6 +2907,16 @@ static void add_slot_files(PakWriter& writer,
                 : base_pak.find(pak_path_hash(std::string_view("natives/stm/" + mp_rel + "." + user_ver)));
             if (me) {
                 auto mdata = base_pak.read(*me);
+                // The documented C. Viper C1 -> C2 swap has its own model-parts USER. Use it
+                // only when the audited recipe accepted it; arbitrary custom files keep the
+                // previous behavior. This happens before private-slot path relocation.
+                const std::string recipe_path = "natives/stm/product/charparam/esf/esf030/battle_ud/esf030v01_model_parts.user.2";
+                if (g_swap_repairs && fd == "esf030" && old_f == "002" && from_own_mod(recipe_path)) {
+                    const auto& mf = amf.at(recipe_path);
+                    bool known = false;
+                    auto repaired = mf.read_data(&known);
+                    if (known) mdata = std::move(repaired);
+                }
                 std::vector<uint8_t> vd(mdata.begin(), mdata.end());
                 // Meshes and materials this slot relocated, as "<part>/<file>.mesh|.mdf2"
                 auto part_keys = [&](const std::string& folder,
@@ -4070,19 +4133,20 @@ static std::unordered_map<std::string, ModFileRef> scan_folder_mod(
     for (auto& item : pak_items) {
         if (item.pak_path.find("/product/model/esf/") != std::string::npos
             || item.pak_path.find("/streaming/product/model/esf/") != std::string::npos) {
-            ModFileRef mf; mf.disk_path = item.full_path;
+            ModFileRef mf; mf.disk_path = item.full_path; mf.pak_path = item.pak_path;
             result[item.pak_path] = mf;
         } else {
             auto sl = item.pak_path.rfind('/');
             std::string fn = (sl != std::string::npos) ? item.pak_path.substr(sl+1) : item.pak_path;
             // Files named after a costume folder, and costume scenes (follow_mod_scene)
-            bool matched = is_costume_scene(item.pak_path);
+            bool matched = is_costume_scene(item.pak_path)
+                || (g_swap_repairs && item.pak_path == "natives/stm/product/charparam/esf/esf030/battle_ud/esf030v01_model_parts.user.2");
             for (auto& pfx : costume_prefixes) {
                 if (fn.find(pfx) != std::string::npos) { matched = true; break; }
             }
             if (!matched && is_model_root_file(item.pak_path)) matched = true;
             if (matched) {
-                ModFileRef mf; mf.disk_path = item.full_path;
+                ModFileRef mf; mf.disk_path = item.full_path; mf.pak_path = item.pak_path;
                 result[item.pak_path] = mf;
                 extra_count++;
             } else {
@@ -4241,9 +4305,19 @@ static std::string ensure_archive_extracted(const std::string& archive_path) {
     HANDLE hm = CreateFileW(long_w(tmp_w + L"\\.complete").c_str(), GENERIC_WRITE, 0, nullptr,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hm != INVALID_HANDLE_VALUE) CloseHandle(hm);
-    if (!MoveFileExW(long_w(tmp_w).c_str(), long_w(fin_w).c_str(), 0)) {
+    // 1.10.4: a virus scanner reading the files just extracted briefly blocks the folder's rename
+    // (error 5/32); the outfit used to be skipped. Try again for up to about 2 s.
+    BOOL moved = FALSE; DWORD move_error = 0;
+    for (int attempt = 0; attempt < 20; attempt++) {
+        moved = MoveFileExW(long_w(tmp_w).c_str(), long_w(fin_w).c_str(), 0);
+        if (moved) break;
+        move_error = GetLastError();
+        if (move_error != ERROR_ACCESS_DENIED && move_error != ERROR_SHARING_VIOLATION) break;
+        Sleep(100);
+    }
+    if (!moved) {
         printf("    archive: %s extracted but its cache folder could not be finalised (error %lu)\n",
-               fname.c_str(), (unsigned long)GetLastError());
+               fname.c_str(), (unsigned long)move_error);
         delete_tree_w(tmp_w);
         return {};
     }
@@ -5545,6 +5619,8 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     logf("=== SF6 Costume Slot Loader ===\n");
     g_variant_archives.clear();
     load_variant_choices(registry_dir + "\\variant_choices.json");
+    g_swap_repairs = GetFileAttributesA((registry_dir + "\\swap_repairs.txt").c_str()) != INVALID_FILE_ATTRIBUTES;
+    if (g_swap_repairs) logf("  swap repairs: on (swap_repairs.txt)\n");
 
     // Base pak path
     std::string base_path;
@@ -5687,7 +5763,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         log_close(); return 1;
     }
     std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + game_fp + dlc_fingerprint(game_dir)
-                       + variant_choices_fingerprint();
+                       + variant_choices_fingerprint() + (g_swap_repairs ? "|swap_repairs" : "");
     // Compared with the saved one: new_fp, then the game colour files of that build as they are now
     std::string check_fp = new_fp + game_colours_digest(current_game_colours(saved_colours, colours_present));
     int target_num = top_foreign + 1;

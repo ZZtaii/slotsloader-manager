@@ -20,13 +20,14 @@ namespace SlotsInstaller
     {
         private sealed class PackageReload
         {
-            internal string Mode, Character, OutfitName, Name; internal bool Raced, NameTyped, NameLocked;
+            internal string Mode, Character, OutfitName, Name, CompletionStatus; internal bool Raced, NameTyped, NameLocked, Renamed;
             internal List<KeyValuePair<string, string>> Selection = new List<KeyValuePair<string, string>>();   // option id -> option name
         }
         private string packageStamp;
         private PackageReload pendingReload;
         internal int SourceReloads { get; private set; }
         internal string LastReloadDropped { get; private set; }
+        internal static Action<string> BeforeSourceStamp;   // deterministic worker/cancellation checks
 
         // Size and write time of an archive; for a folder mod also its file count, total size and newest write
         // time (an edit, an added or a removed file all change it). null when the source is gone.
@@ -34,31 +35,75 @@ namespace SlotsInstaller
         {
             try
             {
+                OperationContext.ThrowIfCancellationRequested();
+                if (BeforeSourceStamp != null) BeforeSourceStamp(path);
+                OperationContext.ThrowIfCancellationRequested();
                 if (String.IsNullOrEmpty(path)) return null;
-                if (File.Exists(path)) { var f = new FileInfo(path); return "file:" + f.Length + ":" + f.LastWriteTimeUtc.Ticks; }
+                if (File.Exists(path)) return FileStamp(new FileInfo(path));
                 if (!Directory.Exists(path)) return null;
                 var dir = new DirectoryInfo(path);
                 long count = 0, size = 0, latest = dir.LastWriteTimeUtc.Ticks;
                 foreach (FileSystemInfo item in dir.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
                 {
+                    OperationContext.ThrowIfCancellationRequested();
                     var file = item as FileInfo;
                     if (file != null) { count++; size += file.Length; }
                     latest = Math.Max(latest, item.LastWriteTimeUtc.Ticks);
                 }
                 return "folder:" + count + ":" + size + ":" + latest;
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; return "unreadable:" + ex.GetType().Name; }
         }
 
-        // Returns true when the open mod changed (a reload started) or is gone (the inspector was cleared).
-        internal bool CheckOpenPackage()
+        private static string FileStamp(FileInfo f) { return "file:" + f.Length + ":" + f.LastWriteTimeUtc.Ticks; }
+
+        // An archive's stamp is one file stat, cheap enough for the UI thread: false only for a folder mod (its stamp
+        // walks every file, so a worker compares it). stamp is null when the archive is gone.
+        private static bool TryArchiveStamp(string path, out string stamp)
         {
-            if (package == null || busy || packageStamp == null) return false;
-            string now = SourceStamp(package.SourcePath);
-            if (now == packageStamp) return false;
-            if (now == null) { SourceGone(); return true; }
-            ReloadOpenPackage(false);
-            return true;
+            stamp = null;
+            if (String.IsNullOrEmpty(path) || Directory.Exists(path)) return false;
+            try { var f = new FileInfo(path); if (f.Exists) stamp = FileStamp(f); return true; }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return false; }   // the worker's SourceStamp decides
+        }
+
+        // Window activation / F5: an unchanged archive needs no new check (Install stays enabled); a folder mod is
+        // compared by the review worker, never walked on the UI thread.
+        internal void CheckOpenPackage()
+        {
+            if (package == null || busy || packageStamp == null) return;
+            string now;
+            if (TryArchiveStamp(package.SourcePath, out now))
+            {
+                if (now == packageStamp) return;
+                if (now == null) SourceGone(); else ReloadOpenPackage(false);
+                return;
+            }
+            RequestReview(1);
+            UpdateInstallButton();
+        }
+
+        // Install must also validate a fresh source: an archive at once, a folder mod in a worker.
+        private void WithFreshPackage(Action unchanged)
+        {
+            if (package == null || busy) return;
+            string stamp;
+            if (TryArchiveStamp(package.SourcePath, out stamp))
+            {
+                if (stamp == null) SourceGone();
+                else if (stamp != packageStamp) ReloadOpenPackage(false);
+                else unchanged();
+                return;
+            }
+            ModPackage current = package; string expected = packageStamp;
+            Work("Checking mod source…", delegate { return SourceStamp(current.SourcePath); }, delegate(string now)
+            {
+                if (!Object.ReferenceEquals(current, package) || packageStamp != expected) return;
+                if (now == null) SourceGone();
+                else if (now != expected) ReloadOpenPackage(false);
+                else unchanged();
+            });
         }
         private void CheckOpenPackageOnActivate()
         {
@@ -70,13 +115,19 @@ namespace SlotsInstaller
         {
             if (package == null || IsDisposed) return;
             if (busy) { BeginInvoke((Action)delegate { ReloadOpenPackage(raced); }); return; }
-            if (SourceStamp(package.SourcePath) == null) { SourceGone(); return; }
-            var reload = new PackageReload { Mode = installMode, Character = Convert.ToString(targetCharacter.SelectedItem), OutfitName = outfitName.Text, Name = package.Name, Raced = raced, NameTyped = outfitNameTyped, NameLocked = outfitNameLocked };
-            foreach (string id in selectedOrder) { ModComponent c = package.Find(id); reload.Selection.Add(new KeyValuePair<string, string>(id, c == null ? "" : c.Name)); }
+            if (!File.Exists(package.SourcePath) && !Directory.Exists(package.SourcePath)) { SourceGone(); return; }
+            PackageReload reload = CapturePackageReload(raced);
             LibraryEntry entry = library.FirstOrDefault(e => String.Equals(e.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)) ?? new LibraryEntry { SourcePath = package.SourcePath, Name = package.Name };
             pendingReload = reload;
             LoadPackage(entry, null, editingReplacement);
             if (pendingReload == reload) pendingReload = null;   // LoadPackage refused (busy): nothing pending
+        }
+
+        private PackageReload CapturePackageReload(bool raced)
+        {
+            var reload = new PackageReload { Mode = installMode, Character = Convert.ToString(targetCharacter.SelectedItem), OutfitName = outfitName.Text, Name = package.Name, Raced = raced, NameTyped = outfitNameTyped, NameLocked = outfitNameLocked };
+            foreach (string id in selectedOrder) { ModComponent c = package.Find(id); reload.Selection.Add(new KeyValuePair<string, string>(id, c == null ? "" : c.Name)); }
+            return reload;
         }
 
         // The old selection on the reloaded package: the same option id, else the one option with the same name.
@@ -102,17 +153,18 @@ namespace SlotsInstaller
         {
             SourceReloads++;
             if (forcedReplaceReason == null && installMode != reload.Mode) SetInstallMode(reload.Mode, false);
-            if (!String.IsNullOrEmpty(reload.OutfitName)) SetOutfitName(reload.OutfitName);
+            if (reload.Renamed || !String.IsNullOrEmpty(reload.OutfitName)) SetOutfitName(reload.OutfitName);
             outfitNameTyped = reload.NameTyped; outfitNameLocked = reload.NameLocked;   // 2.5.0: a typed name stays typed, a suggestion stays a suggestion
-            if (!String.IsNullOrEmpty(reload.Character) && targetCharacter.Items.Contains(reload.Character)) targetCharacter.SelectedItem = reload.Character;
+            if (reload.Renamed) targetCharacter.SelectedIndex = targetCharacter.Items.IndexOf(reload.Character);
+            else if (!String.IsNullOrEmpty(reload.Character) && targetCharacter.Items.Contains(reload.Character)) targetCharacter.SelectedItem = reload.Character;
             List<string> dropped;
             List<string> ids = MapSelection(package, reload.Selection, out dropped);
             LastReloadDropped = String.Join(", ", dropped);
-            if (ids.Count == 0) ids = Composer.DefaultSelection(package, IsReplaceMode);
+            if (ids.Count == 0 && !reload.Renamed) ids = Composer.DefaultSelection(package, IsReplaceMode);
             FillComponents(ids); ResetPlan(); UpdateDestination(); UpdateModeUi();
-            string text = "Reloaded " + package.Name + ": the file changed" + (reload.Raced ? " while it was being installed; nothing was installed. Click Install again." : ".");
+            string text = reload.CompletionStatus ?? ("Reloaded " + package.Name + ": the file changed" + (reload.Raced ? " while it was being installed; nothing was installed. Click Install again." : "."));
             if (dropped.Count > 0) text += " No longer in the mod: " + String.Join(", ", dropped) + ".";
-            SetPageStatus(libraryPage, text, dropped.Count > 0 ? Palette.Accent : Palette.Muted);
+            SetPageStatus(libraryPage, text, dropped.Count > 0 ? Palette.Accent : reload.Renamed ? Palette.Green : Palette.Muted);
             RequestReview(1);
         }
 
@@ -131,7 +183,7 @@ namespace SlotsInstaller
             try { componentTree.BeginUpdate(); componentTree.Nodes.Clear(); componentTree.EndUpdate(); }
             finally { changingChecks = false; }
             componentNodes.Clear(); selectedOrder.Clear(); missingRestoredOptions.Clear(); fileList.Items.Clear();
-            packageTitle.Text = "Choose a mod"; SetByline(null);packageDescription.Text = ""; packageHint.Text = ""; componentTitle.Text = "OPTION PREVIEW";
+            packageTitle.Text = "Choose a mod"; SetByline(null); SetVersion(null); packageDescription.Text = ""; packageHint.Text = ""; componentTitle.Text = "OPTION PREVIEW";
             SetPreview(null); previewButton.Enabled = false;
             foreach (ListViewItem row in modList.SelectedItems.Cast<ListViewItem>().ToList()) row.Selected = false;
             RequestReview(1); UpdateFooter(); UpdateInstallButton(); UpdateLibraryUninstall(); UpdateModeUi();

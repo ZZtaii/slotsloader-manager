@@ -1,5 +1,40 @@
 # Mod-manager coexistence regression fixture
 
+## Character-swap patch repairs
+
+Run `tests/build_swap_repairs.bat`, then `build/swap_repair_test.exe` for the
+focused generated checks. They cover the typed Alex SCN signature update,
+bounded SCN/USER tables, unknown/current signatures, donor fingerprints,
+customized-file refusal, repeat application, Mai same-character restrictions,
+and the model-parts recipe engine's unambiguous target selection.
+
+After `build.bat`, run `python tests/swap_repair_routing.py`. Nine fixture cases
+exercise folder, ZIP and PAK inputs through the actual loader, retaining the
+mod scene when its body or part count differs and following the current scene
+otherwise. They also verify old-build cache invalidation, subsequent cache
+reuse, and unchanged source/base files. The repairs run only while
+`swap_repairs.txt` is in `SF6_Costumes_Data` (the Manager's setting, off by default);
+each case then removes it and checks the rebuild leaves the mod's scene unrepaired. `--evidence <audit evidence directory>`
+adds the retained Mai C1 USER example and current official donor copies to the
+three body-swap cases; those fixtures check repair before private-slot
+relocation. Evidence assets are local test inputs and must not be shipped.
+
+Production automatically recognizes six USER profiles: Mai C1 and Elena C1
+part-01 chains, plus Mai C1/C2 part-30 chain and throw-chain files for swaps
+to a different costume slot of Mai herself. Both the normalized older file
+and current official donor require approved SHA-256 fingerprints. The C. Viper
+model-parts recipe engine is covered by generated tests, but automatic repair
+remains disabled until a known older example is verified; its known target
+file is preserved with a warning. These checks establish byte-level behavior,
+not in-game rendering or compatibility of arbitrary character swaps.
+
+For independent byte comparisons on copied inputs, the focused executable also
+supports `repair <native path> <input file> <official copies directory> <output
+file>` and `cmd <input file> <official CMD> <output file>`. Official copies use
+their lowercase native path with `/` replaced by `__` as the filename. The
+repair command uses the production dispatch and profile table, and writes
+unchanged bytes when a repair is refused.
+
 ## Colours from the game folder (1.9.8)
 
 After `build.bat`, run `python tests/loose_colours.py [--root <new short folder>]

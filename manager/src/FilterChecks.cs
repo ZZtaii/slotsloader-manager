@@ -118,6 +118,7 @@ namespace SlotsInstaller
             check("5:7 tile cropped around the alpha centroid", CheckCrop);
             check("GMSG stage-name reader: decryption, entry names, English text, stage keys; other files refused", CheckMessages);
             check("categories from the listing pass (costume, fighter VFX/colours/art, costume+UI, fighter on a stage, stage = Misc kind, tool, UI, sound, avatar, shared files, PAK-only, readme-only, friendly labels; Misc only when nothing else fits) and index v4 reuse/upgrade", delegate { CheckCategories(root); });
+            check("fighter identity agrees between fresh/cached library scans and opened packages: native paths, colour data, single/multi-fighter art and mixed sources; opening preserves the character filter and category", delegate { CheckIdentityAgreement(root); });
             check("category search terms (stage, misc, is:stage, is:misc, is:character) and row labels", CheckSearchTerms);
             check("name band gradient (2.3.1): no dark seam at its top row (the line across every portrait); luminance falls monotonically", CheckBandGradient);
             check("no file-name fighter for Misc / Code tools mods (2.3.1): row reads No character detected, no fighter card count, plain name search still finds them, the fighter term does not; mods with fighter files and other mods keep their fighter; also after the mod is opened", delegate { CheckNameGuess(root); });
@@ -501,6 +502,8 @@ namespace SlotsInstaller
             Zip(Path.Combine(lib, "Fighter On Stage.zip"), Mesh, "natives/stm/product/environment/stage/resource/ess/ess0800_00/ess0800_00_01.mesh.230110883");
             Zip(Path.Combine(lib, "Stage Script.zip"), "reframework/autorun/stage.lua", "natives/stm/product/environment/stage/resource/ess/ess0800_00/ess0800_00_02.mesh.230110883");
             Zip(Path.Combine(lib, "Viewer Scenes.zip"), "natives/stm/escape/character/ch01/x.scn.20", "natives/x64/scene/masterscene.scn.19");
+            // 1.0.5: portrait art for several fighters is a UI mod, not a multi-character costume (the user's Comic Art Bundle).
+            Zip(Path.Combine(lib, "Comic Art.zip"), "Comic/modinfo.ini", "Comic/natives/stm/product/gui/data/character_image/001/pub/tex_001_cfn_iam.tex.241101895", "Comic/natives/stm/product/gui/data/character_image/009/battlehud/tex_battlehud_009_1p_iam.tex.143230113");
             string folder = Path.Combine(lib, "Folder UI"); Directory.CreateDirectory(Path.Combine(folder, "natives", "stm", "product", "gui", "ui"));
             File.WriteAllText(Path.Combine(folder, "natives", "stm", "product", "gui", "ui", "x.tex.241101895"), "fixture");
             string cache = Path.Combine(root, "categories-cache"); Directory.CreateDirectory(cache);
@@ -512,7 +515,7 @@ namespace SlotsInstaller
                 Library.IdentityCacheDirectory = cache;
                 int misses = Library.CacheMisses;
                 List<LibraryEntry> listed = Library.Scan(new[] { lib }, "");
-                Require(Library.CacheMisses - misses == 21, "first v4 scan listed " + (Library.CacheMisses - misses) + " of 21 sources");
+                Require(Library.CacheMisses - misses == 22, "first v4 scan listed " + (Library.CacheMisses - misses) + " of 22 sources");
                 Func<string, string> cat = delegate(string name) { LibraryEntry e = listed.Single(x => x.Name == name); return ModCategories.Describe(e) + (e.StageIds.Count > 0 ? " [" + String.Join(",", e.StageIds) + "]" : "") + (e.CharacterCodes.Count > 0 ? " {" + String.Join(",", e.CharacterCodes) + "}" : ""); };
                 var expected = new Dictionary<string, string> {
                     { "Costume", "Characters {009}" }, { "Stage Pack", "Misc (Stage) [0800,other]" }, { "Streaming Stage", "Misc (Stage) [1400]" }, { "Renamed Stage", "Misc (Stage) [other]" },
@@ -520,7 +523,7 @@ namespace SlotsInstaller
                     { "Costume With Shared", "Characters {009}" }, { "Shared Only", "Misc (Shared character files)" }, { "Pak Only", "Misc (PAK only)" }, { "Readme Only", "Misc (Other)" },
                     { "Wind", "Characters {001}" }, { "Avatar", "Misc (World Tour avatar)" }, { "Folder UI", "Misc (UI)" },
                     { "Juri Colors", "Characters {016}" }, { "Cammy Drive VFX", "Characters {009}" }, { "Costume UI", "Characters {009}" },
-                    { "Fighter On Stage", "Characters [0800] {009}" }, { "Stage Script", "Code tools [0800]" }, { "Viewer Scenes", "Misc (Other)" } };
+                    { "Fighter On Stage", "Characters [0800] {009}" }, { "Stage Script", "Code tools [0800]" }, { "Viewer Scenes", "Misc (Other)" }, { "Comic Art", "Misc (UI)" } };
                 foreach (var kv in expected) Require(cat(kv.Key) == kv.Value, kv.Key + ": " + cat(kv.Key) + " (expected " + kv.Value + ")");
                 Require(listed.Single(x => x.Name == "Juri Colors").ToolKinds.Count == 0 && listed.Single(x => x.Name == "Juri Colors").Character == "Juri", "colour data must not be a tool file and must name the fighter");
                 Require(listed.All(x => !(ModCategories.IsMisc(x) && (ModCategories.IsCharacter(x) || ModCategories.IsTool(x)))), "a Characters or Code tools mod is also Misc");

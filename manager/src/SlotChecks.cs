@@ -60,6 +60,8 @@ namespace SlotsInstaller
                         check("Installed grouping (2.5.0): the slots of one source are one row \"<mod> · N slots\" (a source with one slot and manual entries stay plain rows); the chevron/keys expand it to its slots with their options; Uninstall on a slot removes just it, on the group all slots in one click, no dialog, deleted for good with no Undo (1.0.1), a history event per slot; Select all and Clear still work; renders", delegate { Grouping(form, game, root); });
                         check("Installed sort (2.5.5; 1.0.1: only the Installed chip): Installed ↓ (newest first) by default, a second press flips it; dated rows in order and undated ones last; saved in the view; an older view or a saved Character/Played sort gives Installed ↓", delegate { InstalledSort(form); });
                         check("Install all variants (2.5.4): an archive with several options is copied unchanged into costume_mods\\<character>\\ like a manual drop, linked to its library mod (✓ Full, Reinstall, footer Uninstall for good with no Undo, 1.0.1); folders and Replace original get no button; a manual file of the same name is never overwritten", delegate { AllVariants(form, mod, game, root); });
+                        check("Renamed archive reinstall (1.0.5): keeps the installed filename, record and variant choices; outside-root records are ignored; changed, wrong-character and ambiguous copies are refused", delegate { RenamedArchiveReinstall(root); });
+                        check("Archive records from another game (1.0.5): existing and absent old copies do not block a new root; their files and records stay untouched", delegate { ArchiveOtherGameRoots(root); });
                         form.Close();
                     }
                 }
@@ -326,6 +328,109 @@ namespace SlotsInstaller
             }
             finally { ThemedMessageBox.TestResponder = null; try { if (File.Exists(dest)) File.Delete(dest); } catch { } }
             Require(dialogs <= 1, "dialogs: " + dialogs);   // at most the refusal of the occupied name
+        }
+
+        private static void RenamedArchiveReinstall(string root)
+        {
+            string fixture = Path.Combine(root, "renamed-archive"), library = Path.Combine(fixture, "library"), data = Path.Combine(fixture, "Data");
+            string costume = Path.Combine(fixture, "game", "reframework", "costume_mods"), source = Path.Combine(library, "Original.zip"), renamed = Path.Combine(library, "Renamed.zip");
+            Directory.CreateDirectory(library); Directory.CreateDirectory(data); Directory.CreateDirectory(costume);
+            File.WriteAllText(source, "archive version 1");
+            string oldData = ArchiveInstalls.DataDirOverride, oldHistory = HistoryStore.DefaultDir, oldCache = Library.IdentityCacheDirectory;
+            ArchiveInstalls.DataDirOverride = data; HistoryStore.DefaultDir = Path.Combine(fixture, "history"); Library.IdentityCacheDirectory = data;
+            try
+            {
+                string recordsFile = Path.Combine(data, ArchiveInstalls.FileName);
+                InstallResult first = ArchiveInstalls.Install(source, costume, "Luke", "Fixture");
+                ArchiveInstallRecord firstRecord = Json.Read<ArchiveInstallFile>(recordsFile).Records.Single();
+                string choiceKey = VariantChoices.SourceOf(new InstalledOutfit { Folder = first.Folder }, costume);
+                VariantChoices.Restore(costume, choiceKey, new Dictionary<string, bool> { { "Blue", false } });
+                byte[] choices = File.ReadAllBytes(VariantChoices.ChoicesFile(costume));
+                SourceRename.Outcome rename = SourceRename.Run(source, "Renamed", new[] { library }, new KeyValuePair<string, string>[0], costume, null);
+                Require(rename.Done && File.Exists(renamed), "rename: " + rename.Error);
+                File.WriteAllText(renamed, "archive version 2");
+                InstallResult again = ArchiveInstalls.Install(renamed, costume, "Luke", "Fixture");
+                ArchiveInstallRecord updated = Json.Read<ArchiveInstallFile>(recordsFile).Records.Single();
+                Require(again.Folder == first.Folder && File.ReadAllBytes(again.Folder).SequenceEqual(File.ReadAllBytes(renamed)) && !File.Exists(ArchiveInstalls.Destination(costume, "Luke", renamed)), "reinstall created a second filename or did not update the old copy");
+                Require(updated.Id == firstRecord.Id && updated.Path == first.Folder && updated.SourcePath == renamed, "reinstall lost the record identity or source link");
+                Require(File.ReadAllBytes(VariantChoices.ChoicesFile(costume)).SequenceEqual(choices) && !VariantChoices.ReadChoices(costume).IsOn(choiceKey, "Blue"), "variant choices changed or lost their installed filename");
+
+                // Choosing another character makes its own copy, never reuses the first character's destination.
+                InstallResult juri = ArchiveInstalls.Install(renamed, costume, "Juri", "Fixture");
+                Require(juri.Folder == ArchiveInstalls.Destination(costume, "Juri", renamed) && File.Exists(first.Folder), "another character reused Luke's installed copy");
+                byte[] records = File.ReadAllBytes(recordsFile), good = File.ReadAllBytes(first.Folder);
+                long ticks = File.GetLastWriteTimeUtc(first.Folder).Ticks;
+                byte[] changed = (byte[])good.Clone(); changed[0] ^= 1;
+                File.WriteAllBytes(first.Folder, changed); File.SetLastWriteTimeUtc(first.Folder, new DateTime(ticks, DateTimeKind.Utc));
+                RefuseArchive(delegate { ArchiveInstalls.Install(renamed, costume, "Luke", "Fixture"); }, "changed");
+                Require(File.ReadAllBytes(first.Folder).SequenceEqual(changed) && File.ReadAllBytes(recordsFile).SequenceEqual(records), "changed archive or its record was overwritten");
+                File.WriteAllBytes(first.Folder, good); File.SetLastWriteTimeUtc(first.Folder, new DateTime(ticks, DateTimeKind.Utc));
+
+                // A record outside this root is ignored without opening its file. A record inside this root that
+                // claims Luke but points into Juri remains a refusal, not an alternate destination.
+                string outside = Path.Combine(fixture, "outside.zip"); File.WriteAllBytes(outside, good);
+                ArchiveInstallFile external = Json.Read<ArchiveInstallFile>(recordsFile);
+                external.Records.Add(new ArchiveInstallRecord { Id = "outside", Path = outside, SourcePath = renamed, Character = "Luke", Sha256 = updated.Sha256, Size = good.Length });
+                Json.Write(recordsFile, external);
+                using (var locked = new FileStream(outside, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    Require(ArchiveInstalls.Install(renamed, costume, "Luke", "Fixture").Folder == first.Folder, "an outside record redirected or blocked the current reinstall");
+                }
+                Require(File.ReadAllBytes(outside).SequenceEqual(good), "an outside archive was changed");
+                File.WriteAllBytes(recordsFile, records);
+                ArchiveInstallFile bad = Json.Read<ArchiveInstallFile>(recordsFile);
+                bad.Records.Single(r => r.Character == "Luke").Path = juri.Folder;
+                Json.Write(recordsFile, bad);
+                byte[] juriBefore = File.ReadAllBytes(juri.Folder);
+                RefuseArchive(delegate { ArchiveInstalls.Install(renamed, costume, "Luke", "Fixture"); }, "outside");
+                Require(File.ReadAllBytes(juri.Folder).SequenceEqual(juriBefore) && File.ReadAllBytes(first.Folder).SequenceEqual(good), "a different character's destination was changed");
+                File.WriteAllBytes(recordsFile, records);
+
+                string extra = Path.Combine(Path.GetDirectoryName(first.Folder), "Extra.zip"); File.Copy(first.Folder, extra);
+                ArchiveInstallFile ambiguous = Json.Read<ArchiveInstallFile>(recordsFile);
+                ambiguous.Records.Add(new ArchiveInstallRecord { Id = "extra", Path = extra, SourcePath = renamed, Character = "Luke", Sha256 = updated.Sha256, Size = good.Length, WriteTicks = File.GetLastWriteTimeUtc(extra).Ticks });
+                Json.Write(recordsFile, ambiguous);
+                RefuseArchive(delegate { ArchiveInstalls.Install(renamed, costume, "Luke", "Fixture"); }, "More than one");
+                Require(File.ReadAllBytes(first.Folder).SequenceEqual(good) && File.ReadAllBytes(extra).SequenceEqual(good) && !File.Exists(ArchiveInstalls.Destination(costume, "Luke", renamed)), "ambiguous reinstall changed an archive or added another");
+            }
+            finally { ArchiveInstalls.DataDirOverride = oldData; HistoryStore.DefaultDir = oldHistory; Library.IdentityCacheDirectory = oldCache; }
+        }
+
+        private static void ArchiveOtherGameRoots(string root)
+        {
+            string oldData = ArchiveInstalls.DataDirOverride, oldHistory = HistoryStore.DefaultDir;
+            try
+            {
+                foreach (bool keepOldCopy in new[] { true, false })
+                {
+                    string fixture = Path.Combine(root, keepOldCopy ? "archive-old-game-present" : "archive-old-game-absent");
+                    string source = Path.Combine(fixture, "library", "Shared.zip"), oldRoot = Path.Combine(fixture, "old-game", "reframework", "costume_mods"), newRoot = Path.Combine(fixture, "new-game", "reframework", "costume_mods");
+                    Directory.CreateDirectory(Path.GetDirectoryName(source)); File.WriteAllText(source, "old archive contents");
+                    ArchiveInstalls.DataDirOverride = Path.Combine(fixture, "Data"); HistoryStore.DefaultDir = Path.Combine(fixture, "history");
+                    InstallResult oldCopy = ArchiveInstalls.Install(source, oldRoot, "Luke", "Shared");
+                    string recordsFile = Path.Combine(ArchiveInstalls.DataDirOverride, ArchiveInstalls.FileName);
+                    ArchiveInstallRecord oldRecord = Json.Read<ArchiveInstallFile>(recordsFile).Records.Single();
+                    string oldJson = Json.Serializer().Serialize(oldRecord); byte[] oldBytes = File.ReadAllBytes(oldCopy.Folder);
+                    if (!keepOldCopy) File.Delete(oldCopy.Folder);
+                    File.WriteAllText(source, "updated archive for the new game");
+                    InstallResult newCopy = ArchiveInstalls.Install(source, newRoot, "Luke", "Shared");
+                    Require(newCopy.Folder == ArchiveInstalls.Destination(newRoot, "Luke", source) && File.ReadAllBytes(newCopy.Folder).SequenceEqual(File.ReadAllBytes(source)), "an old game's record blocked or redirected the new install");
+                    ArchiveInstallFile both = Json.Read<ArchiveInstallFile>(recordsFile);
+                    Require(both.Records.Count == 2 && Json.Serializer().Serialize(both.Records.Single(r => r.Id == oldRecord.Id)) == oldJson, "install changed the old game's record");
+                    ArchiveInstallRecord newRecord = both.Records.Single(r => r.Id != oldRecord.Id);
+                    Require(ArchiveInstalls.Install(source, newRoot, "Luke", "Shared").Folder == newCopy.Folder
+                        && Json.Read<ArchiveInstallFile>(recordsFile).Records.Any(r => r.Id == newRecord.Id && r.Path == newCopy.Folder), "the old record interfered with the new game's reinstall");
+                    Require(keepOldCopy ? File.ReadAllBytes(oldCopy.Folder).SequenceEqual(oldBytes) : !File.Exists(oldCopy.Folder), "the old game's present or absent copy was changed");
+                }
+            }
+            finally { ArchiveInstalls.DataDirOverride = oldData; HistoryStore.DefaultDir = oldHistory; }
+        }
+
+        private static void RefuseArchive(Action action, string message)
+        {
+            try { action(); }
+            catch (IOException ex) { Require(ex.Message.IndexOf(message, StringComparison.OrdinalIgnoreCase) >= 0, "unexpected refusal: " + ex.Message); return; }
+            throw new InvalidOperationException("Archive install was not refused: " + message);
         }
 
         private static T Get<T>(object o, string name) { FieldInfo field = o.GetType().GetField(name, PrivateInstance); if (field == null) throw new MissingFieldException(name); return (T)field.GetValue(o); }

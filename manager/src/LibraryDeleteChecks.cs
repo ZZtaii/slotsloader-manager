@@ -58,7 +58,7 @@ namespace SlotsInstaller
             {
                 string lib = Path.Combine(root, "library"), fluffyRoot = Path.Combine(root, "Fluffy", "Games", "SF6"), fluffyMods = Path.Combine(fluffyRoot, "Mods");
                 string outside = Path.Combine(root, "outside"), game = Path.Combine(root, "game");
-                foreach (string name in new[] { "Alpha", "Bravo", "Charlie", "Echo", "India" }) Zip(Path.Combine(lib, name + ".zip"), name, root);
+                foreach (string name in new[] { "Alpha", "Bravo", "Charlie", "Echo", "India", "Kilo", "Lima" }) Zip(Path.Combine(lib, name + ".zip"), name, root);
                 Put(Path.Combine(lib, "Delta"), "Main/modinfo.ini", "name=Delta main\n"); Put(Path.Combine(lib, "Delta"), "Main/" + Mesh, "delta mesh");
                 Put(Path.Combine(lib, "Delta"), "readme.txt", "read-only file"); File.SetAttributes(Path.Combine(lib, "Delta", "readme.txt"), FileAttributes.ReadOnly);
                 Put(Path.Combine(lib, "Hotel"), "Main/modinfo.ini", "name=Hotel main\n"); Put(Path.Combine(lib, "Hotel"), "Main/" + Mesh, "hotel mesh");
@@ -68,6 +68,7 @@ namespace SlotsInstaller
                 var config = new AppConfig { GameRoot = game, Libraries = new List<string> { lib, fluffyMods }, SevenZipPath = "" };
                 Managed(Path.Combine(config.CostumeRoot, "Juri", "Echo outfit"), "Echo outfit", Path.Combine(lib, "Echo.zip"));
                 Managed(Path.Combine(config.CostumeRoot, "Juri", "Foxtrot outfit"), "Foxtrot outfit", Path.Combine(lib, "Foxtrot.zip"));   // its source was never in the library
+                Managed(Path.Combine(config.CostumeRoot, "Juri", "Kilo outfit"), "Kilo outfit", Path.Combine(lib, "Kilo.zip"));   // 1.0.5 Rename
                 // A junction as a mod and a folder mod with a junction inside, both pointing outside the library.
                 Put(Path.Combine(outside, "target"), "keep.txt", "outside the library");
                 Put(Path.Combine(outside, "target2"), "keep.txt", "outside the library");
@@ -94,6 +95,11 @@ namespace SlotsInstaller
                             catch (Exception ex) { failures++; report.Add("FAIL " + name + ": " + ex); }
                         };
                         check("menu: Open, Open in Explorer, separator, the uninstall items, separator, Delete last in the danger colour; Delete archive / Delete folder; disabled while busy; not offered for an unreadable library row", delegate { MenuShape(form); });
+                        check("rename (1.0.5): Rename after Open in Explorer (F2); edited on the row; Enter renames the archive and the installed outfit's manifest, entry and history follow; Esc cancels; a taken or invalid name and a Fluffy-installed mod are refused inline; a failed record write puts everything back; a case-only rename works", delegate { Rename(form, lib, config, root); });
+                        check("rename records (1.0.5): Replace-original records and Install all variants records take the new path under the game lock", delegate { RenameRecords(lib, config, root); });
+                        check("rename metadata: valid archive cache survives, stale identities are rejected, filename guesses refresh, managed manifest discovery preserves scope", delegate { RenameMetadataChecks.Run(root); });
+                        check("rename UI: native click-away saves before opening the clicked row; options, typed name, target and replacement edit survive a rename", delegate { ManagerImprovementChecks.RenameUi(form, lib, config, root); });
+                        check("folder freshness: scans run off the UI thread, superseded checks cancel, switching mods ignores old results, Install revalidates; activation leaves an unchanged archive alone and reloads a changed one",delegate { ManagerImprovementChecks.FolderReview(form, lib, config, root); });
                         check("Fluffy: a mod Fluffy's installed.ini lists is refused inline (" + LibraryDelete.FluffyRefusal + "); nothing deleted, row kept", delegate { FluffyRefused(form, bin, Path.Combine(fluffyMods, "Fluffy Mod.zip")); });
                         check("scope: a source outside the libraries and a library root are refused inline; .. escapes, case and trailing separators resolve; a folder holding a library or the game folder is refused", delegate { Scope(form, bin, lib, outside, game); });
                         if (junctions) check("links: a junction mod and a folder mod with a junction inside are refused; the junction targets are untouched", delegate { Links(form, bin, lib, outside); });
@@ -133,15 +139,99 @@ namespace SlotsInstaller
             ContextMenuStrip menu = Get<ListView>(form, "modList").ContextMenuStrip;
             ToolStripMenuItem delete = OpenMenu(form, Entry(form, "Alpha"));
             string[] texts = menu.Items.Cast<ToolStripItem>().Select(i => i is ToolStripSeparator ? "|" : i.Text).ToArray();
-            Require(menu.Items.Count == 8 && texts[0] == "Open" && texts[1] == "Open in Explorer" && texts[2] == "|" && texts[6] == "|" && Object.ReferenceEquals(delete, menu.Items[7]), "menu items: " + String.Join(", ", texts));
-            Require(delete.Text == "Delete archive" && delete.Available && delete.Enabled && delete.ForeColor == Palette.Red && menu.Items[6].Available, "zip item: " + delete.Text + " available " + delete.Available + " enabled " + delete.Enabled + " colour " + delete.ForeColor);
+            Require(menu.Items.Count == 9 && texts[0] == "Open" && texts[1] == "Open in Explorer" && texts[2] == "Rename" && texts[3] == "|" && texts[7] == "|" && Object.ReferenceEquals(delete, menu.Items[8]), "menu items: " + String.Join(", ", texts));
+            Require(delete.Text == "Delete archive" && delete.Available && delete.Enabled && delete.ForeColor == Palette.Red && menu.Items[7].Available, "zip item: " + delete.Text + " available " + delete.Available + " enabled " + delete.Enabled + " colour " + delete.ForeColor);
             Require(OpenMenu(form, Entry(form, "Delta")).Text == "Delete folder", "folder item: " + delete.Text);
             Call(form, "SetBusy", true, "Fixture busy");
             try { Require(!OpenMenu(form, Entry(form, "Alpha")).Enabled, "Delete is enabled while busy"); }
             finally { Call(form, "SetBusy", false, "Ready"); }
             var unreadable = new LibraryEntry { Name = "Missing library", Kind = "Library", SourcePath = @"C:\fixture\missing-library", Detection = "Error" };
             OpenMenu(form, unreadable);
-            Require(!delete.Available && !menu.Items[6].Available, "Delete offered for an unreadable library row");
+            Require(!delete.Available && !menu.Items[7].Available && !menu.Items[2].Available, "Delete or Rename offered for an unreadable library row");
+        }
+
+        // ---- 1.0.5 Rename
+        private static void Rename(MainForm form, string lib, AppConfig config, string root)
+        {
+            string previousHistory = HistoryStore.DefaultDir; HistoryStore.DefaultDir = Path.Combine(root, "rename-history");
+            try
+            {
+                string kilo = Path.Combine(lib, "Kilo.zip"), renamed = Path.Combine(lib, "Kilo Renamed.zip");
+                string manifest = Path.Combine(config.CostumeRoot, "Juri", "Kilo outfit", ".slots-installer.json");
+                History.Record(null, new HistoryEvent { Kind = HistoryKinds.Install, Mode = HistoryModes.Extra, Source = kilo, Name = "Kilo outfit", Slot = "Juri/Kilo outfit" });
+                LibraryEntry entry = Entry(form, "Kilo");
+                ContextMenuStrip menu = Get<ListView>(form, "modList").ContextMenuStrip;
+                OpenMenu(form, entry);
+                ToolStripItem item = menu.Items[2];
+                Require(item.Text == "Rename" && item.Available && item.Enabled && ((ToolStripMenuItem)item).ShortcutKeyDisplayString == "F2", "Rename item: " + item.Text + " " + item.Available + " " + item.Enabled);
+                // Esc: nothing changes.
+                form.BeginLibraryRename(entry);
+                TextBox box = Get<TextBox>(form, "renameBox");
+                Require(box != null && box.Text == "Kilo" && box.Parent == Get<ListView>(form, "modList"), "rename box: " + (box == null ? "none" : box.Text));
+                box.Text = "Not this"; form.EndLibraryRename(false); WaitIdle(form);
+                Require(File.Exists(kilo) && Get<TextBox>(form, "renameBox") == null && entry.Name == "Kilo" && form.RenameRuns == 0, "Esc renamed or kept the box");
+                // Refusals, inline: a taken name, an invalid one, a mod Fluffy installed.
+                form.RenameLibrarySource(entry, "Alpha"); WaitIdle(form);
+                Require(Status(form) == "Can't rename Kilo.zip: Alpha.zip already exists in that folder." && File.Exists(kilo), "taken: " + Status(form));
+                form.RenameLibrarySource(entry, "a:b"); WaitIdle(form);
+                Require(Status(form).StartsWith("Can't rename Kilo.zip: a name can't contain", StringComparison.Ordinal) && File.Exists(kilo), "invalid: " + Status(form));
+                form.BeginLibraryRename(Entry(form, "Fluffy Mod"));
+                Require(Status(form) == MainForm.RenameFluffyRefusal && Get<TextBox>(form, "renameBox") == null, "Fluffy: " + Status(form));
+                Require(form.RenameRuns == 0, "a refusal reached the worker");
+                // A record that can't be written: the file name and every record are put back.
+                string before = File.ReadAllText(manifest);
+                File.SetAttributes(manifest, FileAttributes.ReadOnly);
+                try { form.RenameLibrarySource(entry, "Kilo Renamed"); WaitIdle(form); }
+                finally { File.SetAttributes(manifest, FileAttributes.Normal); }
+                Require(Status(form).StartsWith("Couldn't rename Kilo.zip: ", StringComparison.Ordinal) && StatusColor(form) == Palette.Red && File.Exists(kilo) && !File.Exists(renamed) && File.ReadAllText(manifest) == before && entry.SourcePath == kilo, "rollback: " + Status(form));
+                // Enter on the row: renamed, with the installed outfit, the entry and the history.
+                form.BeginLibraryRename(entry);
+                Get<TextBox>(form, "renameBox").Text = "Kilo Renamed.zip";   // typing the extension again is fine
+                form.EndLibraryRename(true); WaitIdle(form);
+                Require(Status(form) == "Renamed Kilo.zip to Kilo Renamed.zip. Installed copies now point to it." && StatusColor(form) == Palette.Green, "status: " + Status(form));
+                Require(!File.Exists(kilo) && File.Exists(renamed) && entry.SourcePath == renamed && entry.Name == "Kilo Renamed" && Listed(form).Contains("Kilo Renamed") && !Listed(form).Contains("Kilo"), "entry: " + entry.SourcePath + " / " + entry.Name);
+                Require(LibraryDelete.Same(Json.Read<InstallManifest>(manifest).SourcePath, renamed), "manifest: " + Json.Read<InstallManifest>(manifest).SourcePath);
+                Require(((List<InstalledOutfit>)Get<object>(form, "installed")).Any(o => o.Name == "Kilo outfit" && LibraryDelete.Same(o.SourcePath, renamed)), "the Installed list kept the old path");
+                Require(form.SourceGoneNote(renamed) == null, "Installed says " + form.SourceGoneNote(renamed));
+                HistoryIndex index = HistoryStore.Default.Index();
+                Require(index.Find(History.Normalize(renamed)) != null && index.Find(History.Normalize(renamed)).LastInstalled.HasValue && index.Find(History.Normalize(kilo)) == null, "history did not follow the file");
+                Require((string)typeof(MainForm).GetMethod("Verb", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { new HistoryEvent { Kind = HistoryKinds.Rename } }) == "Renamed", "History page verb");
+                // Case only.
+                form.RenameLibrarySource(entry, "kilo renamed"); WaitIdle(form);
+                Require(Directory.GetFiles(lib, "kilo renamed.zip").Select(Path.GetFileName).SequenceEqual(new[] { "kilo renamed.zip" }) && entry.Name == "kilo renamed", "case-only: " + String.Join(", ", Directory.GetFiles(lib, "kilo*").Select(Path.GetFileName)) + " / " + Status(form));
+            }
+            finally { HistoryStore.DefaultDir = previousHistory; }
+        }
+
+        private static void RenameRecords(string lib, AppConfig config, string root)
+        {
+            string data = Path.Combine(root, "rename-data"); Directory.CreateDirectory(data);
+            string lima = Path.Combine(lib, "Lima.zip"), next = Path.Combine(lib, "Lima 2.zip");
+            string game = config.GameRoot; Directory.CreateDirectory(game);
+            var engine = new ReplaceEngine(game, data, new ReplaceSettings());
+            var state = new ReplaceState { GameRoot = engine.GameRoot, Mods = new List<ReplaceMod> { new ReplaceMod { Id = "lima1", Name = "Lima", SourcePath = lima }, new ReplaceMod { Id = "other", Name = "Other", SourcePath = Path.Combine(lib, "Alpha.zip") } } };
+            DurableFile.WriteJson(engine.StatePath, state);
+            string previous = ArchiveInstalls.DataDirOverride; ArchiveInstalls.DataDirOverride = data;
+            string previousHistory = HistoryStore.DefaultDir; HistoryStore.DefaultDir = Path.Combine(root, "rename-history-2");
+            try
+            {
+                Json.Write(Path.Combine(data, ArchiveInstalls.FileName), new ArchiveInstallFile { Records = new List<ArchiveInstallRecord> { new ArchiveInstallRecord { Id = "a1", Path = Path.Combine(config.CostumeRoot, "Juri", "Lima.zip"), SourcePath = lima, Character = "Juri" } } });
+                SourceRename.Outcome o = SourceRename.Run(lima, "Lima 2", config.Libraries, new KeyValuePair<string, string>[0], config.CostumeRoot, delegate { return engine; });
+                Require(o.Done && o.Replacements == 1 && o.ArchiveCopies == 1 && File.Exists(next) && !File.Exists(lima), "outcome: " + o.Error + " replacements " + o.Replacements + " copies " + o.ArchiveCopies);
+                ReplaceState after = engine.LoadState();
+                Require(LibraryDelete.Same(after.Find("lima1").SourcePath, next) && LibraryDelete.Same(after.Find("other").SourcePath, Path.Combine(lib, "Alpha.zip")), "state: " + after.Find("lima1").SourcePath);
+                ArchiveInstallFile records = Json.Read<ArchiveInstallFile>(Path.Combine(data, ArchiveInstalls.FileName));
+                Require(LibraryDelete.Same(records.Records.Single().SourcePath, next), "archive record: " + records.Records.Single().SourcePath);
+                // A change to the game folder that didn't finish (a journal) blocks it; nothing moves.
+                File.WriteAllText(engine.JournalPath, "{}");
+                try
+                {
+                    SourceRename.Outcome blocked = SourceRename.Run(next, "Lima 3", config.Libraries, new KeyValuePair<string, string>[0], config.CostumeRoot, delegate { return engine; });
+                    Require(!blocked.Done && File.Exists(next) && blocked.Error.Contains("didn't finish"), "journal: " + blocked.Error);
+                }
+                finally { File.Delete(engine.JournalPath); }
+            }
+            finally { ArchiveInstalls.DataDirOverride = previous; HistoryStore.DefaultDir = previousHistory; }
         }
 
         private static void FluffyRefused(MainForm form, StubBin bin, string zip)

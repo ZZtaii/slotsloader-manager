@@ -40,7 +40,10 @@ namespace SlotsInstaller
         private void InstallAllVariants()
         {
             if (busy || package == null || IsReplaceMode || targetCharacter.SelectedIndex < 0) return;
-            if (CheckOpenPackage()) return;   // the source changed on disk: reloaded first
+            WithFreshPackage(InstallAllVariantsFresh);
+        }
+        private void InstallAllVariantsFresh()
+        {
             string source = package.SourcePath, name = package.Name, character = Convert.ToString(targetCharacter.SelectedItem), root = config.CostumeRoot;
             Work("Installing every variant of " + name + "…", delegate { return ArchiveInstalls.Install(source, root, character, name); }, delegate(InstallResult result)
             {

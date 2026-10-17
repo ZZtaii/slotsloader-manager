@@ -128,6 +128,7 @@ namespace SlotsInstaller
         private ListBox settingsLibraries;
         private OptionTree componentTree;
         private PictureBox preview;
+        private Label componentVersion;
         private Label packageTitle, packageMeta, packageDescription, packageHint, noPreview, libraryCount, selectedLabel, targetPath, planSummary, planDetails, searchClear;
         private Label installedTitle, installedDetail, statusText, componentTitle;
         private FlatButton previewButton, installButton, libraryUninstallButton, componentTab, filesTab, openInstalledButton, editInstalledButton, toggleInstalledButton, removeInstalledButton, filterButton;
@@ -233,6 +234,40 @@ namespace SlotsInstaller
             string text = Library.AuthorText(authors);
             packageMeta.Text = text.Length == 0 ? "" : "by " + text;
             if (layoutInspectorInfo != null) layoutInspectorInfo();
+        }
+        // 1.0.5: the mod's version is its top option's version= (else the first one any option names).
+        private string PackageVersion()
+        {
+            if (package == null) return "";
+            ModComponent root = package.Components.FirstOrDefault(c => c.ParentId == null && !String.IsNullOrWhiteSpace(c.Version));
+            return (root ?? package.Components.FirstOrDefault(c => !String.IsNullOrWhiteSpace(c.Version)) ?? new ModComponent()).Version ?? "";
+        }
+        internal static string VersionText(string version)
+        {
+            string v = (version ?? "").Trim();
+            return v.Length == 0 ? "" : Char.IsDigit(v[0]) ? "v" + v : v;
+        }
+        internal void SetVersion(string version)
+        {
+            componentVersion.Text = VersionText(version);
+            componentVersion.Visible = componentVersion.Text.Length > 0;
+            PlaceVersion();
+        }
+        private int Ascent(Font font)
+        {
+            FontFamily family = font.FontFamily;
+            return (int)Math.Round(font.SizeInPoints * DeviceDpi / 72F * family.GetCellAscent(font.Style) / family.GetEmHeight(font.Style));
+        }
+        private void PlaceVersion()
+        {
+            if (componentVersion == null) return;
+            Padding pad = componentTitle.Padding;
+            int width = !componentVersion.Visible ? 0 : Math.Min(TextRenderer.MeasureText(componentVersion.Text, componentVersion.Font).Width + Px(4), componentTitle.ClientSize.Width * 2 / 5);
+            // On the title's baseline (each font's ascent), never below the row: the row clips anything lower.
+            int top = pad.Top + Math.Max(0, Ascent(componentTitle.Font) - Ascent(componentVersion.Font));
+            top = Math.Max(0, Math.Min(top, componentTitle.ClientSize.Height - componentVersion.Font.Height));
+            componentVersion.Bounds = new Rectangle(componentTitle.ClientSize.Width - width, top, width, Math.Max(1, componentTitle.ClientSize.Height - top));
+            componentTitle.Padding = new Padding(pad.Left, pad.Top, width == 0 ? 0 : width + Px(10), pad.Bottom);   // a long title ends in "…" before it
         }
         private void CaptureTableMetrics(Control root)
         {
@@ -542,10 +577,16 @@ namespace SlotsInstaller
             modList = CreateList(58); ((BufferedModList)modList).RepaintAfterScroll = true; modList.ShowItemToolTips = false; modList.Columns.Add("Mod", 300); modList.DrawSubItem += DrawLibraryItem;
             ((BufferedModList)modList).SuppressIdleHover = true;
             modList.HotTracking = false; modList.HoverSelection = false;
+            ((BufferedModList)modList).BeforePointerSelection = delegate(Point point)
+            {
+                ListViewItem row = modList.GetItemAt(point.X, point.Y);
+                return CommitRenameBeforeSelection(row == null ? null : row.Tag as LibraryEntry);
+            };
             modList.SelectedIndexChanged += delegate
             {
                 if (modList.SelectedItems.Count > 0 && !busy && !selectingMod && (Control.MouseButtons & MouseButtons.Right) == 0)
                 {
+                    if (CommitRenameBeforeSelection(modList.SelectedItems[0].Tag as LibraryEntry)) return;
                     if (userPickingMod) ClosePanelForPickedMod();
                     LoadPackage((LibraryEntry)modList.SelectedItems[0].Tag);
                 }
@@ -587,6 +628,7 @@ namespace SlotsInstaller
             modMenu.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors());
             modMenu.Items.Add("Open", null, delegate { OpenLibrarySource(modMenu.Tag as LibraryEntry, false); });
             modMenu.Items.Add("Open in Explorer", null, delegate { OpenLibrarySource(modMenu.Tag as LibraryEntry, true); });
+            AddLibraryRename(modMenu);   // 1.0.5 (MainFormRename.cs)
             modMenu.Items.Add(new ToolStripSeparator());
             ToolStripMenuItem uninstallItem = new ToolStripMenuItem("Uninstall outfit");
             uninstallItem.Click += delegate { LibraryEntry entry = modMenu.Tag as LibraryEntry; if (entry != null) UninstallAllOutfits(entry.SourcePath); };   // 2.4.1: all of its extra outfits, Undo
@@ -611,7 +653,11 @@ namespace SlotsInstaller
             {
                 if (e.KeyCode == Keys.Apps || (e.KeyCode == Keys.F10 && e.Shift))
                     modMenu.Tag = modList.SelectedItems.Count == 0 ? null : modList.SelectedItems[0].Tag;
+                if (e.KeyCode == Keys.F2 && e.Modifiers == Keys.None && modList.SelectedItems.Count > 0) { e.Handled = true; BeginLibraryRename(modList.SelectedItems[0].Tag as LibraryEntry); }   // 1.0.5
             };
+            // 1.0.5: the rename box sits on its row; scrolling or resizing the list ends the edit (Enter's rules).
+            modList.MouseWheel += delegate { EndLibraryRename(true); };
+            modList.Resize += delegate { EndLibraryRename(true); };
             modMenu.Opening += delegate(object sender, CancelEventArgs e)
             {
                 LibraryEntry entry = modMenu.Tag as LibraryEntry;
@@ -621,6 +667,7 @@ namespace SlotsInstaller
                 PopulateReplacementUninstall(uninstallReplacementItem, source);
                 PopulateFluffyUninstall(uninstallFluffyItem, source);
                 PopulateLibraryDelete(entry);   // 2.4.1
+                PopulateLibraryRename(entry);   // 1.0.5
                 // A source installed only as replacements (or by Fluffy) shows just that action; with neither, the disabled outfit action stays.
                 uninstallItem.Visible = LinkedOutfits(source).Count > 0 || (LinkedReplacements(source).Count == 0 && LinkedFluffy(source).Count == 0);
             };
@@ -746,6 +793,10 @@ namespace SlotsInstaller
             noPreview = new Label { UseMnemonic=false, Text = "No preview", TextAlign = ContentAlignment.MiddleCenter, Dock = DockStyle.Fill, ForeColor = Palette.Border, Font = new Font("Segoe UI", 16F, FontStyle.Bold) };
             preview.Cursor = Cursors.Hand; preview.Click += delegate { EnlargePreview(); };  visual.Controls.Add(preview); visual.Controls.Add(noPreview);
             componentTitle = new Label { UseMnemonic=false, Text = "OPTION PREVIEW", Dock = DockStyle.Top, Height = 30, Font = Palette.Strong, AutoEllipsis = true, Padding = new Padding(0, 7, 0, 0) };
+            // 1.0.5 (the user): the modinfo.ini version, right-aligned on the title row (SetVersion).
+            componentVersion = new Label { UseMnemonic=false, Text = "", ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true, TextAlign = ContentAlignment.TopRight, Anchor = AnchorStyles.Top | AnchorStyles.Right, Visible = false, AccessibleName = "Mod version" };
+            componentTitle.Controls.Add(componentVersion);
+            componentTitle.Resize += delegate { PlaceVersion(); };
             // 2.5.9: the byline ("by Author") under the option name; hidden when the mod names no author.
             packageMeta = new Label { UseMnemonic=false, Text = "", Dock = DockStyle.Top, Height = 24, ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true, Visible = false, AccessibleName = "Mod author" };
             packageDescription = new Label { UseMnemonic=false, Text = "Hover an option to preview it.", Dock = DockStyle.Top, Height = 24, ForeColor = Palette.Text, Font = Palette.Small, AutoEllipsis = true };
@@ -1928,6 +1979,9 @@ namespace SlotsInstaller
         private void LoadPackage(LibraryEntry entry, InstalledOutfit restore, ReplaceMod restoreReplace)
         {
             if (busy) return;
+            // A review of the old package must become obsolete as soon as another load starts, even while
+            // that load is still reading and the package field has not been replaced yet.
+            if (package != null) RequestReview(1);
             string sevenZip = config.SevenZipPath;
             // 2.3.0: a mod that does not force Replace opens in the remembered mode (an earlier tool package or edited
             // replacement may have forced Replace without changing what is remembered).
@@ -1983,7 +2037,7 @@ namespace SlotsInstaller
                 packageTitle.Text = package.Name;
                 ModComponent primary = package.Components.FirstOrDefault(c => !c.IsDummy && c.Assets.Count > 0) ?? package.Components.FirstOrDefault();
                 componentTitle.Text = primary == null ? "OPTION PREVIEW" : primary.Name;
-                SetByline(PackageAuthors());
+                SetByline(PackageAuthors()); SetVersion(primary == null || String.IsNullOrWhiteSpace(primary.Version) ? PackageVersion() : primary.Version);
                 packageDescription.Text = primary == null ? "No options found in this mod." : primary.Description;
                 if (String.IsNullOrWhiteSpace(packageDescription.Text)) packageDescription.Text = "Hover an option to preview it. Check its box to include it.";
                 packageHint.Text = package.Warnings.Count > 0 ? String.Join("\n", package.Warnings.Take(2)) : "Main files first. Options selected later take precedence when they replace the same file.";
@@ -2117,6 +2171,7 @@ namespace SlotsInstaller
             packageDescription.Text = String.IsNullOrWhiteSpace(component.Description) ? component.Name : component.Description;
             List<string> own = Library.CleanAuthors(new[] { component.Author });
             SetByline(own.Count > 0 ? own : PackageAuthors());   // an option by someone else names them; otherwise the mod's author
+            SetVersion(String.IsNullOrWhiteSpace(component.Version) ? PackageVersion() : component.Version);
             SetPreview(null); noPreview.Text = "Loading preview…";
             if (previewLoading) { pendingPreviewPackage = package; pendingPreviewId = component.Id; pendingPreviewGeneration = generation; }
             else ReadComponentPreview(package, component.Id, generation);
@@ -2434,9 +2489,11 @@ namespace SlotsInstaller
 
         private void InstallCurrent()
         {
-            if (CheckOpenPackage()) return;   // 2.4.1: the source changed on disk: reloaded instead of installing stale files
-            if (IsReplaceMode) { InstallReplacement(); return; }
-            InstallSlot();
+            if (busy || package == null || ReviewPending) return;
+            WithFreshPackage(delegate
+            {
+                if (IsReplaceMode) InstallReplacement(); else InstallSlot();
+            });
         }
 
         private void InstallSlot()
@@ -2971,6 +3028,7 @@ namespace SlotsInstaller
         // ---- Keyboard shortcuts ----------------------------------------------------
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (RenameKey(keyData)) return true;   // 1.0.5: the rename box's Enter / Esc / Tab first (MainFormRename.cs)
             // 2.4.1: Space installs the selected options, exactly like a click on the footer's Install.
             if (keyData == Keys.Space && SpaceInstallsHere())
             {

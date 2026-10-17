@@ -143,3 +143,31 @@ bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<ui
 // tightly packed but whose pitch is wrong gets the right pitch (counted in *repaired). Returns the
 // number of levels left inconsistent; 0 for a texture of unknown format or not a texture.
 int texture_mip_check(std::vector<uint8_t>& tex, bool repair, int* repaired);
+
+// Audited patch recipes only. Refused inputs are never modified. The caller supplies bytes from
+// official base/DLC PAKs, not loose replacements or generated patch PAKs.
+enum class SwapRepairState { Unchanged, Repaired, Refused };
+struct SwapRepairResult {
+    SwapRepairState state = SwapRepairState::Unchanged;
+    size_t changes = 0;
+    std::string reason;
+};
+SwapRepairResult repair_swap_scene(std::vector<uint8_t>& data,
+                                   const std::vector<uint8_t>& current_official);
+
+struct SwapUserProfile {
+    std::string kind;                 // "chain", "mai_self_chain", or C. Viper "model_parts"
+    std::string basename;             // donor basename for chains; target basename for model_parts
+    std::string donor_path;           // exact current official PAK path
+    std::string old_normalized_sha256;
+    std::string current_sha256;       // required: later, unreviewed official updates are refused
+};
+#include <functional>
+using SwapOfficialRead = std::function<std::vector<uint8_t>(const std::string&)>;
+using SwapSha256 = std::function<std::string(const std::vector<uint8_t>&)>;
+SwapRepairResult repair_swap_user(std::vector<uint8_t>& data, const std::string& mod_path,
+                                  const std::vector<SwapUserProfile>& profiles,
+                                  const SwapOfficialRead& official_read, const SwapSha256& sha256);
+const std::vector<SwapUserProfile>& swap_user_profiles();
+SwapRepairResult repair_swap_file(std::vector<uint8_t>& data, const std::string& mod_path,
+                                  const SwapOfficialRead& official_read, const SwapSha256& sha256);

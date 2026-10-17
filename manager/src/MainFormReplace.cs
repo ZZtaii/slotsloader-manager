@@ -63,7 +63,7 @@ namespace SlotsInstaller
         private Control[] settingsGeneralParts = new Control[0];
         private Label settingsSubtitle;   // 2.4.0: shown on the General tab only
         private ComboBox settingsMethod;
-        private CheckBox settingsCrashReporter;
+        private CheckBox settingsCrashReporter, settingsSwapRepairs;
         private Label settingsMethodStatus, settingsToolStatus, settingsGameFiles, settingsStoreStatus, settingsFluffyStatus;
         private PaddedTextField settingsStore;
         private FlatButton loaderOnButton, loaderOffButton, installSlotsLoaderButton;
@@ -482,6 +482,7 @@ namespace SlotsInstaller
                 catch (Exception ex) { Program.Log(ex); }
                 try { engine.DeleteRemovedExcept(ProtectedRemovedFolders()); }
                 catch (Exception ex) { Program.Log(ex); }
+                SwapRepairFlag.Sync(engine.GameRoot, engine.Settings.SwapRepairs);   // 1.0.5: Slotsloader follows the setting
                 // 1.0.1: a gap in the patch PAK row (any tool's) is filled at start-up and every refresh, with SF6 and
                 // the external mod manager closed.
                 try
@@ -993,6 +994,9 @@ namespace SlotsInstaller
             // (ReplaceSettings.DefaultMode stays in the file and is used only before a first choice).
             settingsCrashReporter = new CheckBox { Text = "Rename the crash reporter while replacements are installed", Height = 28, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0) };
             add(left, settingsCrashReporter);
+            // 1.0.5: off by default, so ordinary mods never get swap warnings; Replace original and Slotsloader both follow it.
+            settingsSwapRepairs = new CheckBox { Text = "Try to fix character-swap mods broken by game updates", Height = 28, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0) };
+            add(left, settingsSwapRepairs);
             add(left, Rhythm.Gap(Rhythm.Group));
             add(left, Caption("REFramework and Slotsloader"));
             settingsToolStatus = note("", 52); add(left, settingsToolStatus);
@@ -1029,6 +1033,7 @@ namespace SlotsInstaller
             panel.Controls.Add(columns);
             settingsMethod.SelectedIndexChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
             settingsCrashReporter.CheckedChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
+            settingsSwapRepairs.CheckedChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
             return panel;
         }
 
@@ -1041,6 +1046,7 @@ namespace SlotsInstaller
                 replaceSettings = ReplaceSettings.Load();
                 settingsMethod.SelectedIndex = replaceSettings.Method == ReplaceMethods.Loose ? 1 : replaceSettings.Method == ReplaceMethods.Pak ? 2 : 0;
                 settingsCrashReporter.Checked = replaceSettings.RenameCrashReporter;
+                settingsSwapRepairs.Checked = replaceSettings.SwapRepairs;
                 settingsStore.Text = replaceSettings.StoreLocation ?? "";
                 ReplaceEngine engine = Engine(); ReplaceState state = null;
                 try { state = engine.LoadState(); } catch (Exception ex) { settingsGameFiles.Text = ex.Message; }
@@ -1087,6 +1093,7 @@ namespace SlotsInstaller
                 string previousMethod = replaceSettings.Method ?? "";
                 replaceSettings.Method = method;
                 replaceSettings.RenameCrashReporter = settingsCrashReporter.Checked;
+                replaceSettings.SwapRepairs = settingsSwapRepairs.Checked;
                 string store = settingsStore.Text.Trim();
                 if (!String.Equals(store, replaceSettings.StoreLocation ?? "", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1095,6 +1102,7 @@ namespace SlotsInstaller
                     replaceSettings.StoreLocation = store;
                 }
                 replaceSettings.Save();
+                SwapRepairFlag.Sync(config.GameRoot, replaceSettings.SwapRepairs);
                 if (methodChanged && (state.Mods.Count > 0 || state.Deployed.Count > 0))
                 {
                     engine = Engine(); string target = engine.DesiredMethod();

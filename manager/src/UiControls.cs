@@ -165,6 +165,7 @@ namespace SlotsInstaller
         internal bool InputLocked;
         internal bool RepaintAfterScroll;
         internal bool SuppressIdleHover;
+        internal Func<Point, bool> BeforePointerSelection;
         private bool fittingColumn;
         internal BufferedModList() { DoubleBuffered = true; }
         [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left, Top, Right, Bottom; }
@@ -189,6 +190,12 @@ namespace SlotsInstaller
         }
         protected override void WndProc(ref Message message)
         {
+            // Give inline editors a chance to commit before the native list changes selection/focus.
+            if (message.Msg == 0x201 && !InputLocked && BeforePointerSelection != null)
+            {
+                long pos = message.LParam.ToInt64();
+                if (BeforePointerSelection(new Point((short)(pos & 0xffff), (short)((pos >> 16) & 0xffff)))) return;
+            }
             // The library has no hover action. Keep the native ListView and
             // WinForms mouse-move path from partially repainting custom rows.
             // Button/capture movement still reaches the control for dragging.

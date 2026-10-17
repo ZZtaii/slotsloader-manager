@@ -249,8 +249,8 @@ namespace SlotsInstaller
             ListView list = ControlField<ListView>(form, "modList");
             ContextMenuStrip contextMenu = list.ContextMenuStrip;
             // 2.4.1: a separator and Delete (to the Recycle Bin) follow, last.
-            Require(contextMenu != null && contextMenu.Items.Count == 8 && contextMenu.Items[2] is ToolStripSeparator && contextMenu.Items[4].Text == "Uninstall replacement" && contextMenu.Items[5].Text == "Uninstall mod (external manager)" && contextMenu.Items[6] is ToolStripSeparator && contextMenu.Items[7].Text.StartsWith("Delete", StringComparison.Ordinal), context + ": uninstall context action is missing.");
-            ToolStripMenuItem contextAction = contextMenu.Items[3] as ToolStripMenuItem;
+            Require(contextMenu != null && contextMenu.Items.Count == 9 && contextMenu.Items[2].Text == "Rename" && contextMenu.Items[3] is ToolStripSeparator && contextMenu.Items[5].Text == "Uninstall replacement" && contextMenu.Items[6].Text == "Uninstall mod (external manager)" && contextMenu.Items[7] is ToolStripSeparator && contextMenu.Items[8].Text.StartsWith("Delete", StringComparison.Ordinal), context + ": uninstall context action is missing.");
+            ToolStripMenuItem contextAction = contextMenu.Items[4] as ToolStripMenuItem;
             Require(contextAction != null && contextAction.Text == "Uninstall outfit", context + ": uninstall context action has changed.");
             ModPackage oldPackage = (ModPackage)Field("package").GetValue(form);
             List<InstalledOutfit> oldInstalled = (List<InstalledOutfit>)Field("installed").GetValue(form);
@@ -361,8 +361,8 @@ namespace SlotsInstaller
             ListView list = ControlField<ListView>(form, "modList");
             ContextMenuStrip menu = list.ContextMenuStrip;
             Require(menu != null, context + ": library context menu is missing.");
-            Require(menu.Items.Count == 8 && menu.Items[5].Text == "Uninstall mod (external manager)" && menu.Items[0].Text == "Open" && menu.Items[1].Text == "Open in Explorer" && menu.Items[2] is ToolStripSeparator && menu.Items[3].Text == "Uninstall outfit" && menu.Items[4].Text == "Uninstall replacement"
-                && menu.Items[6] is ToolStripSeparator && menu.Items[7].Text.StartsWith("Delete", StringComparison.Ordinal) && menu.Items[7].ForeColor == Palette.Red, context + ": library context actions are missing.");   // 2.4.1: Delete last, danger colour
+            Require(menu.Items.Count == 9 && menu.Items[6].Text == "Uninstall mod (external manager)" && menu.Items[0].Text == "Open" && menu.Items[1].Text == "Open in Explorer" && menu.Items[2].Text == "Rename" && menu.Items[3] is ToolStripSeparator && menu.Items[4].Text == "Uninstall outfit" && menu.Items[5].Text == "Uninstall replacement"
+                && menu.Items[7] is ToolStripSeparator && menu.Items[8].Text.StartsWith("Delete", StringComparison.Ordinal) && menu.Items[8].ForeColor == Palette.Red, context + ": library context actions are missing.");   // 2.4.1: Delete last, danger colour; 1.0.5: Rename after Open in Explorer
             LibraryEntry first = new LibraryEntry { Name = "First", Kind = "ZIP", SourcePath = @"C:\fixture\first.zip" };
             LibraryEntry second = new LibraryEntry { Name = "Second", Kind = "RAR", SourcePath = @"C:\fixture\second.rar" };
             list.Items.Add(new ListViewItem(first.Name) { Tag = first });

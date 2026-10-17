@@ -28,6 +28,7 @@ namespace SlotsInstaller
         public bool LooseLoaderConsent;           // asked once before turning the loader on
         public bool SkipLooseLoaderPrompt;        // 2.1.0: "Don't ask again" for installing with the loader off (older files: false)
         public bool RenameCrashReporter = true;
+        public bool SwapRepairs;                  // 1.0.5: off by default; known fixes for character-swap mods (SwapRepairs.cs, SwapRepairFlag)
         public List<string> FluffyRoots = new List<string>();
         internal bool Relocated;                  // StoreLocation was read from a moved Data folder (not serialized)
 
