@@ -1,0 +1,11 @@
+bin/
+obj/
+Data/
+tests/runs/
+*.user
+*.suo
+Data/portraits/
+tests.local.json
+out/
+releases/
+tests/*.txt

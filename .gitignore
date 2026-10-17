@@ -1,0 +1,15 @@
+build/
+build-cross/
+build-compat/*.a
+__pycache__/
+*.pyc
+*.log
+
+# Slotsloader Manager: local data, build and test output, personal test settings
+manager/Data/
+manager/obj/
+manager/bin/
+manager/out/
+manager/releases/
+manager/tests.local.json
+manager/tests/*.txt
