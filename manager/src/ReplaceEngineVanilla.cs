@@ -1,0 +1,81 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+
+namespace SlotsInstaller
+{
+    // 1.0.1 (the user): gear → Restore → "Restore game to vanilla". Beyond removing this Manager's mods it also clears
+    // the external mod manager's installs and record, every patch PAK (any tool's) and the natives folder, then puts
+    // back the game entries left invalidated (each with a proof). REFramework, costume_mods and the extra outfits stay.
+    // Nothing is kept for an Undo: the click is a confirmed reset. Order: the external manager's mods first (newest
+    // first, as they were stacked over this Manager's), then this Manager's (Restore original for any file another
+    // tool changed), then the leftovers. Each step is its own complete change, so a stop leaves a consistent game.
+    internal sealed partial class ReplaceEngine
+    {
+        internal string RestoreVanilla()
+        {
+            GameProcesses.RequireIdle("restore the game to vanilla");
+            if (GameProcesses.Probe.IsFluffyRunning()) throw new IOException(FluffyRunningReason);
+            var done = new List<string>();
+
+            // 1. The external mod manager's installs, the way it uninstalls them; its record ends empty.
+            List<FluffyMod> fluffyMods = Fluffy().Mods.OrderByDescending(m => m.Index).ToList();
+            int fluffyRemoved = 0;
+            foreach (FluffyMod m in fluffyMods)
+            {
+                string kept;
+                try { UninstallFluffy(m.Root, m.Section, out kept, true); fluffyRemoved++; }
+                catch (Exception ex)
+                {
+                    if (ex is OutOfMemoryException) throw;
+                    throw new IOException("Stopped at the external mod manager's mod '" + m.Name + "': " + ex.Message + (done.Count > 0 || fluffyRemoved > 0 ? " Done before that: " + ReplacePlanner.N(fluffyRemoved, "of its mods") + " uninstalled." : ""), ex);
+                }
+                if (kept != null) try { DeleteFluffyRemoved(kept); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            }
+            if (fluffyRemoved > 0) done.Add("Uninstalled the external mod manager's " + ReplacePlanner.N(fluffyRemoved, "mod") + ".");
+
+            // 2. This Manager's mods, originals back (another tool's changed file gives way to the original).
+            int mine = LoadState().Mods.Count;
+            string restored = RestoreAll(DriftChoice.RestoreOriginal);
+            if (mine > 0) done.Add("Removed this Manager's " + ReplacePlanner.N(mine, "mod") + ".");
+
+            // 3. Every patch PAK and the natives folder, whoever put them there.
+            int paks = 0, natives = 0;
+            using (Lock())
+            {
+                foreach (string pak in Directory.GetFiles(GameRoot, "re_chunk_000.pak.patch_*.pak"))
+                {
+                    Safety.NoReparse(pak); File.SetAttributes(pak, FileAttributes.Normal); File.Delete(pak); GamePaks.Forget(pak); paks++;
+                }
+                string nativesDir = GamePath("natives");
+                if (Directory.Exists(nativesDir))
+                {
+                    Safety.NoReparseChain(nativesDir);
+                    natives = Directory.GetFiles(nativesDir, "*", SearchOption.AllDirectories).Length;
+                    foreach (string f in Directory.GetFiles(nativesDir, "*", SearchOption.AllDirectories)) File.SetAttributes(f, FileAttributes.Normal);
+                    Directory.Delete(nativesDir, true);
+                }
+            }
+            if (paks > 0) done.Add("Deleted " + ReplacePlanner.N(paks, "patch PAK") + ".");
+            if (natives > 0) done.Add("Deleted the natives folder (" + ReplacePlanner.N(natives, "file") + ").");
+
+            // 4. Entries still invalidated point at files that are gone now: each one proven goes back.
+            string repair;
+            try
+            {
+                PakRepairResult r = RepairOrphanedRows(true);
+                repair = r.Repaired.Count > 0 ? "Restored " + ReplacePlanner.N(r.Repaired.Count, "game entry") + " in the game PAKs." : "";
+                if (r.Unproven.Count > 0) repair = (repair + " " + ReplacePlanner.N(r.Unproven.Count, "game entry") + " couldn't be proven: verify SF6's files in Steam to restore " + (r.Unproven.Count == 1 ? "it" : "them") + ".").Trim();
+            }
+            catch (IOException ex) { repair = ex.Message; }
+            if (repair.Length > 0) done.Add(repair);
+
+            PakIndex basePak = File.Exists(GamePath("re_chunk_000.pak")) ? GamePaks.Cached(GamePath("re_chunk_000.pak")) : null;
+            int zeroed = basePak == null ? 0 : basePak.CountZeroed();
+            done.Add(zeroed == 0 ? "The game is vanilla (REFramework and your extra outfits stay)." : "The base PAK still has " + ReplacePlanner.N(zeroed, "invalidated entry") + ": verify SF6's files in Steam.");
+            Program.LogLine("Restore to vanilla: " + String.Join(" ", done) + (String.IsNullOrEmpty(restored) ? "" : " | " + restored));
+            return String.Join(" ", done);
+        }
+    }
+}

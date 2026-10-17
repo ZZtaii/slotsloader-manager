@@ -1,0 +1,28 @@
+{
+    "Workspace":  "\u003cfolder that holds this project\u003e",
+    "GameRoot":  "\u003cgame folder\u003e",
+    "SevenZip":  "C:\\Program Files\\7-Zip\\7z.exe",
+    "Libraries":  [
+                      "\u003cmod manager\u003e\\Games\\SF6\\Mods"
+                  ],
+    "FluffyRoots":  [
+                        "\u003cmod manager\u003e\\Games\\SF6"
+                    ],
+    "Archives":  {
+                     "juri":  "\u003cmod manager\u003e\\Games\\SF6\\Mods\\(Goth Juri C1) EA.zip",
+                     "ingrid":  "\u003clibrary\u003e\\Ingrid C.C. Barefoot C1.zip",
+                     "viperHair":  "\u003clibrary\u003e\\Viper - Hair - Manon C4.rar",
+                     "numericOutfit":  "\u003clibrary\u003e\\01outfit-1385-1-1-1703241589.zip",
+                     "smallReplacement":  "\u003clibrary\u003e\\Cammy C2 Barefoot Colors.zip"
+                 },
+    "ReplaceCases":  [
+                         [
+                             "crc",
+                             "\u003clibrary\u003e\\\u003carchive\u003e.zip",
+                             "\u003centry path inside the archive\u003e",
+                             "\u003cSHA-256 of the entry\u003e",
+                             "\u003cSHA-256 after the fix\u003e"
+                         ]
+                     ],
+    "PrivatePatterns":  [ "\u003cpart of a path only your machine has, e.g. a drive folder\u003e" ]
+}
