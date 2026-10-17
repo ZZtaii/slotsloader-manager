@@ -1,3 +1,18 @@
+# 1.10.4 (2026-10-18)
+
+Package `SF6_Slotsloader_Fork_v1.10.4.zip`, build ID 2026-10-18-1.10.4-slotsloader-fork
+(the first launch rebuilds the outfit PAK once).
+
+- Character-swap repairs, off unless Slotsloader Manager's Settings → **Try to fix
+  character-swap mods broken by game updates** is on (an empty `swap_repairs.txt` in
+  `reframework\data\SF6_Costumes_Data`). On: a swap scene from before the Alex update
+  gets the current timeline type signature, and six known Mai C1, Elena C1 and Mai own-slot
+  chain files are rebuilt from the current game file, only when both the old and the game
+  file match verified fingerprints. Off, outfits are built exactly as in 1.10.3. Turning
+  it on or off rebuilds the outfit PAK at the next launch.
+- An archive whose extracted folder was briefly held by a virus scanner was skipped
+  ("cache folder could not be finalised (error 5)"); the rename is now retried for up to 2 s.
+
 # 1.10.3 (2026-10-17)
 
 Package `SF6_Slotsloader_Fork_v1.10.3.zip`, build ID 2026-10-17-1.10.3-slotsloader-fork

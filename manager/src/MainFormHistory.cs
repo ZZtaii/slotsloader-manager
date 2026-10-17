@@ -238,6 +238,7 @@ namespace SlotsInstaller
                 case HistoryKinds.Recover: return e.Via == "journal" ? "Recovered" : "Restored";
                 case HistoryKinds.Undo: return "Undo";
                 case HistoryKinds.FluffyUninstall: return "Uninstalled (external manager)";
+                case HistoryKinds.Rename: return "Renamed";
             }
             return e.Kind;
         }
@@ -252,6 +253,7 @@ namespace SlotsInstaller
                 case HistoryKinds.Reorder: return "Priority moves";
                 case HistoryKinds.Recover: case HistoryKinds.Undo: return "Undo and restores";
                 case HistoryKinds.FluffyUninstall: return "External mod manager";
+                case HistoryKinds.Rename: return "Renames";
                 case "play": return "Played";
             }
             return "";

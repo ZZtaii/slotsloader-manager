@@ -41,10 +41,11 @@ namespace SlotsInstaller
                     p.Components.Add(c);
                     componentsById.Add(c.Id,c);
                 }
+                var identity = new CharacterIdentity();
                 foreach (SourceEntry e in r.Entries.Values)
                 {
                     string[] parts=e.Path.Split('/'); int natives=Array.FindIndex(parts,s=>s.Equals("natives",StringComparison.OrdinalIgnoreCase));
-                    if (natives < 0) continue;
+                    if (natives < 0) { identity.AddOutside(e.Path); continue; }
                     string owner=String.Join("/",parts.Take(natives));
                     // Each natives root is its own selectable unit. Never absorb nested backups into a parent.
                     ModComponent c;
@@ -55,9 +56,10 @@ namespace SlotsInstaller
                     }
                     string dst="natives/"+String.Join("/",parts.Skip(natives+1));
                     c.Assets.Add(new NativeAsset {EntryPath=e.Path,DestinationPath=dst,Size=e.Size});
-                    foreach (string code in Library.FighterCodes("/"+dst))   // 1.0.1: the fighter folder decides (Library.FighterCodes)
-                        if (!p.CharacterCodes.Contains(code)) p.CharacterCodes.Add(code);
+                    identity.AddNative("/"+dst.Substring("natives/".Length));
                 }
+                // Keep the listing's fighter identity when opening, including REFramework colour data.
+                p.CharacterCodes = identity.Finish();
                 CollectRootFiles(p, r, componentsById, metadata.Select(e => Dir(e.Path)).ToList());
                 p.RebuildIndexes();
                 var componentsByName = p.Components.GroupBy(c=>c.Name.Trim(),StringComparer.OrdinalIgnoreCase)

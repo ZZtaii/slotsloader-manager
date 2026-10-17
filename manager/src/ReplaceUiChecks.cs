@@ -562,7 +562,7 @@ namespace SlotsInstaller
             Call(form, "InstallCurrent"); WaitReview(form);
             ReplaceMod mod = engine.LoadState().Mods.Single();
             ListView list = Get<ListView>(form, "modList"); ContextMenuStrip menu = list.ContextMenuStrip;
-            var outfitItem = (ToolStripMenuItem)menu.Items[3]; var replacementItem = (ToolStripMenuItem)menu.Items[4];
+            var outfitItem = (ToolStripMenuItem)menu.Items[4]; var replacementItem = (ToolStripMenuItem)menu.Items[5];   // 1.0.5: Rename is item 2
             FlatButton button = Get<FlatButton>(form, "libraryUninstallButton");
 
 
@@ -766,7 +766,8 @@ namespace SlotsInstaller
                 // 6. The source is deleted: the inspector clears and says so; the installed copy stays.
                 Call(form, "ShowPage", Get<Panel>(form, "libraryPage")); Load(form, f, "Edit Me.zip"); WaitReview(form);
                 File.Delete(zip);
-                Require((bool)Call(form, "CheckOpenPackage") && Get<ModPackage>(form, "package") == null && Get<Label>(form, "statusText").Text.Contains("is no longer on disk") && Get<Label>(form, "packageTitle").Text == "Choose a mod" && !Get<FlatButton>(form, "installButton").Enabled, "deleted source: " + problems());
+                Call(form, "CheckOpenPackage"); WaitReview(form);
+                Require(Get<ModPackage>(form, "package") == null && Get<Label>(form, "statusText").Text.Contains("is no longer on disk") && Get<Label>(form, "packageTitle").Text == "Choose a mod" && !Get<FlatButton>(form, "installButton").Enabled, "deleted source: " + problems());
                 Require(engine.LoadState().Mods.Any(m => String.Equals(m.SourcePath, zip, StringComparison.OrdinalIgnoreCase)) && asked == 0, "the installed copy went with its source, or a dialog opened");
                 // The selection mapping itself: an id that changed falls back to the one option with that name.
                 List<string> dropped;

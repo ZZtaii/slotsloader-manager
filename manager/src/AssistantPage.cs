@@ -584,7 +584,7 @@ namespace SlotsInstaller
         {
             AssistantModel m = AssistantModels.Find(Session.Model);
             Transcript.EmptyTitle = "Ask the Assistant to find, install or explain mods";
-            Transcript.EmptyBody = "For example:\n“Find outfits for Chun-Li in my library and add the best two as extra slots.”\n“What's installed for Ryu, and which of those mods haven't I played in a while?”\n\nThe Assistant searches your library, checks what's installed and plans the changes. Nothing is installed until you apply it in the Plan.";
+            Transcript.EmptyBody = "For example:\n“Give me 5 options for Chun-Li C1.”\n“What's installed for Ryu, and which of those mods haven't I played in a while?”\n\nThe Assistant searches your library, checks what's installed and plans the changes. Nothing is installed until you apply it in the Plan.";
             string key = null;
             try { key = LoadKey(); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; }
             if (key == null) { Transcript.EmptyStatus = "No API key · add one in Settings → Assistant"; Transcript.EmptyStatusColor = Palette.Accent; }

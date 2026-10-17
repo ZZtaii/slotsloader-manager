@@ -44,6 +44,7 @@ namespace SlotsInstaller
             };
             try
             {
+                check("swap repairs (1.0.5 setting, off by default: nothing touched, Slotsloader marker follows it): typed Alex scene signatures, fingerprinted physics recipes, malformed/customized refusals, idempotence and game-aware preparation cache", delegate { SwapRepairChecks.Run(Path.Combine(run, "swap-repairs")); });
                 check("murmur3 path hash matches the game's index (two real vanilla paths)", HashVectors);
                 check("KPKA TOC parse, lookups, zero/restore rows with verification, refusal of features != 0 and wrong expected bytes", delegate { PakBasics(Path.Combine(run, "pak")); });
                 check("fixers: allow-listed CRC upgrade, stale types reported, mip pitch repair, old tex suffix and path normalization", delegate { Fixers(); });

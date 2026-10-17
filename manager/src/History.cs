@@ -17,7 +17,8 @@ namespace SlotsInstaller
     {
         internal const string Install = "install", Update = "update", Uninstall = "uninstall", Enable = "enable", Disable = "disable",
             Reorder = "reorder", Recover = "recover", Undo = "undo", FluffyUninstall = "fluffy_uninstall",
-            SessionStart = "session_start", SessionStop = "session_stop", Launch = "launch", Summary = "summary";
+            SessionStart = "session_start", SessionStop = "session_stop", Launch = "launch", Summary = "summary",
+            Rename = "rename";   // 1.0.5: a library source renamed in the Manager (Source = new path, PrevId = old path)
         internal static bool IsPlay(string kind) { return kind == SessionStart || kind == Launch; }
     }
     internal static class HistoryModes { internal const string Extra = "extra_outfit", Replace = "replace", Tool = "tool", Fluffy = "fluffy"; }
@@ -163,6 +164,14 @@ namespace SlotsInstaller
         private readonly List<HistoryEvent> playEvents = new List<HistoryEvent>();
         private Dictionary<string, int> foldedPlays = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, DateTime> foldedLast = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        // 1.0.5: renamed sources (old path -> new path). A mod's history follows its file; plays that list the old path count for the new one.
+        private readonly Dictionary<string, string> renamed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        internal string Resolve(string key)
+        {
+            string next; int hops = 0;
+            while (!String.IsNullOrEmpty(key) && renamed.TryGetValue(key, out next) && hops++ < 32) key = next;
+            return key;
+        }
 
         internal int Launches { get { return FoldedLaunches + Plays.Count; } }
         internal int SlotUses { get { return FoldedSlotUses + Plays.Sum(p => p.Slots); } }
@@ -211,7 +220,8 @@ namespace SlotsInstaller
             if (HistoryKinds.IsPlay(e.Kind)) { playEvents.Add(e); return; }
             if (e.Kind == HistoryKinds.SessionStop) return;
             if (e.Kind == HistoryKinds.Undo) return;   // its own row in the timeline; the restore it runs has its own events
-            string key = Key(e);
+            if (e.Kind == HistoryKinds.Rename) { ApplyRename(e); return; }
+            string key = Resolve(Key(e));
             if (e.Kind == HistoryKinds.Summary)
             {
                 if (key.Length == 0) { FoldedLaunches += e.Launches; FoldedSlotUses += e.Slots; return; }
@@ -264,6 +274,35 @@ namespace SlotsInstaller
             }
         }
 
+        private void ApplyRename(HistoryEvent e)
+        {
+            string from = e.PrevId ?? "", to = e.Source ?? "";
+            if (from.Length == 0 || to.Length == 0 || String.Equals(from, to, StringComparison.Ordinal)) return;
+            string current = Resolve(from);
+            if (String.Equals(current, to, StringComparison.OrdinalIgnoreCase) && !String.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return;   // already merged
+            ModHistory old; bool had = Mods.TryGetValue(current, out old);
+            if (had) Mods.Remove(current);
+            // The requested name is now the source, even when it was used before (A -> B -> A).
+            // Point every earlier name straight to it; the current name must never be its own alias.
+            string[] aliases = renamed.Where(p => String.Equals(p.Value, current, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray();
+            renamed.Remove(to);
+            foreach (string alias in aliases) if (!String.Equals(alias, to, StringComparison.OrdinalIgnoreCase)) renamed[alias] = to;
+            if (!String.Equals(current, to, StringComparison.OrdinalIgnoreCase)) renamed[current] = to;
+            ModHistory m = Get(to, to, e.Name, had ? old.Mode : e.Mode, had ? old.Character : e.Character, had ? old.Slot : e.Slot);
+            m.LastEvent = History.Max(m.LastEvent, e.Utc);
+            if (had)
+            {
+                if (String.IsNullOrEmpty(m.Name)) m.Name = old.Name;
+                m.Events += old.Events;
+                m.FirstInstalled = History.Min(m.FirstInstalled, old.FirstInstalled); m.LastInstalled = History.Max(m.LastInstalled, old.LastInstalled);
+                m.LastUpdated = History.Max(m.LastUpdated, old.LastUpdated); m.LastUninstalled = History.Max(m.LastUninstalled, old.LastUninstalled);
+                m.LastEvent = History.Max(m.LastEvent, old.LastEvent);
+                m.Slots.UnionWith(old.Slots); m.Disabled.UnionWith(old.Disabled);
+            }
+            int plays; if (foldedPlays.TryGetValue(current, out plays)) { foldedPlays.Remove(current); int now; foldedPlays.TryGetValue(to, out now); foldedPlays[to] = now + plays; }
+            DateTime last; if (foldedLast.TryGetValue(current, out last)) { foldedLast.Remove(current); DateTime now; if (!foldedLast.TryGetValue(to, out now) || last > now) foldedLast[to] = last; }
+        }
+
         // Launches, newest last: a probe session and a SlotsLoader run less than three minutes apart (or the same
         // game process) are one launch; every mod in either counts once.
         internal static List<HistoryPlay> MergePlays(IEnumerable<HistoryEvent> events)
@@ -287,10 +326,10 @@ namespace SlotsInstaller
         {
             Plays = MergePlays(playEvents);
             foreach (ModHistory m in Mods.Values) { m.Plays = 0; m.LastPlayed = null; }
-            foreach (var kv in foldedPlays) { ModHistory m = Find(kv.Key); if (m != null) m.Plays += kv.Value; }
-            foreach (var kv in foldedLast) { ModHistory m = Find(kv.Key); if (m != null) m.LastPlayed = History.Max(m.LastPlayed, kv.Value); }
+            foreach (var kv in foldedPlays) { ModHistory m = Find(Resolve(kv.Key)); if (m != null) m.Plays += kv.Value; }
+            foreach (var kv in foldedLast) { ModHistory m = Find(Resolve(kv.Key)); if (m != null) m.LastPlayed = History.Max(m.LastPlayed, kv.Value); }
             foreach (HistoryPlay p in Plays)
-                foreach (string key in p.Keys)
+                foreach (string key in new HashSet<string>(p.Keys.Select(Resolve), StringComparer.OrdinalIgnoreCase))   // a launch counts once per mod
                 {
                     ModHistory m = Find(key);
                     if (m == null)

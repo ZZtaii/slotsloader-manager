@@ -57,6 +57,7 @@ namespace SlotsInstaller
             plan.Method = engine.CurrentMethod(state);
             GamePaks paks = GamePaks.Load(engine.GameRoot);
             GameReference reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc);
+            reference.SwapRepairs = engine.Settings.SwapRepairs;   // 1.0.5: Settings, off by default
             FluffyInstalls fluffy = engine.Fluffy();
             string externalLock = plugin == null ? ReplaceEngine.ExternalLockReason(fluffy) : null;   // 1.0.1: Slotsloader still installs
             if (externalLock != null) plan.Items.Add(new HealthItem("error", externalLock));
@@ -143,7 +144,7 @@ namespace SlotsInstaller
                 string low = pair.Key.ToLowerInvariant();
                 List<FixResult> quick;
                 if (prepared.Native && low.Contains(".tex.") && ModFixes.TextureFileOk(staged, out quick)) prepared.Fixes = quick;   // 1.0.1: header only
-                else if (prepared.Native && (low.Contains(".user.") || low.Contains(".tex.")) && prepared.Size <= 256L * 1024 * 1024)
+                else if (prepared.Native && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && reference.SwapRepairs && low.EndsWith(".scn.20"))) && prepared.Size <= 256L * 1024 * 1024)
                 {
                     byte[] data = File.ReadAllBytes(staged);
                     prepared.Fixes = ModFixes.UpgradeModFile(ref data, reference, pair.Key);
@@ -335,7 +336,7 @@ namespace SlotsInstaller
         // Game facts that change what the fixers write; part of every cache key.
         internal static string ReferenceKey(GameReference r)
         {
-            return "swatch1|" + r.TexVersion + "|" + r.CrcSource + "|" + String.Join(",", r.CurrentCrcs.OrderBy(kv => kv.Key).Select(kv => kv.Key.ToString("X8") + ":" + kv.Value.ToString("X8")));
+            return (r.SwapRepairs ? "swap1|" + r.OfficialStamp : "swatch1") + "|" + r.TexVersion + "|" + r.CrcSource + "|" + String.Join(",", r.CurrentCrcs.OrderBy(kv => kv.Key).Select(kv => kv.Key.ToString("X8") + ":" + kv.Value.ToString("X8")));
         }
 
         // The area a file belongs to. Outfit folders (esfNNN/CCC) and non-costume folders are "slots":
@@ -518,7 +519,7 @@ namespace SlotsInstaller
                         string low = pair.Key.ToLowerInvariant();
                         List<FixResult> quick;
                         if (low.StartsWith("natives/") && low.Contains(".tex.") && ModFixes.TextureFileOk(file, out quick)) item.Fixes = quick;   // 1.0.1: header only
-                        else if (low.StartsWith("natives/") && (low.Contains(".user.") || low.Contains(".tex.")) && item.Size <= 256L * 1024 * 1024)
+                        else if (low.StartsWith("natives/") && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && reference.SwapRepairs && low.EndsWith(".scn.20"))) && item.Size <= 256L * 1024 * 1024)
                         {
                             byte[] data = System.IO.File.ReadAllBytes(file);
                             item.Fixes = ModFixes.UpgradeModFile(ref data, reference, pair.Key);

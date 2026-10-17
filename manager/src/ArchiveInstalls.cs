@@ -25,7 +25,8 @@ namespace SlotsInstaller
         internal const string FileName = "archive-installs.json";
         private static readonly object Sync = new object();
         private static readonly string[] Extensions = { ".zip", ".rar", ".7z" };
-        private static string RecordsPath { get { return System.IO.Path.Combine(AppConfig.DataDir, FileName); } }
+        internal static string DataDirOverride;   // checks: a fixture Data folder
+        private static string RecordsPath { get { return System.IO.Path.Combine(DataDirOverride ?? AppConfig.DataDir, FileName); } }
 
         internal static bool IsArchive(string path) { return !String.IsNullOrEmpty(path) && File.Exists(path) && Extensions.Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase); }
 
@@ -100,6 +101,21 @@ namespace SlotsInstaller
             catch (Exception ex) { Program.Log(ex); }
         }
 
+        // 1.0.5 Rename: the records of a renamed library source name its new path. Returns how many changed; a write
+        // failure throws (the rename rolls back).
+        internal static int RenameSource(string from, string to)
+        {
+            lock (Sync)
+            {
+                ArchiveInstallFile records = Load();
+                int changed = 0;
+                foreach (ArchiveInstallRecord r in records.Records)
+                    if (String.Equals(System.IO.Path.GetFullPath(r.SourcePath), System.IO.Path.GetFullPath(from), StringComparison.OrdinalIgnoreCase)) { r.SourcePath = System.IO.Path.GetFullPath(to); changed++; }
+                if (changed > 0) Save(records);
+                return changed;
+            }
+        }
+
         // The archive's place in costume_mods, as a manual drop would have it.
         internal static string Destination(string costumeRoot, string character, string source)
         {
@@ -108,16 +124,60 @@ namespace SlotsInstaller
             return Safety.Under(Safety.Under(root, character), name);
         }
 
+        private static bool SamePath(string a, string b)
+        {
+            try { return String.Equals(System.IO.Path.GetFullPath(a), System.IO.Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return false; }
+        }
+
+        // A library rename changes SourcePath, not the installed filename: that filename is also SlotsLoader's
+        // variant-choice key. Reinstall its one existing copy in this character's folder. Records from another
+        // costume root are unrelated to this install and are ignored without inspecting their files.
+        private static ArchiveInstallRecord ExistingCopy(ArchiveInstallFile records, string source, string destination, string character)
+        {
+            string folder = System.IO.Path.GetDirectoryName(destination);
+            string root = System.IO.Path.GetDirectoryName(folder).TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var copies = new List<ArchiveInstallRecord>();
+            foreach (ArchiveInstallRecord record in records.Records.AsEnumerable().Reverse())
+            {
+                if (!SamePath(record.SourcePath, source) || !String.Equals(record.Character, character, StringComparison.OrdinalIgnoreCase)) continue;
+                string path;
+                try { path = System.IO.Path.GetFullPath(record.Path); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; throw new IOException("The installed archive's recorded path is not valid. Refresh the Installed page before reinstalling.", ex); }
+                if (!System.IO.Path.IsPathRooted(record.Path)) throw new IOException("The installed archive's recorded path is not absolute. Refresh the Installed page before reinstalling.");
+                if (!SamePath(path, root) && !path.StartsWith(root + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!SamePath(System.IO.Path.GetDirectoryName(path), folder) || !Extensions.Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                    throw new IOException("The installed archive's recorded path is outside costume_mods\\" + character + ". It cannot be used for this reinstall.");
+                if (!seen.Add(path)) continue;
+                Safety.NoReparseChain(path);
+                if (Directory.Exists(path)) throw new IOException(System.IO.Path.GetFileName(path) + " is now a folder. Uninstall or rename it first.");
+                if (File.Exists(path)) copies.Add(record);
+            }
+            if (copies.Count > 1) throw new IOException("More than one installed archive is linked to this mod for " + character + ". Remove the extra copies on the Installed page before reinstalling.");
+            return copies.SingleOrDefault();
+        }
+
+        private static void VerifyCopy(ArchiveInstallRecord record, string path)
+        {
+            Safety.NoReparseChain(path);
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length != record.Size || String.IsNullOrEmpty(record.Sha256) || !String.Equals(Hash(path), record.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new IOException(System.IO.Path.GetFileName(path) + " changed since the Manager installed it. Uninstall or rename it before reinstalling.");
+        }
+
         internal static InstallResult Install(string source, string costumeRoot, string character, string modName)
         {
             if (!IsArchive(source)) throw new IOException("Install all variants needs a ZIP, RAR or 7Z archive.");
             if (!Characters.Names.Contains(character)) throw new IOException("Choose a known character.");
             using (Installer.AcquireMutation(costumeRoot))
             {
-                string dest = Destination(costumeRoot, character, source), folder = System.IO.Path.GetDirectoryName(dest), name = System.IO.Path.GetFileName(dest);
-                Safety.NoReparseChain(dest);
+                string dest = Destination(costumeRoot, character, source);
                 ArchiveInstallFile records; lock (Sync) records = Load();
-                ArchiveInstallRecord previous = File.Exists(dest) ? records.Records.LastOrDefault(r => Matches(r, dest)) : null;
+                ArchiveInstallRecord previous = ExistingCopy(records, source, dest, character);
+                if (previous != null) { dest = System.IO.Path.GetFullPath(previous.Path); VerifyCopy(previous, dest); }
+                string folder = System.IO.Path.GetDirectoryName(dest), name = System.IO.Path.GetFileName(dest);
+                Safety.NoReparseChain(dest);
                 if (Directory.Exists(dest) || (File.Exists(dest) && previous == null))
                     throw new IOException(name + " is already in costume_mods\\" + character + ". Uninstall or rename it first.");
                 Directory.CreateDirectory(folder);
@@ -129,8 +189,8 @@ namespace SlotsInstaller
                     OperationContext.ThrowIfCancellationRequested();
                     using (OperationContext.NonCancellable())
                     {
-                        if (previous != null) File.Delete(dest);
-                        File.Move(temp, dest);
+                        if (previous != null) { VerifyCopy(previous, dest); File.Replace(temp, dest, null); }
+                        else File.Move(temp, dest);
                     }
                 }
                 finally { try { if (File.Exists(temp)) File.Delete(temp); } catch { } }

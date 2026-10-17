@@ -159,7 +159,7 @@ namespace SlotsInstaller
         private static readonly Regex NativeCode = new Regex(@"(?:/esf/esf|/esf)(\d{3})(?:/|_)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex CostumeFolder = new Regex(@"/product/model/esf/esf(\d{3})/(\d{3})/", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex FighterFolder = new Regex(@"/esf/esf(\d{3})/", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        internal const int CodesVersion = 2;
+        internal const int CodesVersion = 3;   // 1.0.5: art for several fighters is UI (relists multi-fighter records once)
         // Fighter codes of one native path ("/stm/..." or "/natives/stm/..."). 1.0.1: a file under a fighter folder
         // (/esf/esfNNN/) is that fighter's only; "esf027_*.tex" inside esf001 no longer adds Terry. Elsewhere a code in
         // a folder or file name counts, as before.
@@ -213,6 +213,75 @@ namespace SlotsInstaller
             lock (CacheLock) { removed = IdentityCache.Remove(path); if (removed) cacheDirty = true; }
             if (removed) SaveIdentityCache();
             return removed;
+        }
+        private static bool UsableIdentity(LibraryIdentityRecord record, string stamp)
+        {
+            return record != null && record.Stamp == stamp && record.CharacterCodes != null && record.OptionCount.HasValue && record.OptionCount.Value >= 0
+                && record.OptionIds != null && record.OptionIds.Count == record.OptionCount.Value && record.CostumeKeys != null && record.ToolKinds != null
+                && record.StageIds != null && record.MiscAreas != null && record.Authors != null
+                && (record.CodesVersion >= CodesVersion || record.CharacterCodes.Count <= 1);
+        }
+        private static LibraryIdentityRecord CopyIdentity(LibraryIdentityRecord record)
+        {
+            return new LibraryIdentityRecord { SourcePath = record.SourcePath, Stamp = record.Stamp, CharacterCodes = record.CharacterCodes.ToList(),
+                OptionCount = record.OptionCount, OptionIds = record.OptionIds.ToList(), CostumeKeys = record.CostumeKeys.ToList(), ToolKinds = record.ToolKinds.ToList(),
+                StageIds = record.StageIds.ToList(), MiscAreas = record.MiscAreas.ToList(), Authors = record.Authors.ToList(), AddedUtc = record.AddedUtc, CodesVersion = record.CodesVersion };
+        }
+        // Only archive content metadata is reusable. Capture it while the old source still exists; incomplete or
+        // older records are conservatively left for the next scan. Folder contents remain uncached.
+        internal static LibraryIdentityRecord CaptureRenameIdentity(string source, string sevenZipPath)
+        {
+            try
+            {
+                if (Directory.Exists(source)) return null;
+                EnsureCacheLoaded(); string stamp = ArchiveStamp(source, sevenZipPath);
+                lock (CacheLock)
+                {
+                    LibraryIdentityRecord record;
+                    return IdentityCache.TryGetValue(source, out record) && UsableIdentity(record, stamp) && record.CodesVersion >= CodesVersion ? CopyIdentity(record) : null;
+                }
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return null; }
+        }
+        // Called only after a successful rename. A changed source/tool invalidates the hint rather than assigning
+        // stale metadata to the new path. Cache failures never turn a completed file rename into an error.
+        internal static void CompleteSourceRename(string from, string to, LibraryIdentityRecord captured, string sevenZipPath)
+        {
+            try
+            {
+                EnsureCacheLoaded(); LibraryIdentityRecord moved = null;
+                try
+                {
+                    if (captured != null && String.Equals(captured.SourcePath, from, StringComparison.OrdinalIgnoreCase) && captured.CodesVersion >= CodesVersion
+                        && UsableIdentity(captured, ArchiveStamp(to, sevenZipPath)))
+                    {
+                        moved = CopyIdentity(captured); moved.SourcePath = to;
+                        var info = new FileInfo(to); moved.AddedUtc = AddedStamp(AddedTime(info.CreationTimeUtc, info.LastWriteTimeUtc));
+                    }
+                }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; }
+                lock (CacheLock)
+                {
+                    bool removed = IdentityCache.Remove(from);
+                    removed = IdentityCache.Remove(to) || removed;   // also discard any stale record of an earlier source at this name
+                    if (moved != null) IdentityCache[to] = moved;
+                    if (removed || moved != null) cacheDirty = true;
+                }
+                SaveIdentityCache();
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+        }
+        // The UI keeps content metadata after a rename, but guesses based on the outer filename must be rebuilt.
+        internal static void RefreshFilenameIdentity(LibraryEntry entry)
+        {
+            if (entry == null || String.IsNullOrEmpty(entry.SourcePath)) return;
+            string name = entry.Kind == "Folder" ? Path.GetFileName(entry.SourcePath.TrimEnd('\\')) : Path.GetFileNameWithoutExtension(entry.SourcePath);
+            entry.FilenameCharacter = entry.Detection == "Error" ? "" : Characters.Guess(name);
+            if (entry.Detection != "Error" && (entry.CharacterCodes == null || entry.CharacterCodes.Count == 0))
+            {
+                entry.Character = ModCategories.NameGuessAllowed(entry) ? entry.FilenameCharacter : "";
+                entry.Detection = String.IsNullOrWhiteSpace(entry.Character) ? "Unknown" : "Filename";
+            }
         }
         public static List<LibraryEntry> Scan(IEnumerable<string> libraries)
         {
@@ -382,7 +451,7 @@ namespace SlotsInstaller
                     lock (CacheLock)
                     {
                         LibraryIdentityRecord found;
-                        if (IdentityCache.TryGetValue(entry.SourcePath, out found) && found.Stamp == stamp && found.OptionCount.HasValue && found.OptionCount.Value >= 0 && found.OptionIds != null && found.OptionIds.Count == found.OptionCount.Value && found.CostumeKeys != null && found.ToolKinds != null && found.StageIds != null && found.MiscAreas != null && found.Authors != null && (found.CodesVersion >= CodesVersion || found.CharacterCodes == null || found.CharacterCodes.Count <= 1)) cached = found;
+                        if (IdentityCache.TryGetValue(entry.SourcePath, out found) && UsableIdentity(found, stamp)) cached = found;
                         // 2.4.1: a record from before the Added sort (or with an older time) gets this listing's stat; no relisting.
                         string added = AddedStamp(entry.AddedUtc);
                         if (cached != null && added != null && cached.AddedUtc != added) { cached.AddedUtc = added; cacheDirty = true; }
@@ -393,11 +462,12 @@ namespace SlotsInstaller
                 else
                 {
                     Interlocked.Increment(ref CacheMisses);
-                    var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var identity = new CharacterIdentity();
                     var costumes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     var options = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     var tools = new HashSet<string>(StringComparer.Ordinal);
                     var categories = new ModCategories.Collector();
+                    var artFiles = new List<string>();
                     using (var reader = new SourceReader(entry.SourcePath, sevenZipPath))
                     {
                         foreach (string path in reader.Entries.Keys)
@@ -408,24 +478,23 @@ namespace SlotsInstaller
                             if (boundary < 0)
                             {
                                 // 2.3.0: REFramework colour data keyed to a fighter is that fighter's (not a tool file).
-                                string colour = ModCategories.ColourDataFighter(path);
-                                if (colour != null) { found.Add(colour); categories.AddFighterData(); continue; }
+                                if (identity.AddOutside(path)) { categories.AddFighterData(); continue; }
                                 string tool = ToolKind(parts); if (tool != null) tools.Add(tool); else categories.AddOther(path); continue;
                             }
                             options.Add(String.Join("/", parts.Take(boundary)));
                             string native = "/" + String.Join("/", parts.Skip(boundary + 1));
-                            bool fighter = false;
-                            foreach (string code in FighterCodes(native)) { found.Add(code); fighter = true; }
-                            // 2.3.0: the fighter's own art (gui/data/character_image/NNN/) belongs to that fighter.
-                            string art = fighter ? null : ModCategories.FighterArtCode(native);
-                            if (art != null) { found.Add(art); fighter = true; }
+                            CharacterIdentity.NativeFile fileIdentity = identity.AddNative(native);
                             Match costume = CostumeFolder.Match(native);
                             if (costume.Success) costumes.Add(costume.Groups[1].Value + "/" + costume.Groups[2].Value);
-                            categories.AddNative(native, fighter);
+                            // 2.3.0: the fighter's own art (gui/data/character_image/NNN/) belongs to that fighter. 1.0.5: only when
+                            // the art covers one fighter; art for several fighters (a portrait set) is a UI mod (sorted after the loop).
+                            if (fileIdentity.ArtCode != null) { artFiles.Add(native); continue; }
+                            categories.AddNative(native, fileIdentity.Fighter);
                         }
                         entry.Authors = ReadAuthors(reader);
                     }
-                    codes = found.OrderBy(code => code, StringComparer.Ordinal).ToList();
+                    foreach (string art in artFiles) categories.AddNative(art, identity.SingleFighterArt);
+                    codes = identity.Finish();
                     entry.OptionIds = options.OrderBy(id => id, StringComparer.OrdinalIgnoreCase).ToList();
                     entry.OptionCount = entry.OptionIds.Count;
                     entry.CostumeKeys = costumes.OrderBy(k => k, StringComparer.Ordinal).ToList();
@@ -704,6 +773,52 @@ namespace SlotsInstaller
             LoaderResults.Apply(list,root);
             return list.OrderBy(x=>x.Character).ThenBy(x=>x.Name).ToList();
         }
+        internal sealed class ManagedManifestSnapshot
+        {
+            internal string File;
+            internal byte[] Before;
+            internal InstallManifest Manifest;
+        }
+        // Rename needs only managed manifests, including disabled outfits. Match ListInstalled's visibility and
+        // link rules without reading manual archives, loader reports, variant choices or UI snapshot stamps.
+        internal static IEnumerable<ManagedManifestSnapshot> ManagedManifests(string costumeRoot)
+        {
+            string root = ValidateRoot(costumeRoot);
+            if (Directory.Exists(root))
+                foreach (string character in Directory.EnumerateDirectories(root))
+                {
+                    if (Path.GetFileName(character).StartsWith(".") || (File.GetAttributes(character) & FileAttributes.Hidden) != 0) continue;
+                    Safety.NoReparse(character);
+                    foreach (string folder in Directory.EnumerateDirectories(character))
+                    {
+                        if (Path.GetFileName(folder).StartsWith(".") || (File.GetAttributes(folder) & FileAttributes.Hidden) != 0) continue;
+                        Safety.NoReparse(folder);
+                        ManagedManifestSnapshot snapshot = ReadManagedSnapshot(folder, Path.GetFileName(character));
+                        if (snapshot != null) yield return snapshot;
+                    }
+                }
+            string disabled = Path.Combine(Path.GetDirectoryName(root), ".slotsloader-installer-disabled"); Safety.NoReparseChain(disabled);
+            if (Directory.Exists(disabled))
+                foreach (string folder in Directory.EnumerateDirectories(disabled))
+                {
+                    Safety.NoReparse(folder);
+                    ManagedManifestSnapshot snapshot = ReadManagedSnapshot(folder, null);
+                    if (snapshot != null) yield return snapshot;
+                }
+        }
+        private static ManagedManifestSnapshot ReadManagedSnapshot(string folder, string character)
+        {
+            string file = Path.Combine(folder, ManifestName); if (!File.Exists(file)) return null;
+            Safety.NoReparseChain(file);
+            try
+            {
+                byte[] before = File.ReadAllBytes(file); InstallManifest manifest;
+                using (var reader = new StreamReader(new MemoryStream(before), Encoding.UTF8, true))
+                    manifest = Json.Serializer().Deserialize<InstallManifest>(reader.ReadToEnd());
+                return ValidManagedManifest(manifest, character) ? new ManagedManifestSnapshot { File = file, Before = before, Manifest = manifest } : null;
+            }
+            catch { return null; }
+        }
         public static string SetEnabled(InstalledOutfit outfit,string costumeRoot,bool enabled)
         {
             using (AcquireMutation(costumeRoot)) return SetEnabledLocked(outfit,costumeRoot,enabled);
@@ -763,12 +878,15 @@ namespace SlotsInstaller
             try
             {
                 InstallManifest m=Json.Read<InstallManifest>(p);
-                if (m==null || m.Format!="sf6-slotsloader-installer-v1" || !Regex.IsMatch(m.Id ?? "",@"^[0-9a-f]{32}$") || m.SelectedIds==null || m.Sha256==null || m.Sha256.Count==0) return null;
-                Safety.Segment(m.Name); Safety.Segment(m.Character);
-                if (character!=null && !m.Character.Equals(character,StringComparison.OrdinalIgnoreCase)) return null;
-                return m;
+                return ValidManagedManifest(m,character) ? m : null;
             }
             catch { return null; }
+        }
+        private static bool ValidManagedManifest(InstallManifest m, string character)
+        {
+            if (m == null || m.Format != "sf6-slotsloader-installer-v1" || !Regex.IsMatch(m.Id ?? "", @"^[0-9a-f]{32}$") || m.SelectedIds == null || m.Sha256 == null || m.Sha256.Count == 0) return false;
+            Safety.Segment(m.Name); Safety.Segment(m.Character);
+            return character == null || m.Character.Equals(character, StringComparison.OrdinalIgnoreCase);
         }
         internal static IDisposable AcquireMutation(string costumeRoot)
         {

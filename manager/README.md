@@ -10,6 +10,15 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 
 ## What changed
 
+- 1.0.5:
+  - **Rename** in the Mod library: right-click → Rename or **F2**, then type on the row. Enter or clicking away renames, Esc cancels. Installed outfits, Install all variants copies, replacements and history follow the new name. Options you were editing stay as they were.
+  - The option's version (`v1.0`) shows at the right of its name.
+  - Portrait art for several fighters counts as a UI mod. A portrait bundle no longer shows under every fighter.
+  - Colour-only mods keep their fighter after you open them.
+  - Reinstalling an Install all variants copy updates that file, even after the source was renamed.
+  - Settings → Game files & replacements → **Try to fix character-swap mods broken by game updates** (off by default). On, Replace original and Slotsloader 1.10.4 apply known fixes to old character swaps: the Alex update's scene signature, and some Mai and Elena physics files rebuilt from the current game. Only files that match a verified older version are changed. Off, nothing changes and no swap warnings show.
+  - Bundles **Slotsloader Fork 1.10.4**: the swap fixes above, and an archive briefly locked by a virus scanner is no longer skipped.
+
 - 1.0.4:
   - Clearer option order. In each list: the mod's `MenuPriority=` (lower first) when it sets one; the author's numbering when names start with numbers; otherwise the default option first, marked **Default** (its files are identical to the main files'), single options before groups, small add-ons right after the option they change, then by name. Main files no longer sit between two groups. The order is display only: which files win still follows the order you pick options in.
 

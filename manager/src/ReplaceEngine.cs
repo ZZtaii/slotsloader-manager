@@ -1097,13 +1097,14 @@ namespace SlotsInstaller
                 if (state.Mods.Count == 0) return "";
                 GamePaks paks = GamePaks.Load(GameRoot);
                 GameReference reference = GameReference.Load(GameRoot, paks.Base, paks.Dlc);
+                reference.SwapRepairs = Settings.SwapRepairs;   // 1.0.5: Settings, off by default
                 int changed = 0;
                 foreach (ReplaceMod mod in state.Mods)
                     foreach (ModFile f in mod.Files)
                     {
                         if (!f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)) continue;
                         string low = f.Path.ToLowerInvariant();
-                        if (!low.Contains(".user.") && !low.Contains(".tex.")) continue;
+                        if (!low.Contains(".user.") && !low.Contains(".tex.") && !(reference.SwapRepairs && low.EndsWith(".scn.20"))) continue;
                         string stored = StoreFile(state, mod, f);
                         if (!File.Exists(stored) || new FileInfo(stored).Length > 256L * 1024 * 1024) continue;
                         List<FixResult> quick;

@@ -158,6 +158,7 @@ namespace SlotsInstaller
         {
             internal int Generation; internal ModPackage Package; internal string Mode; internal string[] Selection;
             internal CompositionPlan Composition; internal ReplacePlan Health; internal long Milliseconds;
+            internal bool SourceChanged, SourceGone;
         }
 
         private void EnsureReviewTimer()
@@ -191,8 +192,8 @@ namespace SlotsInstaller
 
         private void StartReview()
         {
-            if (CheckOpenPackage()) return;   // 2.4.1: the source changed on disk: reload (the reload reviews again)
             int generation = reviewGeneration; ModPackage current = package; string[] selection = selectedOrder.ToArray(); string mode = installMode; bool replace = IsReplaceMode;
+            string expectedStamp = packageStamp;
             string[] missing = missingRestoredOptions.ToArray(); string sevenZip = config.SevenZipPath;
             bool choicesOpen = unresolvedChoices.Count > 0;
             ReplaceEngine engine = replace ? Engine() : null;
@@ -214,6 +215,12 @@ namespace SlotsInstaller
                 {
                     if (ReviewTestDelay > 0) Thread.Sleep(ReviewTestDelay);   // checks: keep a run in flight
                     OperationContext.ThrowIfCancellationRequested();
+                    string sourceStamp = SourceStamp(current.SourcePath);
+                    if (sourceStamp != expectedStamp)
+                    {
+                        e.Result = new ReviewResult { Generation = generation, Package = current, Mode = mode, Selection = selection, SourceChanged = true, SourceGone = sourceStamp == null, Milliseconds = clock.ElapsedMilliseconds };
+                        return;
+                    }
                     CompositionPlan composition = Composer.Plan(current, selection, replace);
                     if (missing.Length > 0) composition.Errors.Add("Saved options are missing: " + String.Join(", ", missing) + ". Click " + (replace ? "Health" : "Review files") + " to review the changed selection.");
                     ReplacePlan health = null;
@@ -248,7 +255,12 @@ namespace SlotsInstaller
                 if (IsDisposed) return;
                 ReviewResult result = e.Error == null && !e.Cancelled ? (ReviewResult)e.Result : null;
                 bool current2 = generation == reviewGeneration && Object.ReferenceEquals(current, package) && mode == installMode;
-                if (e.Error is SourceChangedException && Object.ReferenceEquals(current, package)) { ReloadOpenPackage(true); return; }
+                if (e.Error is SourceChangedException && current2) { ReloadOpenPackage(true); return; }
+                if (result != null && current2 && result.SourceChanged)
+                {
+                    if (result.SourceGone) SourceGone(); else ReloadOpenPackage(false);
+                    return;
+                }
                 if (result != null && current2) ApplyReview(result);
                 else if (result == null && current2 && e.Error != null && !(e.Error is OperationCanceledException))
                 {
