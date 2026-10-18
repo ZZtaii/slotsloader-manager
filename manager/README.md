@@ -13,6 +13,7 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 - 1.0.5:
   - **Rename** in the Mod library: right-click → Rename or **F2**, then type on the row. Enter or clicking away renames, Esc cancels. Installed outfits, Install all variants copies, replacements and history follow the new name. Options you were editing stay as they were.
   - The option's version (`v1.0`) shows at the right of its name.
+  - `MenuPriority=` orders options as external mod managers do: higher first, an option without one counts as 0. 1.0.4 had it reversed.
   - Portrait art for several fighters counts as a UI mod. A portrait bundle no longer shows under every fighter.
   - Colour-only mods keep their fighter after you open them.
   - Reinstalling an Install all variants copy updates that file, even after the source was renamed.
