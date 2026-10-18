@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace SlotsInstaller
 {
     // 1.0.4 option order (the user). Display only: install layering follows selection order (Composer.Plan).
-    // Per sibling set: Fluffy's MenuPriority= when the author set it (lower first, unset after); name order when
+    // Per sibling set: Fluffy's MenuPriority= when the author set it (higher first, unset = 0); name order when
     // the author numbered the names; otherwise
     // the default choice first (its files are identical to the main files'), plain options before groups,
     // a tweak right after the bigger option whose files it overlaps, then natural name.
@@ -40,8 +40,9 @@ namespace SlotsInstaller
 
         private static List<ModComponent> Siblings(ModPackage p, ModComponent parent, List<ModComponent> set)
         {
+            // Same as Fluffy: higher first, unset = 0, ties by name (set is already in natural name order).
             if (set.Any(c => PackageReader.MenuPriority(c).HasValue))
-                return set.OrderBy(c => PackageReader.MenuPriority(c) ?? Double.MaxValue).ThenBy(c => c.IsDummy ? 1 : 0).ToList();
+                return set.OrderByDescending(c => PackageReader.MenuPriority(c) ?? 0).ToList();
             // Authors number names to order them ("1) Main files", "2! Skin Options", "03A1 Shoes"): keep name order.
             if (set.Count(c => Regex.IsMatch(c.Name ?? "", @"^\s*\d")) >= 2) return set;
             List<ModComponent> sorted = set.OrderBy(c => c.IsDefaultChoice ? 0 : 1).ThenBy(c => c.IsDummy ? 1 : 0).ToList();   // stable: name order inside

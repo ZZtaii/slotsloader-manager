@@ -26,7 +26,7 @@ namespace SlotsInstaller
             Check("independent bundle requirements remain scoped to the selected branch",delegate { IndependentBranches(Path.Combine(run,"independent-branches")); },ref failures);
             Check("nested choice branches count their parent and child as one alternative",delegate { NestedBranches(Path.Combine(run,"nested-branches")); },ref failures);
             Check("case-insensitive IDs, dependencies and previews retain canonical identities",delegate { CaseHandling(Path.Combine(run,"case-handling")); },ref failures);
-            Check("options follow MenuPriority, then plain options before groups, then name",delegate { OptionOrder(Path.Combine(run,"option-order")); },ref failures);
+            Check("options follow MenuPriority (higher first), else plain options before groups, then name",delegate { OptionOrder(Path.Combine(run,"option-order")); },ref failures);
             Console.WriteLine("Composition regression checks: "+(7-failures)+" passed, "+failures+" failed.");
             return failures;
         }
@@ -67,9 +67,11 @@ namespace SlotsInstaller
             Put(source,"Outfit/Full/modinfo.ini","name=Full\naddonfor=Outfit\n"); Put(source,"Outfit/Full/"+Mesh,"full");
             Put(source,"Extras/modinfo.ini","name=Character Select\nMenuPriority=1\n"); Put(source,"Extras/"+Mesh.Replace("esf032_001_01.mesh","extra.mesh"),"cs");
             Put(source,"Extras2/modinfo.ini","name=BattleHud\nMenuPriority=2\n"); Put(source,"Extras2/"+Mesh.Replace("esf032_001_01.mesh","hud.mesh"),"hud");
+            Put(source,"Extras3/modinfo.ini","name=Credits\nMenuPriority=-1\n"); Put(source,"Extras3/"+Mesh.Replace("esf032_001_01.mesh","credits.mesh"),"credits");
             ModPackage package=Load(source);
             Func<string,string> children=parent=>String.Join(",",package.Components.Where(c=>c.ParentId==package.Components.Single(x=>x.Name==parent).Id).Select(c=>c.Name));
-            Require(children("Bundle")=="Character Select,BattleHud,Main files,Hair style,Outfit","Bundle order: "+children("Bundle"));
+            // Fluffy's MenuPriority: higher first, unset = 0, ties by name.
+            Require(children("Bundle")=="BattleHud,Character Select,Hair style,Main files,Outfit,Credits","Bundle order: "+children("Bundle"));
             Require(children("Hair style")=="WT Hair,Combined Hair","Hair order (default first): "+children("Hair style"));
             Require(children("Outfit")=="Full,Barefoot","Outfit order (default first): "+children("Outfit"));
             Require(package.Components.Where(c=>c.IsDefaultChoice).Select(c=>c.Name).OrderBy(n=>n).SequenceEqual(new[]{"Full","WT Hair"}),"Default options: "+String.Join(",",package.Components.Where(c=>c.IsDefaultChoice).Select(c=>c.Name)));
