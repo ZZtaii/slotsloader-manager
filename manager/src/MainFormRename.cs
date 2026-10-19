@@ -17,6 +17,7 @@ namespace SlotsInstaller
         private TextBox renameBox;
         private LibraryEntry renaming;
         private LibraryEntry afterRenameSelection;
+        private bool renamingDisplay;   // 1.0.6: the Name view renames the shown name only (LibraryNames), not the file
         internal int RenameRuns;   // checks: how many renames reached the worker
 
         // BuildLibrary: after Open in Explorer.
@@ -31,7 +32,7 @@ namespace SlotsInstaller
             if (libraryRenameItem == null) return;
             bool show = entry != null && !String.IsNullOrEmpty(entry.SourcePath) && entry.Kind != "Library";
             libraryRenameItem.Visible = show; libraryRenameItem.Enabled = show && !busy;
-            libraryRenameItem.AccessibleDescription = show && LinkedFluffy(entry.SourcePath).Count > 0 ? RenameFluffyRefusal : "Renames its archive or folder. Installed copies keep working.";
+            libraryRenameItem.AccessibleDescription = !libraryFileNames ? "Changes the name shown in the Name view. The file keeps its name." : show && LinkedFluffy(entry.SourcePath).Count > 0 ? RenameFluffyRefusal : "Renames its archive or folder. Installed copies keep working.";
         }
 
         internal static string RenameText(LibraryEntry entry)
@@ -43,15 +44,18 @@ namespace SlotsInstaller
         internal void BeginLibraryRename(LibraryEntry entry)
         {
             if (entry == null || busy || String.IsNullOrEmpty(entry.SourcePath) || entry.Kind == "Library") return;
-            if (LinkedFluffy(entry.SourcePath).Count > 0) { SetPageStatus(libraryPage, RenameFluffyRefusal, Palette.Accent); return; }
+            bool display = !libraryFileNames;
+            if (!display && LinkedFluffy(entry.SourcePath).Count > 0) { SetPageStatus(libraryPage, RenameFluffyRefusal, Palette.Accent); return; }
             ListViewItem row = modList.Items.Cast<ListViewItem>().FirstOrDefault(i => Object.ReferenceEquals(i.Tag, entry));
             if (row == null) return;
             CloseRenameBox();
             row.EnsureVisible();
-            renaming = entry;
+            renaming = entry; renamingDisplay = display;
             Rectangle r = row.Bounds;
-            renameBox = new TextBox { Font = Palette.Strong, BackColor = Palette.Raised, ForeColor = Palette.Text, BorderStyle = BorderStyle.FixedSingle, Text = RenameText(entry), AccessibleName = "New name" };
-            renameBox.Bounds = new Rectangle(r.Left + Px(8), r.Top + Px(5), Math.Max(Px(80), r.Width - Px(18)), renameBox.PreferredHeight);
+            // 1.0.6: sized for the screen's DPI (a box made after the window scaled itself kept the 100 % font and height).
+            renameBox = new TextBox { Font = Palette.Strong, BackColor = Palette.Raised, ForeColor = Palette.Text, BorderStyle = BorderStyle.FixedSingle, AutoSize = false, Text = display ? entry.ShownName(false) : RenameText(entry), AccessibleName = display ? "Name shown in the list" : "New file name" };
+            renameBox.Bounds = new Rectangle(r.Left + Px(8), r.Top + Px(4), Math.Max(Px(80), r.Width - Px(18)), Px(32));
+            NativeDpiFont.Attach(renameBox);
             // Commit during focus transfer, before another control can start background work.
             renameBox.LostFocus += delegate { EndLibraryRename(true); };
             modList.Controls.Add(renameBox);
@@ -91,11 +95,26 @@ namespace SlotsInstaller
         internal void EndLibraryRename(bool commit)
         {
             if (renameBox == null) return;
-            LibraryEntry entry = renaming; string name = renameBox.Text;
+            LibraryEntry entry = renaming; string name = renameBox.Text; bool display = renamingDisplay;
             if (commit && busy) return;   // keep the edit available rather than silently discarding it
             CloseRenameBox();
-            if (!commit || entry == null || String.Equals(name.Trim(), RenameText(entry), StringComparison.Ordinal)) return;
+            if (!commit || entry == null) return;
+            if (display) { if (!String.Equals(name.Trim(), entry.ShownName(false), StringComparison.Ordinal)) RenameDisplayName(entry, name); return; }
+            if (String.Equals(name.Trim(), RenameText(entry), StringComparison.Ordinal)) return;
             RenameLibrarySource(entry, name);
+        }
+
+        // 1.0.6: the Name view's rename. Only the shown name changes (Data\library-names.json); an empty box gives the
+        // mod's own name back. Search finds the new name too.
+        internal void RenameDisplayName(LibraryEntry entry, string name)
+        {
+            string shown;
+            try { shown = LibraryNames.Set(entry, name); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); SetPageStatus(libraryPage, "Couldn't save the name: " + ex.Message, Palette.Red); return; }
+            foreach (LibraryEntry e in SameSourceEntries(entry)) if (!Object.ReferenceEquals(e, entry)) e.CustomName = entry.CustomName;
+            foreach (ListViewItem item in modList.Items) { var e = item.Tag as LibraryEntry; if (e != null && String.Equals(e.SourcePath, entry.SourcePath, StringComparison.OrdinalIgnoreCase) && item.Text != LibraryRowName(e)) item.Text = LibraryRowName(e); }
+            ApplyFilters(); modList.Invalidate();
+            SetSharedStatus(entry.CustomName == null ? "Showing " + shown + " again (the mod's own name)." : "Renamed to " + shown + " in the Name view. The file keeps its name.", Palette.Green);
         }
 
         internal void RenameLibrarySource(LibraryEntry entry, string name)
@@ -145,6 +164,7 @@ namespace SlotsInstaller
                 libraryRows.Remove(e); installStates.Remove(e); libraryRanks.Remove(e);
             }
             if (changedSources.Remove(outcome.From)) changedSources.Add(outcome.To);
+            try { LibraryNames.Move(outcome.From, outcome.To); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }   // 1.0.6: a typed name follows the file
             if (wasOpen) ClosePackage();
             string copies = outcome.Outfits + outcome.ArchiveCopies + outcome.Replacements == 0 ? "" : " Installed copies now point to it.";
             string message = "Renamed " + label + " to " + Path.GetFileName(outcome.To) + "." + copies;

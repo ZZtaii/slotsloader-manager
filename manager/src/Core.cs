@@ -128,6 +128,18 @@ namespace SlotsInstaller
         // (Mods\Cammy\mod.zip, Library.IsGroupFolder) still belongs to Mods. Null for entries made outside a scan.
         public string LibraryRoot;
         internal string LibraryFolder { get { return !String.IsNullOrEmpty(LibraryRoot) ? LibraryRoot : Path.GetDirectoryName(SourcePath); } }
+        // 1.0.6: the mod's own name from its modinfo.ini (Library.ModInfoName; "" = none, the file name stands in) and
+        // the name= of every modinfo.ini (option names, for deep search).
+        public string DisplayName = "";
+        public List<string> OptionNames = new List<string>();
+        // A name typed in the Name view (LibraryNames, Data\library-names.json); null = none. Not stored in the index.
+        internal string CustomName;
+        // Name shown in the library: the typed name, else the display name, else the file name; the file name when the
+        // list shows file names.
+        internal string ShownName(bool fileNames) { return fileNames ? Name : !String.IsNullOrWhiteSpace(CustomName) ? CustomName : String.IsNullOrWhiteSpace(DisplayName) ? Name : DisplayName; }
+        // LibrarySearch's compact name/option texts, rebuilt when the strings they came from change.
+        internal sealed class SearchCache { internal string Name, DisplayName, CustomName, Source, Character; internal string[] Names, Options, NameTokens, OptionTokens; internal List<string> OptionIds, OptionNames; }
+        internal SearchCache Search;
     }
     public sealed class LibraryIdentityCache
     {
@@ -149,6 +161,10 @@ namespace SlotsInstaller
         // 1.0.1 (still index v4, additive): 2 = a file under a fighter folder (/esf/esfNNN/) counts for that fighter only,
         // not for a code in its file name (esf027_*.tex inside esf001 is Ryu's). Multi-fighter records without it are listed again.
         public int CodesVersion;
+        // 1.0.6 (still index v4, additive): the modinfo.ini display name ("" = none) and every modinfo.ini name=. A record
+        // without them is listed again once.
+        public string DisplayName;
+        public List<string> OptionNames;
     }
     public enum LibraryInstallState { None, Partial, Full, Disabled }
     public static class Library
@@ -218,14 +234,14 @@ namespace SlotsInstaller
         {
             return record != null && record.Stamp == stamp && record.CharacterCodes != null && record.OptionCount.HasValue && record.OptionCount.Value >= 0
                 && record.OptionIds != null && record.OptionIds.Count == record.OptionCount.Value && record.CostumeKeys != null && record.ToolKinds != null
-                && record.StageIds != null && record.MiscAreas != null && record.Authors != null
+                && record.StageIds != null && record.MiscAreas != null && record.Authors != null && record.DisplayName != null && record.OptionNames != null
                 && (record.CodesVersion >= CodesVersion || record.CharacterCodes.Count <= 1);
         }
         private static LibraryIdentityRecord CopyIdentity(LibraryIdentityRecord record)
         {
             return new LibraryIdentityRecord { SourcePath = record.SourcePath, Stamp = record.Stamp, CharacterCodes = record.CharacterCodes.ToList(),
                 OptionCount = record.OptionCount, OptionIds = record.OptionIds.ToList(), CostumeKeys = record.CostumeKeys.ToList(), ToolKinds = record.ToolKinds.ToList(),
-                StageIds = record.StageIds.ToList(), MiscAreas = record.MiscAreas.ToList(), Authors = record.Authors.ToList(), AddedUtc = record.AddedUtc, CodesVersion = record.CodesVersion };
+                StageIds = record.StageIds.ToList(), MiscAreas = record.MiscAreas.ToList(), Authors = record.Authors.ToList(), AddedUtc = record.AddedUtc, CodesVersion = record.CodesVersion, DisplayName = record.DisplayName, OptionNames = record.OptionNames.ToList() };
         }
         // Only archive content metadata is reusable. Capture it while the old source still exists; incomplete or
         // older records are conservatively left for the next scan. Folder contents remain uncached.
@@ -458,7 +474,7 @@ namespace SlotsInstaller
                     }
                 }
                 List<string> codes;
-                if (cached != null) { codes = new List<string>(cached.CharacterCodes); entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas); entry.Authors = new List<string>(cached.Authors); }
+                if (cached != null) { codes = new List<string>(cached.CharacterCodes); entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas); entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); }
                 else
                 {
                     Interlocked.Increment(ref CacheMisses);
@@ -491,7 +507,8 @@ namespace SlotsInstaller
                             if (fileIdentity.ArtCode != null) { artFiles.Add(native); continue; }
                             categories.AddNative(native, fileIdentity.Fighter);
                         }
-                        entry.Authors = ReadAuthors(reader);
+                        ModInfoSummary info = ReadModInfo(reader);
+                        entry.Authors = info.Authors; entry.DisplayName = info.DisplayName; entry.OptionNames = info.OptionNames;
                     }
                     foreach (string art in artFiles) categories.AddNative(art, identity.SingleFighterArt);
                     codes = identity.Finish();
@@ -505,7 +522,7 @@ namespace SlotsInstaller
                     {
                         lock (CacheLock)
                         {
-                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = new List<string>(entry.Authors), CodesVersion = CodesVersion };
+                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = new List<string>(entry.Authors), CodesVersion = CodesVersion, DisplayName = entry.DisplayName ?? "", OptionNames = new List<string>(entry.OptionNames) };
                             cacheDirty = true;
                         }
                     }
@@ -532,22 +549,47 @@ namespace SlotsInstaller
                 // Failed reads are not cached, so Refresh can recover from temporary IO errors.
                 ForgetIdentity(entry.SourcePath);
                 entry.Character = ""; entry.FilenameCharacter=""; entry.Detection = "Error"; entry.DetectionError = ex.Message;
-                entry.CharacterCodes.Clear(); entry.OptionIds.Clear(); entry.OptionCount=-1; entry.CostumeKeys.Clear(); entry.ToolKinds.Clear(); entry.StageIds.Clear(); entry.MiscAreas.Clear(); entry.Authors.Clear();
+                entry.CharacterCodes.Clear(); entry.OptionIds.Clear(); entry.OptionCount=-1; entry.CostumeKeys.Clear(); entry.ToolKinds.Clear(); entry.StageIds.Clear(); entry.MiscAreas.Clear(); entry.Authors.Clear(); entry.DisplayName = ""; entry.OptionNames.Clear();
             }
         }
         // 2.5.9: author= of every modinfo.ini (path order, duplicates dropped). An unreadable modinfo.ini only costs the
         // byline: the mod stays listed with its identity.
-        internal static List<string> ReadAuthors(SourceReader reader)
+        internal static List<string> ReadAuthors(SourceReader reader) { return ReadModInfo(reader).Authors; }
+        internal sealed class ModInfoSummary { internal List<string> Authors = new List<string>(), OptionNames = new List<string>(); internal string DisplayName = ""; }
+        // 1.0.6: one read of the modinfo.ini files gives the authors, the display name and the option names.
+        internal static ModInfoSummary ReadModInfo(SourceReader reader)
         {
+            var summary = new ModInfoSummary();
             List<SourceEntry> infos = reader.Entries.Values.Where(e => Path.GetFileName(e.Path).Equals("modinfo.ini", StringComparison.OrdinalIgnoreCase) && e.Size <= 1024 * 1024).OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase).ToList();
-            if (infos.Count == 0) return new List<string>();
+            if (infos.Count == 0) return summary;
             try
             {
                 Dictionary<string, byte[]> bytes = reader.ReadManyBytes(infos, 1024 * 1024);
-                return CleanAuthors(infos.Select(e => { string a; byte[] b; return bytes.TryGetValue(e.Path, out b) && PackageReader.ParseIni(b).TryGetValue("author", out a) ? a : ""; }));
+                var parsed = infos.Select(e => { byte[] b; return new KeyValuePair<string, Dictionary<string, string>>(e.Path, bytes.TryGetValue(e.Path, out b) ? PackageReader.ParseIni(b) : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)); }).ToList();
+                Func<Dictionary<string, string>, string, string> get = delegate(Dictionary<string, string> meta, string key) { string v; return meta.TryGetValue(key, out v) ? Regex.Replace(v ?? "", @"\s+", " ").Trim() : ""; };
+                summary.Authors = CleanAuthors(parsed.Select(p => get(p.Value, "author")));
+                summary.OptionNames = parsed.Select(p => get(p.Value, "name")).Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                summary.DisplayName = ModInfoName(parsed.Select(p => new KeyValuePair<string, Dictionary<string, string>>(ModInfoFolder(p.Key), p.Value)).ToList(), get);
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { if (!(ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException)) throw; return new List<string>(); }
+            catch (Exception ex) { if (!(ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException)) throw; return new ModInfoSummary(); }
+            return summary;
+        }
+        private static string ModInfoFolder(string path) { int slash = path.LastIndexOf('/'); return slash < 0 ? "" : path.Substring(0, slash); }
+        // The mod's own name, close to the inspector's (PackageReader): the top-level dummy root's name=, else the
+        // NameAsBundle= of the top-level options, else the name= of the only top-level modinfo.ini. Options inside
+        // another modinfo.ini's folder and add-ons (AddonFor=) are not top level. "" when nothing names the mod (several
+        // top-level options without a bundle name are options, not the mod).
+        internal static string ModInfoName(List<KeyValuePair<string, Dictionary<string, string>>> infos, Func<Dictionary<string, string>, string, string> get)
+        {
+            var folders = infos.Select(i => i.Key).ToList();
+            Func<string, bool> nested = delegate(string folder) { return folders.Any(other => other != folder && (other.Length == 0 ? folder.Length > 0 : folder.StartsWith(other + "/", StringComparison.OrdinalIgnoreCase))); };
+            var top = infos.Where(i => get(i.Value, "addonfor").Length == 0 && !nested(i.Key)).ToList();
+            var dummy = top.FirstOrDefault(i => get(i.Value, "dummymod").Equals("true", StringComparison.OrdinalIgnoreCase));
+            if (dummy.Value != null) return get(dummy.Value, "name");
+            string bundle = top.Select(i => get(i.Value, "nameasbundle")).FirstOrDefault(s => s.Length > 0);
+            if (!String.IsNullOrEmpty(bundle)) return bundle;
+            return top.Count == 1 ? get(top[0].Value, "name") : "";
         }
         internal static List<string> CleanAuthors(IEnumerable<string> authors)
         {
@@ -617,7 +659,8 @@ namespace SlotsInstaller
                     foreach (var record in data.Records)
                     {
                         if (record == null || String.IsNullOrWhiteSpace(record.SourcePath) || record.Stamp == null || record.CharacterCodes == null || record.CharacterCodes.Any(c => !Regex.IsMatch(c ?? "", @"^\d{3}$")) || (record.CostumeKeys != null && record.CostumeKeys.Any(k => !Regex.IsMatch(k ?? "", @"^\d{3}/\d{3}$"))) || (record.ToolKinds != null && record.ToolKinds.Any(k => !ToolKindOrder.Contains(k)))
-                            || (record.StageIds != null && record.StageIds.Any(k => !Regex.IsMatch(k ?? "", @"^(\d{4}(_\d{2})?|other)$"))) || (record.MiscAreas != null && record.MiscAreas.Any(k => String.IsNullOrWhiteSpace(k) || k.Length > 40))) continue;
+                            || (record.StageIds != null && record.StageIds.Any(k => !Regex.IsMatch(k ?? "", @"^(\d{4}(_\d{2})?|other)$"))) || (record.MiscAreas != null && record.MiscAreas.Any(k => String.IsNullOrWhiteSpace(k) || k.Length > 40))
+                            || (record.DisplayName != null && record.DisplayName.Length > 300) || (record.OptionNames != null && (record.OptionNames.Count > 2000 || record.OptionNames.Any(k => k == null || k.Length > 300)))) continue;
                         IdentityCache[Path.GetFullPath(record.SourcePath)] = record;
                     }
                 }
@@ -644,7 +687,7 @@ namespace SlotsInstaller
             }
         }
     }
-    public sealed class InstallResult { public string Folder,Message; public int FileCount,SwatchFixes; public long Bytes; }
+    public sealed class InstallResult { public string Folder,Message; public int FileCount,SwatchFixes; public long Bytes; public string PartsNote=""; }   // 1.0.6: PartsNote = parts kept or dropped on a reinstall
     public sealed class InstalledOutfit
     {
         public string Name,Character,Folder,Id,SourcePath;
@@ -662,8 +705,10 @@ namespace SlotsInstaller
         public string Format="sf6-slotsloader-installer-v1",Id,Name,Character,SourcePath,CreatedUtc;
         public List<string> SelectedIds=new List<string>();
         public Dictionary<string,string> Sha256=new Dictionary<string,string>();
+        // 1.0.6: parts added from other mods (InstallerParts.cs); null or empty = none. Older Managers ignore the field.
+        public List<PartGraft> Parts;
     }
-    public static class Installer
+    public static partial class Installer
     {
         private const string ManifestName=".slots-installer.json";
         public static InstallResult Install(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged)
@@ -705,9 +750,17 @@ namespace SlotsInstaller
                 if (!current.CanInstall || current.Files.Count!=plan.Files.Count || current.Files.Any(k=>!plan.Files.ContainsKey(k.Key) || plan.Files[k.Key].Asset.Size!=k.Value.Asset.Size || plan.Files[k.Key].Asset.EntryPath!=k.Value.Asset.EntryPath)) throw new IOException("The mod changed after preview. Reload it and review again.");
                 hashes=r.CopyFiles(current.Files.Values,stage,transaction);
                 }
+                // 1.0.6: parts added from other mods (InstallerParts.cs) stay when the same mod is reinstalled (Edit options,
+                // a changed source); another mod in this outfit's place starts without them.
+                var droppedParts=new List<string>(); List<PartGraft> keptParts=new List<PartGraft>();
+                if (oldManifest!=null && oldManifest.Parts!=null && oldManifest.Parts.Count>0)
+                {
+                    if (String.Equals(oldManifest.SourcePath,fresh.SourcePath,StringComparison.OrdinalIgnoreCase)) keptParts=ReapplyParts(oldManifest,stage,hashes,transaction,sevenZipPath,droppedParts);
+                    else droppedParts.AddRange(oldManifest.Parts.Select(g=>GraftText(g)+" (another mod fills the outfit now)"));
+                }
                 int swatchFixes=FixSwatches(stage,hashes,root);   // 2.5.5: outdated select-screen swatches (ModFixes.UpgradeSwatches)
                 var manifest=new InstallManifest {Id=oldManifest==null ? Guid.NewGuid().ToString("N") : oldManifest.Id,Name=outfitName,Character=character,SourcePath=fresh.SourcePath,CreatedUtc=DateTime.UtcNow.ToString("o"),SelectedIds=current.Layers.Select(c=>c.Id).ToList()};
-                manifest.Sha256=hashes;
+                manifest.Sha256=hashes; if (keptParts.Count>0) manifest.Parts=keptParts;
                 File.WriteAllText(Path.Combine(stage,"modinfo.ini"),"name="+outfitName+"\r\nauthor="+CleanMetadata(String.Join(", ",current.Layers.Select(c=>c.Author).Where(s=>!String.IsNullOrWhiteSpace(s)).Distinct()))+"\r\ndescription="+CleanMetadata("Composed with Slotsloader Manager. "+String.Join(" + ",current.Layers.Select(c=>c.Name)))+"\r\nversion=1.0\r\n",new UTF8Encoding(false));
                 Json.Write(Path.Combine(stage,ManifestName),manifest);
                 OperationContext.ThrowIfCancellationRequested();
@@ -730,7 +783,8 @@ namespace SlotsInstaller
                 OutfitHistory.Installed(manifest,oldManifest,fresh.Name);   // 2.4.1 history (never throws)
                 // 1.0.1: the switched-out copy was only the rollback for this move; nothing is kept once it committed.
                 if (backup!=null) { try { Safety.DeleteGenerated(backup,Path.GetDirectoryName(backup)); backup=null; } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); } }
-                return new InstallResult {Folder=dest,FileCount=current.Files.Count,Bytes=current.TotalBytes,SwatchFixes=swatchFixes,Message="Installed "+outfitName+" for "+character+(swatchFixes>0 ? " (outdated colour swatches rebuilt)" : "")+". Restart SF6 to load it."};
+                string partsNote=(keptParts.Count>0 ? " · kept "+String.Join("; ",keptParts.Select(GraftText)) : "")+(droppedParts.Count>0 ? " · removed "+String.Join("; ",droppedParts) : "");
+                return new InstallResult {Folder=dest,FileCount=current.Files.Count,Bytes=current.TotalBytes,SwatchFixes=swatchFixes,PartsNote=partsNote,Message="Installed "+outfitName+" for "+character+(swatchFixes>0 ? " (outdated colour swatches rebuilt)" : "")+partsNote+". Restart SF6 to load it."};
             }
             finally
             {

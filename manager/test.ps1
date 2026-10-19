@@ -38,6 +38,7 @@ $testCases = @(
     @{ Name='library-delete'; Arguments=@('--delete-check', ('"' + (Join-Path $OutputDirectory 'delete-check') + '"')) },
     @{ Name='variants'; Arguments=@('--variants-check', ('"' + $testFixtures + '"')) },
     @{ Name='slots'; Arguments=@('--slots-check', ('"' + $testFixtures + '"')) },
+    @{ Name='queue'; Arguments=@('--queue-check', ('"' + (Join-Path $OutputDirectory 'queue-check') + '"')) },
     @{ Name='wording'; Arguments=@('--wording-check', ('"' + $testFixtures + '"')) }
 )
 $dialogCase = @{ Name='dialog'; Arguments=@('--dialog-check', ('"' + (Join-Path $OutputDirectory 'dialog-check') + '"')); Style='Normal' }

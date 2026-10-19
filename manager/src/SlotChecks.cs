@@ -296,9 +296,9 @@ namespace SlotsInstaller
             {
                 Call(form, "ShowPage", Get<Panel>(form, "libraryPage")); Call(form, "SetInstallMode", InstallModes.Slot, false); Application.DoEvents();
                 Call(form, "LoadPackage", new LibraryEntry { SourcePath = mod, Name = Mod }); WaitIdle(form);
-                Require(!row.Visible, "a folder mod offers Install all variants");
+                Require(!row.Visible || !all.Visible, "a folder mod offers Install all variants");   // 1.0.6: the row may still show Add to outfit…
                 Call(form, "LoadPackage", new LibraryEntry { SourcePath = zip, Name = Mod }); WaitIdle(form);
-                Require(row.Visible && all.Enabled && all.Text == "Install all variants" && Convert.ToString(Get<ComboBox>(form, "targetCharacter").SelectedItem) == "Luke", "button: " + row.Visible + "/" + all.Enabled + "/" + all.Text);
+                Require(row.Visible && all.Visible && all.Enabled && all.Text == "Install all variants" && Convert.ToString(Get<ComboBox>(form, "targetCharacter").SelectedItem) == "Luke", "button: " + row.Visible + "/" + all.Enabled + "/" + all.Text);
                 Call(form, "SetInstallMode", InstallModes.Replace, false); Application.DoEvents();
                 Require(!row.Visible, "shown in Replace original");
                 Call(form, "SetInstallMode", InstallModes.Slot, false); Application.DoEvents();

@@ -194,7 +194,7 @@ namespace SlotsInstaller
                 }
                 Rectangle treeBounds = BoundsInHost(tree, layoutHost);
                 RequireInside(tree, layoutHost, context);
-                string[] inspectorFields = { "preview", "packageTitle", "packageMeta", "packageDescription", "targetCharacter", "outfitName", "targetPath" };
+                string[] inspectorFields = { "preview", "packageTitle", "packageMeta", "packageDescription", "targetCharacter", "outfitName" };   // 1.0.6: no destination line
                 foreach (string name in inspectorFields)
                 {
                     Control control = ControlField<Control>(form, name);
@@ -399,7 +399,8 @@ namespace SlotsInstaller
             FilterPanel filterPanel = ControlField<FilterPanel>(form, "filterPanel");
             // 2.4.1: the header is the count row (26), the search (37) and the sort row (26: 20 px chips + Rhythm.Related),
             // so the list starts 89 px below the browser padding: 99 px, bound 106 (was 80 before the sort row).
-            Require(!filterPanel.Visible && list.Top <= DpiMetrics.Px(list,106), context + ": collapsed filters did not free library list space (list top " + list.Top + ").");
+            // 1.0.6: + the Deep search / Name · File row (MainForm.SearchOptionsHeight, 28): 127 px, bound 134.
+            Require(!filterPanel.Visible && list.Top <= DpiMetrics.Px(list,106 + MainForm.SearchOptionsHeight), context + ": collapsed filters did not free library list space (list top " + list.Top + ").");
             typeof(Control).GetMethod("OnClick", PrivateInstance).Invoke(filterButton, new object[] { EventArgs.Empty });
             Application.DoEvents();
             Rectangle listScreen = list.RectangleToScreen(list.ClientRectangle), panelScreen = filterPanel.RectangleToScreen(filterPanel.ClientRectangle);

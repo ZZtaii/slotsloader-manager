@@ -169,6 +169,13 @@ namespace SlotsInstaller
                     if (args.Length < 2) throw new ArgumentException("--wording-check requires a fixture output directory.");
                     return WordingChecks.Run(args[1]);
                 }
+                if (args.Length > 0 && args[0] == "--queue-check")
+                {
+                    // 1.0.6 search, display names, queue, Add to outfit (hidden window on generated fixtures).
+                    Headless = true;
+                    if (args.Length < 2) throw new ArgumentException("--queue-check requires a fixture output directory.");
+                    return QueueChecks.Run(args[1]);
+                }
                 if (args.Length > 0 && args[0] == "--slots-check")
                 {
                     // 2.5.0 several variants of one mod as extra slots: suggested names, hint, Reset options, Installed grouping (hidden window).

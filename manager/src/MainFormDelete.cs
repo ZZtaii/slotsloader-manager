@@ -363,6 +363,7 @@ namespace SlotsInstaller
         private void FinishLibraryDelete(List<LibraryEntry> group, string full, string message)
         {
             var gone = new HashSet<LibraryEntry>(group);
+            LibraryNames.Forget(new[] { full }.Concat(group.Select(e => e.SourcePath)));   // 1.0.6
             deletedSources.Add(full); foreach (LibraryEntry e in group) deletedSources.Add(e.SourcePath);
             changedSources.Remove(full); foreach (LibraryEntry e in group) changedSources.Remove(e.SourcePath);
             int next = -1;

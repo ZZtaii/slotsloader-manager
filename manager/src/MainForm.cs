@@ -32,6 +32,9 @@ namespace SlotsInstaller
         public List<string> Fighters = new List<string>(), Kinds = new List<string>(), MiscAreas = new List<string>(), Stages = new List<string>(), SelectedLibraries = new List<string>();
         // 2.4.1 sort chips: "added" | "last_used" | "installed" and "desc" | "asc". Missing or unknown (older files) = Installed ↓.
         public string LibrarySort = "", LibrarySortOrder = "", InstalledSort = "", InstalledSortOrder = "";   // 2.5.5: Installed sort
+        // 1.0.6: library rows show "name" (modinfo.ini) or "file" names (missing = file); Deep search on/off.
+        public string LibraryNames = "";
+        public bool DeepSearch;
         internal static ViewPreferences Load(string file)
         {
             try
@@ -94,8 +97,13 @@ namespace SlotsInstaller
             int index = modList.SelectedIndices.Count > 0 ? modList.SelectedIndices[0] : modList.FocusedItem != null ? modList.FocusedItem.Index : -1;
             int next = index < 0 ? 0 : Math.Max(0, Math.Min(modList.Items.Count - 1, index + delta));
             if (next == index) return;
+            ListViewItem target = modList.Items[next];
+            // 1.0.6: the list allows several rows; W/S go back to one.
+            bool previous = selectingMod; selectingMod = true;
+            try { foreach (ListViewItem other in modList.SelectedItems.Cast<ListViewItem>().ToList()) if (other != target) other.Selected = false; }
+            finally { selectingMod = previous; }
             userPickingMod = true;
-            try { ListViewItem item = modList.Items[next]; item.Selected = true; item.Focused = true; item.EnsureVisible(); }
+            try { target.Selected = true; target.Focused = true; target.EnsureVisible(); }
             finally { userPickingMod = false; }
         }
         private string screenshotFile;
@@ -288,8 +296,9 @@ namespace SlotsInstaller
             if(librarySplit.Width>=Px(952)) {librarySplit.SplitterWidth=Px(12);librarySplit.Panel1MinSize=Px(220);librarySplit.Panel2MinSize=Px(720);RestoreSplitter(librarySplit,Px(libraryLogicalWidth));}
             if(installedSplit.Width>=Px(768)) {installedSplit.SplitterWidth=Px(18);installedSplit.Panel1MinSize=Px(460);installedSplit.Panel2MinSize=Px(290);RestoreSplitter(installedSplit,Px(installedLogicalWidth));}
             componentTree.ItemHeight=Px(32); componentTree.Indent=Px(18);
-            foreach(var list in new[]{modList,installedList,fileList})
+            foreach(var list in new[]{modList,installedList,fileList,batchList})   // 1.0.6: the queue list too
             {
+                if(list==null) continue;
                 var buffered=(BufferedModList)list;
                 if(list.SmallImageList!=null) list.SmallImageList.ImageSize=new Size(Px(1),Px(buffered.LogicalRowHeight));
             }
@@ -297,7 +306,7 @@ namespace SlotsInstaller
             foreach(Action layout in dpiLayouts) layout();
             foreach(var field in new[]{search,installedSearch,outfitName,settingsGame,settingsSevenZip,settingsApiKey})field.LayoutEditor();
             if (assistantPage != null) assistantPage.ApplyDpi();
-            componentTree.Invalidate(); modList.Invalidate(); installedList.Invalidate();
+            componentTree.Invalidate(); modList.Invalidate(); installedList.Invalidate(); if(batchList!=null) batchList.Invalidate();
             applyingDpi=false;
         }
 
@@ -343,7 +352,7 @@ namespace SlotsInstaller
                 FiltersOpen=filterPanel.Visible,
                 Fighters=filterPanel.Grid.Selected.OrderBy(c=>c,StringComparer.Ordinal).ToList(),
                 Kinds=new[]{FilterPanel.ToolsKind,FilterPanel.MiscKind}.Where(k=>filterPanel.Kinds.Selected.Contains(k)).ToList(),SelectedLibraries=filterPanel.LibrariesSelected.OrderBy(k=>k,StringComparer.OrdinalIgnoreCase).ToList(),MiscAreas=MiscKindsSelectedOrPending().ToList(),
-                LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc"
+                LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn
             };
         }
         // Older builds read one character name; keep it meaningful when exactly one fighter is selected.
@@ -376,6 +385,7 @@ namespace SlotsInstaller
             overridesOnly.Checked=saved.OverridesOnly;
             installedSearch.Text=saved.InstalledSearch ?? ""; RestoreInstalledCharacters(saved.InstalledCharacter); SelectPreference(installedState,saved.InstalledState);
             RestoreFilterPanel(saved);
+            RestoreLibraryView(saved);   // 1.0.6: Name · File and Deep search
             RestoreLibrarySort(saved);
             RestoreInstalledSort(saved);   // 2.5.5 (FillInstalled runs with the next refresh)
             // 2.4.1: a saved Assistant view opens Mod library while the tab is hidden.
@@ -535,11 +545,11 @@ namespace SlotsInstaller
             librarySplit=split;
             Panel browser = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(10) };
             // 2.4.1: row 2 is the sort strip (LibrarySort.cs): 20 px chips and the Rhythm.Related gap to the list.
-            TableLayoutPanel filters = new TableLayoutPanel { Dock = DockStyle.Top, Height = 63 + SortChipHeight + Rhythm.Related, ColumnCount = 2, RowCount = 3, Padding = new Padding(0), Margin = new Padding(0) };
+            TableLayoutPanel filters = new TableLayoutPanel { Dock = DockStyle.Top, Height = 63 + SearchOptionsHeight + SortChipHeight + Rhythm.Related, ColumnCount = 2, RowCount = 4, Padding = new Padding(0), Margin = new Padding(0) };
             // 2.4.1: the right cell holds Filters and, while a filter is active, Clear. Its width is fixed, so neither
             // the Filters button nor the count moves when Clear appears.
             filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 142));
-            filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 37)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SortChipHeight + Rhythm.Related));
+            filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 37)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SearchOptionsHeight)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SortChipHeight + Rhythm.Related));
             // The caption carries the live count that previously used its own row.
             libraryCount = Caption("MOD LIBRARY"); libraryCount.Dock = DockStyle.Fill; libraryCount.AutoEllipsis = true; filters.Controls.Add(libraryCount, 0, 0);
             filterButton = Button("Filters", false, 84, delegate { ShowFilters(!filterPanel.Visible, false); });
@@ -550,9 +560,10 @@ namespace SlotsInstaller
             filterActions.Controls.Add(filterClearButton); filterActions.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); filterActions.Controls.Add(filterButton);
             filterButton.SendToBack();   // docked first: the rightmost
             filters.Controls.Add(filterActions, 1, 0);
-            search = TextField(); search.Dock = DockStyle.Fill; search.Margin = new Padding(0, 0, 0, 7); search.TrailingSpace=27; search.PlaceholderText="Search or is:bundle"; search.AccessibleName="Search mod library"; search.TextChanged += delegate { QueueLibraryFilter(); };
+            search = TextField(); search.Dock = DockStyle.Fill; search.Margin = new Padding(0, 0, 0, 7); search.TrailingSpace=27; search.PlaceholderText="Search or is:bundle"; search.AccessibleName="Search mod library"; search.TextChanged += delegate { libraryToTop = true; QueueLibraryFilter(); };
             filters.Controls.Add(search, 0, 1); filters.SetColumnSpan(search, 2);
-            Panel sorts = BuildSortStrip(); filters.Controls.Add(sorts, 0, 2); filters.SetColumnSpan(sorts, 2);
+            Panel searchOptions = BuildSearchOptions(); filters.Controls.Add(searchOptions, 0, 2); filters.SetColumnSpan(searchOptions, 2);   // 1.0.6
+            Panel sorts = BuildSortStrip(); filters.Controls.Add(sorts, 0, 3); filters.SetColumnSpan(sorts, 2);
             search.Editor.KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Enter && e.Modifiers == Keys.None) { e.Handled = e.SuppressKeyPress = true; OpenTopLibraryMatch(); }
@@ -566,7 +577,7 @@ namespace SlotsInstaller
             // 2.3.0: the Filters panel (FilterPanel.cs) opens to the right of this list, in place of the options
             // column; the shared filters below its tabs replace the 2.2.0 popup.
             filterPanel = new FilterPanel { Dock = DockStyle.Fill, Visible = false };
-            filterPanel.FiltersChanged += delegate { ApplyFilters(); };
+            filterPanel.FiltersChanged += delegate { if (quietFilters == 0) libraryToTop = true; ApplyFilters(); };   // 1.0.6: a filter change shows the first match, like a search
             filterPanel.Grid.SetFighters(GridFighters());
             // 2.3.1: no hover tooltips anywhere in the panel (the help text is in UI-REFERENCE.md); accessible names stay.
             // 2.4.1: the panel has no Clear of its own; the list header's Clear (filterClearButton) is the only one.
@@ -575,6 +586,7 @@ namespace SlotsInstaller
             // (c1 / costume:1, format:zip, is:bundle, is:normal, is:unreadable, is:tool). "Installed mods only" is the
             // Installed tile (FilterPanel.InstalledOn).
             modList = CreateList(58); ((BufferedModList)modList).RepaintAfterScroll = true; modList.ShowItemToolTips = false; modList.Columns.Add("Mod", 300); modList.DrawSubItem += DrawLibraryItem;
+            modList.MultiSelect = true;   // 1.0.6: Ctrl/Shift+click or Ctrl+A queue several mods (MainFormBatch.cs)
             ((BufferedModList)modList).SuppressIdleHover = true;
             modList.HotTracking = false; modList.HoverSelection = false;
             ((BufferedModList)modList).BeforePointerSelection = delegate(Point point)
@@ -582,18 +594,13 @@ namespace SlotsInstaller
                 ListViewItem row = modList.GetItemAt(point.X, point.Y);
                 return CommitRenameBeforeSelection(row == null ? null : row.Tag as LibraryEntry);
             };
-            modList.SelectedIndexChanged += delegate
-            {
-                if (modList.SelectedItems.Count > 0 && !busy && !selectingMod && (Control.MouseButtons & MouseButtons.Right) == 0)
-                {
-                    if (CommitRenameBeforeSelection(modList.SelectedItems[0].Tag as LibraryEntry)) return;
-                    if (userPickingMod) ClosePanelForPickedMod();
-                    LoadPackage((LibraryEntry)modList.SelectedItems[0].Tag);
-                }
-            };
+            // 1.0.6: read once the selection settles: one row opens the mod, several open the queue (MainFormBatch.cs).
+            modList.ItemSelectionChanged += delegate(object sender, ListViewItemSelectionChangedEventArgs e) { LibraryItemSelected(e); };
+            modList.SelectedIndexChanged += delegate { LibrarySelectionEvent(); };
             modList.MouseClick += delegate(object sender, MouseEventArgs e)
             {
                 if (e.Button != MouseButtons.Left || busy) return;
+                if ((Control.ModifierKeys & (Keys.Control | Keys.Shift)) != 0 || modList.SelectedItems.Count > 1) return;   // 1.0.6: building a selection
                 ListViewItem row = modList.GetItemAt(e.X, e.Y);
                 LibraryEntry entry = row == null ? null : row.Tag as LibraryEntry;
                 if (entry != null) ClosePanelForPickedMod();
@@ -613,7 +620,8 @@ namespace SlotsInstaller
                     return;
                 }
                 if (k == Keys.Up || k == Keys.Down || k == Keys.PageUp || k == Keys.PageDown || k == Keys.Home || k == Keys.End || k == Keys.Left || k == Keys.Right) { userPickingMod = true; BeginInvoke((Action)delegate { userPickingMod = false; }); }
-                else if (k == Keys.Enter && e.Modifiers == Keys.None && modList.SelectedItems.Count > 0)
+                else if (k == Keys.A && e.Modifiers == Keys.Control) { e.Handled = e.SuppressKeyPress = true; SelectAllLibraryRows(); }   // 1.0.6
+                else if (k == Keys.Enter && e.Modifiers == Keys.None && modList.SelectedItems.Count == 1)
                 {
                     e.Handled = e.SuppressKeyPress = true;
                     ClosePanelForPickedMod();
@@ -674,7 +682,8 @@ namespace SlotsInstaller
             modList.Disposed += delegate { modMenu.Dispose(); };
             browser.Controls.Add(modList); browser.Controls.Add(filters);
             split.Panel1.Controls.Add(browser);
-            split.Panel2.Controls.Add(BuildDetail());
+            split.Panel2.Controls.Add(detailPanel = BuildDetail());
+            split.Panel2.Controls.Add(BuildBatchPanel()); batchPanel.BringToFront();   // 1.0.6: hidden until several mods are selected
             page.Controls.Add(split); split.BringToFront();
             return page;
         }
@@ -778,15 +787,16 @@ namespace SlotsInstaller
             body.Controls.Add(centre, 0, 0);
 
             Panel inspector = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), BackColor = Palette.Surface, Padding = new Padding(8, 0, 0, 9) };
-            TableLayoutPanel target = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 86, ColumnCount = 2, RowCount = 3, Padding = new Padding(0, 6, 0, 0) };
+            // 1.0.6 (the user): no destination line under the fields; Add to outfit… shares the Install all variants row.
+            TableLayoutPanel target = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 56, ColumnCount = 2, RowCount = 2, Padding = new Padding(0, 6, 0, 0) };
             target.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 36)); target.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 64));
-            target.RowStyles.Add(new RowStyle(SizeType.Absolute, 20)); target.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); target.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            target.RowStyles.Add(new RowStyle(SizeType.Absolute, 20)); target.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             Label characterCaption = Caption("CHARACTER"); characterCaption.Dock = DockStyle.Fill; characterCaption.Margin=Padding.Empty;
             targetCharacter = Combo(); targetCharacter.Dock = DockStyle.Fill; targetCharacter.Margin = new Padding(0, 0, 8, 0); targetCharacter.Items.AddRange(Characters.Names.Cast<object>().ToArray()); targetCharacter.SelectedIndexChanged += delegate { UpdateDestination(); ApplySuggestedName(); };
             Label outfitCaption = Caption("OUTFIT NAME"); outfitCaption.Dock = DockStyle.Fill; outfitCaption.Margin=Padding.Empty;
             outfitName = TextField(); outfitName.Dock = DockStyle.Fill; outfitName.Margin = new Padding(0); outfitName.AccessibleName="Outfit name"; outfitName.TextChanged += delegate { OutfitNameEdited(); UpdateDestination(); UpdateInstallButton(); };   // 2.5.0: a typed name is kept (MainFormSlots.cs)
             targetPath = new Label { UseMnemonic=false, Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Tiny, AutoEllipsis = true, Padding = new Padding(0, 5, 0, 0) };
-            target.Controls.Add(characterCaption, 0, 0); target.Controls.Add(outfitCaption, 1, 0); target.Controls.Add(targetCharacter, 0, 1); target.Controls.Add(outfitName, 1, 1); target.Controls.Add(targetPath, 0, 2); target.SetColumnSpan(targetPath, 2);
+            target.Controls.Add(characterCaption, 0, 0); target.Controls.Add(outfitCaption, 1, 0); target.Controls.Add(targetCharacter, 0, 1); target.Controls.Add(outfitName, 1, 1);   // targetPath keeps its text but is not shown (1.0.6)
             Panel info = new Panel { Dock = DockStyle.Fill, AutoScroll = false, Padding = new Padding(0) };
             Panel visual = new Panel { Dock = DockStyle.Top, Height = 154, BackColor = Palette.Background };
             preview = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Palette.Background };
@@ -1239,7 +1249,7 @@ namespace SlotsInstaller
             // Every row has a neutral rail. Only active app-managed installs
             // turn it green; selection is already visible in the row background.
             using (Brush chip = new SolidBrush(installState == LibraryInstallState.Full || installState == LibraryInstallState.Partial ? Palette.Green : Palette.Border)) e.Graphics.FillRectangle(chip, r.Left + Px(1), r.Top + Px(12), Px(3), r.Height - Px(24));
-            TextRenderer.DrawText(e.Graphics, entry.Name, Palette.Strong, new Rectangle(r.Left + Px(13), r.Top + Px(8), r.Width - Px(24), Px(24)), Palette.Text, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(e.Graphics, LibraryRowName(entry), Palette.Strong, new Rectangle(r.Left + Px(13), r.Top + Px(8), r.Width - Px(24), Px(24)), Palette.Text, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             int searchRank; string costume = LibraryRowLabel(entry, libraryRanks.TryGetValue(entry, out searchRank) ? searchRank : (int?)null);
             string subtitle = LibraryCharacterLabel(entry) + (costume.Length > 0 ? "   ·   " + costume : "") + "   ·   " + entry.Kind.ToUpperInvariant() + (entry.Size > 0 ? "   ·   " + Utilities.FriendlyBytes(entry.Size) : "");
             // 1.0.1: "Extra · " before the state when the mod is installed as an extra outfit (the user).
@@ -1415,7 +1425,7 @@ namespace SlotsInstaller
             ((BufferedModList)installedList).InputLocked=value; UpdateResetOptions();
             targetCharacter.Enabled = !value; outfitName.Enabled = !value;
             previewButton.Enabled = !value && package != null;
-            UpdateInstallButton(); UpdateLibraryUninstall(); ShowInstalledSelection(); UpdateRefreshButton();
+            UpdateInstallButton(); UpdateLibraryUninstall(); ShowInstalledSelection(); UpdateRefreshButton(); if (BatchVisible) UpdateBatchUi();
             if (assistantPage != null) assistantPage.UpdateButtons();
             if (!value && portraitRetry && portraitsRequested) EnsurePortraits(false);
         }
@@ -1488,8 +1498,8 @@ namespace SlotsInstaller
             string[] libraries = config.Libraries.ToArray(); string root = config.CostumeRoot; string sevenZip = config.SevenZipPath;
             Work("Scanning libraries and installed outfits…", delegate { return WithChangedSources(new ScanResult { Entries = Library.Scan(libraries, sevenZip), Installed = Installer.ListInstalled(root), Game = LoadGameRows(true), Removed = ReadRemovedUsage(root) }); }, delegate(ScanResult result)
             {
-                library = result.Entries; installed = result.Installed; UseRemovedUsage(result.Removed); changedSources = result.Changed ?? changedSources; ApplyGameRows(result.Game); UpdateModeUi();
-                filterPanel.SetLibraries(libraries);   // a library removed in Settings loses its tile and selection
+                library = result.Entries; LibraryNames.Apply(library); installed = result.Installed;   // 1.0.6: names typed in the Name view UseRemovedUsage(result.Removed); changedSources = result.Changed ?? changedSources; ApplyGameRows(result.Game); UpdateModeUi();
+                quietFilters++; try { filterPanel.SetLibraries(libraries); } finally { quietFilters--; }   // a library removed in Settings loses its tile and selection
                 ApplyFilters(); FillInstalled(); UpdateLibraryUninstall();
                 if (toTop && librarySort == LibrarySortKey.Added && !librarySortAscending && modList.Items.Count > 0) modList.EnsureVisible(0);
                 // A game update or PAK-method install since the last read changes the PAK identity: re-check.
@@ -1521,7 +1531,7 @@ namespace SlotsInstaller
             if (modList == null || filterPanel == null) return;
             if (!Object.ReferenceEquals(facetRowsSource, library)) RefreshFacetRows();
             // Shared with the Assistant: characters, name words, is:/format:/costume: tokens and costume terms (c1, costume 1).
-            LibrarySearch.Query query = LibrarySearch.Parse(search.Text, SearchCharacterTerm);
+            LibrarySearch.Query query = LibraryQuery();   // 1.0.6: with Deep search
             HashSet<string> searchedCodes = LibrarySearch.CodesFor(query.Characters);
             // 2.3.0: fighters are OR-ed, the kind tiles (Code tools, Misc with its kinds) OR-ed, the library tiles OR-ed;
             // fighters, kinds, Installed and libraries are AND-ed with each other and with search. Each card or tile
@@ -1565,6 +1575,7 @@ namespace SlotsInstaller
             bool sameRows = modList.Items.Count == rows.Count;
             for (int i = 0; sameRows && i < rows.Count; i++) sameRows = Object.ReferenceEquals(modList.Items[i].Tag, rows[i]);
             if (!sameRows) UpdateLibraryRows(rows);
+            ScrollLibraryToTopIfAsked();
             libraryCount.Text = library.Count == 0 ? "MOD LIBRARY" : rows.Count == library.Count ? library.Count + " MODS" : rows.Count + " OF " + library.Count + " MODS";
         }
 
@@ -1579,10 +1590,10 @@ namespace SlotsInstaller
             Func<LibraryEntry, ListViewItem> rowFor = delegate(LibraryEntry entry)
             {
                 ListViewItem item;
-                if (!libraryRows.TryGetValue(entry, out item) || item.ListView != null && item.ListView != modList) libraryRows[entry] = item = new ListViewItem(entry.Name) { Tag = entry };
+                if (!libraryRows.TryGetValue(entry, out item) || item.ListView != null && item.ListView != modList) libraryRows[entry] = item = new ListViewItem(LibraryRowName(entry)) { Tag = entry };
                 // Detached rows keep their old flags; a stale selected flag would
                 // otherwise reselect (and reload) a mod when it is inserted.
-                if (item.ListView == null) { if (item.Selected) item.Selected = false; if (item.Focused) item.Focused = false; if (item.Text != entry.Name) item.Text = entry.Name; }
+                if (item.ListView == null) { if (item.Selected) item.Selected = false; if (item.Focused) item.Focused = false; string shown = LibraryRowName(entry); if (item.Text != shown) item.Text = shown; }
                 return item;
             };
             var target = new Dictionary<LibraryEntry, int>();
@@ -1599,6 +1610,8 @@ namespace SlotsInstaller
             bool sameSet = !ordered && modList.Items.Count == rows.Count && rows.Count > 1;
             if (sameSet) foreach (ListViewItem item in modList.Items) { var entry = item.Tag as LibraryEntry; if (entry == null || !target.ContainsKey(entry)) { sameSet = false; break; } }
             bool previousSelecting = selectingMod; selectingMod = true; ListViewItem keepVisible = null;
+            // 1.0.6: a multi-selection (the queue) survives a rebuild for the rows still listed.
+            HashSet<LibraryEntry> keepSelected = modList.SelectedItems.Count > 1 ? new HashSet<LibraryEntry>(modList.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag as LibraryEntry).Where(x => x != null)) : null;
             modList.BeginUpdate();
             try
             {
@@ -1620,6 +1633,7 @@ namespace SlotsInstaller
                 }
                 // 2.4.1: also after the incremental path (a refresh replaces every entry): the loaded mod's new row is selected.
                 if (package != null && modList.SelectedItems.Count == 0) foreach (ListViewItem item in modList.Items) if (String.Equals(((LibraryEntry)item.Tag).SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)) { item.Selected = true; item.Focused = true; keepVisible = item; break; }
+                if (keepSelected != null) foreach (ListViewItem item in modList.Items) if (!item.Selected && keepSelected.Contains(item.Tag as LibraryEntry)) item.Selected = true;
             }
             finally { modList.EndUpdate(); selectingMod = previousSelecting; }
             // 2.4.1: a row that moved (installed first) stays selected and in view; the inspector is not reloaded.
@@ -1687,6 +1701,7 @@ namespace SlotsInstaller
         {
             if (filterPanel == null) return;
             if (open && currentPage != libraryPage) ShowPage(libraryPage);
+            if (open && BatchVisible) HideBatch();   // 1.0.6: the Filters panel shows in the inspector's place, which the queue covers
             if (filterPanel.Visible != open)
             {
                 bool hadFocus = filterPanel.ContainsFocus;
@@ -1701,10 +1716,14 @@ namespace SlotsInstaller
         {
             // Fighters, Tool mods/Misc, the Misc chips, Installed and libraries; the search text stays (it is not a filter).
             filterPanel.ClearSelections(); pendingMiscKinds.Clear();
-            ApplyFilters(); QueueViewSave();
+            libraryToTop = true; ApplyFilters(); QueueViewSave();
         }
 
         private void RestoreFilterPanel(ViewPreferences saved)
+        {
+            quietFilters++; try { RestoreFilterPanelQuiet(saved); } finally { quietFilters--; }
+        }
+        private void RestoreFilterPanelQuiet(ViewPreferences saved)
         {
             var fighters = (saved.Fighters ?? new List<string>()).Where(c => c != null && c.Length == 3).ToList();
             if (fighters.Count == 0 && !String.IsNullOrWhiteSpace(saved.Character))
@@ -1752,6 +1771,10 @@ namespace SlotsInstaller
         private readonly HashSet<string> pendingMiscKinds = new HashSet<string>(StringComparer.Ordinal);
         private IEnumerable<string> MiscKindsSelectedOrPending() { return filterPanel.MiscSelected.Concat(pendingMiscKinds).Distinct(); }
         private void RefreshFacetRows()
+        {
+            quietFilters++; try { RefreshFacetRowsQuiet(); } finally { quietFilters--; }
+        }
+        private void RefreshFacetRowsQuiet()
         {
             facetRowsSource = library;
             filterPanel.Grid.SetFighters(GridFighters());
@@ -1835,7 +1858,7 @@ namespace SlotsInstaller
                         if (!PostToUi(delegate
                         {
                             if (cancellation.IsCancellationRequested || IsDisposed) { if (bitmap != null) bitmap.Dispose(); return; }
-                            if (!filterPanel.Grid.Cards.Any(c => c.Code == info.Id)) { discoveredFighters[info.Id] = info.Name; filterPanel.Grid.SetFighters(GridFighters()); }
+                            if (!filterPanel.Grid.Cards.Any(c => c.Code == info.Id)) { discoveredFighters[info.Id] = info.Name; quietFilters++; try { filterPanel.Grid.SetFighters(GridFighters()); } finally { quietFilters--; } }
                             if (installedFighters != null && bitmap != null) { if (!installedFighters.Cards.Any(c => c.Code == info.Id)) installedFighters.SetFighters(GridFighters()); installedFighters.SetPortrait(info.Id, (Bitmap)bitmap.Clone(), info.Ok ? info.Candidate : info.Note); QueueCharacterRenders(); }   // 1.0.1: the Installed picker's copy
                             filterPanel.Grid.SetPortrait(info.Id, bitmap, info.Ok ? info.Candidate : info.Note);
                         }) && bitmap != null) bitmap.Dispose();
@@ -1910,7 +1933,8 @@ namespace SlotsInstaller
 
         internal static bool EntryMatchesName(LibraryEntry entry, string term)
         {
-            return entry.Name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0 || Path.GetFileName(entry.SourcePath).IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0;
+            // 1.0.6: the display name too, and word by word ("viper barefoot" finds C-Viper-Barefoot).
+            return LibrarySearch.NameMatches(entry, term);
         }
 
         // Costume label of a library row ("C1, C3 + shared", "Shared parts (all outfits)", "… · title match"),
@@ -2480,6 +2504,7 @@ namespace SlotsInstaller
 
         private void UpdateInstallButton()
         {
+            UpdateAddPartsButton();   // 1.0.6
             if (IsReplaceMode) { UpdateReplaceButtons(); UpdateSlotHint(); return; }
             UpdateSlotHint();
             if (installButton != null) installButton.Enabled = !busy && !ReviewPending && missingRestoredOptions.Count==0 && plan != null && plan.CanInstall && targetCharacter.SelectedIndex >= 0 && !String.IsNullOrWhiteSpace(outfitName.Text);
@@ -2512,7 +2537,7 @@ namespace SlotsInstaller
             CompositionPlan current = plan; string root = config.CostumeRoot; string sevenZip = config.SevenZipPath;
             Work("Installing extra outfit…", delegate { return Installer.Install(current, root, character, name, sevenZip, replace); }, delegate(InstallResult result)
             {
-                RefreshInstalled("✓ Installed " + name + " · " + ReplacePlanner.N(result.FileCount, "file") + ". Restart SF6 to see changes.");
+                RefreshInstalled("✓ Installed " + name + " · " + ReplacePlanner.N(result.FileCount, "file") + result.PartsNote + ". Restart SF6 to see changes.");   // 1.0.6: added parts kept/removed
             });
         }
 
@@ -3067,7 +3092,7 @@ namespace SlotsInstaller
         // A disabled or hidden Install does nothing, like a click on it; never while a task runs.
         private void PressInstall()
         {
-            if (busy || installButton == null || !installButton.Enabled || !installButton.Visible) return;
+            if (busy || installButton == null || !installButton.Enabled || !installButton.Visible || BatchVisible) return;   // 1.0.6: never under the queue
             SpaceInstalls++;
             installButton.PerformClick();
         }
@@ -3080,6 +3105,7 @@ namespace SlotsInstaller
                 case ShortcutAction.SwitchMode:
                     // 1.0.1 (the user): Tab flips INSTALL AS in the Mod library (remembered like a click). Elsewhere, or
                     // while a PAK/tool mod locks it, Tab keeps moving the focus.
+                    if (currentPage == libraryPage && BatchVisible) { if (busy || batchMode.Locked) return false; batchMode.Choose(1 - batchMode.SelectedIndex); return true; }   // 1.0.6: the queue's mode
                     if (currentPage != libraryPage || busy || modeToggle == null || modeToggle.Locked) return false;
                     SetInstallMode(IsReplaceMode ? InstallModes.Slot : InstallModes.Replace, true);
                     return true;
@@ -3106,6 +3132,7 @@ namespace SlotsInstaller
                 case ShortcutAction.RefreshLibraries: if (!busy) RefreshLibrary(true); return true;
                 case ShortcutAction.OpenArchive: if (!busy) ChoosePackageFile(); return true;
                 case ShortcutAction.OpenFolder: if (!busy) ChoosePackageFolder(); return true;
+                case ShortcutAction.ToggleNames: if (currentPage != libraryPage) return false; SetLibraryFileNames(!libraryFileNames, true); return true;   // 1.0.6
             }
             return false;
         }
