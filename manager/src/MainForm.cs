@@ -1251,7 +1251,9 @@ namespace SlotsInstaller
             using (Brush chip = new SolidBrush(installState == LibraryInstallState.Full || installState == LibraryInstallState.Partial ? Palette.Green : Palette.Border)) e.Graphics.FillRectangle(chip, r.Left + Px(1), r.Top + Px(12), Px(3), r.Height - Px(24));
             TextRenderer.DrawText(e.Graphics, LibraryRowName(entry), Palette.Strong, new Rectangle(r.Left + Px(13), r.Top + Px(8), r.Width - Px(24), Px(24)), Palette.Text, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             int searchRank; string costume = LibraryRowLabel(entry, libraryRanks.TryGetValue(entry, out searchRank) ? searchRank : (int?)null);
-            string subtitle = LibraryCharacterLabel(entry) + (costume.Length > 0 ? "   ·   " + costume : "") + "   ·   " + entry.Kind.ToUpperInvariant() + (entry.Size > 0 ? "   ·   " + Utilities.FriendlyBytes(entry.Size) : "");
+            string subtitle = entry.Pending   // 1.0.6: not read yet (background indexing)
+                ? (String.IsNullOrEmpty(entry.Character) ? "" : entry.Character + "   ·   ") + "Reading…   ·   " + entry.Kind.ToUpperInvariant() + (entry.Size > 0 ? "   ·   " + Utilities.FriendlyBytes(entry.Size) : "")
+                : LibraryCharacterLabel(entry) + (costume.Length > 0 ? "   ·   " + costume : "") + "   ·   " + entry.Kind.ToUpperInvariant() + (entry.Size > 0 ? "   ·   " + Utilities.FriendlyBytes(entry.Size) : "");
             // 1.0.1: "Extra · " before the state when the mod is installed as an extra outfit (the user).
             bool extra = installState != LibraryInstallState.None && InstalledAsExtra(entry);   // 1.0.1: "Extra" alone when fully installed (the user: no "Full" next to it)
             string badge = installState == LibraryInstallState.None ? "" : extra && installState == LibraryInstallState.Full ? "Extra" : (extra ? "Extra · " : "") + (installState == LibraryInstallState.Full ? "✓ Full" : installState == LibraryInstallState.Partial ? "◐ Partial" : "Disabled");
@@ -1489,19 +1491,23 @@ namespace SlotsInstaller
             return true;
         }
 
-        private sealed class ScanResult { internal List<LibraryEntry> Entries; internal List<InstalledOutfit> Installed; internal GameRowsResult Game; internal List<UsageRecord> Removed; internal HashSet<string> Changed; }
+        private sealed class ScanResult { internal List<LibraryEntry> Entries, Pending, NamesPending; internal List<InstalledOutfit> Installed; internal GameRowsResult Game; internal List<UsageRecord> Removed; internal HashSet<string> Changed; }
         private static ScanResult WithChangedSources(ScanResult s) { s.Changed = ChangedSources(s.Installed, s.Game == null ? null : s.Game.Rows); return s; }   // 2.4.1
 
         // 2.5.2: toTop (F5, the ↻ button, gear → Refresh libraries) scrolls the list back to the top when it is sorted by Added ↓, so the newest mods show.
         private void RefreshLibrary(bool toTop = false)
         {
             string[] libraries = config.Libraries.ToArray(); string root = config.CostumeRoot; string sevenZip = config.SevenZipPath;
-            Work("Scanning libraries and installed outfits…", delegate { return WithChangedSources(new ScanResult { Entries = Library.Scan(libraries, sevenZip), Installed = Installer.ListInstalled(root), Game = LoadGameRows(true), Removed = ReadRemovedUsage(root) }); }, delegate(ScanResult result)
+            // 1.0.6: the quick listing (what the index knows); the rest is read in the background (MainFormIndexing.cs).
+            StopIndexing();
+            Work("Scanning libraries and installed outfits…", delegate { List<LibraryEntry> pending, names; List<LibraryEntry> entries = Library.ScanQuick(libraries, sevenZip, out pending, out names); return WithChangedSources(new ScanResult { Entries = entries, Pending = pending, NamesPending = names, Installed = Installer.ListInstalled(root), Game = LoadGameRows(true), Removed = ReadRemovedUsage(root) }); }, delegate(ScanResult result)
             {
-                library = result.Entries; LibraryNames.Apply(library); installed = result.Installed;   // 1.0.6: names typed in the Name view UseRemovedUsage(result.Removed); changedSources = result.Changed ?? changedSources; ApplyGameRows(result.Game); UpdateModeUi();
+                // 1.0.6: LibraryNames.Apply gives the entries the names typed in the Name view.
+                library = result.Entries; LibraryNames.Apply(library); installed = result.Installed; UseRemovedUsage(result.Removed); changedSources = result.Changed ?? changedSources; ApplyGameRows(result.Game); UpdateModeUi();
                 quietFilters++; try { filterPanel.SetLibraries(libraries); } finally { quietFilters--; }   // a library removed in Settings loses its tile and selection
                 ApplyFilters(); FillInstalled(); UpdateLibraryUninstall();
                 if (toTop && librarySort == LibrarySortKey.Added && !librarySortAscending && modList.Items.Count > 0) modList.EnsureVisible(0);
+                StartIndexing(result.Pending, result.NamesPending);   // 1.0.6: two background passes (MainFormIndexing.cs)
                 // A game update or PAK-method install since the last read changes the PAK identity: re-check.
                 if (portraitsRequested) EnsurePortraits(true);
                 SetPageStatus(libraryPage, LibraryFoundText(library.Count, libraries.Length) + (package == null ? " · drop an archive or folder to open it" : ""));
@@ -1576,7 +1582,7 @@ namespace SlotsInstaller
             for (int i = 0; sameRows && i < rows.Count; i++) sameRows = Object.ReferenceEquals(modList.Items[i].Tag, rows[i]);
             if (!sameRows) UpdateLibraryRows(rows);
             ScrollLibraryToTopIfAsked();
-            libraryCount.Text = library.Count == 0 ? "MOD LIBRARY" : rows.Count == library.Count ? library.Count + " MODS" : rows.Count + " OF " + library.Count + " MODS";
+            captionShown = rows.Count; UpdateLibraryCaption();   // 1.0.6: "· READING n%" while mods are read in the background
         }
 
         // Each native row insert costs ~0.07 ms, so rebuilding 800+ rows per

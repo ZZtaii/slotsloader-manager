@@ -1,14 +1,19 @@
-# Slotsloader Manager 1.0.6
+# Slotsloader Manager 1.0.7
 
 A Windows mod manager for your ZIP, RAR, 7Z and folder mod libraries. It is built for Street Fighter 6 (more games are planned), and installs SF6 mods two ways:
 - as **extra outfits** through Slotsloader;
 - by **replacing the original** files the way external mod managers do, including tool mods such as REFramework scripts, plugins and Slotsloader itself.
 
-The title bar shows **Slotsloader Manager · 1.0.6**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
+The title bar shows **Slotsloader Manager · 1.0.7**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
 
 Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .NET Framework 4.8 runs it; RAR/7Z support uses your installed 7-Zip. No Blender, Node or Python is required. Game/library paths are in Settings. Your existing mod manager libraries are configured by default. `Data` beside the executable holds settings/cache/view preferences and the backups of replaced game files; preserve it during updates. The whole app folder (executables + `Data`) can be moved or renamed; see **Move the app folder** below.
 
 ## What changed
+
+- 1.0.7:
+  - **Faster start.** The Mod library lists every mod at once (2,554 mods in under half a second here) and reads the ones it doesn't know yet in the background while you use the app; the list caption shows `· READING n%`. Fighters, outfits and option folders come first; the names from modinfo.ini (the Name view, option names for Deep search, authors) follow, shown as `· NAMES n%`. A mod not read yet shows **Reading…** on its row.
+  - Updating from 1.0.5 no longer reads every archive again: what the library already knows stays, and only the names are read.
+  - Fixed: since 1.0.6, a library scan (including the one at start) didn't refresh Replace original installs and "source changed" marks until you opened the Installed page or installed something.
 
 - 1.0.6:
   - **Name · File** under the library search: list mods by their own name (from modinfo.ini) or their file name. **Ctrl+Shift+N** switches. A mod without a name shows its file name in both. The first refresh after updating reads each archive once more to learn the names.
