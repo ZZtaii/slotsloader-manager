@@ -134,6 +134,10 @@ namespace SlotsInstaller
         public List<string> OptionNames = new List<string>();
         // A name typed in the Name view (LibraryNames, Data\library-names.json); null = none. Not stored in the index.
         internal string CustomName;
+        // 1.0.6: listed from the index-less quick scan and not read yet (Library.ScanQuick); the window reads it in the background.
+        internal bool Pending;
+        // 1.0.6: identity known, modinfo.ini names (display name, option names, authors) not read yet.
+        internal bool NamesPending;
         // Name shown in the library: the typed name, else the display name, else the file name; the file name when the
         // list shows file names.
         internal string ShownName(bool fileNames) { return fileNames ? Name : !String.IsNullOrWhiteSpace(CustomName) ? CustomName : String.IsNullOrWhiteSpace(DisplayName) ? Name : DisplayName; }
@@ -234,14 +238,17 @@ namespace SlotsInstaller
         {
             return record != null && record.Stamp == stamp && record.CharacterCodes != null && record.OptionCount.HasValue && record.OptionCount.Value >= 0
                 && record.OptionIds != null && record.OptionIds.Count == record.OptionCount.Value && record.CostumeKeys != null && record.ToolKinds != null
-                && record.StageIds != null && record.MiscAreas != null && record.Authors != null && record.DisplayName != null && record.OptionNames != null
+                && record.StageIds != null && record.MiscAreas != null
                 && (record.CodesVersion >= CodesVersion || record.CharacterCodes.Count <= 1);
         }
+        // 1.0.6: the modinfo.ini names (authors, display name, option names) are read in a second, later pass for RAR/7Z
+        // archives; a record can have its identity without them. Records from 1.0.5 have authors but no names.
+        internal static bool NamesKnown(LibraryIdentityRecord record) { return record != null && record.Authors != null && record.DisplayName != null && record.OptionNames != null; }
         private static LibraryIdentityRecord CopyIdentity(LibraryIdentityRecord record)
         {
             return new LibraryIdentityRecord { SourcePath = record.SourcePath, Stamp = record.Stamp, CharacterCodes = record.CharacterCodes.ToList(),
                 OptionCount = record.OptionCount, OptionIds = record.OptionIds.ToList(), CostumeKeys = record.CostumeKeys.ToList(), ToolKinds = record.ToolKinds.ToList(),
-                StageIds = record.StageIds.ToList(), MiscAreas = record.MiscAreas.ToList(), Authors = record.Authors.ToList(), AddedUtc = record.AddedUtc, CodesVersion = record.CodesVersion, DisplayName = record.DisplayName, OptionNames = record.OptionNames.ToList() };
+                StageIds = record.StageIds.ToList(), MiscAreas = record.MiscAreas.ToList(), Authors = record.Authors == null ? null : record.Authors.ToList(), AddedUtc = record.AddedUtc, CodesVersion = record.CodesVersion, DisplayName = record.DisplayName, OptionNames = record.OptionNames == null ? null : record.OptionNames.ToList() };
         }
         // Only archive content metadata is reusable. Capture it while the old source still exists; incomplete or
         // older records are conservatively left for the next scan. Folder contents remain uncached.
@@ -305,31 +312,9 @@ namespace SlotsInstaller
         }
         public static List<LibraryEntry> Scan(IEnumerable<string> libraries, string sevenZipPath)
         {
-            var result = new List<LibraryEntry>(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var seenLibraries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             CancellationToken token = OperationContext.Token;
             Action<OperationProgress> progress = OperationContext.Progress;
-            token.ThrowIfCancellationRequested();
-            EnsureCacheLoaded();
-            foreach (string lib in libraries)
-            {
-                token.ThrowIfCancellationRequested();
-                string library = lib;
-                try
-                {
-                    library = Path.GetFullPath(lib);
-                    if (!seenLibraries.Add(library)) continue;
-                    OperationContext.Report("Listing mod libraries",result.Count,0);
-                    string root = library.Length > 3 ? library.TrimEnd(Path.DirectorySeparatorChar) : library;   // "F:\" stays as GetDirectoryName gives it
-                    foreach (string path in Directory.EnumerateFileSystemEntries(library)) AddListed(path, root, 0, result, seen, token);
-                }
-                catch (Exception ex)
-                {
-                    if (!IsSourceError(ex)) throw;
-                    // Keep already discovered entries and every other configured library.
-                    result.Add(ErrorEntry(library,"Library",ex));
-                }
-            }
+            List<LibraryEntry> result = ListEntries(libraries);
             // Only central directories/file names are read. Four independent listings keep a
             // large RAR/7Z library responsive without extracting payloads or parsing every INI.
             int completed = 0; object progressLock = new object(); var progressClock=Stopwatch.StartNew();
@@ -356,6 +341,134 @@ namespace SlotsInstaller
             token.ThrowIfCancellationRequested();
             SaveIdentityCache();
             return result.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        // 1.0.6: the window's quick listing. Every mod comes back at once: the ones the index knows (same archive stamp,
+        // complete record) with their identity, the rest (new or changed archives, folders, records from an older Manager)
+        // marked Pending with only their file-name guess, listed in `pending` for IndexEntry in the background.
+        public static List<LibraryEntry> ScanQuick(IEnumerable<string> libraries, string sevenZipPath, out List<LibraryEntry> pending) { List<LibraryEntry> names; return ScanQuick(libraries, sevenZipPath, out pending, out names); }
+        // namesPending: listed with their identity, still without their modinfo.ini names (IndexNames).
+        public static List<LibraryEntry> ScanQuick(IEnumerable<string> libraries, string sevenZipPath, out List<LibraryEntry> pending, out List<LibraryEntry> namesPending)
+        {
+            List<LibraryEntry> result = ListEntries(libraries);
+            pending = new List<LibraryEntry>(); namesPending = new List<LibraryEntry>();
+            OperationContext.Report("Reading the library index",0,result.Count);
+            foreach (LibraryEntry entry in result)
+            {
+                OperationContext.ThrowIfCancellationRequested();
+                if (entry.Detection == "Error") continue;
+                if (!ApplyCached(entry, sevenZipPath)) { MarkPending(entry); pending.Add(entry); }
+                else if (entry.NamesPending) namesPending.Add(entry);
+            }
+            SaveIdentityCache();   // Added times filled in from this listing
+            return result.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        // The index's record of an archive, when it is still valid for the file on disk. Folders are never cached.
+        private static bool ApplyCached(LibraryEntry entry, string sevenZipPath)
+        {
+            if (entry.Kind == "Folder") return false;
+            string stamp;
+            try { stamp = ArchiveStamp(entry.SourcePath, sevenZipPath); }
+            catch (Exception ex) { if (!IsSourceError(ex)) throw; return false; }
+            LibraryIdentityRecord cached = null;
+            lock (CacheLock)
+            {
+                LibraryIdentityRecord found;
+                if (IdentityCache.TryGetValue(entry.SourcePath, out found) && UsableIdentity(found, stamp)) cached = found;
+                string added = AddedStamp(entry.AddedUtc);
+                if (cached != null && added != null && cached.AddedUtc != added) { cached.AddedUtc = added; cacheDirty = true; }
+                if (cached == null) return false;
+                entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas);
+                if (NamesKnown(cached)) { entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); entry.NamesPending = false; }
+                else entry.NamesPending = true;
+                ApplyCodes(entry, new List<string>(cached.CharacterCodes));
+            }
+            return true;
+        }
+        // Until it is read: the file-name fighter (as for a mod without fighter files), no options or kinds yet.
+        private static void MarkPending(LibraryEntry entry)
+        {
+            entry.Pending = true;
+            entry.Character = ModCategories.NameGuessAllowed(entry) ? entry.FilenameCharacter : "";
+            entry.Detection = "Pending";
+        }
+        // Reads one mod as a full scan would (the archive listing and modinfo.ini files) and records it in the index.
+        // Safe on a pool thread for an entry no other thread uses (the window passes a copy: IndexCopy).
+        // ZIPs and folders read their few modinfo.ini files with the listing (cheap); RAR/7Z leave them for IndexNames.
+        internal static void IndexEntry(LibraryEntry entry, string sevenZipPath)
+        {
+            entry.Pending = false;
+            if (entry.Detection != "Error") DetectIdentity(entry, sevenZipPath, entry.Kind == "ZIP" || entry.Kind == "Folder");
+        }
+        // Second pass: the modinfo.ini names of a mod whose identity is known. A failure only costs the names.
+        internal static void IndexNames(LibraryEntry entry, string sevenZipPath)
+        {
+            try
+            {
+                string stamp = entry.Kind == "Folder" ? null : ArchiveStamp(entry.SourcePath, sevenZipPath);
+                ReadNames(entry, sevenZipPath, stamp);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { if (!(ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)) throw; entry.NamesPending = false; }
+        }
+        // Reads the names and adds them to the index record when it is still the record of this file (same stamp).
+        private static void ReadNames(LibraryEntry entry, string sevenZipPath, string stamp)
+        {
+            ModInfoSummary info;
+            using (var reader = new SourceReader(entry.SourcePath, sevenZipPath)) info = ReadModInfo(reader);
+            entry.Authors = info.Authors; entry.DisplayName = info.DisplayName; entry.OptionNames = info.OptionNames; entry.NamesPending = false;
+            if (entry.Kind == "Folder" || stamp == null) return;
+            lock (CacheLock)
+            {
+                LibraryIdentityRecord record;
+                if (IdentityCache.TryGetValue(entry.SourcePath, out record) && record.Stamp == stamp)
+                { record.Authors = new List<string>(info.Authors); record.DisplayName = info.DisplayName ?? ""; record.OptionNames = new List<string>(info.OptionNames); cacheDirty = true; }
+            }
+        }
+        internal static LibraryEntry IndexCopy(LibraryEntry e)
+        {
+            return new LibraryEntry { SourcePath = e.SourcePath, Name = e.Name, Kind = e.Kind, Size = e.Size, AddedUtc = e.AddedUtc, FilenameCharacter = e.FilenameCharacter, LibraryRoot = e.LibraryRoot, Character = "", Detection = "" };
+        }
+        // Copies what IndexEntry found from `found` (a copy) onto the listed entry.
+        internal static void TakeIdentity(LibraryEntry entry, LibraryEntry found)
+        {
+            entry.CharacterCodes = found.CharacterCodes; entry.Character = found.Character; entry.Detection = found.Detection; entry.DetectionError = found.DetectionError;
+            entry.OptionCount = found.OptionCount; entry.OptionIds = found.OptionIds; entry.CostumeKeys = found.CostumeKeys; entry.ToolKinds = found.ToolKinds; entry.StageIds = found.StageIds; entry.MiscAreas = found.MiscAreas;
+            entry.Authors = found.Authors; entry.DisplayName = found.DisplayName; entry.OptionNames = found.OptionNames; entry.FilenameCharacter = found.FilenameCharacter;
+            entry.Pending = false; entry.NamesPending = found.NamesPending;
+        }
+        internal static void TakeNames(LibraryEntry entry, LibraryEntry found)
+        {
+            entry.Authors = found.Authors; entry.DisplayName = found.DisplayName; entry.OptionNames = found.OptionNames; entry.NamesPending = false;
+        }
+        internal static void SaveIndex() { SaveIdentityCache(); }
+        // The library folders' mods with their file stats only (no archive is opened).
+        private static List<LibraryEntry> ListEntries(IEnumerable<string> libraries)
+        {
+            var result = new List<LibraryEntry>(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenLibraries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            CancellationToken token = OperationContext.Token;
+            token.ThrowIfCancellationRequested();
+            EnsureCacheLoaded();
+            foreach (string lib in libraries)
+            {
+                token.ThrowIfCancellationRequested();
+                string library = lib;
+                try
+                {
+                    library = Path.GetFullPath(lib);
+                    if (!seenLibraries.Add(library)) continue;
+                    OperationContext.Report("Listing mod libraries",result.Count,0);
+                    string root = library.Length > 3 ? library.TrimEnd(Path.DirectorySeparatorChar) : library;   // "F:\" stays as GetDirectoryName gives it
+                    foreach (string path in Directory.EnumerateFileSystemEntries(library)) AddListed(path, root, 0, result, seen, token);
+                }
+                catch (Exception ex)
+                {
+                    if (!IsSourceError(ex)) throw;
+                    // Keep already discovered entries and every other configured library.
+                    result.Add(ErrorEntry(library,"Library",ex));
+                }
+            }
+            return result;
         }
         // 1.0.2: a group folder's mods are listed one by one (two group levels at most), each still in its library.
         private static void AddListed(string path, string root, int depth, List<LibraryEntry> result, HashSet<string> seen, CancellationToken token)
@@ -454,7 +567,10 @@ namespace SlotsInstaller
             if (path == null) return;
             lock (CacheLock) if (IdentityCache.Remove(path)) cacheDirty = true;
         }
-        private static void DetectIdentity(LibraryEntry entry, string sevenZipPath)
+        private static void DetectIdentity(LibraryEntry entry, string sevenZipPath) { DetectIdentity(entry, sevenZipPath, true); }
+        // readNames false (1.0.6, background first pass): the archive listing only; the modinfo.ini names are left for
+        // ReadNames (NamesPending), and the record is saved without them.
+        private static void DetectIdentity(LibraryEntry entry, string sevenZipPath, bool readNames)
         {
             try
             {
@@ -474,7 +590,11 @@ namespace SlotsInstaller
                     }
                 }
                 List<string> codes;
-                if (cached != null) { codes = new List<string>(cached.CharacterCodes); entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas); entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); }
+                if (cached != null) { codes = new List<string>(cached.CharacterCodes); entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas);
+                    if (NamesKnown(cached)) { entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); entry.NamesPending = false; }
+                    else if (readNames) IndexNames(entry, sevenZipPath);   // a names failure costs only the names
+                    else entry.NamesPending = true;
+                }
                 else
                 {
                     Interlocked.Increment(ref CacheMisses);
@@ -507,8 +627,8 @@ namespace SlotsInstaller
                             if (fileIdentity.ArtCode != null) { artFiles.Add(native); continue; }
                             categories.AddNative(native, fileIdentity.Fighter);
                         }
-                        ModInfoSummary info = ReadModInfo(reader);
-                        entry.Authors = info.Authors; entry.DisplayName = info.DisplayName; entry.OptionNames = info.OptionNames;
+                        if (readNames) { ModInfoSummary info = ReadModInfo(reader); entry.Authors = info.Authors; entry.DisplayName = info.DisplayName; entry.OptionNames = info.OptionNames; entry.NamesPending = false; }
+                        else entry.NamesPending = true;
                     }
                     foreach (string art in artFiles) categories.AddNative(art, identity.SingleFighterArt);
                     codes = identity.Finish();
@@ -522,25 +642,12 @@ namespace SlotsInstaller
                     {
                         lock (CacheLock)
                         {
-                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = new List<string>(entry.Authors), CodesVersion = CodesVersion, DisplayName = entry.DisplayName ?? "", OptionNames = new List<string>(entry.OptionNames) };
+                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = readNames ? new List<string>(entry.Authors) : null, CodesVersion = CodesVersion, DisplayName = readNames ? entry.DisplayName ?? "" : null, OptionNames = readNames ? new List<string>(entry.OptionNames) : null };
                             cacheDirty = true;
                         }
                     }
                 }
-                entry.CharacterCodes = codes;
-                entry.DetectionError = "";
-                if (codes.Count > 1) { entry.Character = ""; entry.Detection = "Ambiguous"; }
-                else if (codes.Count == 1)
-                {
-                    string name;
-                    if (Characters.ByCode.TryGetValue(codes[0], out name)) { entry.Character = name; entry.Detection = "Native"; }
-                    else { entry.Character = ""; entry.Detection = "UnknownNative"; }
-                }
-                else
-                {
-                    entry.Character = ModCategories.NameGuessAllowed(entry) ? entry.FilenameCharacter : "";
-                    entry.Detection = String.IsNullOrWhiteSpace(entry.Character) ? "Unknown" : "Filename";
-                }
+                ApplyCodes(entry, codes);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -549,7 +656,25 @@ namespace SlotsInstaller
                 // Failed reads are not cached, so Refresh can recover from temporary IO errors.
                 ForgetIdentity(entry.SourcePath);
                 entry.Character = ""; entry.FilenameCharacter=""; entry.Detection = "Error"; entry.DetectionError = ex.Message;
-                entry.CharacterCodes.Clear(); entry.OptionIds.Clear(); entry.OptionCount=-1; entry.CostumeKeys.Clear(); entry.ToolKinds.Clear(); entry.StageIds.Clear(); entry.MiscAreas.Clear(); entry.Authors.Clear(); entry.DisplayName = ""; entry.OptionNames.Clear();
+                entry.CharacterCodes.Clear(); entry.OptionIds.Clear(); entry.OptionCount=-1; entry.CostumeKeys.Clear(); entry.ToolKinds.Clear(); entry.StageIds.Clear(); entry.MiscAreas.Clear(); entry.Authors.Clear(); entry.DisplayName = ""; entry.OptionNames.Clear(); entry.NamesPending = false;
+            }
+        }
+        // The fighter of a mod from its native codes (one known fighter), else its file-name guess when allowed.
+        private static void ApplyCodes(LibraryEntry entry, List<string> codes)
+        {
+            entry.CharacterCodes = codes;
+            entry.DetectionError = ""; entry.Pending = false;
+            if (codes.Count > 1) { entry.Character = ""; entry.Detection = "Ambiguous"; }
+            else if (codes.Count == 1)
+            {
+                string name;
+                if (Characters.ByCode.TryGetValue(codes[0], out name)) { entry.Character = name; entry.Detection = "Native"; }
+                else { entry.Character = ""; entry.Detection = "UnknownNative"; }
+            }
+            else
+            {
+                entry.Character = ModCategories.NameGuessAllowed(entry) ? entry.FilenameCharacter : "";
+                entry.Detection = String.IsNullOrWhiteSpace(entry.Character) ? "Unknown" : "Filename";
             }
         }
         // 2.5.9: author= of every modinfo.ini (path order, duplicates dropped). An unreadable modinfo.ini only costs the

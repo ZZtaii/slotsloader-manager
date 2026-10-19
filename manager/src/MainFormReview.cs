@@ -152,7 +152,7 @@ namespace SlotsInstaller
 
         internal bool ReviewPending { get { return package != null && appliedGeneration != reviewGeneration; } }
         internal bool ReviewRunning { get { return reviewRunning; } }
-        internal bool Working { get { return busy || ReviewPending; } }
+        internal bool Working { get { return busy || ReviewPending || Indexing; } }   // 1.0.6: checks wait for the background library read too
 
         private sealed class ReviewResult
         {

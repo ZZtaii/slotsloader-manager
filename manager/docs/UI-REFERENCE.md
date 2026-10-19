@@ -36,6 +36,16 @@ Read this before changing layout, navigation, option selection, previews, or scr
 
 These cover the custom screens. **Edit options** loads a managed outfit back into the existing Options view; it is not another editor window. Archive/executable pickers and folder browsers are standard Windows dialogs. Since 2.4.1 there are no confirmations for recoverable actions (they act at once with Undo) and errors are inline; the few remaining questions (permanent deletes, another tool's changes) use the themed message box (2.0.3; standard MessageBoxes before). A successful install uses a green checked status line rather than a popup. Taking screenshots does not require installing, disabling, removing, or replacing an outfit.
 
+## 1.0.7 Background library reading, 2026-10-20
+
+Source: `Library.ScanQuick` / `IndexEntry` / `IndexNames` in [Core.cs](../src/Core.cs), [MainFormIndexing.cs](../src/MainFormIndexing.cs). Checks: `--queue-check` "background index".
+
+- **The list first.** A scan (start, F5, ↻) lists every mod with what the index knows (same archive stamp, complete identity) and marks the rest Pending: the row says **Reading…** and, until read, the mod has its file-name fighter only. The window is not busy for the reading.
+- **Two background passes**, four mods at a time, rows on screen first: (1) identity from the archive listing (fighter, outfits, option folders, kinds; ZIPs and folders also read their modinfo.ini here), (2) the modinfo.ini names of RAR/7Z archives (display name, option names, authors), which cost a second 7-Zip run. Results are applied every 0.4 s; filters, counts and the Name view follow. The caption reads `N MODS · READING n%`, then `· NAMES n%`. The index is saved every 200 mods and at the end, so a closed window loses nothing already read.
+- **Index records**: identity no longer needs the names. A 1.0.5 record (authors, no display or option names) keeps its identity; only its names are read. A full `Library.Scan` (CLI, Assistant) reads missing names inline.
+- F5 / ↻ during a run stop it and start a new scan; deletes and renames during a run are safe (a rename keeps the file's content, so the result still applies).
+- Fixed: 1.0.6 commented out the refresh of replacements (`ApplyGameRows`), removed-usage and changed-source marks and `UpdateModeUi` after every library scan.
+
 ## 1.0.6 Library names, search, queue, Add to outfit, 2026-10-19
 
 Source: [MainFormLibraryView.cs](../src/MainFormLibraryView.cs), [LibrarySearch.cs](../src/LibrarySearch.cs), [MainFormBatch.cs](../src/MainFormBatch.cs), [MainFormAddParts.cs](../src/MainFormAddParts.cs), [InstallerParts.cs](../src/InstallerParts.cs). Checks: `--queue-check` (suite `queue`).

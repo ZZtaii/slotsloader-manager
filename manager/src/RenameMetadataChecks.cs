@@ -57,7 +57,9 @@ namespace SlotsInstaller
             if (kind == "schema" || kind == "version")
             {
                 LibraryIdentityCache cache = Cache();
-                if (kind == "schema") cache.Records.Single().Authors = null; else cache.Records.Single().CodesVersion = 0;
+                // 1.0.6: missing names (authors, display name, option names) are read in a later pass and keep the record;
+                // a missing identity field still makes it invalid.
+                if (kind == "schema") cache.Records.Single().MiscAreas = null; else cache.Records.Single().CodesVersion = 0;
                 Json.Write(CachePath(), cache); Library.IdentityCacheDirectory = Library.IdentityCacheDirectory;
             }
             else if (kind == "source") File.SetLastWriteTimeUtc(source, File.GetLastWriteTimeUtc(source).AddSeconds(5));

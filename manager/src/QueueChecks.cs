@@ -39,7 +39,8 @@ namespace SlotsInstaller
                 check("comma forms (1.0.6): \"juri, barefoot\", \"juri,barefoot\", \"juri barefoot\", \" juri ,  barefoot ,\", \"juri;barefoot\", \"juri，barefoot\" all give the same mods; \"juri c1\" = \"juri, c1\"; a fighter term stays strict with commas (the Alex stage mod case)", CommaForms);
                 check("deep search (1.0.6): off, \"barefoot\" misses Goth Juri; on, its Barefoot option folder or option name finds it, also as a comma term or one word of several", DeepSearch);
                 check("modinfo display name (1.0.6): dummy root, NameAsBundle, the only top-level option; several top-level options or none = no name; add-ons and nested options are not top level", ModInfoNames);
-                check("library index (1.0.6): a scan reads the display name and option names; a cached record keeps them; a record without them is listed again once", delegate { IndexNames(root); });
+                check("library index (1.0.6): a scan reads the display name and option names; a cached record keeps them; a record without them keeps its identity and only its names are read", delegate { IndexNames(root); });
+                check("background index (1.0.6): the quick listing returns every mod at once (unread ones Pending, with their file-name fighter); reading one gives the same identity as a full scan; a 1.0.5 record (no names) keeps its identity without a relist and only its names are read; names fill the display name and option names", delegate { BackgroundIndex(root); });
                 check("queue defaults (1.0.6): alternative top-level variants keep the first (the Default one first); a required choose-one group gets its default/first option; optional add-ons stay off; the plan installs", delegate { QueueDefaults(root); });
                 check("add to outfit (1.0.6): exactly the ticked options' files go into the installed outfit (a lone hair option without main files is fine); nothing else is added or removed; recorded once; a reinstall of the same mod puts them back; files for another outfit slot are refused; the picker window renders", delegate { AddPart(root); });
                 SynchronizationContext previous = SynchronizationContext.Current; bool previousAuto = WindowsFormsSynchronizationContext.AutoInstall;
@@ -163,7 +164,47 @@ namespace SlotsInstaller
             File.WriteAllText(file, Json.Serializer().Serialize(cache));
             Library.IdentityCacheDirectory = Library.IdentityCacheDirectory;   // reload from disk
             List<LibraryEntry> third = Library.Scan(new[] { lib }, "");
-            Require(Library.CacheMisses >= misses + 2 && third.Single(e => e.Name == "Goth Juri").DisplayName == "Goth Juri", "old record not relisted");
+            // A record without names keeps its identity (no relisting); a full scan reads just the names.
+            Require(Library.CacheMisses == misses && third.Single(e => e.Name == "Goth Juri").DisplayName == "Goth Juri" && third.Single(e => e.Name == "Goth Juri").OptionNames.Contains("Bare Feet"), "names of an old record: " + (Library.CacheMisses - misses) + " relisted");
+        }
+
+        // ---- Background index -----------------------------------------------------------------------------------------
+        private static void BackgroundIndex(string root)
+        {
+            string lib = Path.Combine(root, "bg-lib"); Directory.CreateDirectory(lib);
+            string before = Library.IdentityCacheDirectory; Library.IdentityCacheDirectory = Path.Combine(root, "bg-index");
+            try
+            {
+                for (int i = 0; i < 6; i++)
+                    Zip(Path.Combine(lib, "Juri Look " + i + ".zip"), new Dictionary<string, string> {
+                        { "Look/modinfo.ini", "name=Juri Look Number " + i + "\r\nauthor=Tester\r\n" },
+                        { "Look/natives/stm/product/model/esf/esf016/001/01/esf016_001_01.mesh.230110883", "body " + i } });
+                List<LibraryEntry> pending, names;
+                List<LibraryEntry> quick = Library.ScanQuick(new[] { lib }, "", out pending, out names);
+                Require(quick.Count == 6 && pending.Count == 6 && names.Count == 0 && quick.All(e => e.Pending && e.Character == "Juri" && e.CostumeKeys.Count == 0), "first quick listing: " + pending.Count + " pending");
+                foreach (LibraryEntry e in pending) { LibraryEntry copy = Library.IndexCopy(e); Library.IndexEntry(copy, ""); Library.TakeIdentity(e, copy); }
+                Library.SaveIndex();
+                List<LibraryEntry> full = Library.Scan(new[] { lib }, "");
+                Require(quick.All(e => !e.Pending && !e.NamesPending && e.Character == "Juri" && e.CostumeKeys.SequenceEqual(new[] { "016/001" }) && e.DisplayName.StartsWith("Juri Look Number") && e.Authors.SequenceEqual(new[] { "Tester" })), "read in the background: " + String.Join(", ", quick.Select(e => e.Detection + "/" + e.DisplayName)));
+                Require(full.Select(e => e.Name + "|" + e.Character + "|" + String.Join(",", e.CostumeKeys) + "|" + e.DisplayName).SequenceEqual(quick.Select(e => e.Name + "|" + e.Character + "|" + String.Join(",", e.CostumeKeys) + "|" + e.DisplayName)), "background identity differs from a full scan");
+                List<LibraryEntry> again = Library.ScanQuick(new[] { lib }, "", out pending, out names);
+                Require(pending.Count == 0 && names.Count == 0 && again.All(e => !e.Pending && e.DisplayName.StartsWith("Juri Look Number")), "second start read again: " + pending.Count + "/" + names.Count);
+                // A record from 1.0.5: identity and authors, no display name or option names.
+                string file = Path.Combine(Library.IdentityCacheDirectory, Library.CacheFilename);
+                var cache = Json.Serializer().Deserialize<LibraryIdentityCache>(File.ReadAllText(file));
+                foreach (var r in cache.Records) { r.DisplayName = null; r.OptionNames = null; }
+                File.WriteAllText(file, Json.Serializer().Serialize(cache));
+                Library.IdentityCacheDirectory = Library.IdentityCacheDirectory;   // reload from disk
+                int misses = Library.CacheMisses;
+                List<LibraryEntry> updated = Library.ScanQuick(new[] { lib }, "", out pending, out names);
+                Require(pending.Count == 0 && names.Count == 6 && updated.All(e => e.Character == "Juri" && e.CostumeKeys.Count == 1 && e.NamesPending) && Library.CacheMisses == misses, "1.0.5 records were listed again: " + pending.Count + " pending, " + names.Count + " names");
+                foreach (LibraryEntry e in names) { LibraryEntry copy = Library.IndexCopy(e); Library.IndexNames(copy, ""); Library.TakeNames(e, copy); }
+                Require(updated.All(e => !e.NamesPending && e.DisplayName.StartsWith("Juri Look Number") && e.OptionNames.Count == 1), "names pass");
+                Library.SaveIndex();
+                Library.ScanQuick(new[] { lib }, "", out pending, out names);
+                Require(pending.Count == 0 && names.Count == 0, "names not kept in the index");
+            }
+            finally { Library.IdentityCacheDirectory = before; }
         }
 
         // ---- Queue defaults -------------------------------------------------------------------------------------------
@@ -280,6 +321,10 @@ namespace SlotsInstaller
                 Call(form, "RefreshLibrary", false); WaitIdle(form);
                 ListView list = Get<ListView>(form, "modList");
                 Require(list.Items.Count == 31, "rows: " + list.Items.Count);
+                // The first scan listed everything at once and read it in the background; a second scan has nothing to read.
+                Require(form.IndexRuns == 1 && !form.Indexing && list.Items.Cast<ListViewItem>().All(i => !((LibraryEntry)i.Tag).Pending && !((LibraryEntry)i.Tag).NamesPending), "background read: runs " + form.IndexRuns);
+                Call(form, "RefreshLibrary", false); WaitIdle(form);
+                Require(form.IndexRuns == 1 && Get<Label>(form, "libraryCount").Text == "31 MODS", "second scan: runs " + form.IndexRuns + " / " + Get<Label>(form, "libraryCount").Text);
                 // Name · File
                 form.SetLibraryFileNames(true, false);
                 Require(list.Items.Cast<ListViewItem>().Any(i => i.Text == "cammy-mod-07-file"), "file names");
