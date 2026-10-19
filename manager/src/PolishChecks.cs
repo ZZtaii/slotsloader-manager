@@ -230,7 +230,8 @@ namespace SlotsInstaller
                 { Keys.Control | Keys.D1, ShortcutAction.LibraryPage }, { Keys.Control | Keys.D2, ShortcutAction.InstalledPage }, { Keys.Control | Keys.D3, ShortcutAction.AssistantPage },
                 { Keys.Control | Keys.Oemcomma, ShortcutAction.SettingsPage }, { Keys.F5, ShortcutAction.RefreshLibraries },
                 { Keys.Control | Keys.O, ShortcutAction.OpenArchive }, { Keys.Control | Keys.Shift | Keys.O, ShortcutAction.OpenFolder },
-                { Keys.Control | Keys.Shift | Keys.F, ShortcutAction.ToggleFilters }, { Keys.Tab, ShortcutAction.SwitchMode } };   // 1.0.1: Tab flips INSTALL AS in the Mod library
+                { Keys.Control | Keys.Shift | Keys.F, ShortcutAction.ToggleFilters }, { Keys.Tab, ShortcutAction.SwitchMode },   // 1.0.1: Tab flips INSTALL AS in the Mod library
+                { Keys.Control | Keys.Shift | Keys.N, ShortcutAction.ToggleNames } };   // 1.0.6: mod names / file names in the Mod library
             Require(Shortcuts.All.Length == expected.Count && Shortcuts.All.All(s => expected.ContainsKey(s.Keys) && expected[s.Keys] == s.Action), "Shortcut table differs from the documented mapping.");
             Require(Enum.GetNames(typeof(ShortcutAction)).All(n => n.Replace("InstalledPage", "").IndexOf("Install", StringComparison.OrdinalIgnoreCase) < 0 &&n.IndexOf("Remove", StringComparison.OrdinalIgnoreCase) < 0 && n.IndexOf("Delete", StringComparison.OrdinalIgnoreCase) < 0), "A shortcut can install, uninstall or remove.");
             // 1.0.1: Tab flips INSTALL AS in the Mod library (unless a PAK/tool mod locks it) and flips it back.
@@ -410,6 +411,7 @@ namespace SlotsInstaller
         // except OutfitSetsForm.Confirm (a saved copy deleted for good, no Undo). Nothing opens one on its own.
         internal static readonly string[] WindowAllowList =
         {
+            "AddPartsForm.Choose",          // 1.0.6 Add to outfit…: pick the installed outfit and the parts (Cancel changes nothing)
             "FluffyPresetForm.Review",      // Import Fluffy preset: map each entry before anything installs (Cancel installs nothing)
             "MainForm.EnlargePreview",      // the preview image, enlarged (click the preview)
             "MainForm.ShowCompositionReport", // Review files (Extra outfit mode)

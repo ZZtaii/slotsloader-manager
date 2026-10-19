@@ -11,7 +11,7 @@ namespace SlotsInstaller
 {
     // Vector glyphs drawn with anti-aliased GDI+ at the control's device DPI.
     // Font glyphs such as "⌄" fall back to a plain letter in Segoe UI.
-    internal enum ButtonGlyph { None, ExpandAll, CollapseAll, Gear, Coffee, Bug, Chat, GitHub, Patreon, Nexus, ColorSync, History, Presets }
+    internal enum ButtonGlyph { None, ExpandAll, CollapseAll, Gear, Coffee, Bug, Chat, GitHub, Patreon, Nexus, ColorSync, History, Presets, Refresh }
     internal enum ChevronDirection { Right, Down, Up }
 
     internal static class Glyphs
@@ -131,6 +131,20 @@ namespace SlotsInstaller
                     graphics.DrawPolygon(pen, new[] { new PointF(x, top - h), new PointF(x + w, top), new PointF(x, top + h), new PointF(x - w, top) });
                     foreach (float dy in new[] { 3.6F * s, 7.2F * s })
                         graphics.DrawLines(pen, new[] { new PointF(x - w, top + dy), new PointF(x, top + dy + h), new PointF(x + w, top + dy) });
+                }
+                graphics.SmoothingMode = previous;
+            }
+            else if (glyph == ButtonGlyph.Refresh)
+            {
+                // 1.0.6 Installed-page Refresh icon: a circle open at the upper right whose end is an arrow head.
+                SmoothingMode previous = graphics.SmoothingMode; graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                float s = scale, x = center.X, y = center.Y, r = 7F * s;
+                using (var pen = new Pen(color, stroke) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                {
+                    graphics.DrawArc(pen, x - r, y - r, r * 2, r * 2, -60, 300);
+                    double end = -60 * Math.PI / 180;
+                    var tip = new PointF(x + (float)(Math.Cos(end) * r), y + (float)(Math.Sin(end) * r));
+                    graphics.DrawLines(pen, new[] { new PointF(tip.X - 3.6F * s, tip.Y - 0.8F * s), tip, new PointF(tip.X - 0.2F * s, tip.Y + 3.6F * s) });
                 }
                 graphics.SmoothingMode = previous;
             }
@@ -406,7 +420,7 @@ namespace SlotsInstaller
 
     // One table drives key handling, the gear menu and tooltips. None of
     // these shortcuts installs, uninstalls or removes anything.
-    internal enum ShortcutAction { FocusSearch, ClearSearch, LibraryPage, InstalledPage, AssistantPage, SettingsPage, RefreshLibraries, OpenArchive, OpenFolder, ToggleFilters, SwitchMode }
+    internal enum ShortcutAction { FocusSearch, ClearSearch, LibraryPage, InstalledPage, AssistantPage, SettingsPage, RefreshLibraries, OpenArchive, OpenFolder, ToggleFilters, SwitchMode, ToggleNames }
     internal sealed class ShortcutInfo
     {
         internal readonly Keys Keys; internal readonly ShortcutAction Action; internal readonly string Display, Description;
@@ -427,6 +441,7 @@ namespace SlotsInstaller
             new ShortcutInfo(Keys.Control | Keys.Shift | Keys.O, ShortcutAction.OpenFolder, "Ctrl+Shift+O", "Open folder"),
             new ShortcutInfo(Keys.Control | Keys.Shift | Keys.F, ShortcutAction.ToggleFilters, "Ctrl+Shift+F", "Show or hide filters"),
             new ShortcutInfo(Keys.Tab, ShortcutAction.SwitchMode, "Tab", "Switch Extra outfit / Replace original"),   // 1.0.1: Mod library only
+            new ShortcutInfo(Keys.Control | Keys.Shift | Keys.N, ShortcutAction.ToggleNames, "Ctrl+Shift+N", "Show mod names or file names"),   // 1.0.6: Mod library only
         };
         internal static ShortcutInfo Find(Keys keys) { return All.FirstOrDefault(s => s.Keys == keys); }
         internal static string Display(ShortcutAction action) { var item = All.FirstOrDefault(s => s.Action == action); return item == null ? "" : item.Display; }

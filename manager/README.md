@@ -1,14 +1,25 @@
-# Slotsloader Manager 1.0.1
+# Slotsloader Manager 1.0.6
 
 A Windows mod manager for your ZIP, RAR, 7Z and folder mod libraries. It is built for Street Fighter 6 (more games are planned), and installs SF6 mods two ways:
 - as **extra outfits** through Slotsloader;
 - by **replacing the original** files the way external mod managers do, including tool mods such as REFramework scripts, plugins and Slotsloader itself.
 
-The title bar shows **Slotsloader Manager · 1.0.1**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
+The title bar shows **Slotsloader Manager · 1.0.6**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
 
 Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .NET Framework 4.8 runs it; RAR/7Z support uses your installed 7-Zip. No Blender, Node or Python is required. Game/library paths are in Settings. Your existing mod manager libraries are configured by default. `Data` beside the executable holds settings/cache/view preferences and the backups of replaced game files; preserve it during updates. The whole app folder (executables + `Data`) can be moved or renamed; see **Move the app folder** below.
 
 ## What changed
+
+- 1.0.6:
+  - **Name · File** under the library search: list mods by their own name (from modinfo.ini) or their file name. **Ctrl+Shift+N** switches. A mod without a name shows its file name in both. The first refresh after updating reads each archive once more to learn the names.
+  - Search matches both names, word by word in any order: `viper barefoot`, `barefoot viper` and `cviper` all find `C-Viper-Barefoot.zip`. `juri, barefoot`, `juri,barefoot` and `juri barefoot` give the same mods, and `juri c1` works without a comma.
+  - **Deep search** (check box beside the switch) also searches a mod's variant folders and option names: `barefoot` finds a bundle whose Barefoot variant is a sub-folder.
+  - Changing a filter scrolls the list back to the top, like a search.
+  - **Several mods at once**: Ctrl+click, Shift+click or Ctrl+A in the Mod library opens a queue with **Install N** and **Delete N**, and a row per mod with its result. Each mod installs with its default options; a bundle gets its main files and the default or first choice of each required group, optional variants stay off. A mod that can't install is skipped with the reason, and the rest go on. Delete moves them to the Recycle Bin.
+  - **Add to outfit…** (Extra outfit mode, beside Install all variants): copy the options you ticked, for example one hair option of a bundle, into an extra outfit you already installed. Exactly those files are added, replacing the outfit's files with the same names; nothing else changes. Edit options and reinstalls of that outfit keep them. Files made for another outfit slot can't go on it.
+  - **Rename** (F2) follows the switch: with **Name** on it changes only the name the list shows (kept in the Manager's Data; the file and its modinfo.ini stay as they are, and an empty name gives the mod's own name back); with **File** on it renames the archive or folder as before. The rename box is now the size of the row's name.
+  - The destination path line under the outfit name is gone.
+  - **Refresh** button on the Installed page.
 
 - 1.0.5:
   - **Rename** in the Mod library: right-click → Rename or **F2**, then type on the row. Enter or clicking away renames, Esc cancels. Installed outfits, Install all variants copies, replacements and history follow the new name. Options you were editing stay as they were.

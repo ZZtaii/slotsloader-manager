@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace SlotsInstaller
@@ -28,10 +29,19 @@ namespace SlotsInstaller
         private static readonly Regex Tokens = new Regex(@"(^|[\s,])(?:(?:is|type):(bundle|normal|standalone|unreadable|tool|stage|misc|character)|format:(zip|rar|7z|folder)|costume:0*(\d{1,2})|by:(?:""([^""]+)""|([^\s,""]+)))(?=\s|,|$)", RegexOptions.IgnoreCase);
         private static readonly Regex CostumeWord = new Regex(@"^(?:c|o|costume|outfit)\s*0*(\d{1,2})$", RegexOptions.IgnoreCase);
 
+        // 1.0.6: one word of a plain query ("juri barefoot" = juri AND barefoot); a fighter spelled in several words
+        // ("chun li", "dee jay") stays one word.
+        internal sealed class Word { internal string Text, Character, Tool, Category; }
+
         internal sealed class Query
         {
             internal string Plain = "", Type, Format, Author;
             internal bool Comma;
+            // 1.0.6 deep search: name words also match the mod's option folders and option names (a bundle's
+            // "Barefoot" variant), not only its own names.
+            internal bool Deep;
+            internal List<Word> PlainWords = new List<Word>();
+            internal Dictionary<string, List<Word>> NameWords = new Dictionary<string, List<Word>>(StringComparer.OrdinalIgnoreCase);
             internal HashSet<string> Characters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             internal List<string> Names = new List<string>();
             internal List<int> Costumes = new List<int>();
@@ -110,9 +120,10 @@ namespace SlotsInstaller
         internal static string Folder(int costume) { return costume.ToString("000", CultureInfo.InvariantCulture); }
         internal static string Label(int costume) { return "C" + costume.ToString(CultureInfo.InvariantCulture); }
 
-        internal static Query Parse(string text, Func<string, string> characterTerm)
+        internal static Query Parse(string text, Func<string, string> characterTerm) { return Parse(text, characterTerm, false); }
+        internal static Query Parse(string text, Func<string, string> characterTerm, bool deep)
         {
-            var q = new Query();
+            var q = new Query { Deep = deep };
             string query = Tokens.Replace((text ?? "").Trim(), delegate(Match match)
             {
                 if (match.Groups[2].Success) q.Type = match.Groups[2].Value.ToLowerInvariant();
@@ -120,22 +131,41 @@ namespace SlotsInstaller
                 if (match.Groups[4].Success) { int n = Int32.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture); if (n > 0 && !q.Costumes.Contains(n)) q.Costumes.Add(n); }
                 if (match.Groups[5].Success || match.Groups[6].Success) q.Author = (match.Groups[5].Success ? match.Groups[5].Value : match.Groups[6].Value).Trim();
                 return match.Groups[1].Value;
-            }).Trim().Trim(',').Trim();
+            });
+            // 1.0.6: ";" and full-width commas separate terms like ","; quotes and runs of spaces don't matter.
+            query = Regex.Replace(query.Replace(';', ',').Replace('，', ',').Replace('،', ',').Replace("\"", " "), @"\s+", " ");
+            query = Regex.Replace(query, @"\s*,[\s,]*", ",").Trim().Trim(',').Trim();
             q.Comma = query.IndexOf(',') >= 0;
             if (q.Comma)
             {
-                foreach (string term in query.Split(',').Select(part => part.Trim()).Where(part => part.Length > 0))
+                foreach (string part in query.Split(',').Select(part => part.Trim()).Where(part => part.Length > 0))
                 {
+                    string term = part;
                     string found = characterTerm(term); int? costume = CostumeNumber(term);
                     if (found != null) q.Characters.Add(found);
                     else if (costume.HasValue) { if (!q.Costumes.Contains(costume.Value)) q.Costumes.Add(costume.Value); }
                     else
                     {
+                        // 1.0.6: a costume word inside a term ("juri c1", "barefoot costume 2") is that costume; what's
+                        // left is the fighter when it names one, else the name words.
+                        string rest = ExtractCostumes(term, q.Costumes);
+                        if (rest.Length == 0) continue;
+                        if (rest != term)
+                        {
+                            List<Word> split = Words(rest, characterTerm);
+                            foreach (Word w in split.Where(w => w.Character != null)) q.Characters.Add(w.Character);
+                            rest = String.Join(" ", split.Where(w => w.Character == null).Select(w => w.Text));
+                            if (rest.Length == 0) continue;
+                        }
+                        term = rest;
+                        if (q.Names.Contains(term, StringComparer.OrdinalIgnoreCase)) continue;
                         q.Names.Add(term);
                         string tool = ToolKeyword(term);
                         if (tool != null) q.NameTools[term] = tool;
                         string category = ModCategories.Keyword(term);
                         if (category != null) q.NameCategories[term] = category;
+                        List<Word> words = Words(term, characterTerm);
+                        if (words.Count > 1) q.NameWords[term] = words;
                     }
                 }
             }
@@ -145,9 +175,187 @@ namespace SlotsInstaller
                 string character = query.Length > 0 ? characterTerm(query) : null;
                 if (costume.HasValue) { if (!q.Costumes.Contains(costume.Value)) q.Costumes.Add(costume.Value); }
                 else if (character != null && q.HasCostume) q.Characters.Add(character);   // "cammy costume:1"
-                else { q.Plain = query; q.PlainTool = ToolKeyword(query); q.PlainCategory = ModCategories.Keyword(query); q.PlainCharacter = character; }
+                else
+                {
+                    // 1.0.6: "juri c1" / "juri barefoot costume 2" without a comma: the costume word is the costume and a
+                    // fighter word its fighter, like "juri, c1".
+                    string rest = ExtractCostumes(query, q.Costumes);
+                    if (rest != query)
+                    {
+                        List<Word> split = Words(rest, characterTerm);
+                        foreach (Word w in split.Where(w => w.Character != null)) q.Characters.Add(w.Character);
+                        query = String.Join(" ", split.Where(w => w.Character == null).Select(w => w.Text));
+                        character = query.Length > 0 ? characterTerm(query) : null;
+                    }
+                    q.Plain = query; q.PlainTool = ToolKeyword(query); q.PlainCategory = ModCategories.Keyword(query); q.PlainCharacter = character;
+                    List<Word> words = Words(query, characterTerm);
+                    if (words.Count > 1) q.PlainWords = words;
+                }
             }
             return q;
+        }
+
+        // Costume words of a term ("c1", "o2", "costume 3", "outfit 4") go to `costumes`; returns the rest of the term.
+        private static readonly Regex CostumeInText = new Regex(@"(?<![\p{L}\p{N}])(?:c|o|costume|outfit)\s*0*(\d{1,2})(?![\p{L}\p{N}])", RegexOptions.IgnoreCase);
+        private static string ExtractCostumes(string term, List<int> costumes)
+        {
+            // Only when the term has other words too: "c1" alone is handled by CostumeNumber.
+            if (term.IndexOf(' ') < 0) return term;
+            var found = new List<int>();
+            string rest = CostumeInText.Replace(term, delegate(Match m) { int n = Int32.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture); if (n > 0) found.Add(n); return " "; });
+            if (found.Count == 0) return term;
+            foreach (int n in found) if (!costumes.Contains(n)) costumes.Add(n);
+            return Regex.Replace(rest, @"\s+", " ").Trim();
+        }
+
+        // Words of a plain query. Runs of up to three words that name a fighter ("chun li", "dee jay") are one word;
+        // words without a letter or digit ("-", "+", "&") are dropped.
+        internal static List<Word> Words(string text, Func<string, string> characterTerm)
+        {
+            var raw = (text ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).Where(w => w.Any(Char.IsLetterOrDigit)).ToList();
+            var words = new List<Word>();
+            for (int i = 0; i < raw.Count; )
+            {
+                int taken = 1; string character = null;
+                for (int span = Math.Min(3, raw.Count - i); span >= 2 && character == null; span--)
+                {
+                    string joined = String.Join(" ", raw.Skip(i).Take(span));
+                    // Only a full name joins words ("chun li"); a start of one ("dee") is left to the single word.
+                    string who = characterTerm(joined);
+                    if (who != null && Compact(joined).Length >= Compact(who).Length) { character = who; taken = span; }
+                }
+                string word = String.Join(" ", raw.Skip(i).Take(taken));
+                if (character == null) character = characterTerm(word);
+                words.Add(new Word { Text = word, Character = character, Tool = ToolKeyword(word), Category = ModCategories.Keyword(word) });
+                i += taken;
+            }
+            return words;
+        }
+
+        // ---- 1.0.6 name matching --------------------------------------------------------------------------------
+        // Lower case letters and digits only, accents dropped: "C-Viper-Barefoot" -> "cviperbarefoot", "Élena" -> "elena".
+        internal static string Compact(string text)
+        {
+            if (String.IsNullOrEmpty(text)) return "";
+            string decomposed = text.Normalize(NormalizationForm.FormD);
+            var b = new StringBuilder(decomposed.Length);
+            foreach (char c in decomposed)
+            {
+                if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark) continue;
+                if (Char.IsLetterOrDigit(c)) b.Append(Char.ToLowerInvariant(c));
+            }
+            return b.ToString();
+        }
+        // The compact words of a term: "viper barefoot" -> viper, barefoot; "C-Viper" -> c, viper.
+        internal static List<string> CompactWords(string term)
+        {
+            return Regex.Split(term ?? "", @"[^\p{L}\p{N}\p{Mn}]+").Select(Compact).Where(w => w.Length > 0).Distinct().ToList();
+        }
+        private static bool Has(string text, string term) { return !String.IsNullOrEmpty(text) && text.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0; }
+
+        // Compact texts of an entry's names (file name, display name), cached on the entry until they change.
+        private static string[] NameKeys(LibraryEntry e)
+        {
+            string file = FileName(e.SourcePath);
+            LibraryEntry.SearchCache c = e.Search;
+            if (c == null || !ReferenceEquals(c.Name, e.Name) || !ReferenceEquals(c.DisplayName, e.DisplayName) || !ReferenceEquals(c.CustomName, e.CustomName) || !ReferenceEquals(c.Source, e.SourcePath) || !ReferenceEquals(c.Character, e.Character))
+            {
+                c = new LibraryEntry.SearchCache { Name = e.Name, DisplayName = e.DisplayName, CustomName = e.CustomName, Source = e.SourcePath, Character = e.Character, Options = c == null ? null : c.Options, OptionTokens = c == null ? null : c.OptionTokens, OptionIds = c == null ? null : c.OptionIds, OptionNames = c == null ? null : c.OptionNames };
+                c.Names = new[] { Compact(e.Name), Compact(e.DisplayName), Compact(e.CustomName), Compact(file) }.Where(s => s.Length > 0).Distinct().ToArray();
+                c.NameTokens = new[] { e.Name, e.DisplayName, e.CustomName, file, e.Character }.SelectMany(TokensAndPairs).Distinct().ToArray();
+                e.Search = c;
+            }
+            return c.Names;
+        }
+        // Words of a name, split at spaces, punctuation, lower→upper case and letter↔digit changes: "CViper-Barefoot2" ->
+        // c, viper, barefoot, 2. For one- and two-letter words of a several-word search ("a manual" must not match every "a").
+        private static readonly Regex TokenBreak = new Regex(@"[^\p{L}\p{N}\p{Mn}]+|(?<=\p{Ll})(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})|(?<=\p{L})(?=\p{N})|(?<=\p{N})(?=\p{L})");
+        internal static IEnumerable<string> WordTokens(string text)
+        {
+            if (String.IsNullOrEmpty(text)) return new string[0];
+            return TokenBreak.Split(text).Select(Compact).Where(t => t.Length > 0);
+        }
+        // The words, and each word joined to the next ("v", "2" -> also "v2"), so a two-character word can span a split.
+        private static IEnumerable<string> TokensAndPairs(string text)
+        {
+            var words = WordTokens(text).ToList();
+            for (int i = 0; i < words.Count; i++) { yield return words[i]; if (i + 1 < words.Count) yield return words[i] + words[i + 1]; }
+        }
+        // A one-letter word must be a whole word ("a manual" = A Manual archive, not D Manual archive); two characters
+        // start a word ("v2", "ex").
+        private static bool ShortWordIn(string[] tokens, string compact)
+        {
+            return compact.Length == 1 ? tokens.Any(t => t == compact) : tokens.Any(t => t.StartsWith(compact, StringComparison.Ordinal));
+        }
+        private static string[] NameTokens(LibraryEntry e) { NameKeys(e); return e.Search.NameTokens; }
+        private static string[] OptionTokens(LibraryEntry e) { OptionKeys(e); return e.Search.OptionTokens; }
+        // Compact texts of the option folders (every folder level: "Goth Juri/Barefoot" -> "gothjuri", "barefoot",
+        // "gothjuribarefoot") and option names of a bundle, for deep search.
+        private static string[] OptionKeys(LibraryEntry e)
+        {
+            NameKeys(e);
+            LibraryEntry.SearchCache c = e.Search;
+            if (c.Options == null || !ReferenceEquals(c.OptionIds, e.OptionIds) || !ReferenceEquals(c.OptionNames, e.OptionNames))
+            {
+                var keys = new List<string>();
+                foreach (string id in e.OptionIds ?? new List<string>())
+                {
+                    foreach (string segment in id.Split('/')) keys.Add(Compact(segment));
+                    keys.Add(Compact(id));
+                }
+                foreach (string name in e.OptionNames ?? new List<string>()) keys.Add(Compact(name));
+                c.Options = keys.Where(k => k.Length > 0).Distinct().ToArray(); c.OptionIds = e.OptionIds; c.OptionNames = e.OptionNames;
+                c.OptionTokens = (e.OptionIds ?? new List<string>()).SelectMany(id => id.Split('/')).Concat(e.OptionNames ?? new List<string>()).SelectMany(TokensAndPairs).Distinct().ToArray();
+            }
+            return c.Options;
+        }
+        private static string FileName(string path)
+        {
+            try { return String.IsNullOrEmpty(path) ? "" : Path.GetFileName(path.TrimEnd('\\', '/')); }
+            catch (ArgumentException) { return ""; }
+        }
+
+        // The mod's file name or display name holds `term`: as typed, or word by word ignoring spaces, dashes and
+        // underscores ("viper barefoot", "barefoot viper" and "cviper" all find C-Viper-Barefoot.zip).
+        internal static bool NameMatches(LibraryEntry e, string term)
+        {
+            if (e == null || String.IsNullOrEmpty(term)) return e != null;
+            if (Has(e.Name, term) || Has(e.DisplayName, term) || Has(e.CustomName, term) || Has(FileName(e.SourcePath), term)) return true;
+            return WordsIn(NameKeys(e), NameTokens(e), term, false);
+        }
+        // Deep search: an option folder or option name holds `term` (all its words in the same option).
+        internal static bool OptionMatches(LibraryEntry e, string term)
+        {
+            if (e == null || String.IsNullOrEmpty(term)) return false;
+            return WordsIn(OptionKeys(e), OptionTokens(e), term, true);
+        }
+        // Every word of `term` is in one of `keys` (sameKey: all in the same one); the whole term without spaces also counts.
+        // One- and two-character words go by `tokens` (ShortWordIn): inside a longer word they match almost anything.
+        private static bool WordsIn(string[] keys, string[] tokens, string term, bool sameKey)
+        {
+            if (keys.Length == 0) return false;
+            string whole = Compact(term);
+            if (whole.Length == 0) return false;
+            List<string> words = CompactWords(term);
+            if (words.Count < 2) return whole.Length <= 2 ? ShortWordIn(tokens, whole) : keys.Any(k => k.IndexOf(whole, StringComparison.Ordinal) >= 0);
+            if (whole.Length > 2 && keys.Any(k => k.IndexOf(whole, StringComparison.Ordinal) >= 0)) return true;
+            List<string> shortWords = words.Where(w => w.Length <= 2).ToList(), longWords = words.Where(w => w.Length > 2).ToList();
+            if (!shortWords.All(w => ShortWordIn(tokens, w))) return false;
+            return sameKey ? longWords.Count == 0 || keys.Any(k => longWords.All(w => k.IndexOf(w, StringComparison.Ordinal) >= 0))
+                           : longWords.All(w => keys.Any(k => k.IndexOf(w, StringComparison.Ordinal) >= 0));
+        }
+
+        // One word of a plain query: what a one-word search would match (fighter, tool or category word, author,
+        // names, the detected fighter, esf code), plus option names with deep search.
+        private static bool WordMatches(LibraryEntry e, Word w, bool deep, Func<LibraryEntry, string, bool> matchesCharacter, Func<LibraryEntry, string, bool> matchesName)
+        {
+            string compact = Compact(w.Text);
+            // One or two letters/digits: the start of a word only ("a manual" = A Manual, not Barefoot Manual; "v2").
+            if (compact.Length <= 2)
+                return (w.Character != null && matchesCharacter(e, w.Character)) || ShortWordIn(NameTokens(e), compact) || (deep && ShortWordIn(OptionTokens(e), compact));
+            return (w.Character != null && matchesCharacter(e, w.Character)) || (w.Tool != null && MatchesTool(e, w.Tool)) || (w.Category != null && ModCategories.InCategory(e, w.Category))
+                || MatchesAuthor(e, w.Text) || matchesName(e, w.Text) || Has(e.Character, w.Text) || (e.CharacterCodes ?? new List<string>()).Any(code => ("esf" + code).IndexOf(w.Text, StringComparison.OrdinalIgnoreCase) >= 0)
+                || (deep && OptionMatches(e, w.Text));
         }
 
         internal static HashSet<string> CodesFor(IEnumerable<string> characters)
@@ -159,7 +367,7 @@ namespace SlotsInstaller
         private static bool TitleSaysCostume(LibraryEntry e, int costume)
         {
             var pattern = new Regex(@"(?<![A-Za-z0-9])(?:c|o|costume|outfit|cos)[\s_\-]*0*" + costume.ToString(CultureInfo.InvariantCulture) + @"(?![0-9])", RegexOptions.IgnoreCase);
-            return pattern.IsMatch(e.Name ?? "") || pattern.IsMatch(Path.GetFileName(e.SourcePath ?? ""));
+            return pattern.IsMatch(e.Name ?? "") || pattern.IsMatch(e.DisplayName ?? "") || pattern.IsMatch(FileName(e.SourcePath));
         }
 
         // Rank of `e` for the costume part of the query (Direct, SharedParts, TitleOnly), or -1.
@@ -175,7 +383,7 @@ namespace SlotsInstaller
             var mine = keys.Where(k => codes.Contains(k.Substring(0, 3))).ToList();
             if (!anyCharacter && mine.Count > 0 && mine.All(k => k.EndsWith("/000"))) return SharedParts;
             // Unreadable or unknown sources have no keys: their title (and the character named in it) still matches.
-            if (q.Costumes.Any(c => TitleSaysCostume(e, c)) && (anyCharacter || q.Characters.Any(name => matchesCharacter(e, name) || (e.Name ?? "").IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0))) return TitleOnly;
+            if (q.Costumes.Any(c => TitleSaysCostume(e, c)) && (anyCharacter || q.Characters.Any(name => matchesCharacter(e, name) || NameMatches(e, name)))) return TitleOnly;
             return -1;
         }
 
@@ -194,11 +402,17 @@ namespace SlotsInstaller
             {
                 // With a costume term the character is already applied by the costume rank (native key or title).
                 bool characterOk = q.Characters.Count == 0 || q.HasCostume || q.Characters.Any(name => matchesCharacter(e, name));
-                string tool, category;
-                return characterOk && q.Names.All(term => matchesName(e, term) || MatchesAuthor(e, term) || (q.NameTools.TryGetValue(term, out tool) && MatchesTool(e, tool)) || (q.NameCategories.TryGetValue(term, out category) && ModCategories.InCategory(e, category)));
+                string tool, category; List<Word> words;
+                // 1.0.6: a term of several words also matches word by word ("goth juri, barefoot"), and deep search
+                // looks into the option folders and names.
+                return characterOk && q.Names.All(term => matchesName(e, term) || MatchesAuthor(e, term) || (q.NameTools.TryGetValue(term, out tool) && MatchesTool(e, tool)) || (q.NameCategories.TryGetValue(term, out category) && ModCategories.InCategory(e, category))
+                    || (q.Deep && OptionMatches(e, term)) || (q.NameWords.TryGetValue(term, out words) && words.All(w => WordMatches(e, w, q.Deep, matchesCharacter, matchesName))));
             }
             string query = q.Plain;
-            return query.Length == 0 || (q.PlainCharacter != null && matchesCharacter(e, q.PlainCharacter)) || (q.PlainTool != null && MatchesTool(e, q.PlainTool)) || (q.PlainCategory != null && ModCategories.InCategory(e, q.PlainCategory)) || MatchesAuthor(e, query) || (e.Name ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 || (e.SourcePath ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 || (e.Character ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 || e.CharacterCodes.Any(code => ("esf" + code).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (query.Length == 0 || (q.PlainCharacter != null && matchesCharacter(e, q.PlainCharacter)) || (q.PlainTool != null && MatchesTool(e, q.PlainTool)) || (q.PlainCategory != null && ModCategories.InCategory(e, q.PlainCategory)) || MatchesAuthor(e, query) || matchesName(e, query) || Has(e.SourcePath, query) || Has(e.Character, query) || (e.CharacterCodes ?? new List<string>()).Any(code => ("esf" + code).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)) return true;
+            // 1.0.6: several words match one by one, in any order ("juri barefoot" = a Juri mod named …Barefoot…).
+            if (q.Deep && OptionMatches(e, query)) return true;
+            return q.PlainWords.Count > 1 && q.PlainWords.All(w => WordMatches(e, w, q.Deep, matchesCharacter, matchesName));
         }
 
         // "C1, C2" / "Shared parts" / "" for the library row and inspector.

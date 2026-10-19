@@ -55,6 +55,7 @@ namespace SlotsInstaller
         private void PressUninstall(FlatButton button, ref int count)
         {
             if (busy || button == null || !button.Enabled || !button.Visible) return;
+            if (button == libraryUninstallButton && BatchVisible) return;   // 1.0.6: the queue covers the open mod
             count++;
             button.PerformClick();
         }

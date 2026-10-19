@@ -14,6 +14,7 @@ namespace SlotsInstaller
         private int selected, hover = -1;
         private bool locked;
         internal readonly string[] Descriptions;
+        internal bool CheckMark = true;   // 1.0.6: false = no tick before the chosen label (the compact Name · File switch)
         internal SegmentedChoice(params string[] options)
         {
             if (options == null || options.Length < 2) throw new ArgumentException("A segmented choice needs at least two options.");
@@ -83,10 +84,10 @@ namespace SlotsInstaller
                 bool isOn = i == selected;
                 Color fore = isOn ? (Enabled ? Palette.Background : FlatButton.DisabledText) : inactive ? FlatButton.DisabledText : Palette.Text;
                 Size text = TextRenderer.MeasureText(g, options[i], Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-                int mark = isOn ? Px(14) : 0;
+                int mark = isOn && CheckMark ? Px(14) : 0;
                 int width = Math.Min(r.Width - Px(8), text.Width + mark);
                 int x = r.Left + (r.Width - width) / 2;
-                if (isOn)
+                if (isOn && CheckMark)
                 {
                     int cy = r.Top + r.Height / 2, s = Px(4);
                     using (var pen = new Pen(fore, Math.Max(1.5F, Px(2))) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
@@ -100,7 +101,7 @@ namespace SlotsInstaller
         {
             using (Graphics g = CreateGraphics())
                 for (int i = 0; i < options.Length; i++)
-                    if (TextRenderer.MeasureText(g, options[i], Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width + Px(14) > SegmentBounds(i).Width - Px(8)) return false;
+                    if (TextRenderer.MeasureText(g, options[i], Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width + (CheckMark ? Px(14) : 0) > SegmentBounds(i).Width - Px(8)) return false;
             return true;
         }
         protected override AccessibleObject CreateAccessibilityInstance() { return new GroupAccessible(this); }

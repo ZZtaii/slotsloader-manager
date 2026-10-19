@@ -149,6 +149,14 @@ namespace SlotsInstaller
             holder.Controls.Add(historyButton);
             heading.Controls.Add(holder);
             heading.Controls.SetChildIndex(holder, 1);   // docks after Presets…, so it sits to its left
+            // 1.0.6 (the user): Refresh re-reads what is installed (extra outfits, game-folder mods), left of History.
+            var refreshHolder = new Panel { Dock = DockStyle.Right, Width = 50, Padding = new Padding(0, 0, 8, 10) };
+            refreshInstalledButton = Button("", false, 42, delegate { if (!busy) RefreshInstalled(); });   // the page status shows the fresh count
+            refreshInstalledButton.Dock = DockStyle.Fill; refreshInstalledButton.Margin = Padding.Empty; refreshInstalledButton.Name = "refreshInstalledButton"; refreshInstalledButton.AccessibleName = "Refresh installed";
+            refreshInstalledButton.Glyph = ButtonGlyph.Refresh; IconHint(refreshInstalledButton, "Refresh");
+            refreshHolder.Controls.Add(refreshInstalledButton);
+            heading.Controls.Add(refreshHolder);
+            heading.Controls.SetChildIndex(refreshHolder, 1);   // docks after History, so it sits to its left
             Shown += delegate { if (!Program.Headless) StartHistory(); };
             FormClosing += delegate { if (historySessions != null) historySessions.Close(History.Now); };
         }

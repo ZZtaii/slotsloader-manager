@@ -187,7 +187,7 @@ namespace SlotsInstaller
         // The list order. Installed keeps the search relevance (rank) first in both directions; Added and Last used
         // replace it. Every tie falls back to the name (A–Z), then the path. `lastUsed` is only called for Last used
         // (0 = never used: last in ↓, first in ↑; LibrarySorting.Now = installed now).
-        internal static List<LibraryEntry> Order(IList<KeyValuePair<LibraryEntry, int>> ranked, LibrarySortKey key, bool ascending, Func<LibraryEntry, bool> installed, Func<LibraryEntry, long> lastUsed)
+        internal static List<LibraryEntry> Order(IList<KeyValuePair<LibraryEntry, int>> ranked, LibrarySortKey key, bool ascending, Func<LibraryEntry, bool> installed, Func<LibraryEntry, long> lastUsed, Func<LibraryEntry, string> shownName = null)
         {
             int n = ranked.Count;
             var rows = new Row[n];
@@ -198,7 +198,7 @@ namespace SlotsInstaller
                 if (key == LibrarySortKey.Added) primary = e.AddedUtc.Ticks;
                 else if (key == LibrarySortKey.LastUsed) primary = lastUsed(e);
                 else primary = installed(e) ? 1 : 0;
-                rows[i] = new Row { Entry = e, Rank = key == LibrarySortKey.Installed ? ranked[i].Value : 0, Key = ascending ? primary : -primary - 1, Name = e.Name ?? "", Path = e.SourcePath ?? "" };
+                rows[i] = new Row { Entry = e, Rank = key == LibrarySortKey.Installed ? ranked[i].Value : 0, Key = ascending ? primary : -primary - 1, Name = (shownName == null ? e.Name : shownName(e)) ?? "", Path = e.SourcePath ?? "" };   // 1.0.6: the name the list shows
             }
             Array.Sort(rows, Compare);
             var result = new List<LibraryEntry>(n);
@@ -218,6 +218,7 @@ namespace SlotsInstaller
     internal sealed partial class MainForm
     {
         internal const int SortChipHeight = 20;     // with Rhythm.Related below it: the 26 px strip
+        internal const int SearchOptionsHeight = 22 + Rhythm.Related;   // 1.0.6: Deep search and Name · File (MainFormLibraryView.cs)
         private LibrarySortKey librarySort = LibrarySortKey.Installed;
         private bool librarySortAscending;
         private Panel sortStrip;
@@ -277,7 +278,12 @@ namespace SlotsInstaller
         internal const string RefreshGlyph = "↻";
         private static readonly Font RefreshFont = new Font("Segoe UI Symbol", 10F);
         private FlatButton refreshLibraryButton;
-        private void UpdateRefreshButton() { if (refreshLibraryButton != null && refreshLibraryButton.Enabled == busy) refreshLibraryButton.Enabled = !busy; }
+        private FlatButton refreshInstalledButton;   // 1.0.6: Installed page (MainFormHistory.AttachHistoryButton)
+        private void UpdateRefreshButton()
+        {
+            if (refreshLibraryButton != null && refreshLibraryButton.Enabled == busy) refreshLibraryButton.Enabled = !busy;
+            if (refreshInstalledButton != null && refreshInstalledButton.Enabled == busy) refreshInstalledButton.Enabled = !busy;
+        }
 
         // Fixed widths (the label with either arrow), so the chips never move when the arrow appears or flips. In a
         // narrow list the chips' side room and the gaps shrink before anything would overlap Refresh.
@@ -361,7 +367,7 @@ namespace SlotsInstaller
             Func<LibraryEntry, long> lastUsed = null;
             if (librarySort == LibrarySortKey.LastUsed)
                 lastUsed = delegate(LibraryEntry e) { DateTime? t = LibraryLastUsed(e); return t.HasValue ? t.Value.Ticks : 0; };
-            return LibrarySorting.Order(ranked, librarySort, librarySortAscending, isInstalled, lastUsed);
+            return LibrarySorting.Order(ranked, librarySort, librarySortAscending, isInstalled, lastUsed, LibraryRowName);
         }
 
         private LibraryUsageIndex UsageIndex()
