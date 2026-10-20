@@ -1,10 +1,10 @@
-# Slotsloader Manager 1.0.7
+# Slotsloader Manager 1.0.10
 
 A Windows mod manager for your ZIP, RAR, 7Z and folder mod libraries. It is built for Street Fighter 6 (more games are planned), and installs SF6 mods two ways:
 - as **extra outfits** through Slotsloader;
 - by **replacing the original** files the way external mod managers do, including tool mods such as REFramework scripts, plugins and Slotsloader itself.
 
-The title bar shows **Slotsloader Manager · 1.0.7**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
+The title bar shows **Slotsloader Manager · 1.0.10**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
 
 Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .NET Framework 4.8 runs it; RAR/7Z support uses your installed 7-Zip. No Blender, Node or Python is required. Game/library paths are in Settings. Your existing mod manager libraries are configured by default. `Data` beside the executable holds settings/cache/view preferences and the backups of replaced game files; preserve it during updates. The whole app folder (executables + `Data`) can be moved or renamed; see **Move the app folder** below.
 
@@ -18,6 +18,7 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 
 - 1.0.9:
   - **Other costume loaders can see your replacements.** After every install, uninstall, enable, disable or priority change, and at start-up, the Manager writes `reframework\data\SF6_Costumes_Data\manager_installs.json`. It lists each replacement and tool mod in priority order, with its files and patch PAKs. A costume loader that reads it can leave those files alone instead of turning them into extra outfits, without searching your PC for the Manager's Data folder. Slotsloader doesn't need it. The file is only written where a costume loader keeps its data.
+  - **Smoother with big libraries and bundles.** Review files builds its rows only when you open it, even for a mod with thousands of files. MY FILTERS match in the background on large libraries, previews you have already seen show at once, and the list refreshes at most five times a second while the library is being read.
 
 - 1.0.8:
   - **MY FILTERS** in the Filters panel: filters you make from keywords. A filter matches a mod whose name or any option name or folder contains one of its keywords (case, spaces and dashes don't matter). Click a filter to show only its mods, again to hide them, a third time to turn it off; right-click for the same choices and **Edit filter**. **+ New filter** and Edit open a small editor under the chips: while you type keywords the list shows what they match. Filters are saved in the Manager's Data and their on/hide state is remembered like the other filters.
