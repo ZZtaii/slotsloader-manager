@@ -381,6 +381,7 @@ namespace SlotsInstaller
                         else if (v3) { result.Notes.Add(item.RelativePath+": a different outfit is installed there; left as is."); taken.Add(item); }
                         else throw new IOException("A different outfit already exists at "+item.RelativePath+". Nothing was restored.");
                     }
+                PresetReplacementPlan copied=null;
                 if (replacements)
                 {
                     List<OutfitSetReplacement> saved=record.Replacements.Mods;
@@ -392,8 +393,12 @@ namespace SlotsInstaller
                     },out done) ?? "";
                     result.ReplacementsRestored=done.Missing.Count; result.ReplacementsSkipped=done.Identical.Count;
                     result.ReplacementConflicts=done.Conflicts.Select(i=>saved[i].Mod.Name).ToList();
+                    copied=done;
                 }
-                if (listedReplacements) RestorePointers(root,record,false,true,engine,sevenZip,result);
+                var listed=new Dictionary<int,string>();
+                if (listedReplacements) RestorePointers(root,record,false,true,engine,sevenZip,result,listed);
+                // 1.0.8: listed and copied replacements back in the preset's one saved priority order.
+                if (v3 && PresetScopes.Replacements(scope) && (listed.Count>0 || (copied!=null && copied.Created.Count>0))) ArrangeReplacements(record,copied,listed,engine,result);
                 if (missing.Count>0)
                 {
                     List<OutfitSetItem> considered=record.Entries.Where(e=>!taken.Contains(e)).ToList();
@@ -410,7 +415,7 @@ namespace SlotsInstaller
                         catch (IOException ex) { throw new IOException(ReplacePlanner.N(result.ReplacementsRestored,"replacement")+" restored; extra outfits failed: "+ex.Message,ex); }
                     }
                 }
-                if (v3 && outfits) RestorePointers(root,record,true,false,null,sevenZip,result);
+                if (v3 && outfits) RestorePointers(root,record,true,false,null,sevenZip,result,null);
                 return result;
             }
         }
@@ -595,11 +600,11 @@ namespace SlotsInstaller
         private static OutfitSetInfo Info(string folder,OutfitSetRecord record,string text)
         {
             List<OutfitSetReplacement> mods=record.Replacements==null || record.Replacements.Mods==null ? new List<OutfitSetReplacement>() : record.Replacements.Mods;
-            // 1.0.8 v3: pointers first (in their saved order), then the copied entries, marked "(copy)"; Bytes = the copies
-            // plus the record.
+            // 1.0.8 v3: pointers first, then the copied entries, marked "(copy)"; replacements in their one saved priority
+            // order (SavedReplacementOrder). Bytes = the copies plus the record.
             PresetPointers p=record.Pointers;
             var outfits=(p==null ? new List<string>() : p.Outfits.Select(o=>o.Character+"/"+o.Folder).ToList()).Concat(record.Entries.Select(e=>e.RelativePath+(e.Enabled ? "" : " (disabled)")+(p==null ? "" : " (copy)"))).ToList();
-            var replacements=(p==null ? new List<string>() : p.Replacements.Select(r=>r.Name).ToList()).Concat(mods.Select(r=>r.Mod.Name+(p==null ? "" : " (copy)"))).ToList();
+            var replacements=p==null ? mods.Select(r=>r.Mod.Name).ToList() : SavedReplacementOrder(record).Select(x=>x.Key ? p.Replacements[x.Value].Name : mods[x.Value].Mod.Name+" (copy)").ToList();
             return new OutfitSetInfo {Folder=folder,Id=record.Id,Name=record.Name,Kind=(OutfitSetKind)Enum.Parse(typeof(OutfitSetKind),record.Kind),CreatedUtc=DateTime.Parse(record.CreatedUtc,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind).ToUniversalTime(),
                 Bytes=record.Entries.Sum(e=>e.Files.Sum(f=>f.Length))+mods.Sum(r=>r.Mod.Files.Sum(f=>f.Size))+(p==null ? 0 : RecordBytes(text)),OutfitCount=outfits.Count,Outfits=outfits,ManifestText=text,
                 Scope=PresetScopes.Of(outfits.Count>0,replacements.Count>0),ReplacementCount=replacements.Count,Replacements=replacements,ReplacementMethod=record.Replacements==null ? "" : record.Replacements.Method ?? "",

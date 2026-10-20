@@ -296,6 +296,21 @@ namespace SlotsInstaller
         {
             return composition != null && composition.Files.Keys.Any(k => String.Equals(PakHash.Normalize(k).TrimStart('/'), "dinput8.dll", StringComparison.OrdinalIgnoreCase));
         }
+        // 1.0.8: the record a REFramework install replaces in place: the one whose dinput8.dll is in the game (highest
+        // priority), when it and the new package are plain REFramework (dinput8.dll and its revision note). A mod that
+        // bundles dinput8.dll with scripts or plugins is never replaced: the new build goes above it, and the bundle's
+        // files stay (its dinput8.dll comes back if the new one is uninstalled). Null = a normal install.
+        private static readonly string[] ReFrameworkFiles = { "dinput8.dll", "reframework_revision.txt" };
+        private static bool PlainReFramework(IEnumerable<string> paths)
+        {
+            return paths.All(p => ReFrameworkFiles.Contains(PakHash.Normalize(p ?? "").TrimStart('/'), StringComparer.OrdinalIgnoreCase));
+        }
+        internal static string ReFrameworkUpdateTarget(IEnumerable<ReplaceMod> mods, IEnumerable<string> newFiles)
+        {
+            if (!PlainReFramework(newFiles)) return null;
+            ReplaceMod refw = mods.FirstOrDefault(m => m.Files != null && m.Files.Any(x => String.Equals(PakHash.Normalize(x.Path ?? "").TrimStart('/'), "dinput8.dll", StringComparison.OrdinalIgnoreCase)));
+            return refw != null && PlainReFramework(refw.Files.Select(x => x.Path)) ? refw.Id : null;
+        }
         internal static bool IsLoaderComposition(CompositionPlan composition)
         {
             return composition != null && composition.Files.Keys.Any(k => String.Equals(PakHash.Normalize(k).TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase));
@@ -325,10 +340,7 @@ namespace SlotsInstaller
                 }
                 // 1.0.8: another REFramework build (a newer pinned nightly) updates the REFramework this app installed in place.
                 if (String.IsNullOrEmpty(replaceId) && IsReFrameworkComposition(composition))
-                {
-                    ReplaceMod refw = engine.LoadState().Mods.FirstOrDefault(m => m.Files.Any(x => String.Equals(x.Path, "dinput8.dll", StringComparison.OrdinalIgnoreCase)));
-                    if (refw != null) replaceId = refw.Id;
-                }
+                    replaceId = ReFrameworkUpdateTarget(engine.LoadState().Mods, composition.Files.Keys);
                 string keep = replaceId;
                 others = same.Where(m => !String.Equals(m.Id, keep, StringComparison.OrdinalIgnoreCase)).ToList();
             }

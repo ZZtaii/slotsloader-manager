@@ -1292,6 +1292,13 @@ namespace SlotsInstaller
             Require(up.BuildDate == new DateTime(2026, 8, 31) && up.Commit == "a2cd2f0a734e68fc9bc2127a7f4a385487afb484" && up.Upscaler && !up.OlderThan(supported), "upscaler build: " + up.BuildDate + " " + up.Commit);
             Require(nightly.BuildDate == new DateTime(2026, 10, 11) && !nightly.Upscaler && !nightly.OlderThan(supported) && old.OlderThan(supported) && none.BuildDate == null && !none.OlderThan(supported), "nightly/old/unknown builds");
             Require(supported.Size == 13272178 && supported.Sha256 == "27376E1DA177DDCDE9C46B3541BDC6FA1AD54A11D0CAB9F7782EFF0481455E94" && supported.Url == "https://github.com/praydog/REFramework-nightly/releases/download/" + supported.Tag + "/REFramework.zip", "supported pin");
+            // Only a plain REFramework record is updated in place; a mod bundling dinput8.dll with other files keeps its record.
+            Func<string, string[], ReplaceMod> record = delegate(string id, string[] paths) { return new ReplaceMod { Id = id, Files = paths.Select(p => new ModFile { Path = p }).ToList() }; };
+            ReplaceMod plainRecord = record("plain", new[] { "dinput8.dll" }), bundleRecord = record("bundle", new[] { "dinput8.dll", "reframework/autorun/helper.lua" }), other = record("other", new[] { "natives/stm/x.tex" });
+            string[] plainZip = { "dinput8.dll", "reframework_revision.txt" };
+            Require(ReplacePlanner.ReFrameworkUpdateTarget(new[] { other, plainRecord }, plainZip) == "plain", "a plain REFramework record is not updated in place");
+            Require(ReplacePlanner.ReFrameworkUpdateTarget(new[] { bundleRecord, plainRecord }, plainZip) == null && ReplacePlanner.ReFrameworkUpdateTarget(new[] { bundleRecord }, plainZip) == null, "a bundle holding dinput8.dll would be replaced");
+            Require(ReplacePlanner.ReFrameworkUpdateTarget(new[] { plainRecord }, new[] { "dinput8.dll", "reframework/plugins/x.dll" }) == null, "a bundle would replace the plain REFramework record");
             string dll = Path.Combine(f.Game, "dinput8.dll"), dir = Path.Combine(f.Game, "reframework"); bool hadDir = Directory.Exists(dir);
             Func<string> notice = delegate { Call(form, "SetInstallMode", InstallModes.Slot, true); return Get<Label>(form, "modeNotice").Text; };
             Action<string> putDll = delegate(string text) { File.WriteAllBytes(dll, Encoding.ASCII.GetBytes(text)); File.SetLastWriteTimeUtc(dll, DateTime.UtcNow.AddSeconds(-new Random().Next(10, 100000))); };

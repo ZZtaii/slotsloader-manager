@@ -57,6 +57,7 @@ namespace SlotsInstaller
                 check("preset scope (2.4.1): SF6 running refuses a replacement restore (nothing changes, no store leftovers); Fluffy open refuses PAK-method rows; all-identical restores still pass",delegate { RunningRefused(Path.Combine(run,"scope-running"),probe); });
                 check("list presets (1.0.8): v3 saves library pointers (outfit source, options, place; replacements in priority order, no Slotsloader) and copies only what has no source; info, labels, old-format mark; a damaged pointer is refused",delegate { probe.Game=false;probe.Fluffy=false;PointerSave(Path.Combine(run,"list-save")); });
                 check("list presets (1.0.8): restore reinstalls from the library (saved order, same game files, same options), skips what is installed, notes a missing mod, a taken place and a changed source while the rest goes on; a library rename moves the pointers",delegate { probe.Game=false;probe.Fluffy=false;PointerRestore(Path.Combine(run,"list-restore")); });
+                check("list presets (1.0.8): copied and listed replacements restore in one saved priority order",delegate { probe.Game=false;probe.Fluffy=false;PointerMixedOrder(Path.Combine(run,"list-mixed")); });
             }
             finally { GameProcesses.Probe=previousProbe; }
             Console.WriteLine("Outfit set checks: "+(count-failures-skips)+" passed, "+failures+" failed, "+skips+" skipped.");
@@ -539,6 +540,7 @@ namespace SlotsInstaller
             Require((string)record["Format"]=="sf6-slotsloader-outfit-set-v3" && (string)record["Scope"]=="both","List preset format/scope: "+record["Format"]);
             Require(outfits.Count==1 && (string)outfits[0]["Character"]=="Ingrid" && (string)outfits[0]["Folder"]=="Managed A" && (string)outfits[0]["Mode"]=="composed" && String.Equals((string)outfits[0]["SourcePath"],Path.Combine(root,"outfit-source"),StringComparison.OrdinalIgnoreCase) && ((System.Collections.IList)outfits[0]["SelectedIds"]).Count>0,"Outfit pointer: "+Json.Serializer().Serialize(outfits));
             Require(String.Join("|",mods.Select(m=>(string)m["Name"]))=="Script Pack|Cammy Alt|Cammy Colors" && mods.All(m=>Directory.Exists((string)m["SourcePath"])),"Replacement pointers (priority order, no Slotsloader): "+String.Join("|",mods.Select(m=>(string)m["Name"])));
+            Require(String.Join("|",mods.Select(m=>Convert.ToString(m["Order"])))=="0|1|2","Replacement pointer places: "+String.Join("|",mods.Select(m=>Convert.ToString(m["Order"]))));
             // Only the manual zip (no library source) is copied; no replacement store copies.
             var entries=((System.Collections.IEnumerable)record["Entries"]).Cast<Dictionary<string,object>>().ToList();
             Require(entries.Count==1 && (string)entries[0]["RelativePath"]=="Juri/Manual zip.zip" && !Directory.Exists(Path.Combine(both.Folder,"replacements")) && Directory.GetFileSystemEntries(Path.Combine(both.Folder,"payload")).Length==1,"Copied part of a list preset: "+entries.Count);
@@ -578,6 +580,30 @@ namespace SlotsInstaller
             // Again: everything already there is skipped.
             r=OutfitSetStore.Restore(s.CostumeRoot,both,PresetScope.Both,s.Engine);
             Require(r.Restored==0 && r.Skipped==2 && r.ReplacementsRestored==0 && r.ReplacementsSkipped==3 && r.Notes.Count==0,"Second restore: "+r.Restored+"/"+r.Skipped+"/"+r.ReplacementsSkipped+" "+String.Join(" | ",r.Notes));
+            // Only a lower-priority one missing: it goes back below the ones still installed, not on top.
+            UninstallAll(s,"Cammy Colors");
+            r=OutfitSetStore.Restore(s.CostumeRoot,both,PresetScope.Replacements,s.Engine);
+            Require(r.ReplacementsRestored==1 && r.Notes.Count==0 && String.Join("|",s.Order())=="Script Pack|Cammy Alt|Cammy Colors|Slotsloader","Partial restore order: "+String.Join("|",s.Order())+" "+String.Join(" | ",r.Notes));
+            SameGame(fullGame,GameFiles(s),"Partial list restore");
+            // Another mod under a saved replacement's name: skipped and reported, never stacked over it.
+            UninstallAll(s,"Cammy Colors");
+            ReplaceChecks.Put(s.R.Mods,"other/modinfo.ini",Encoding.UTF8.GetBytes("name=Other\r\n"));
+            ReplaceChecks.Put(s.R.Mods,"other/natives/stm/product/ui/title.user.2",Encoding.UTF8.GetBytes("someone else's title"));
+            ReplaceMod impostor=ReplaceChecks.Install(s.R,"other","Cammy Colors");
+            Require(OutfitSetStore.Preview(s.CostumeRoot,both,PresetScope.Replacements,s.Engine).ConflictReplacements.SequenceEqual(new[]{"Cammy Colors"}),"A same-named replacement is not previewed as a conflict.");
+            r=OutfitSetStore.Restore(s.CostumeRoot,both,PresetScope.Replacements,s.Engine);
+            Require(r.ReplacementsRestored==0 && r.ReplacementsSkipped==2 && r.ReplacementConflicts.SequenceEqual(new[]{"Cammy Colors"}) && s.Engine.LoadState().Mods.Count(m=>m.Name=="Cammy Colors")==1 && ReplaceEngine.SameFiles(s.Engine.LoadState().Mods.Single(m=>m.Name=="Cammy Colors"),impostor),"A same-named replacement was not skipped: "+String.Join("|",s.Order()));
+            UninstallAll(s,"Cammy Colors");
+            r=OutfitSetStore.Restore(s.CostumeRoot,both,PresetScope.Replacements,s.Engine);
+            Require(r.ReplacementsRestored==1 && String.Join("|",s.Order())=="Script Pack|Cammy Alt|Cammy Colors|Slotsloader","Restore after the conflict: "+String.Join("|",s.Order()));
+            // Saved with an added part, installed without it: noted, not counted as identical.
+            string setFile=Path.Combine(both.Folder,"set.json"); byte[] original=File.ReadAllBytes(setFile);
+            var withPart=Manifest(both); var savedOutfit=(Dictionary<string,object>)((System.Collections.IList)((Dictionary<string,object>)withPart["Pointers"])["Outfits"])[0];
+            savedOutfit["Parts"]=new List<object>{ new Dictionary<string,object>{{"SourcePath",Path.Combine(root,"outfit-source")},{"SourceStamp",""},{"Mod","Part fixture"},{"SelectedIds",ids.Cast<object>().ToList()}} };
+            WriteManifest(both,withPart);
+            r=OutfitSetStore.Restore(s.CostumeRoot,Fresh(s,both),PresetScope.ExtraOutfits,s.Engine);
+            Require(r.Restored==0 && r.Skipped==1 && r.Notes.SequenceEqual(new[]{"Ingrid/Managed A: installed, but its added parts differ from the preset; left as is."}),"Missing part: "+r.Restored+"/"+r.Skipped+" "+String.Join(" | ",r.Notes));
+            File.WriteAllBytes(setFile,original);
             // A mod no longer in the library, a different outfit in the place and a changed source: noted, the rest goes on.
             UninstallAll(s,"Cammy Alt","Cammy Colors");
             Directory.Move(Path.Combine(s.R.Mods,"modB"),Path.Combine(s.R.Mods,"modB gone"));
@@ -596,6 +622,24 @@ namespace SlotsInstaller
             string renamed=Path.Combine(s.R.Mods,"modA renamed"); Directory.Move(Path.Combine(s.R.Mods,"modA"),renamed);
             OutfitSetStore.RenameSource(s.CostumeRoot,Path.Combine(s.R.Mods,"modA"),renamed);
             Require(Json.Serializer().Serialize(PointerRecord(Fresh(s,both))).Contains(Json.Serializer().Serialize(renamed).Trim('"')),"Rename did not move the pointer.");
+        }
+
+        // A replacement whose mod left the library is copied; restored with the listed ones, all keep one saved order.
+        private static void PointerMixedOrder(string root)
+        {
+            ScopeFixture s=CreateScope(root);
+            var fullGame=GameFiles(s);
+            Directory.Move(Path.Combine(s.R.Mods,"modB"),Path.Combine(s.R.Mods,"modB gone"));
+            OutfitSetInfo mods=OutfitSetStore.CreatePreset(s.CostumeRoot,"Mixed",PresetScope.Replacements,s.Engine);
+            Require(mods.Pointers && mods.Replacements.SequenceEqual(new[]{"Script Pack","Cammy Alt (copy)","Cammy Colors"}),"Mixed preset contents: "+String.Join(", ",mods.Replacements));
+            UninstallAll(s,"Script Pack","Cammy Alt","Cammy Colors");
+            var r=OutfitSetStore.Restore(s.CostumeRoot,mods,PresetScope.Replacements,s.Engine);
+            Require(r.ReplacementsRestored==3 && r.Notes.Count==0 && String.Join("|",s.Order())=="Script Pack|Cammy Alt|Cammy Colors|Slotsloader","Mixed restore order: "+String.Join("|",s.Order())+" "+String.Join(" | ",r.Notes));
+            SameGame(fullGame,GameFiles(s),"Mixed restore");
+            // Only the copied one missing: back between the listed ones.
+            UninstallAll(s,"Cammy Alt");
+            r=OutfitSetStore.Restore(s.CostumeRoot,mods,PresetScope.Replacements,s.Engine);
+            Require(r.ReplacementsRestored==1 && String.Join("|",s.Order())=="Script Pack|Cammy Alt|Cammy Colors|Slotsloader","Copied one restored out of order: "+String.Join("|",s.Order()));
         }
 
         private static void RunningRefused(string root,FakeProcessProbe probe)

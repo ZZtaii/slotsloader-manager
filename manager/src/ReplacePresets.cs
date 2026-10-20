@@ -10,6 +10,7 @@ namespace SlotsInstaller
     {
         internal readonly List<int> Missing = new List<int>(), Identical = new List<int>(), Conflicts = new List<int>();
         internal readonly Dictionary<int, string> Matched = new Dictionary<int, string>();   // identical: saved index -> installed id
+        internal readonly Dictionary<int, string> Created = new Dictionary<int, string>();   // 1.0.8, restored: saved index -> new id
         internal bool InstallsNatives;
     }
 
@@ -115,7 +116,7 @@ namespace SlotsInstaller
                             string stored = Safety.Under(storeDir, f.Path);
                             if (!File.Exists(stored) || new FileInfo(stored).Length != f.Size) throw new IOException("The restored copy of " + f.Path + " is missing or changed.");
                         }
-                        s.Mods.Insert(Position(s, saved.Count, placed, i), mod); placed[i] = mod.Id;
+                        s.Mods.Insert(Position(s, saved.Count, placed, i), mod); placed[i] = mod.Id; plan.Created[i] = mod.Id;
                     }
                     if (String.IsNullOrEmpty(s.StoreRoot)) s.StoreRoot = root;
                     return s;
@@ -135,6 +136,38 @@ namespace SlotsInstaller
                             if (!kept.Contains(Path.GetFileName(dir)) && Directory.Exists(dir)) { try { Directory.Delete(dir, true); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); } }
                 }
             }
+        }
+
+        // 1.0.8 list presets: the replacements a restore installed (`restored`) move next to their saved neighbours, as
+        // Position places copies: after the nearest higher one in place, else before the nearest lower one, else on top.
+        // `saved`: installed ids in the preset's priority order (null = not installed). One change, only when it moves something.
+        internal string ArrangeRestored(IList<string> saved, ICollection<string> restored)
+        {
+            if (restored == null || restored.Count == 0) return "";
+            List<string> current = LoadState().Mods.Select(m => m.Id).ToList();
+            if (Arranged(current, saved, restored).SequenceEqual(current)) return "";
+            return Change("Restore replacements", true, delegate(ReplaceState s)
+            {
+                Dictionary<string, ReplaceMod> byId = s.Mods.ToDictionary(m => m.Id);
+                List<string> order = Arranged(s.Mods.Select(m => m.Id).ToList(), saved, restored);
+                s.Mods.Clear(); s.Mods.AddRange(order.Select(id => byId[id]));
+                return s;
+            }, false, null);
+        }
+        private static List<string> Arranged(List<string> ids, IList<string> saved, ICollection<string> restored)
+        {
+            var order = ids.ToList();
+            var placed = new HashSet<string>(saved.Where(id => id != null && order.Contains(id) && !restored.Contains(id)));
+            for (int k = 0; k < saved.Count; k++)
+            {
+                string id = saved[k];
+                if (id == null || !restored.Contains(id) || !order.Remove(id)) continue;
+                int at = -1;
+                for (int j = k - 1; j >= 0 && at < 0; j--) if (saved[j] != null && placed.Contains(saved[j])) at = order.IndexOf(saved[j]) + 1;
+                for (int j = k + 1; j < saved.Count && at < 0; j++) if (saved[j] != null && placed.Contains(saved[j])) at = order.IndexOf(saved[j]);
+                order.Insert(Math.Max(0, at), id); placed.Add(id);
+            }
+            return order;
         }
 
         // After the nearest earlier saved replacement already in the list, else before the nearest later one, else on top.

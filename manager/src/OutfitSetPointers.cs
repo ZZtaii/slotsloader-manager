@@ -27,6 +27,7 @@ namespace SlotsInstaller
     {
         public string Name = "", SourcePath = "", SourceStamp = "", Kind = "";
         public List<string> SelectedIds = new List<string>();
+        public int Order = -1;   // its place among all saved replacements, copied ones included (-1: saved before it was kept)
     }
 
     internal static partial class OutfitSetStore
@@ -83,10 +84,11 @@ namespace SlotsInstaller
                 PresetOutfitPointer p = OutfitPointer(enabled[i]);
                 if (p != null) pointers.Outfits.Add(p); else copyOutfits.Add(enabled[i]);
             }
-            foreach (ReplaceMod m in mods ?? new List<ReplaceMod>())
+            List<ReplaceMod> all = mods ?? new List<ReplaceMod>();
+            for (int i = 0; i < all.Count; i++)
             {
-                PresetReplacementPointer p = ReplacementPointer(m);
-                if (p != null) pointers.Replacements.Add(p); else copyMods.Add(m);
+                PresetReplacementPointer p = ReplacementPointer(all[i]);
+                if (p != null) { p.Order = i; pointers.Replacements.Add(p); } else copyMods.Add(all[i]);
             }
             if (pointers.Outfits.Count + pointers.Replacements.Count + copyOutfits.Count + copyMods.Count == 0) throw new IOException("Nothing enabled to save.");
             return SavePreset(root, name, copyOutfits, copyMods, storeFile, method, pointers);
@@ -130,29 +132,34 @@ namespace SlotsInstaller
         }
 
         // Replacements first (like v1/v2), then extra outfits. Each item is installed on its own; problems become notes.
-        private static void RestorePointers(string root, OutfitSetRecord record, bool outfits, bool replacements, ReplaceEngine engine, string sevenZip, OutfitSetRestoreResult result)
+        // `restored` (replacements): saved index -> id of each replacement installed here.
+        private static void RestorePointers(string root, OutfitSetRecord record, bool outfits, bool replacements, ReplaceEngine engine, string sevenZip, OutfitSetRestoreResult result, Dictionary<int, string> restored)
         {
             PresetPointers pointers = record.Pointers;
-            if (replacements && pointers.Replacements.Count > 0) RestoreReplacementPointers(pointers.Replacements, engine, SevenZip(sevenZip), result);
+            if (replacements && pointers.Replacements.Count > 0) RestoreReplacementPointers(pointers.Replacements, engine, SevenZip(sevenZip), result, restored ?? new Dictionary<int, string>());
             if (outfits && pointers.Outfits.Count > 0) RestoreOutfitPointers(root, pointers.Outfits, SevenZip(sevenZip), result);
         }
+        private static bool SameName(string a, string b) { return String.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.OrdinalIgnoreCase); }
 
-        private static void RestoreReplacementPointers(List<PresetReplacementPointer> saved, ReplaceEngine engine, string sevenZip, OutfitSetRestoreResult result)
+        private static void RestoreReplacementPointers(List<PresetReplacementPointer> saved, ReplaceEngine engine, string sevenZip, OutfitSetRestoreResult result, Dictionary<int, string> restored)
         {
             if (engine == null) throw new IOException("Replacements can't be restored without the game folder.");
             bool checkedGame = false;
-            // Lowest priority first: each install goes on top, so the restored ones keep their saved order.
+            // Lowest priority first, each on top; ArrangeReplacements then puts them next to their saved neighbours.
             for (int i = saved.Count - 1, n = 0; i >= 0; i--, n++)
             {
                 PresetReplacementPointer p = saved[i];
                 OperationContext.Report("Restoring replacement " + (n + 1) + " of " + saved.Count, n, saved.Count);
-                ReplaceMod same = engine.LoadState().Mods.FirstOrDefault(m => ReplacePlanner.SameSource(m.SourcePath, p.SourcePath));
+                List<ReplaceMod> installed = engine.LoadState().Mods;
+                ReplaceMod same = installed.FirstOrDefault(m => ReplacePlanner.SameSource(m.SourcePath, p.SourcePath));
                 if (same != null)
                 {
                     if (SameIds(same.SelectedIds, p.SelectedIds)) result.ReplacementsSkipped++;
                     else result.ReplacementConflicts.Add(p.Name);
                     continue;
                 }
+                // Another archive or version under the saved name: skipped and reported, like a copied one (ClassifyPreset).
+                if (installed.Any(m => SameName(m.Name, p.Name))) { result.ReplacementConflicts.Add(p.Name); continue; }
                 if (!SourceExists(p.SourcePath)) { result.Notes.Add(p.Name + ": not in your libraries any more (" + p.SourcePath + ")."); continue; }
                 if (!checkedGame)
                 {
@@ -170,13 +177,57 @@ namespace SlotsInstaller
                     CompositionPlan composition = Composer.Plan(package, ids, true);
                     if (!composition.CanInstall) throw new IOException(String.Join(" ", composition.Errors.DefaultIfEmpty("Its options changed.")));
                     ReplacePlan plan;
-                    ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, p.Name, false, null, out plan);
+                    ReplaceMod done = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, p.Name, false, null, out plan);
+                    if (done != null) restored[i] = done.Id;
                     result.ReplacementsRestored++;
                     if (dropped.Count > 0) result.Notes.Add(p.Name + ": options no longer in the mod were left out (" + String.Join(", ", dropped) + ").");
                     string changed = ChangedNote(p.SourceStamp, p.SourcePath); if (changed != null) result.Notes.Add(p.Name + ": " + changed + ".");
                 }
                 catch (Exception ex) { if (Fatal(ex)) throw; result.Notes.Add(p.Name + ": not restored. " + ex.Message); }
             }
+        }
+
+        // The saved priority order of a v3 preset's replacements, listed and copied together: (listed?, index in its
+        // list). A listed one sits at its Order; the copies fill the other places in their own order. Presets saved
+        // before Order was kept: the listed ones first.
+        private static List<KeyValuePair<bool, int>> SavedReplacementOrder(OutfitSetRecord record)
+        {
+            List<PresetReplacementPointer> listed = record.Pointers.Replacements;
+            int total = listed.Count + (record.Replacements == null ? 0 : record.Replacements.Mods.Count);
+            bool ordered = listed.All(p => p.Order >= 0 && p.Order < total) && listed.Select(p => p.Order).Distinct().Count() == listed.Count;
+            var slots = new KeyValuePair<bool, int>?[total];
+            for (int i = 0; i < listed.Count; i++) slots[ordered ? listed[i].Order : i] = new KeyValuePair<bool, int>(true, i);
+            for (int k = 0, copy = 0; k < total; k++) if (slots[k] == null) slots[k] = new KeyValuePair<bool, int>(false, copy++);
+            return slots.Select(x => x.Value).ToList();
+        }
+        // After a restore: the replacements it installed (listed ones went on top, copied ones among the copies) move
+        // next to their saved neighbours (ReplaceEngine.ArrangeRestored), so the saved priority order holds.
+        // `copied`: the copies' restore (null when none); `listed`: saved pointer index -> installed id.
+        private static void ArrangeReplacements(OutfitSetRecord record, PresetReplacementPlan copied, Dictionary<int, string> listed, ReplaceEngine engine, OutfitSetRestoreResult result)
+        {
+            try
+            {
+                List<ReplaceMod> installed = engine.LoadState().Mods;
+                var saved = new List<string>(); var restored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (KeyValuePair<bool, int> slot in SavedReplacementOrder(record))
+                {
+                    string id = null;
+                    if (slot.Key)
+                    {
+                        if (listed.TryGetValue(slot.Value, out id)) restored.Add(id);
+                        else { PresetReplacementPointer p = record.Pointers.Replacements[slot.Value]; ReplaceMod same = installed.FirstOrDefault(m => ReplacePlanner.SameSource(m.SourcePath, p.SourcePath)); id = same == null ? null : same.Id; }
+                    }
+                    else if (copied != null)
+                    {
+                        if (copied.Created.TryGetValue(slot.Value, out id)) restored.Add(id);
+                        else copied.Matched.TryGetValue(slot.Value, out id);
+                    }
+                    saved.Add(id);
+                }
+                string message = engine.ArrangeRestored(saved, restored);
+                if (!String.IsNullOrEmpty(message)) result.ReplaceMessage = ((result.ReplaceMessage ?? "") + " " + message).Trim();
+            }
+            catch (Exception ex) { if (Fatal(ex)) throw; result.Notes.Add("The restored replacements couldn't be put in their saved order: " + ex.Message); }
         }
 
         private static void RestoreOutfitPointers(string root, List<PresetOutfitPointer> saved, string sevenZip, OutfitSetRestoreResult result)
@@ -192,7 +243,9 @@ namespace SlotsInstaller
                 if (there != null || Exists(destination) || alreadyCopied)
                 {
                     bool same = alreadyCopied || (there != null && there.Enabled && ReplacePlanner.SameSource(there.SourcePath, p.SourcePath) && (p.Mode == ModeAllVariants ? there.WholeArchive : there.Managed && SameIds(there.SelectedIds, p.SelectedIds)));
-                    if (same) result.Skipped++; else result.Notes.Add(label + ": a different outfit is installed there; left as is.");
+                    if (same && !alreadyCopied && p.Mode == ModeComposed && !SameParts(there, p.Parts)) result.Notes.Add(label + ": installed, but its added parts differ from the preset; left as is.");
+                    else if (same) result.Skipped++;
+                    else result.Notes.Add(label + ": a different outfit is installed there; left as is.");
                     continue;
                 }
                 if (!SourceExists(p.SourcePath)) { result.Notes.Add(label + ": its mod is not in your libraries any more (" + p.SourcePath + ")."); continue; }
@@ -229,7 +282,25 @@ namespace SlotsInstaller
             }
         }
 
-        // Preview of v3 replacement pointers: not installed yet (by source) or already there.
+        // The parts added to an installed outfit (its manifest) are the saved ones: same sources and options, same order.
+        private static bool SameParts(InstalledOutfit o, List<PresetPartPointer> saved)
+        {
+            string path = System.IO.Path.Combine(o.Folder, ".slots-installer.json");
+            List<PartGraft> parts;
+            try
+            {
+                if (!File.Exists(path)) return saved.Count == 0;
+                InstallManifest manifest = Json.Read<InstallManifest>(path);
+                parts = ((manifest == null ? null : manifest.Parts) ?? new List<PartGraft>()).Where(x => x != null).ToList();
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return false; }
+            if (parts.Count != saved.Count) return false;
+            for (int i = 0; i < parts.Count; i++)
+                if (!ReplacePlanner.SameSource(parts[i].SourcePath, saved[i].SourcePath) || !SameIds(parts[i].SelectedIds, saved[i].SelectedIds)) return false;
+            return true;
+        }
+
+        // Preview of v3 replacement pointers: not installed yet (by source) or already there; a same-named other mod is a conflict.
         private static void PreviewPointers(OutfitSetRecord record, PresetScope scope, ReplaceEngine engine, string root, OutfitSetPreview preview)
         {
             if (PresetScopes.Outfits(scope))
@@ -242,7 +313,8 @@ namespace SlotsInstaller
                 foreach (PresetReplacementPointer p in record.Pointers.Replacements)
                 {
                     ReplaceMod same = installed.FirstOrDefault(m => ReplacePlanner.SameSource(m.SourcePath, p.SourcePath));
-                    if (same == null) { preview.AddReplacements.Add(p.Name); if (p.Kind != "Tool" && p.Kind != "Pak") preview.InstallsNatives = true; }
+                    if (same == null && installed.Any(m => SameName(m.Name, p.Name))) preview.ConflictReplacements.Add(p.Name);
+                    else if (same == null) { preview.AddReplacements.Add(p.Name); if (p.Kind != "Tool" && p.Kind != "Pak") preview.InstallsNatives = true; }
                     else if (SameIds(same.SelectedIds, p.SelectedIds)) preview.SameReplacements.Add(p.Name);
                     else preview.ConflictReplacements.Add(p.Name);
                 }
