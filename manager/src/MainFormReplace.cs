@@ -522,6 +522,7 @@ namespace SlotsInstaller
                 try { engine.DeleteRemovedExcept(ProtectedRemovedFolders()); }
                 catch (Exception ex) { Program.Log(ex); }
                 SwapRepairFlag.Sync(engine.GameRoot, engine.Settings.SwapRepairs);   // 1.0.5: Slotsloader follows the setting
+                ManagerInstalls.Sync(engine);   // 1.0.9: the installs list other costume loaders read follows the state
                 // 1.0.1: a gap in the patch PAK row (any tool's) is filled at start-up and every refresh, with SF6 and
                 // the external mod manager closed.
                 try

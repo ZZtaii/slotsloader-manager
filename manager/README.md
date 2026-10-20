@@ -10,6 +10,9 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 
 ## What changed
 
+- 1.0.9:
+  - **Other costume loaders can see your replacements.** After every install, uninstall, enable, disable or priority change, and at start-up, the Manager writes `reframework\data\SF6_Costumes_Data\manager_installs.json`. It lists each replacement and tool mod in priority order, with its files and patch PAKs. A costume loader that reads it can leave those files alone instead of turning them into extra outfits, without searching your PC for the Manager's Data folder. Slotsloader doesn't need it. The file is only written where a costume loader keeps its data.
+
 - 1.0.8:
   - **MY FILTERS** in the Filters panel: filters you make from keywords. A filter matches a mod whose name or any option name or folder contains one of its keywords (case, spaces and dashes don't matter). Click a filter to show only its mods, again to hide them, a third time to turn it off; right-click for the same choices and **Edit filter**. **+ New filter** and Edit open a small editor under the chips: while you type keywords the list shows what they match. Filters are saved in the Manager's Data and their on/hide state is remembered like the other filters.
   - A ready-made **NSFW** filter (nsfw, nude, naked, topless, bottomless, pubic, futa, see through, …), picked from real mod and option names. Edit or delete it like your own.

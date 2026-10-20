@@ -651,8 +651,7 @@ namespace SlotsInstaller
                 Require(DateTime.UtcNow < deadline, context + ": indicator preview did not settle.");
                 Application.DoEvents(); Thread.Sleep(10);
             }
-            ((Dictionary<string, byte[]>)Field("previewCache").GetValue(form)).Clear();
-            Field("previewCacheBytes").SetValue(form, 0L);
+            ((PreviewImageCache)Field("previewCache").GetValue(form)).Dispose();
             report.Add("PASS: " + context + " managed full-row buffer; 24 immediate native hover/leave frames retain orange indicator; mouse/Space toggles, Home/Down/End navigation and checked accessibility state; hover/scroll roundtrip bitmap stable. Saved images are hidden-control renderings, not desktop captures.");
         }
 
@@ -759,6 +758,7 @@ namespace SlotsInstaller
             form.PreviewOption(nodes[pictured[3].Id]);
             Require((bool)Field("previewLoading").GetValue(form), context + ": uncached hover did not start a read.");
             form.PreviewOption(nodes[pictured[0].Id]);
+            Require((string)Field("previewComponentId").GetValue(form) == pictured[0].Id && preview.Image != null && Field("pendingPreviewId").GetValue(form) == null, context + ": decoded cache hit waited for the old preview worker.");
             RequirePreviewInteractive(form, context);
             WaitForPreview(form, pictured[0].Id, context);
             VerifyPreview(form, pictured[0], package, settings, preview, title, context);

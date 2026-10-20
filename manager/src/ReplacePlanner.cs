@@ -54,6 +54,15 @@ namespace SlotsInstaller
             if (plugin != null && plugin.Component != null && LoaderCostumePak.IsUpstreamBuild(plugin.Component.Name, plugin.Component.Version, plugin.Component.Author))
                 plan.Items.Add(new HealthItem("error", "This is upstream's Slots Loader" + (String.IsNullOrEmpty(plugin.Component.Version) ? "" : " " + plugin.Component.Version) + ", not the Manager's Slotsloader Fork. Install the fork instead: Settings → Install Slotsloader " + UpdateCheck.ShortVersion(LoaderRelease.Pin.Version) + "."));
             ReplaceState state = engine.LoadState();
+            // This state is read-only throughout Prepare. Build the lookup once
+            // per review, never retain it across an install or state mutation.
+            var deployed = new Dictionary<string, DeployedFile>(StringComparer.OrdinalIgnoreCase);
+            foreach (DeployedFile file in state.Deployed)
+                if (file.Path != null && !deployed.ContainsKey(file.Path)) deployed.Add(file.Path, file);
+            Func<string, DeployedFile> deployment = delegate(string path)
+            {
+                DeployedFile file; return deployed.TryGetValue(path, out file) ? file : null;
+            };
             plan.Method = engine.CurrentMethod(state);
             GamePaks paks = GamePaks.Load(engine.GameRoot);
             GameReference reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc);
@@ -190,7 +199,7 @@ namespace SlotsInstaller
                 PakIndex patch = paks.PatchContaining(f.Path);
                 if (patch != null) plan.Items.Add(new HealthItem(plan.Method == ReplaceMethods.Pak ? "error" : "warn", f.Path + " is also in the patch PAK " + Path.GetFileName(patch.Path) + (plan.Method == ReplaceMethods.Pak ? ", which is never modified: the PAK method can't replace it." : "; the loose file loader may still prefer the loose copy.")));
                 var rows = paks.Rows(f.Path);
-                DeployedFile already = state.Deployment(f.Path);
+                DeployedFile already = deployment(f.Path);
                 int heldRows = already == null ? 0 : already.Zeroed.Count;
                 if (rows.Count + heldRows > 0)
                 {
@@ -220,13 +229,13 @@ namespace SlotsInstaller
             if (twins.Count > 0) plan.Items.Add(new HealthItem("warn", N(twins.Count, "replaced texture") + " " + (twins.Count == 1 ? "has" : "have") + " a high-res streaming copy the mod doesn't ship (e.g. " + Path.GetFileName(twins[0]) + "); up close, SF6 may show the original texture."));
 
             // Fluffy ownership, one line per Fluffy mod (named, so the footer shows which one).
-            foreach (var group in plan.Files.Select(f => new { File = f, Owner = state.Deployment(f.Path) == null ? fluffy.Owner(f.Path) : null }).Where(x => x.Owner != null).GroupBy(x => x.Owner.Name, StringComparer.OrdinalIgnoreCase))
+            foreach (var group in plan.Files.Select(f => new { File = f, Owner = deployment(f.Path) == null ? fluffy.Owner(f.Path) : null }).Where(x => x.Owner != null).GroupBy(x => x.Owner.Name, StringComparer.OrdinalIgnoreCase))
             {
                 int count = group.Count();
                 plan.Items.Add(new HealthItem("error", (count == 1 ? "1 file belongs" : count + " files belong") + " to the mod '" + group.Key + "' (e.g. " + Path.GetFileName(group.First().File.Path) + "), installed by an external mod manager. Disable it there, then check again."));
             }
             // Loose files already in the game folder that neither this app nor Fluffy installed.
-            plan.UnknownLoose = plan.Files.Where(f => f.Native && state.Deployment(f.Path) == null && fluffy.Owner(f.Path) == null && File.Exists(engine.GamePath(f.Path))).Select(f => f.Path).ToList();
+            plan.UnknownLoose = plan.Files.Where(f => f.Native && deployment(f.Path) == null && fluffy.Owner(f.Path) == null && File.Exists(engine.GamePath(f.Path))).Select(f => f.Path).ToList();
             if (plan.UnknownLoose.Count > 0)
                 plan.Items.Add(new HealthItem("info", (plan.UnknownLoose.Count == 1 ? "1 file is" : plan.UnknownLoose.Count + " files are") + " already in the game folder, not installed by the Manager (e.g. " + Path.GetFileName(plan.UnknownLoose[0]) + "): backed up now, put back on uninstall."));
             // Other installed replacements: same files, same outfit or both.
@@ -243,7 +252,7 @@ namespace SlotsInstaller
             // Root/tool files.
             if (plan.RootFiles > 0)
             {
-                int existing = plan.Files.Count(f => !f.Native && File.Exists(engine.GamePath(f.Path)) && state.Deployment(f.Path) == null);
+                int existing = plan.Files.Count(f => !f.Native && File.Exists(engine.GamePath(f.Path)) && deployment(f.Path) == null);
                 plan.Items.Add(new HealthItem("info", (plan.RootFiles == 1 ? "1 file goes" : plan.RootFiles + " files go") + " to the game folder (" + String.Join(", ", plan.Files.Where(f => !f.Native).Select(f => f.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).Take(4)) + ")." + (existing > 0 ? " " + (existing == 1 ? "1 existing file is" : existing + " existing files are") + " backed up and restored on uninstall." : "")));
                 if (plan.Files.Any(f => f.Path.Equals("amd_ags_x64.dll", StringComparison.OrdinalIgnoreCase))) plan.Items.Add(new HealthItem("info", "Slotsloader: the game's own amd_ags_x64.dll is backed up and restored on uninstall."));
                 if (plan.Files.Any(f => f.Path.Equals("dinput8.dll", StringComparison.OrdinalIgnoreCase))) plan.Items.Add(new HealthItem("info", "REFramework: any existing dinput8.dll is backed up and restored on uninstall."));
