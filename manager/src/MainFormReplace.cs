@@ -116,6 +116,7 @@ namespace SlotsInstaller
 
         private void LaunchGame()
         {
+            if (!LaunchConfirmed()) return;   // 1.0.10: a pending Reapply is said first (MainFormGameNotice.cs)
             try { GameProcesses.Launcher.Launch(config.GameRoot); SetPageStatus(currentPage, "Starting SF6 through Steam…"); }
             catch (Exception ex) { Error(ex); }
         }
@@ -635,6 +636,7 @@ namespace SlotsInstaller
             bannerRestore.Visible = gameStatus != null && (gameStatus.NeedsReapply || gameStatus.BaseChanged) && (gameRows ?? new List<GameModRow>()).Any(r => r.Mod != null);
             bannerLoader.Enabled = idle;
             bannerReapply.Enabled = bannerRestore.Enabled = idle && !FluffyBlocksPak;
+            UpdateGameFilesToast();   // 1.0.10: the same notice on the other pages (MainFormGameNotice.cs)
         }
 
         private GameModRow GetGameRowSelection() { return installedList.SelectedItems.Count == 1 ? installedList.SelectedItems[0].Tag as GameModRow : null; }

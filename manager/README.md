@@ -10,6 +10,9 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 
 ## What changed
 
+- 1.0.10:
+  - **Reapply is hard to miss.** When the game files no longer match your replacements (an SF6 update, a Steam verify), the notice now shows on every page, not only on Installed: a box at the bottom right with **Reapply**, **Show details** and ✕ (back if something else changes). **Launch SF6** says so first; click it again within 15 seconds to start anyway. Nothing is reapplied without your click.
+
 - 1.0.9:
   - **Other costume loaders can see your replacements.** After every install, uninstall, enable, disable or priority change, and at start-up, the Manager writes `reframework\data\SF6_Costumes_Data\manager_installs.json`. It lists each replacement and tool mod in priority order, with its files and patch PAKs. A costume loader that reads it can leave those files alone instead of turning them into extra outfits, without searching your PC for the Manager's Data folder. Slotsloader doesn't need it. The file is only written where a costume loader keeps its data.
 
@@ -95,7 +98,7 @@ For Goth Juri C1, Main files + Default skin + Regular full outfit barefoot yield
 3. Click **Install** (or press Space). Start SF6 with **Launch SF6**. With the replacement method on Automatic, the app uses REFramework's loose file loader when it is on and otherwise the PAK method, so the files always show in game.
 4. On **Installed**, set the type toggle to **Installed** (replacements and tool mods). From there you can disable, reorder, edit or uninstall it. Uninstall restores the original files exactly and keeps no copy: reinstall it from the Mod library. A mod whose source is gone from your libraries goes to the Recycle Bin instead.
 
-After a game update, the Installed page shows a banner. Click **Reapply**, or **Restore original game files** to remove every replacement and tool mod this app installed; **Undo** puts them back. The same action is in gear → Restore → **Remove this Manager's mods** and in Settings → Game files & replacements. Extra outfits and external mod manager installs are not touched. To go further, gear → Restore → **Restore game to vanilla…** also removes the external mod manager's installs, every patch PAK and the `natives` folder (no Undo). It leaves REFramework and your extra outfits alone.
+After a game update, the Installed page shows a banner, and every other page a notice at the bottom right (1.0.10). Click **Reapply**, or **Restore original game files** to remove every replacement and tool mod this app installed; **Undo** puts them back. The same action is in gear → Restore → **Remove this Manager's mods** and in Settings → Game files & replacements. Extra outfits and external mod manager installs are not touched. To go further, gear → Restore → **Restore game to vanilla…** also removes the external mod manager's installs, every patch PAK and the `natives` folder (no Undo). It leaves REFramework and your extra outfits alone.
 
 If another tool replaced or deleted a file this app installed, the banner says which one. Uninstall still works: choose **Restore original** or **Keep current file** (see What changed, 2.2.0). The originals kept behind such files and the other tools' files that were replaced stay in the Manager's Data folder.
 
