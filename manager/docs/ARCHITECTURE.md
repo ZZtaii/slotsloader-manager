@@ -19,6 +19,7 @@ The primary entry points and current source locations are:
 | `LoaderResults.cs` | Read-only mapping of installed sources to the last native-loader result |
 | `RecoveryStore.cs`, `RecoveryForm.cs` | Inspect, restore or explicitly delete retained managed copies |
 | `OutfitSetStore.cs`, `OutfitSetPointers.cs`, `OutfitSetsForm.cs` | Named presets (1.0.8: lists of library sources, v3; older full-copy v1/v2 still restore), explicitly selected batch removal and reusable set restoration |
+| `SourceRelink.cs` | 1.0.10: at preset save, points a replacement or managed extra outfit whose source is gone at the one library mod holding its files |
 | `LibraryFilters.cs`, `MainFormCustomFilters.cs`, `CustomFilterEditor.cs` | 1.0.8 MY FILTERS: keyword filters (default NSFW) in the Filters panel, `Data\library-filters.json` |
 | `MainFormPerformance.cs`, `PreviewImages.cs` | Deferred virtual review rows; background keyword matching on isolated name snapshots for libraries over 128 entries; decoded preview LRU cache (64 MiB, 128 entries), with independent displayed images and full-resolution enlargement |
 | `OverlayScroll.cs`, `MainFormInspectorScroll.cs` | 1.0.8 scrolling inspector with a thin overlay thumb |
@@ -231,6 +232,17 @@ Install, enable, disable, uninstall, recovery and outfit-set mutations share a n
 ## Named presets and selected outfit sets
 
 1.0.8: a preset is a list (format v3, `OutfitSetPointers.cs`): each enabled outfit and replacement by library source, options, place and order; restore reinstalls item by item and reports what it couldn't (`OutfitSetRestoreResult.Notes`). Only entries without a library source are copied, in the v1/v2 layout described below, which older presets keep using. Details: `src/API.md`.
+
+1.0.10: a manual drop can be listed too. When an archive in costume_mods has no library source, Save looks for an identical archive in the Mod library's current list (no new scan). Only same-size archives are compared, by SHA-256, and the drop is hashed only when one exists. If one matches, the drop is saved as an `all_variants` pointer to it and restored from it under its own file name. Each copy keeps its reason in `Pointers.CopiedOutfitReasons` / `CopiedReplacementReasons`. The Presets window lists the copies with their size and reason in the details, and after Save the status line says how many were copied.
+
+1.0.10, renamed sources (`SourceRelink.cs`): before the list is made, Save also looks for the library mod behind a replacement, tool mod or managed extra outfit whose recorded source is gone (renamed or moved outside the Manager).
+- Candidates come from the same list, by name only: the record's name, its old file name and the modinfo name are compared as letters and digits, and a version after the name counts as the same name ("X - v1.0" and "X").
+- Each candidate is read like an install: its listing, then the record's options composed. Paths are named as `ReplacePlanner.Prepare` names them; a texture or mesh it renamed from an older version suffix is found under its old name.
+- Every file of the record must be there. An unchanged file must have the same size, then the same SHA-256. A file the Manager fixed (`ModFile.Fixes`) is fixed again the same way (`ModFixes.UpgradeModFile` with this game's reference) and must then have the recorded SHA-256; at least one unchanged file must be compared. A patch PAK must equal one of the mod's PAKs.
+- An extra outfit has no fix marks, so all its files must match. One whose swatches were rebuilt never relinks, and one with parts from other mods is skipped.
+- Exactly one match: `SourcePath` is rewritten in `replace-state.json` (under the game lock, not while a journal is pending) or in the outfit's `.slots-installer.json`, as a library rename writes them. No game file changes, and a Rename history event ("from X, found by its files") is recorded.
+- None or several: nothing changes, and the item is copied with "not found at <path>".
+- It does not run at start-up or refresh: a candidate that keeps not matching would be read again every time.
 
 `OutfitSetStore.CreatePreset` enumerates the current installed entries afresh and copies **all enabled entries**, regardless of Installed-page search, filters or selection. Empty presets and duplicate preset names (case-insensitive) are refused. Managed folders, manual folders and direct manual ZIP/RAR/7Z/PAK files are included. Archives and PAKs are opaque files: saving or restoring them needs neither archive extraction nor the original library source. Existing component composition behavior is unchanged.
 

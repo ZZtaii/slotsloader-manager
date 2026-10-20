@@ -14,6 +14,7 @@ namespace SlotsInstaller
         private readonly string costumeRoot;
         private readonly Func<ReplaceEngine> engineFactory;
         private readonly Func<ReplaceEngine,bool,bool> ensureLooseLoader;
+        private readonly Func<IEnumerable<LibraryEntry>> libraryEntries;   // 1.0.10: the Mod library's list (read on the UI thread at Save)
         private readonly BufferedModList sets;
         private readonly PaddedTextField nameInput;
         private readonly SegmentedChoice scope,restoreScope;   // what to save; what to restore (a preset holding both kinds)
@@ -43,9 +44,11 @@ namespace SlotsInstaller
             using(var form=new OutfitSetsForm(costumeRoot,engine,ensureLooseLoader)) {form.ShowDialog(owner);return form.Changed;}
         }
         internal OutfitSetsForm(string costumeRoot):this(costumeRoot,null,null) {}
-        internal OutfitSetsForm(string costumeRoot,Func<ReplaceEngine> engineFactory,Func<ReplaceEngine,bool,bool> ensureLooseLoader)
+        internal OutfitSetsForm(string costumeRoot,Func<ReplaceEngine> engineFactory,Func<ReplaceEngine,bool,bool> ensureLooseLoader):this(costumeRoot,engineFactory,ensureLooseLoader,null) {}
+        // 1.0.10: library = the Mod library's listed mods, so a manual drop identical to a library archive is listed, not copied.
+        internal OutfitSetsForm(string costumeRoot,Func<ReplaceEngine> engineFactory,Func<ReplaceEngine,bool,bool> ensureLooseLoader,Func<IEnumerable<LibraryEntry>> library)
         {
-            this.costumeRoot=costumeRoot;this.engineFactory=engineFactory;this.ensureLooseLoader=ensureLooseLoader;SuspendLayout();
+            this.costumeRoot=costumeRoot;this.engineFactory=engineFactory;this.ensureLooseLoader=ensureLooseLoader;libraryEntries=library;SuspendLayout();
             AutoScaleDimensions=new SizeF(96F,96F);AutoScaleMode=AutoScaleMode.Dpi;
             Text="Outfit presets";ClientSize=new Size(840,600);MinimumSize=new Size(720,500);StartPosition=FormStartPosition.CenterParent;
             Font=Palette.Normal;BackColor=Palette.Background;ForeColor=Palette.Text;ShowInTaskbar=false;MinimizeBox=false;AppBranding.Apply(this);
@@ -147,6 +150,7 @@ namespace SlotsInstaller
         internal static string Contents(OutfitSetInfo e)
         {
             var lines=new List<string> {e.Name+" · "+Counts(e)+(e.Pointers && e.Copied==0 ? "" : " · "+Utilities.FriendlyBytes(e.Bytes))};
+            if(e.Pointers && e.Copies.Count>0)lines.AddRange(CopiedLines(e));
             bool both=e.OutfitCount>0 && e.ReplacementCount>0;
             if(both)lines.Add("Extra outfits");
             lines.AddRange(e.Outfits ?? new List<string>());
@@ -157,6 +161,22 @@ namespace SlotsInstaller
             }
             return String.Join("\r\n",lines);
         }
+        // 1.0.10 (the user: say what a list preset copies): "2 items have no library mod and are copied (51 MB):", then
+        // "Juri/Summer.zip · 40 MB · manual drop" or "Cammy Alt · 11 MB · not found at <path>" for each.
+        internal static List<string> CopiedLines(OutfitSetInfo e)
+        {
+            int n=e.Copies.Count;
+            var lines=new List<string> {(n==1 ? "1 item has no library mod and is copied (" : n+" items have no library mod and are copied (")+Utilities.FriendlyBytes(e.Copies.Sum(c=>c.Bytes))+"):"};
+            foreach(OutfitSetCopy c in e.Copies)lines.Add(c.Name+" · "+Utilities.FriendlyBytes(c.Bytes)+(String.IsNullOrEmpty(c.Reason) ? "" : " · "+c.Reason));
+            return lines;
+        }
+        // The status after Save: "Saved “Weekend” · 12 extra outfits · 3 replacements · 3 copied (51 MB), listed below."
+        internal static string SaveSummary(OutfitSetInfo saved)
+        {
+            string text="Saved “"+saved.Name+"” · "+Counts(saved);
+            if(saved.Pointers && saved.Copies.Count>0)text+=" · "+saved.Copies.Count+" copied ("+Utilities.FriendlyBytes(saved.Copies.Sum(c=>c.Bytes))+"), listed below";
+            return text+".";
+        }
         private OutfitSetInfo Selected() {return sets.SelectedItems.Count==1 ? sets.SelectedItems[0].Tag as OutfitSetInfo : null;}
         private void UpdateSelection()
         {
@@ -166,12 +186,14 @@ namespace SlotsInstaller
             details.Text=selected==null ? HelpText : (restoreNotesId==selected.Id && restoreNotes.Count>0 ? "Last restore\r\n"+String.Join("\r\n",restoreNotes)+"\r\n\r\n" : "")+Contents(selected);
             details.Select(0,0);
         }
-        private void RefreshSets(string completion)
+        private void RefreshSets(string completion) {RefreshSets(completion,null);}
+        // `selectId`: the preset to select afterwards (1.0.10: the one just saved, so its details show what was copied).
+        private void RefreshSets(string completion,string selectId)
         {
             if(closeRequested)return;
             Run("Reading presets…",delegate {return OutfitSetStore.List(costumeRoot);},delegate(OutfitSetListing listing)
             {
-                string selectedId=Selected()==null ? null : Selected().Id;
+                string selectedId=selectId ?? (Selected()==null ? null : Selected().Id);
                 sets.BeginUpdate();try {sets.Items.Clear();foreach(var entry in listing.Entries.OrderByDescending(entry=>entry.CreatedUtc)) {var row=new ListViewItem(entry.Name) {Tag=entry};sets.Items.Add(row);row.Selected=entry.Id==selectedId;}}
                 finally {sets.EndUpdate();FitList();}
                 status.Text=completion ?? (listing.Entries.Count==1 ? "1 preset" : listing.Entries.Count+" presets")+" · "+Utilities.FriendlyBytes(listing.Entries.Sum(entry=>entry.Bytes));
@@ -197,7 +219,10 @@ namespace SlotsInstaller
             if(busy || String.IsNullOrWhiteSpace(nameInput.Text))return;string name=nameInput.Text.Trim();PresetScope chosen=SaveScope;
             ReplaceEngine engine=null;
             if(PresetScopes.Replacements(chosen)) {try {engine=Engine();} catch(Exception ex) {if(ex is OutOfMemoryException)throw;ShowError(ex.Message);return;}}
-            Run("Saving…",delegate {return OutfitSetStore.CreatePreset(costumeRoot,name,chosen,engine);},delegate(OutfitSetInfo saved) {nameInput.Clear();RefreshSets("Saved “"+saved.Name+"” · "+Counts(saved)+".");});
+            // 1.0.10: the library as listed now (no disk scan), for renamed sources and manual drops identical to a library archive.
+            List<LibraryMod> library=null;
+            if(libraryEntries!=null) {try {library=OutfitSetStore.LibraryMods(libraryEntries());} catch(Exception ex) {if(ex is OutOfMemoryException)throw;Program.Log(ex);}}
+            Run("Saving…",delegate {return OutfitSetStore.CreatePreset(costumeRoot,name,chosen,engine,library);},delegate(OutfitSetInfo saved) {nameInput.Clear();RefreshSets(SaveSummary(saved),saved.Id);});
         }
 
         // The part of a preset to restore: the inline choice when it holds both kinds, else what it holds.

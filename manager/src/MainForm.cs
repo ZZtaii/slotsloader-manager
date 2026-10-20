@@ -1379,6 +1379,7 @@ namespace SlotsInstaller
                 finally { if (changed && pages != null) pages.ResumeLayout(true); }
             };
             swap();
+            if (changed) UpdateGameFilesToast();   // 1.0.10: hidden on Installed, where the banner says it
             if(page==libraryPage || page==installedPage || page==assistantPage) {lastMainPage=page==installedPage ? "Installed" : page==assistantPage ? "Assistant" : "Library"; QueueViewSave();}
             // A page needs DPI metrics once per DPI after it first has a real
             // size; repeating the full pass on every tab switch only re-laid

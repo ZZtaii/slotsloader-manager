@@ -69,6 +69,7 @@ namespace SlotsInstaller
                         check("footer and inspector fit without overlap in both modes at 1232x640 and 1110x610", delegate { Layout(form, root); });
                         check("install a replacement; Installed page lists it with priority and a read-only external manager row; the Extra / Installed type filter (1.0.1)", delegate { InstallAndList(form, f, fluffy); });
                         check("game-file change banner appears and Reapply clears it", delegate { Banner(form, f); });
+                        check("Reapply notice (1.0.10): the game-file change is a toast on the other pages (not on Installed, where the banner is) with Reapply, Show details and ✕ (back when the notice changes or at Launch); Launch SF6 says so first and starts on a second click; Reapply from the toast clears it and Launch starts at once", delegate { ReapplyNotice(form, f, launcher); });
                         check("Launch SF6 uses the launcher; the running indicator disables replacement changes", delegate { Launch(form, probe, launcher); });
                         check("no Test in game in the window (removed in 2.3.0): three footer actions; a leftover test record is kept as a normal install at start-up and deleted", delegate { LeftoverTest(form, f); });
                         check("Uninstall from the Installed page restores the clean game folder", delegate { Uninstall(form, f, clean); });
@@ -511,6 +512,48 @@ namespace SlotsInstaller
             Require(banner.Visible && Get<Label>(form, "gameBannerText").Text.StartsWith("Game files changed") && Get<FlatButton>(form, "bannerReapply").Visible, "banner not shown");
             Get<FlatButton>(form, "bannerReapply").PerformClick(); WaitIdle(form);
             Require(!banner.Visible && File.Exists(Path.Combine(f.Game, ReplaceChecks.V2.Replace('/', '\\'))), "Reapply did not repair and clear the banner");
+        }
+
+        private static void ReapplyNotice(MainForm form, ReplaceChecks.Fixture f, RecordingLauncher launcher)
+        {
+            string v2 = Path.Combine(f.Game, ReplaceChecks.V2.Replace('/', '\\'));
+            Panel library = Get<Panel>(form, "libraryPage"), installed = Get<Panel>(form, "installedPage");
+            Func<List<FlatButton>> buttons = delegate { return form.UpdateToast(MainForm.GameFilesToast).Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<FlatButton>().ToList(); };
+            try
+            {
+                Call(form, "ShowPage", library); Application.DoEvents();
+                Require(form.UpdateToast(MainForm.GameFilesToast) == null, "a notice while the game files match");
+                File.Delete(v2);
+                Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                Panel toast = form.UpdateToast(MainForm.GameFilesToast);
+                Require(toast != null && OverlayScroller.OwnVisible(toast.Parent) && toast.AccessibleName.StartsWith("Game files changed") && toast.AccessibleRole == AccessibleRole.Alert, "no notice on the Mod library: " + (toast == null ? "none" : toast.AccessibleName));
+                Require(buttons().Select(b => b.Text).SequenceEqual(new[] { "Reapply", "Show details", "✕" }) && buttons().All(b => b.TabStop && !String.IsNullOrEmpty(b.AccessibleName)) && buttons()[0].Enabled, "notice buttons: " + String.Join(", ", buttons().Select(b => b.Text + (b.Enabled ? "" : " (off)"))));
+                // Installed has the banner instead; back on the Mod library the toast returns.
+                Call(form, "ShowPage", installed); Application.DoEvents();
+                Require(form.UpdateToast(MainForm.GameFilesToast) == null && Get<Panel>(form, "gameBanner").Visible, "the notice must give way to the Installed banner");
+                Call(form, "ShowPage", library); Application.DoEvents();
+                Require(form.UpdateToast(MainForm.GameFilesToast) != null, "the notice did not come back on the Mod library");
+                // ✕ hides it for the session, also across refreshes; Launch brings it back with the warning.
+                buttons()[2].PerformClick(); Application.DoEvents();
+                Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                Require(form.UpdateToast(MainForm.GameFilesToast) == null, "a dismissed notice came back without a change");
+                int before = launcher.Count;
+                Get<FlatButton>(form, "launchButton").PerformClick(); Application.DoEvents();
+                string status = Get<Label>(form, "statusText").Text;
+                Require(launcher.Count == before && status.Contains("click Launch SF6 again") && form.UpdateToast(MainForm.GameFilesToast) != null, "first Launch with a Reapply pending: " + launcher.Count + " / " + status);
+                Get<FlatButton>(form, "launchButton").PerformClick(); Application.DoEvents();
+                Require(launcher.Count == before + 1, "the second Launch did not start the game");
+                // Reapply from the toast repairs, clears it, and Launch starts at once.
+                buttons()[0].PerformClick(); WaitIdle(form);
+                Require(File.Exists(v2) && form.UpdateToast(MainForm.GameFilesToast) == null, "Reapply from the notice did not repair and clear it");
+                Get<FlatButton>(form, "launchButton").PerformClick(); Application.DoEvents();
+                Require(launcher.Count == before + 2, "Launch still warned after the Reapply");
+            }
+            finally
+            {
+                if (!File.Exists(v2)) { Call(form, "ShowPage", installed); Call(form, "RefreshInstalled", (string)null); WaitIdle(form); Get<FlatButton>(form, "bannerReapply").PerformClick(); WaitIdle(form); }
+                Call(form, "ShowPage", library); Application.DoEvents();
+            }
         }
 
         private static void Launch(MainForm form, FakeProcessProbe probe, RecordingLauncher launcher)

@@ -72,6 +72,16 @@ namespace SlotsInstaller
             return loaded;
         }
 
+        // 1.0.10: the library already listed (this workspace's or the app's), never a new scan; null when there is none.
+        internal List<LibraryEntry> ListedLibrary()
+        {
+            lock (sync)
+            {
+                if (library != null) return library;
+            }
+            return LibraryProvider != null ? LibraryProvider() : null;
+        }
+
         internal LibraryEntry FindMod(string modId)
         {
             return Library().FirstOrDefault(e => ModId(e.SourcePath) == modId);
