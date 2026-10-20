@@ -165,7 +165,7 @@ namespace SlotsInstaller
             List<string> keywords = LibraryFilters.ParseKeywords(filterPanel.Editor.KeywordsBox.Text);
             customDraft = keywords.Count == 0 ? null : new CustomFilter { Id = "draft", Name = "draft", Keywords = keywords };
             libraryToTop = true; ApplyFilters();
-            filterPanel.Editor.SetStatus(customDraft == null ? "Type keywords to list their mods." : (captionShown == 1 ? "1 mod listed" : captionShown + " mods listed"), false);
+            UpdateCustomDraftStatus();
         }
         private void EndCustomFilterEdit()
         {
