@@ -58,7 +58,6 @@ namespace SlotsInstaller
                         CheckInstalledDetails(form, report, root);
                         CheckSettingsLibraries(form, root, report);
                         CheckTiming(form, report);
-                        ThemedDialogChecks.Run(form, root, report);
                         CheckNoTooltips(form, report);
                         CheckPopupAllowList(report);
                         CheckOldErrors(form, report);

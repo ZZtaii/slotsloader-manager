@@ -67,7 +67,7 @@ namespace SlotsInstaller
                 Type owner = type; while (owner.DeclaringType != null && owner.Name.StartsWith("<")) owner = owner.DeclaringType;
                 while (owner.DeclaringType != null && owner.Name.Contains("DisplayClass")) owner = owner.DeclaringType;
                 string ownerName = owner.Name;
-                if (ownerName == "ThemedMessageBox" || ownerName == "ThemedMessageForm" || ownerName.EndsWith("Checks") || ownerName.EndsWith("Tests") || ownerName == "DialogCheck" || ownerName == "AssistantDemo" || ownerName == "AssistantLiveCheck" || ownerName == "UiAudit") continue;
+                if (ownerName == "ThemedMessageBox" || ownerName == "ThemedMessageForm" || ownerName.EndsWith("Checks") || ownerName.EndsWith("Tests") || ownerName == "AssistantDemo" || ownerName == "AssistantLiveCheck" || ownerName == "UiAudit") continue;
                 foreach (MethodBase method in type.GetMethods(All).Cast<MethodBase>().Concat(type.GetConstructors(All)))
                 {
                     MethodBody body; try { body = method.GetMethodBody(); } catch (Exception) { continue; }
@@ -116,7 +116,7 @@ namespace SlotsInstaller
             {
                 Type owner = type; while (owner.DeclaringType != null) owner = owner.DeclaringType;
                 string ownerName = owner.Name;
-                if (ownerName.EndsWith("Checks") || ownerName.EndsWith("Tests") || ownerName == "UiAudit" || ownerName == "DialogCheck" || ownerName == "AssistantDemo" || ownerName == "AssistantLiveCheck" || ownerName == "AssistantMockServer" || ownerName == "AssistantFixtures" || ownerName == "LocalTestConfig") continue;
+                if (ownerName.EndsWith("Checks") || ownerName.EndsWith("Tests") || ownerName == "UiAudit" || ownerName == "AssistantDemo" || ownerName == "AssistantLiveCheck" || ownerName == "AssistantMockServer" || ownerName == "AssistantFixtures" || ownerName == "LocalTestConfig") continue;
                 foreach (MethodBase method in type.GetMethods(All).Cast<MethodBase>().Concat(type.GetConstructors(All)))
                 {
                     MethodBody body; try { body = method.GetMethodBody(); } catch (Exception) { continue; }

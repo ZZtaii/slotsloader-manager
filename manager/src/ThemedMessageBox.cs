@@ -58,9 +58,6 @@ namespace SlotsInstaller
             }
         }
 
-        // Checks (--dialog-check): called once the dialog is shown, on the UI thread.
-        internal static Action<ThemedMessageForm> ShownHook;
-
         private static DialogResult Run(ThemedMessageForm dialog, IWin32Window owner)
         {
             Func<ThemedMessageForm, DialogResult> responder = TestResponder;
@@ -451,8 +448,6 @@ namespace SlotsInstaller
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            Action<ThemedMessageForm> hook = ThemedMessageBox.ShownHook;
-            if (hook != null) hook(this);
             if (Program.Headless) return;
             if (IconKind == MessageBoxIcon.Error) SystemSounds.Hand.Play();
             else if (IconKind == MessageBoxIcon.Warning) SystemSounds.Exclamation.Play();

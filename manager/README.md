@@ -10,15 +10,13 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 
 ## What changed
 
-- 1.0.11:
-  - **The REFramework line updates by itself.** When REFramework changes outside the Manager (you copy in a new `dinput8.dll`, or another mod manager installs it), the Extra outfit line and Settings show the new build within a couple of seconds. Before, an "out of date" line could stay until the Manager refreshed for another reason, such as the external mod manager closing.
-  - **REFramework installs while an external mod manager has mods installed**, like Slotsloader. Only plain REFramework (`dinput8.dll` and its revision note) is let through; a mod that bundles `dinput8.dll` with scripts or plugins still waits. If the external mod manager installed REFramework itself, the line says to update it there and offers no download.
-
 - 1.0.10:
   - **Presets copy less.** An archive you dropped into costume_mods yourself that is identical to an archive in your libraries is now saved as that library mod instead of being copied. Only archives of the same size are compared, so saving stays quick. Restore puts it back from the library under its own file name, and skips it while it is still installed.
   - **The Presets window says what it copies and why.** After **Save**, the status line says how many items were copied and their size ("1 copied (12 MB), listed below"), and the new preset is selected. Its details start with "N items have no library mod and are copied (size):" and one line per item: **manual drop**, or **not found at** the path where its mod was when it was installed (renamed or moved outside the Manager). Presets saved by 1.0.8 and 1.0.9 show the list too.
   - **Renamed mods are found again.** When you save a preset, a replacement or extra outfit whose mod was renamed or moved outside the Manager (for example `Mod - v1.0.zip` renamed to `Mod.zip`) is linked to the library mod that holds exactly the files it installed. It is then listed instead of copied, and History shows it as renamed. Only mods with a similar name are opened, and their files are compared byte for byte. Files the Manager fixed are fixed again the same way and must then match too. When no mod or more than one matches, nothing changes and the item is still copied: the Manager doesn't guess.
   - **Reapply is hard to miss.** When the game files no longer match your replacements (an SF6 update, a Steam verify), the notice now shows on every page, not only on Installed: a box at the bottom right with **Reapply**, **Show details** and ✕ (back if something else changes). **Launch SF6** says so first; click it again within 15 seconds to start anyway. Nothing is reapplied without your click.
+  - **The REFramework line updates by itself.** When REFramework changes outside the Manager (you copy in a new `dinput8.dll`, or another mod manager installs it), the Extra outfit line and Settings show the new build within a couple of seconds. Before, an "out of date" line could stay until the Manager refreshed for another reason, such as the external mod manager closing.
+  - **REFramework installs while an external mod manager has mods installed**, like Slotsloader. Only plain REFramework (`dinput8.dll` and its revision note) is let through; a mod that bundles `dinput8.dll` with scripts or plugins still waits. If the external mod manager installed REFramework itself, the line says to update it there and offers no download.
 
 - 1.0.9:
   - **Other costume loaders can see your replacements.** After every install, uninstall, enable, disable or priority change, and at start-up, the Manager writes `reframework\data\SF6_Costumes_Data\manager_installs.json`. It lists each replacement and tool mod in priority order, with its files and patch PAKs. A costume loader that reads it can leave those files alone instead of turning them into extra outfits, without searching your PC for the Manager's Data folder. Slotsloader doesn't need it. The file is only written where a costume loader keeps its data.
@@ -72,7 +70,7 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
   - The loader is now called **Slotsloader** too, so the app and the loader share one spelling. The release bundles **Slotsloader Fork 1.10.1** in a `Slotsloader` folder beside the exe. It keeps the patch PAK row free of gaps that could stop the game at a black screen, and treats a patch PAK it can't read as another tool's. It also reads a texture that a Replace-original install switched off from its loose copy. An extra outfit whose own scene lists a different number of parts than the game's (SF5 Sakura over Ryu) keeps its own hair and cloth physics.
   - **Uninstall means uninstall.** Uninstalling keeps no copy: reinstall from the Mod library. Outfits with no library source (manual drops) go to the Recycle Bin.
   - Gear → **Restore** has two choices. **Remove this Manager's mods** removes every replacement and tool mod this app installed, with Undo. Its copies are kept only while that Undo is available. **Restore game to vanilla…** removes those mods and also the external mod manager's installs, every patch PAK (other tools' too) and the `natives` folder. It asks first and has no Undo.
-  - While an external mod manager has any mod installed, only Extra outfit and Slotsloader install here (and REFramework since 1.0.11), so two managers never change the same game files.
+  - While an external mod manager has any mod installed, only Extra outfit and Slotsloader install here (and REFramework since 1.0.10), so two managers never change the same game files.
   - **INSTALL AS** remembers your last choice. PAK and tool mods switch to Replace original by themselves, and **Tab** in the Mod library switches between the two.
   - Installed page:
     - an **All · Extra · Installed** type toggle;
@@ -177,7 +175,7 @@ Bundles need `--select '<ID>'` options or `--selection '<JSON file>'`. `test-loa
 
 Extra outfit mode composes loose native costumes. Replace mode installs a PAK-only source as the next patch PAK. Lua and DLL tool mods install in Replace original mode. A composition/integrity pass does not prove appearance in-game. Native loader tests also omit DLC PAKs and report that limitation. No loader/game update is included.
 
-Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks, `-Dialogs` the visible dialog check; see docs/DEVELOPMENT.md). See **VALIDATION.txt** for this build's checks. The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
+Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks; see docs/DEVELOPMENT.md). See **VALIDATION.txt** for this build's checks. The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
 
 ## License and third-party notices
 

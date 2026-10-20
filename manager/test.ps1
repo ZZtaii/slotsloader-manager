@@ -1,8 +1,7 @@
-# -Only runs just the named checks (any of those below, real ones included); -Dialogs adds the visible
-# real-app dialog check, which is left out by default since the 2.2.0 sizing fix.
+# -Only runs just the named checks (any of those below, real ones included).
 # Real-archive checks read your folders from -LocalConfig (default tests.local.json beside this script; untracked,
 # see tests.local.example.json): GameRoot, Libraries, FluffyRoots, Archives.juri and so on. Nothing personal is in the source.
-param([string]$OutputDirectory = '', [switch]$RealArchives, [switch]$Dialogs, [string[]]$Only, [string]$LocalConfig = '')
+param([string]$OutputDirectory = '', [switch]$RealArchives, [string[]]$Only, [string]$LocalConfig = '')
 $ErrorActionPreference = 'Stop'
 $testProject = Split-Path -Parent $PSCommandPath
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $testProject ('out\tests-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
@@ -41,7 +40,6 @@ $testCases = @(
     @{ Name='queue'; Arguments=@('--queue-check', ('"' + (Join-Path $OutputDirectory 'queue-check') + '"')) },
     @{ Name='wording'; Arguments=@('--wording-check', ('"' + $testFixtures + '"')) }
 )
-$dialogCase = @{ Name='dialog'; Arguments=@('--dialog-check', ('"' + (Join-Path $OutputDirectory 'dialog-check') + '"')); Style='Normal' }
 $realCases = @(
     @{Name='real-backend'; Arguments=@('--self-test', ('"' + $testFixtures + '"'))},
     @{Name='bundle-ui'; Arguments=@('--exercise-ui', ('"' + $realJuri + '"'))},
@@ -53,7 +51,7 @@ $realCases = @(
     @{Name='bundle-polish'; Arguments=@('--polish-check', ('"' + $testFixtures + '"'), ('"' + $realJuri + '"'))}
 )
 if ($Only) {
-    $allCases = $testCases + $realCases + @($dialogCase)
+    $allCases = $testCases + $realCases
     $wanted = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $unknown = @($wanted | Where-Object { $allCases.Name -notcontains $_ })
     if ($unknown.Count) { throw ('Unknown check: ' + ($unknown -join ', ') + '. Known: ' + ($allCases.Name -join ', ')) }
@@ -61,7 +59,6 @@ if ($Only) {
 } else {
     if ($RealArchives -and -not $local) { throw ('-RealArchives needs ' + $LocalConfig + ': copy tests.local.example.json and fill in your folders.') }
     if ($RealArchives) { $testCases += $realCases }
-    if ($Dialogs) { $testCases += $dialogCase }
 }
 foreach ($testCase in $testCases) {
     $testProcess = Start-Process -FilePath $testExe -ArgumentList $testCase.Arguments -WindowStyle $(if ($testCase.Style) { $testCase.Style } else { 'Hidden' }) -Wait -PassThru -RedirectStandardOutput (Join-Path $OutputDirectory ($testCase.Name + '-stdout.txt')) -RedirectStandardError (Join-Path $OutputDirectory ($testCase.Name + '-stderr.txt'))

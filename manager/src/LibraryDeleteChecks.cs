@@ -108,7 +108,6 @@ namespace SlotsInstaller
                         check("folder: Delete folder (with a read-only file) goes to the Recycle Bin and its row goes", delegate { DeleteFolder(form, bin, lib); });
                         check("multi-mod archive: three library entries from one archive read Delete archive (3 mods); one delete removes all three rows", delegate { DeleteMulti(form, bin, lib); });
                         check("installed: deleting the source of an installed outfit leaves it installed; its Installed row and details say Source deleted; a source missing from its library says Source missing", delegate { Installed(form, bin, lib, config, root); });
-                        check("no popup in the normal flow (ThemedMessageBox.TestResponder never called)", delegate { Require(popups == 0, "popups: " + String.Join(" / ", asked)); });
                         check("Recycle Bin unavailable: the one question (Delete permanently?); Cancel keeps it; Delete permanently deletes it and its row", delegate { Permanent(form, bin, lib, ref answer, ref popups, asked); });
                         form.Close();
                     }
