@@ -123,8 +123,7 @@ namespace SlotsInstaller
         private ModPackage pendingPreviewPackage;
         private string pendingPreviewId;
         private int pendingPreviewGeneration;
-        private readonly Dictionary<string, byte[]> previewCache = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-        private long previewCacheBytes;
+        private readonly PreviewImageCache previewCache = new PreviewImageCache(64L * 1024 * 1024);
 
         private Panel libraryPage, installedPage, settingsPage;
         private FlatButton navLibrary, navInstalled, navSettings;
@@ -228,7 +227,7 @@ namespace SlotsInstaller
                 if (firstLoad) { firstLoad = false; if (screenshotFile != null && !screenshotAvailableSize) ClientSize = new Size(Px(1460), Px(920)); RefreshLibrary(); }
             };
             FormClosing += delegate { SaveView(); if (assistantPage != null) assistantPage.Shutdown(); };
-            FormClosed += delegate { if (previewImage != null) previewImage.Dispose(); if (hoverTimer != null) hoverTimer.Dispose(); if (portraitLoad != null) portraitLoad.Cancel(); };
+            FormClosed += delegate { if (filterMatchCancel != null) filterMatchCancel.Cancel(); ClearPreviewCache(); if (previewImage != null) previewImage.Dispose(); if (hoverTimer != null) hoverTimer.Dispose(); if (portraitLoad != null) portraitLoad.Cancel(); };
             Disposed += delegate { if (hoverTimer != null) hoverTimer.Dispose(); viewSaveTimer.Dispose(); searchTimer.Dispose(); };
         }
 
@@ -773,6 +772,7 @@ namespace SlotsInstaller
             filesPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0), Visible = false };
             fileList = CreateList(28); fileList.OwnerDraw = true; fileList.DrawSubItem += DrawFileItem; fileList.View = View.Details; fileList.HeaderStyle = ColumnHeaderStyle.Nonclickable; fileList.Font = Palette.Small;
             fileList.Columns.Add("File", 400); fileList.Columns.Add("From option", 145); fileList.Columns.Add("Size", 66);
+            fileList.VirtualMode = true; fileList.RetrieveVirtualItem += RetrieveFileRow;
             // The native header sizes itself from the list's HFONT; give it the
             // device-DPI font so the column captions are not clipped at 300%.
             NativeDpiFont.Attach(fileList);
@@ -782,6 +782,7 @@ namespace SlotsInstaller
             overridesOnly = new CheckBox { Text = "Overrides only", Dock = DockStyle.Top, Height = 28, ForeColor = Palette.Muted, Font = Palette.Small };
             overridesOnly.CheckedChanged += delegate { FillFiles(); };
             filesPanel.Controls.Add(overridesOnly);
+            filesPanel.VisibleChanged += delegate { if (filesPanel.Visible) FillFiles(); };
             choices.Controls.Add(componentPanel); choices.Controls.Add(filesPanel); choices.Controls.Add(choiceTabs);
             // 2.3.0: the Filters panel takes the options column while open (between the list and the inspector).
             Panel centre = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), Padding = new Padding(0) };
@@ -1425,7 +1426,7 @@ namespace SlotsInstaller
         private void ShowDetailTab(bool files)
         {
             componentPanel.Visible = !files; filesPanel.Visible = files;
-            if (files) filesPanel.BringToFront(); else componentPanel.BringToFront();
+            if (files) { filesPanel.BringToFront(); FillFiles(); } else componentPanel.BringToFront();
             componentTab.SetActive(!files); filesTab.SetActive(files);
         }
 
@@ -1571,6 +1572,10 @@ namespace SlotsInstaller
             CustomFilterState[] customState = custom.Select(f => f.Id == customEditingId ? CustomFilterState.Off : CustomState(f.Id)).ToArray();
             bool anyOnly = customState.Contains(CustomFilterState.Only);
             CustomFilter draft = customDraft; string draftKey = draft == null ? null : LibraryFilters.MatchKey(draft);
+            bool countCustom = FiltersOpen;
+            var required = custom.Where((f, i) => countCustom || customState[i] != CustomFilterState.Off).ToList();
+            if (draft != null) required.Add(draft);
+            if (!EnsureCustomMatches(required)) { UpdateCustomDraftStatus(); UpdateLibraryCaption(); return; }
             var customHit = new bool[customCount]; var customTotals = new int[customCount];
             libraryRanks.Clear();
             var ranked = new List<KeyValuePair<LibraryEntry, int>>();
@@ -1586,10 +1591,10 @@ namespace SlotsInstaller
                 bool fighterOk = fighters.Count == 0 || codes.Overlaps(fighters);
                 bool kindOk = !kindsOn || (toolsOn && isTool) || (miscOn && isMisc && (miscKinds.Count == 0 || e.MiscAreas.Any(miscKinds.Contains)));
                 bool installedOk = !installedOn || isInstalled, libraryOk = libraries.Count == 0 || libraries.Contains(from);
-                bool onlyOk = !anyOnly, draftOk = draft == null || LibraryFilters.Matches(e, draft, draftKey); int hides = 0;
+                bool onlyOk = !anyOnly, draftOk = draft == null || CustomMatch(e, draftKey); int hides = 0;
                 for (int i = 0; i < customCount; i++)
                 {
-                    bool hit = customHit[i] = LibraryFilters.Matches(e, custom[i], customKeys[i]);
+                    bool hit = customHit[i] = (countCustom || customState[i] != CustomFilterState.Off) && CustomMatch(e, customKeys[i]);
                     if (hit && customState[i] == CustomFilterState.Only) onlyOk = true;
                     if (hit && customState[i] == CustomFilterState.Hide) hides++;
                 }
@@ -1605,7 +1610,7 @@ namespace SlotsInstaller
                 if (query.HasCostume) libraryRanks[e] = rank;
             }
             UpdateFacetCounts(fighterCounts, miscCounts, toolCount, miscCount, installedCount, libraryCounts);
-            customCounts.Clear(); for (int i = 0; i < customCount; i++) customCounts[custom[i].Id] = customTotals[i];
+            if (countCustom) { customCounts.Clear(); for (int i = 0; i < customCount; i++) customCounts[custom[i].Id] = customTotals[i]; }
             UpdateCustomChipLooks();
             UpdateFilterButton();
             // Costume searches list mods that change that costume first, then shared parts, then title-only matches.
@@ -1619,6 +1624,7 @@ namespace SlotsInstaller
             if (!sameRows) UpdateLibraryRows(rows);
             ScrollLibraryToTopIfAsked();
             captionShown = rows.Count; UpdateLibraryCaption();   // 1.0.6: "· READING n%" while mods are read in the background
+            UpdateCustomDraftStatus();
         }
 
         // Each native row insert costs ~0.07 ms, so rebuilding 800+ rows per
@@ -1752,7 +1758,7 @@ namespace SlotsInstaller
                 choicesHost.Visible = !open; filterPanel.Visible = open;
                 if (!open && hadFocus && modList.CanFocus) modList.Focus();
             }
-            if (open) { portraitsRequested = true; EnsurePortraits(false); if (focusPanel && filterPanel.Grid.CanFocus) filterPanel.Grid.Focus(); }
+            if (open) { portraitsRequested = true; EnsurePortraits(false); if (focusPanel && filterPanel.Grid.CanFocus) filterPanel.Grid.Focus(); ApplyFilters(); }
             UpdateFilterButton(); QueueViewSave();
         }
 
@@ -2082,7 +2088,7 @@ namespace SlotsInstaller
                 editingReplacement = restoreReplace;
                 hoverTimer.Stop(); hoverNode = null; previewGeneration++;
                 pendingPreviewPackage = null; pendingPreviewId = null;
-                previewCache.Clear(); previewCacheBytes = 0;
+                ClearPreviewCache();
                 selectingMod = true;
                 foreach (LibraryEntry listed in library.Where(e => String.Equals(e.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -2114,7 +2120,7 @@ namespace SlotsInstaller
                 if (String.IsNullOrWhiteSpace(packageDescription.Text)) packageDescription.Text = "Hover an option to preview it. Check its box to include it.";
                 packageHint.Text = package.Warnings.Count > 0 ? String.Join("\n", package.Warnings.Take(2)) : "Main files first. Options selected later take precedence when they replace the same file.";
                 SetPreview(result.Preview.TakeImage()); previewComponentId = result.Defaults.FirstOrDefault(); inspectedComponentId = previewComponentId;
-                if (previewComponentId != null) CachePreview(previewComponentId, result.Preview.Bytes);
+                if (previewComponentId != null) previewCache.Add(previewComponentId, previewImage);
                 outfitNameTyped = false; outfitNameLocked = restore != null;   // 2.5.0: Edit options keeps the outfit's name; otherwise the name is suggested (ApplySuggestedName)
                 SetOutfitName(restore == null ? CleanName(package.Name) : restore.Name);
                 targetCharacter.SelectedIndex = targetCharacter.Items.IndexOf(restore == null ? package.Character : restore.Character);
@@ -2244,6 +2250,13 @@ namespace SlotsInstaller
             List<string> own = Library.CleanAuthors(new[] { component.Author });
             SetByline(own.Count > 0 ? own : PackageAuthors());   // an option by someone else names them; otherwise the mod's author
             SetVersion(String.IsNullOrWhiteSpace(component.Version) ? PackageVersion() : component.Version);
+            if (previewComponentId == component.Id && previewImage != null) return;
+            Image cachedImage;
+            if (previewCache.TryCopy(component.Id, out cachedImage))
+            {
+                pendingPreviewPackage = null; pendingPreviewId = null;
+                SetPreview(cachedImage); previewComponentId = component.Id; return;
+            }
             SetPreview(null); noPreview.Text = "Loading preview…";
             if (previewLoading) { pendingPreviewPackage = package; pendingPreviewId = component.Id; pendingPreviewGeneration = generation; }
             else ReadComponentPreview(package, component.Id, generation);
@@ -2269,24 +2282,13 @@ namespace SlotsInstaller
             if (node != null && node.TreeView == componentTree) componentTree.InvalidateNode(node);
         }
 
-        private void CachePreview(string id, byte[] bytes)
-        {
-            if (previewCache.ContainsKey(id)) return;
-            long size = bytes == null ? 0 : bytes.Length;
-            while (previewCache.Count > 0 && previewCacheBytes + size > 64L * 1024 * 1024)
-            {
-                string oldest = previewCache.Keys.First(); byte[] old = previewCache[oldest];
-                previewCacheBytes -= old == null ? 0 : old.Length; previewCache.Remove(oldest);
-            }
-            previewCache[id] = bytes; previewCacheBytes += size;
-        }
+        private void ClearPreviewCache() { previewCache.Dispose(); }
 
         private void ReadComponentPreview(ModPackage current, string id, int generation)
         {
             previewLoading = true; string sevenZip = config.SevenZipPath;
-            byte[] cached=null;bool cachedRead=current==package && previewCache.TryGetValue(id,out cached);
             BackgroundWorker worker = new BackgroundWorker();
-            worker.DoWork += delegate(object s, DoWorkEventArgs e) { e.Result = PreviewImageResult.Decode(cachedRead ? cached : current.PreviewBytes(id, sevenZip)); };
+            worker.DoWork += delegate(object s, DoWorkEventArgs e) { e.Result = PreviewImageResult.Decode(current.PreviewBytes(id, sevenZip)); };
             worker.RunWorkerCompleted += delegate(object s, RunWorkerCompletedEventArgs e)
             {
                 using(var result=e.Error==null ? (PreviewImageResult)e.Result : new PreviewImageResult())
@@ -2294,7 +2296,7 @@ namespace SlotsInstaller
                     if (IsDisposed) { previewLoading = false; worker.Dispose(); return; }
                     if (current == package)
                     {
-                        CachePreview(id, result.Bytes);
+                        if (e.Error == null) previewCache.Add(id, result.Image);
                         if (generation == previewGeneration && inspectedComponentId == id) { SetPreview(result.TakeImage()); previewComponentId = id; }
                     }
                 }
@@ -2396,7 +2398,7 @@ namespace SlotsInstaller
         }
         private void ResetPlan()
         {
-            plan = null; replacePlan = null; fileList.Items.Clear();
+            plan = null; replacePlan = null; ClearFileRows();
             // Selection changed: the previous review result no longer applies.
             KeyValuePair<string, Color> stale;
             if (pageStatus.TryGetValue(libraryPage, out stale) && (stale.Key.StartsWith("Merged outfit preview ready") || stale.Key.StartsWith("Review the composition") || stale.Key.StartsWith("Make the required choices") || stale.Key.StartsWith("Choose one option in") || stale.Key.StartsWith("Health check done") || stale.Key.StartsWith("Health check found"))) ClearPageStatus(libraryPage);
@@ -2518,15 +2520,15 @@ namespace SlotsInstaller
 
         private void FillFiles()
         {
-            fileList.BeginUpdate(); fileList.Items.Clear();
+            if (!filesPanel.Visible) { ClearFileRows(); return; }
+            if (ReferenceEquals(fileRowsPlan, plan) && fileRowsOverrides == overridesOnly.Checked) return;
             HashSet<string> overridden = plan == null || !overridesOnly.Checked ? null : new HashSet<string>(plan.Overrides.Select(o => o.Path), StringComparer.OrdinalIgnoreCase);
-            if (plan != null) foreach (KeyValuePair<string, PlannedFile> pair in plan.Files.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
-            {
-                if (overridden != null && !overridden.Contains(pair.Key)) continue;
-                ListViewItem row = new ListViewItem(Path.GetFileName(pair.Key.Replace('/', Path.DirectorySeparatorChar)));
-                row.SubItems.Add(pair.Value.Component.Name); row.SubItems.Add(Utilities.FriendlyBytes(pair.Value.Asset.Size)); fileList.Items.Add(row);
-            }
-            fileList.EndUpdate();
+            fileList.VirtualListSize = 0;
+            fileRows = plan == null ? new KeyValuePair<string, PlannedFile>[0]
+                : plan.Files.Where(p => overridden == null || overridden.Contains(p.Key)).OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).ToArray();
+            fileRowsPlan = plan; fileRowsOverrides = overridesOnly.Checked;
+            fileList.VirtualListSize = fileRows.Length;
+            fileList.Invalidate();
         }
 
         // Review files / Report and explicit re-checks. The review itself runs automatically

@@ -26,6 +26,8 @@ namespace SlotsInstaller
         private System.Windows.Forms.Timer indexTimer;
         private int identityTotal, identityApplied, namesTotal, namesApplied;
         private bool indexWorkerDone;
+        private bool indexUiDirty;
+        private DateTime indexLastUiUpdate;
         internal bool Indexing { get { return indexCancel != null; } }
         internal int IndexRuns;   // checks: background runs started
 
@@ -44,13 +46,14 @@ namespace SlotsInstaller
             var cancel = new CancellationTokenSource(); var queue = new ConcurrentQueue<IndexResult>();
             indexCancel = cancel; indexQueue = queue; indexWorkerDone = false; IndexRuns++;
             identityTotal = identityWork.Count; identityApplied = 0; namesTotal = namesPending.Count; namesApplied = 0;
+            indexUiDirty = false; indexLastUiUpdate = DateTime.MinValue;
             if (indexTimer == null)
             {
                 indexTimer = new System.Windows.Forms.Timer { Interval = 400 }; indexTimer.Tick += delegate { ApplyIndexResults(); };
                 FormClosing += delegate { StopIndexing(); try { Library.SaveIndex(); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); } };
                 Disposed += delegate { indexTimer.Dispose(); };
             }
-            indexTimer.Start();
+            indexTimer.Interval = 400; indexTimer.Start();
             UpdateLibraryCaption();
             string sevenZip = config.SevenZipPath;
             var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Math.Min(4, Environment.ProcessorCount)), CancellationToken = cancel.Token };
@@ -103,7 +106,9 @@ namespace SlotsInstaller
             // drops rows (the result then changes nothing on screen); a rename keeps the file's content, so its result holds.
             bool sameList = true;
             int applied = 0; IndexResult r;
-            while (indexQueue.TryDequeue(out r))
+            int previousIdentity = identityApplied;
+            var slice = System.Diagnostics.Stopwatch.StartNew();
+            while (applied < 128 && slice.ElapsedMilliseconds < 8 && indexQueue.TryDequeue(out r))
             {
                 if (r.Pass == IndexPass.Identity) identityApplied++; else namesApplied++;
                 if (r.Pass == IndexPass.Identity) { Library.TakeIdentity(r.Entry, r.Found); installStates.Remove(r.Entry); libraryRanks.Remove(r.Entry); }
@@ -115,7 +120,15 @@ namespace SlotsInstaller
             bool finished = indexWorkerDone && indexQueue.IsEmpty;
             if (applied > 0 && sameList)
             {
-                if (finished || identityApplied >= identityTotal && identityTotal > 0 && namesApplied == 0) facetRowsSource = null;   // fighters and Misc chips found while reading
+                indexUiDirty = true;
+                if (finished || previousIdentity < identityTotal && identityApplied >= identityTotal) facetRowsSource = null;
+            }
+            // Drain bursts promptly in small slices; refresh the full list at most
+            // five times a second, plus the final flush.
+            indexTimer.Interval = indexQueue.IsEmpty ? 400 : 16;
+            if (indexUiDirty && (finished || (DateTime.UtcNow - indexLastUiUpdate).TotalMilliseconds >= 200))
+            {
+                indexUiDirty = false; indexLastUiUpdate = DateTime.UtcNow;
                 ApplyFilters(); modList.Invalidate();
             }
             if (finished)
@@ -135,6 +148,7 @@ namespace SlotsInstaller
             if (libraryCount == null) return;
             int shown = captionShown < 0 ? library.Count : captionShown;
             string text = library.Count == 0 ? "MOD LIBRARY" : shown == library.Count ? library.Count + " MODS" : shown + " OF " + library.Count + " MODS";
+            if (customMatchesPending) text += " · FILTERING…";
             if (Indexing)
             {
                 if (identityApplied < identityTotal) text += " · READING " + Math.Min(99, identityApplied * 100 / Math.Max(1, identityTotal)) + "%";

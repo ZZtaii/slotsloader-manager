@@ -182,9 +182,9 @@ namespace SlotsInstaller
             changingChecks = true;
             try { componentTree.BeginUpdate(); componentTree.Nodes.Clear(); componentTree.EndUpdate(); }
             finally { changingChecks = false; }
-            componentNodes.Clear(); selectedOrder.Clear(); missingRestoredOptions.Clear(); fileList.Items.Clear();
+            componentNodes.Clear(); selectedOrder.Clear(); missingRestoredOptions.Clear(); ClearFileRows();
             packageTitle.Text = "Choose a mod"; SetByline(null); SetVersion(null); packageDescription.Text = ""; packageHint.Text = ""; componentTitle.Text = "OPTION PREVIEW";
-            SetPreview(null); previewButton.Enabled = false;
+            SetPreview(null); ClearPreviewCache(); previewButton.Enabled = false;
             foreach (ListViewItem row in modList.SelectedItems.Cast<ListViewItem>().ToList()) row.Selected = false;
             RequestReview(1); UpdateFooter(); UpdateInstallButton(); UpdateLibraryUninstall(); UpdateModeUi();
         }

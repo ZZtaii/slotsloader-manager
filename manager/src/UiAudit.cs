@@ -22,7 +22,7 @@ namespace SlotsInstaller
                     foreach (FieldInfo f in t.GetFields(All))
                         if (typeof(ToolTip).IsAssignableFrom(f.FieldType) && f.GetValue(f.IsStatic ? null : c) != null && !ToolTipAllowed.Contains(t.Name + "." + f.Name)) found.Add(t.Name + "." + f.Name + " is a ToolTip");
                 var list = c as ListView;
-                if (list != null) { if (list.ShowItemToolTips) found.Add(Name(c) + ": ShowItemToolTips"); foreach (ListViewItem i in list.Items) if (!String.IsNullOrEmpty(i.ToolTipText)) { found.Add(Name(c) + " row tooltip: " + i.ToolTipText); break; } }
+                if (list != null) { if (list.ShowItemToolTips) found.Add(Name(c) + ": ShowItemToolTips"); foreach (ListViewItem i in ListItems(list)) if (!String.IsNullOrEmpty(i.ToolTipText)) { found.Add(Name(c) + " row tooltip: " + i.ToolTipText); break; } }
                 var tree = c as TreeView;
                 if (tree != null && tree.ShowNodeToolTips) found.Add(Name(c) + ": ShowNodeToolTips");
                 if (c.ContextMenuStrip != null) Menu(c.ContextMenuStrip, Name(c), found);
@@ -43,6 +43,7 @@ namespace SlotsInstaller
             if (drop != null) { if (drop.DropDown.ShowItemToolTips && drop.DropDownItems.Cast<ToolStripItem>().Any(x => !String.IsNullOrEmpty(x.ToolTipText))) found.Add(owner + " submenu '" + i.Text + "' shows tooltips"); foreach (ToolStripItem x in drop.DropDownItems) Item(x, owner, found); }
         }
         private static IEnumerable<Control> Walk(Control c) { yield return c; foreach (Control x in c.Controls) foreach (Control y in Walk(x)) yield return y; }
+        private static IEnumerable<ListViewItem> ListItems(ListView list) { for (int i = 0; i < list.Items.Count; i++) yield return list.Items[i]; }
         private static string Name(Control c) { return String.IsNullOrEmpty(c.Name) ? c.GetType().Name : c.Name; }
 
         // 2.4.1: every ThemedMessageBox.Show/Ask and MessageBox.Show call site in the app (test and check code excluded),
@@ -145,7 +146,7 @@ namespace SlotsInstaller
                 look(n, c.Text); look(n + " (accessible name)", c.AccessibleName); look(n + " (accessible description)", c.AccessibleDescription);
                 var combo = c as ComboBox; if (combo != null) foreach (object item in combo.Items) look(n + " item", Convert.ToString(item));
                 var box = c as ListBox; if (box != null) foreach (object item in box.Items) look(n + " item", Convert.ToString(item));
-                var list = c as ListView; if (list != null) foreach (ListViewItem item in list.Items) foreach (ListViewItem.ListViewSubItem sub in item.SubItems) look(n + " row", sub.Text);
+                var list = c as ListView; if (list != null) foreach (ListViewItem item in ListItems(list)) foreach (ListViewItem.ListViewSubItem sub in item.SubItems) look(n + " row", sub.Text);
                 if (c.ContextMenuStrip != null) MenuTexts(c.ContextMenuStrip.Items, n, look);
                 var strip = c as ToolStrip; if (strip != null) MenuTexts(strip.Items, n, look);
             }
