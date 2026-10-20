@@ -175,7 +175,7 @@ Bundles need `--select '<ID>'` options or `--selection '<JSON file>'`. `test-loa
 
 Extra outfit mode composes loose native costumes. Replace mode installs a PAK-only source as the next patch PAK. Lua and DLL tool mods install in Replace original mode. A composition/integrity pass does not prove appearance in-game. Native loader tests also omit DLC PAKs and report that limitation. No loader/game update is included.
 
-Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks, `-Dialogs` the visible dialog check; see docs/DEVELOPMENT.md). See **VALIDATION.txt** for this build's checks. The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
+Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks; see docs/DEVELOPMENT.md). See **VALIDATION.txt** for this build's checks. The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
 
 ## License and third-party notices
 

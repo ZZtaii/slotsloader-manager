@@ -77,15 +77,13 @@ Use a **new** output directory. This runner builds both executables, writes isol
 .\test.ps1 -RealArchives
 # Only some checks (real ones included), e.g. while iterating:
 .\test.ps1 -Only filters,filter-real
-# The visible real-app dialog check (opens windows on the screen):
-.\test.ps1 -Dialogs
 ```
 
 **Which runs (since 2.3.1).**
-- `-Only <names>` (comma-separated or an array) runs just those checks, real ones and `dialog` included; an unknown name stops with the list of known names: `generated`, `outfit-sets`, `outfit-set-ui`, `layout`, `smoke`, `fields`, `ui-polish`, `assistant`, `assistant-ui`, `replace`, `replace-ui`, `filters`, `loader`, `variants`, `slots`, `real-backend`, `bundle-ui`, `bundle-layout`, `replace-real`, `filter-real`, `loader-real`, `bundle-polish`, `dialog`.
-- The visible `dialog` check (`--dialog-check`) no longer runs by default or with `-RealArchives`; it runs with `-Dialogs` or when named in `-Only`.
-- Policy: while iterating, run only the suites that cover the change through `-Only`; run the full `-RealArchives` once just before packaging a release (without `-Dialogs`); add `-Dialogs` only when `ThemedMessageBox` or the DPI/scaling code changes.
-- Use an output folder outside `scratchpad`-like paths: the library-search regression in `generated` searches fixture paths for word starts such as `scr` and `plu`, so a parent folder named "scratchpad" or "plugins" makes it fail.
+- `-Only <names>` (comma-separated or an array) runs just those checks, real ones included; an unknown name stops with the list of known names: `generated`, `outfit-sets`, `outfit-set-ui`, `layout`, `smoke`, `fields`, `ui-polish`, `assistant`, `assistant-ui`, `replace`, `replace-ui`, `filters`, `loader`, `variants`, `slots`, `real-backend`, `bundle-ui`, `bundle-layout`, `replace-real`, `filter-real`, `loader-real`, `bundle-polish`.
+- 1.0.10 (the user): the visible themed-dialog checks are gone (the `dialog` suite, `--dialog-check`, `-Dialogs`, and `ThemedDialogChecks` inside `ui-polish`), as is the library-delete "no popup" check. They had passed on every run and opened windows on the screen.
+- Policy: while iterating, run only the suites that cover the change through `-Only`; run the full `-RealArchives` once just before packaging a release.
+- Use an output folder outside `scratchpad`-like paths: the library-search regression in `generated` searches fixture paths for word starts such as `scr`, `plu` and `ref`, so a parent folder named "scratchpad", "plugins" or "refw-…" makes it fail.
 
 Generated checks cover required/implicit-root selections, independent main/overlay components, archive CRC/size bounds, library errors/cancellation, loader-result matching, recovery and CLI reports. Restricted tokens may not permit junction creation; that capability check is explicitly skipped. The retained October 13 permitted fixture run exercised junction rejection successfully.
 
@@ -273,7 +271,7 @@ The "install Slotsloader" offer and `loader-fetch` only ever use `LoaderPin.Rele
 
 - `--replace-check` adds (`FluffyLinkChecks.cs`): installed.ini parsing + watcher (install/removal seen within 2 s, `NOTE watcher` gives the times), external manager uninstall in both orders with Undo, refusals (mod manager/SF6 running, invalidate, BOM+LF byte-exactness), the user's drift case (Keep current / Restore original, Recovery entries), missing files, the priority stack in three orders, and the CLI (`manager-*`, drift flags) in-process.
 - `--replace-ui-check` adds the external mod manager link in the window (watcher refresh ≤ 2 s, Uninstall enabled/disabled, library item) and the drift dialog (Cancel, Keep current file). UI checks turn `MainForm.FluffyAutoRefresh` off except in that check because other checks edit `installed.ini` themselves.
-- `--dialog-check <dir>` (test.ps1 suite `dialog`, started with a normal window): the full app as a user launch, five themed dialogs owned by the main window (medium text, the loose-loader question, a short message, forced light and dark); each must draw its first line and its Yes button within 10/15 % of a main-window `Palette.Normal` label (ink height on screen; windows are made topmost for the copy), not scroll, keep its buttons visible and stay ≤ 760 logical px wide. Reports `dialog-check\dialog-check.txt` + PNGs; `Data\log.txt` gets one `Dialog '…'` line per show. With the 2.1.0 dialog it fails (ink ×3.03, scroll bar).
+- `--dialog-check <dir>` (2.2.0; removed in 1.0.10 with `-Dialogs`): the full app as a user launch with five themed dialogs measured on screen.
 ## Moving the app folder (2.1.0)
 
 Every executable resolves `Data` beside itself (`AppConfig.DataDir`). These Data records store absolute paths into their own Data folder:

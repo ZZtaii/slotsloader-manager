@@ -16,9 +16,7 @@ namespace SlotsInstaller
             try
             {
                 if (args.Length > 0 && CommandLine.Handles(args[0])) { Headless = true; return CommandLine.Run(args); }
-                // --dialog-check runs the app exactly like a user launch (not headless) and checks themed dialogs.
-                bool dialogCheck = args.Length > 0 && args[0] == "--dialog-check";
-                Headless = args.Length > 0 && args[0].StartsWith("--") && args[0] != "--open" && !dialogCheck;
+                Headless = args.Length > 0 && args[0].StartsWith("--") && args[0] != "--open";
                 // 1.0.1: the checks never use the real Recycle Bin (uninstall recycles source-less mods); --delete-check has its own stub.
                 if (Headless && args[0] != "--delete-check") RecycleBin.Current = new CheckRecycleBin();
                 Application.EnableVisualStyles();
@@ -210,7 +208,6 @@ namespace SlotsInstaller
                     return TextFieldChecks.Run(args[1]);
                 }
                 MainForm main = new MainForm(AppConfig.Load());
-                if (dialogCheck) { DialogCheck.Attach(main, args.Length > 1 ? args[1] : null); Application.Run(main); return DialogCheck.ExitCode; }
                 if (args.Length > 1 && args[0] == "--open") main.ConfigureOpeningSource(args[1]);
                 if (args.Length > 0 && (args[0] == "--screenshot" || args[0] == "--screenshot-available"))
                 {

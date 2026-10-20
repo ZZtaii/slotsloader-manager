@@ -257,7 +257,7 @@ Download it from https://github.com/ZZtaii/slotsloader-manager/releases/tag/load
 - **Library right-click**: an entry in the external mod manager's `Mods` folder whose name matches an installed section shows **Uninstall mod (external manager) (uninstall it there)**, disabled (1.0.1).
 - **Other tools' files**: the banner/tooltip name who changed a file ("amd_ags_x64.dll (by the external mod manager's mod 'SF6 Mod Suite' (the Slotsloader 1.9.6 proxy))"). Uninstall and Restore original game files ask "Game files changed by another tool" with **Restore original** (default) / **Keep current file** / **Cancel**; Cancel changes nothing.
 - **Gear → Recover removed outfits…** (window "Backups and trash"): types **External manager mod**, **Original file** (the genuine file behind a kept one) and **Kept file** (another tool's file that was replaced); **Restore** (button renamed from "Restore outfit") and **Delete permanently** work for all.
-- **Pop-ups**: same look and buttons; text and buttons now draw at the main window's size on high-DPI monitors (checked by `--dialog-check` on the real app).
+- **Pop-ups**: same look and buttons; text and buttons now draw at the main window's size on high-DPI monitors.
 ## 2.0.3 Tool mods, library uninstall, themed message boxes, 2026-10-14
 
 The layout is unchanged (same footer row, inspector and 32-logical-pixel rows). Source: [LibrarySearch.cs](../src/LibrarySearch.cs), `Library.ToolKind` in [Core.cs](../src/Core.cs), [MainForm.cs](../src/MainForm.cs), [ThemedMessageBox.cs](../src/ThemedMessageBox.cs).
