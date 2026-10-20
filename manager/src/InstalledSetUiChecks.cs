@@ -129,8 +129,12 @@ namespace SlotsInstaller
         private static void ScopedPresets(string output,List<string> report)
         {
             IProcessProbe previousProbe=GameProcesses.Probe;GameProcesses.Probe=new FakeProcessProbe();
+            // 1.0.10: Save reports progress through the window's BackgroundWorker, which needs the UI context (as in the other window checks).
+            SynchronizationContext previousContext=SynchronizationContext.Current;bool previousAutoInstall=WindowsFormsSynchronizationContext.AutoInstall;WindowsFormsSynchronizationContext.AutoInstall=false;
+            using(var uiContext=new WindowsFormsSynchronizationContext())
             try
             {
+                SynchronizationContext.SetSynchronizationContext(uiContext);
                 ReplaceChecks.Fixture f=ReplaceChecks.Create(Path.Combine(output,"scope-game"),false,ReplaceMethods.Pak);
                 string costumeRoot=Path.Combine(f.Game,"reframework","costume_mods"),character=Path.Combine(costumeRoot,"Juri");
                 Directory.CreateDirectory(Path.Combine(character,"Goth Juri","natives"));File.WriteAllText(Path.Combine(character,"Goth Juri","natives","fixture.bin"),"manual bytes");
@@ -139,7 +143,10 @@ namespace SlotsInstaller
                 OutfitSetStore.CreatePreset(costumeRoot,"Weekend outfits",PresetScope.ExtraOutfits,f.Engine);
                 OutfitSetStore.CreatePreset(costumeRoot,"Replacements only",PresetScope.Replacements,f.Engine);
                 OutfitSetInfo both=OutfitSetStore.CreatePreset(costumeRoot,"Everything",PresetScope.Both,f.Engine);
-                using(var manager=new OutfitSetsForm(costumeRoot,delegate {return f.Engine;},null))
+                // 1.0.10: the library the window is given holds a twin of the manual archive (another name, same bytes).
+                string twin=Path.Combine(output,"scope-library","Summer twin.zip");Directory.CreateDirectory(Path.GetDirectoryName(twin));File.Copy(Path.Combine(character,"Juri Summer.zip"),twin);
+                var listed=new List<LibraryEntry>{new LibraryEntry{SourcePath=twin,Size=new FileInfo(twin).Length,Kind="ZIP"}};
+                using(var manager=new OutfitSetsForm(costumeRoot,delegate {return f.Engine;},null,delegate {return listed;}))
                 {
                     manager.ShowInTaskbar=false;manager.Opacity=0;manager.Show();WaitIdle(manager);
                     var sets=Get<ListView>(manager,"sets");Require(sets.Items.Count==3,"Scoped presets did not load.");
@@ -162,10 +169,23 @@ namespace SlotsInstaller
                     Require(scope.LabelsFit() && restoreScope.LabelsFit(),"Scope labels are clipped at the minimum size.");
                     Save(manager,output,"presets-scopes-minimum");
                     report.Add("PASS: one preset of each scope lists its counts (\"2 extra outfits · 2 replacements · …\"), the restore choice shows only for a Both preset, compact buttons with matching accessible names, everything fits at the minimum size at "+manager.DeviceDpi+" DPI.");
+                    // 1.0.10: Save lists the manual archive's library twin and says what it still copies (the manual folder), with
+                    // the size; the new preset is selected so its details list the copy.
+                    Require(Get<TextBox>(manager,"details").Text.Contains("2 items have no library mod and are copied (") && Get<TextBox>(manager,"details").Text.Contains("Juri/Juri Summer.zip · "),"The Both preset's details lack the copy list: "+Get<TextBox>(manager,"details").Text);
+                    manager.Size=new Size(DpiMetrics.Px(manager,840),DpiMetrics.Px(manager,600));Application.DoEvents();
+                    Get<PaddedTextField>(manager,"nameInput").Text="Friday night";Get<SegmentedChoice>(manager,"scope").SelectedIndex=(int)PresetScope.Both;Application.DoEvents();
+                    Get<Button>(manager,"save").PerformClick();WaitIdle(manager);
+                    Require(sets.Items.Count==4 && sets.SelectedItems.Count==1 && ((OutfitSetInfo)sets.SelectedItems[0].Tag).Name=="Friday night","The saved preset is not selected after Save.");
+                    var saved=(OutfitSetInfo)sets.SelectedItems[0].Tag;string status=Get<Label>(manager,"status").Text,details=Get<TextBox>(manager,"details").Text,size=Utilities.FriendlyBytes(saved.Copies.Sum(c=>c.Bytes));
+                    Require(saved.Copies.Count==1 && saved.Copies[0].Name=="Juri/Goth Juri" && saved.Outfits.Contains("Juri/Juri Summer.zip"),"Save copied the archive that has a library twin: "+String.Join(", ",saved.Outfits));
+                    Require(status=="Saved “Friday night” · 2 extra outfits · 2 replacements · 1 copied ("+size+"), listed below.","Save status: "+status);
+                    Require(details.Contains("1 item has no library mod and is copied ("+size+"):\r\nJuri/Goth Juri · "+size+" · manual drop"),"Saved preset details: "+details);
+                    Save(manager,output,"presets-saved");
+                    report.Add("PASS: Save in the window lists a manual archive identical to a library archive instead of copying it, says \"1 copied ("+size+"), listed below\" and selects the new preset, whose details list the copy with its size and reason.");
                     manager.Close();
                 }
             }
-            finally {GameProcesses.Probe=previousProbe;}
+            finally {GameProcesses.Probe=previousProbe;SynchronizationContext.SetSynchronizationContext(previousContext);WindowsFormsSynchronizationContext.AutoInstall=previousAutoInstall;}
         }
         private static void CreateManaged(string folder,string name,string id)
         {

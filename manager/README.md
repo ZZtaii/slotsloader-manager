@@ -10,6 +10,11 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 
 ## What changed
 
+- 1.0.10:
+  - **Presets copy less.** An archive you dropped into costume_mods yourself that is identical to an archive in your libraries is now saved as that library mod instead of being copied. Only archives of the same size are compared, so saving stays quick. Restore puts it back from the library under its own file name, and skips it while it is still installed.
+  - **The Presets window says what it copies and why.** After **Save**, the status line says how many items were copied and their size ("1 copied (12 MB), listed below"), and the new preset is selected. Its details start with "N items have no library mod and are copied (size):" and one line per item: **manual drop**, or **not found at** the path where its mod was when it was installed (renamed or moved outside the Manager). Presets saved by 1.0.8 and 1.0.9 show the list too.
+  - A replacement whose mod was renamed or moved outside the Manager is still copied: the Manager doesn't guess which mod it became. Reinstall it from the renamed mod and save again to list it instead.
+
 - 1.0.9:
   - **Other costume loaders can see your replacements.** After every install, uninstall, enable, disable or priority change, and at start-up, the Manager writes `reframework\data\SF6_Costumes_Data\manager_installs.json`. It lists each replacement and tool mod in priority order, with its files and patch PAKs. A costume loader that reads it can leave those files alone instead of turning them into extra outfits, without searching your PC for the Manager's Data folder. Slotsloader doesn't need it. The file is only written where a costume loader keeps its data.
 
@@ -138,8 +143,8 @@ The **character** filter opens the fighter portraits, as in the library; pick on
 ## Save and restore presets
 
 1. Open **Installed → Presets…**, enter a name, choose what to include (Extra outfits, Replacements or Both) and click **Save**. This saves everything enabled of that kind, regardless of your search, filters or selected rows. Disabled outfits are excluded.
-2. A preset is a list: for each outfit and replacement, the library mod it came from, its options, its outfit name and its order. Only an outfit or replacement with no library mod (a manual drop, a mod you deleted) is copied into the preset.
-3. Later, select the preset and click **Restore**. Everything missing is installed again from your libraries; what is already installed is skipped. Restored replacements go back into their saved priority order. A replacement installed under the same name from another archive or version is skipped and named in the result. A mod no longer in your libraries, a different outfit in the same place or an install that fails is listed under the preset, and the rest still goes ahead. A mod that changed since you saved installs its current version (also listed). Restart SF6 afterward.
+2. A preset is a list: for each outfit and replacement, the library mod it came from, its options, its outfit name and its order. Only an outfit or replacement with no library mod (a manual drop, a mod you deleted, renamed or moved outside the Manager) is copied into the preset. A manual drop that is identical to an archive in your libraries counts as that library mod (1.0.10; archives of the same size are compared byte for byte). After Save, the status line says how many items were copied and their size, and the preset's details list each one with the reason.
+3. Later, select the preset and click **Restore**. Everything missing is installed again from your libraries; what is already installed is skipped. Restored replacements go back into their saved priority order. A replacement installed under the same name from another archive or version is skipped and named in the result. A mod no longer in your libraries, a different outfit in the same place or an install that fails is listed under the preset, and the rest still goes ahead. A mod that changed since you saved installs its current version (also listed). A manual drop saved as its library mod comes back under its own file name. Restart SF6 afterward.
 
 Presets live in `reframework/.slotsloader-installer-presets`; keep that folder if you move your game. Presets saved before 1.0.8 hold full copies and still restore as before (they show "full copy" and their size); save a new preset and delete the old one to free that space. **Delete** removes a preset after confirmation. Slot numbers still come from Slotsloader's next run.
 

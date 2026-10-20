@@ -349,7 +349,7 @@ namespace SlotsInstaller
         private void ShowPresetsWindow()
         {
             bool outfits, replacements;
-            using (var form = new OutfitSetsForm(config.CostumeRoot, Engine, EnsureLooseLoader))
+            using (var form = new OutfitSetsForm(config.CostumeRoot, Engine, EnsureLooseLoader, delegate { return library; }))   // 1.0.10: manual drops find their library twin
             {
                 form.ShowDialog(this);
                 outfits = form.Changed && !form.ReplacementsChanged || form.Changed && form.OutfitsChanged;

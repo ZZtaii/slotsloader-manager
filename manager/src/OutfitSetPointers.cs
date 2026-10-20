@@ -15,7 +15,12 @@ namespace SlotsInstaller
     {
         public List<PresetOutfitPointer> Outfits = new List<PresetOutfitPointer>();
         public List<PresetReplacementPointer> Replacements = new List<PresetReplacementPointer>();   // priority order, 0 = highest
+        // 1.0.10: why each copy was kept ("manual drop", "not found at <path>", "" = no library mod), in the order of the
+        // record's Entries and Replacements.Mods. Null in presets saved before (OutfitSetInfo.Copies then reads the entry).
+        public List<string> CopiedOutfitReasons, CopiedReplacementReasons;
     }
+    // 1.0.10: a library archive as the Mod library listed it, for finding a manual drop's identical twin at save.
+    internal sealed class LibraryArchive { internal string Path; internal long Size; }
     public sealed class PresetOutfitPointer
     {
         public string Character = "", Folder = "", Name = "", Mode = "", SourcePath = "", SourceStamp = "";   // Mode: composed | all_variants
@@ -48,10 +53,13 @@ namespace SlotsInstaller
             return new HashSet<string>(a ?? new string[0], StringComparer.OrdinalIgnoreCase).SetEquals(b ?? new string[0]);
         }
 
-        // An enabled outfit as a pointer, or null when it has to be copied (no library source, or a part's source is gone).
-        private static PresetOutfitPointer OutfitPointer(InstalledOutfit o)
+        // An enabled outfit as a pointer, or null when it has to be copied (no library source, or a part's source is gone);
+        // `why` then says which (CopiedOutfitReasons).
+        private static PresetOutfitPointer OutfitPointer(InstalledOutfit o, out string why)
         {
-            if (o == null || !o.Enabled || !HasSource(o)) return null;
+            why = "";
+            if (o == null || !o.Enabled) return null;
+            if (!HasSource(o)) { why = !o.Managed && !o.WholeArchive ? ManualDrop : SourceExists(o.SourcePath) ? "" : NotFound(o.SourcePath); return null; }
             string source = System.IO.Path.GetFullPath(o.SourcePath), folder = System.IO.Path.GetFileName(o.Folder.TrimEnd('\\'));
             if (o.WholeArchive)
                 return new PresetOutfitPointer { Character = o.Character, Folder = folder, Name = folder, Mode = ModeAllVariants, SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "" };
@@ -62,33 +70,126 @@ namespace SlotsInstaller
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; return null; }
             foreach (PartGraft part in (manifest == null ? null : manifest.Parts) ?? new List<PartGraft>())
             {
-                if (part == null || !SourceExists(part.SourcePath) || part.SelectedIds == null || part.SelectedIds.Count == 0) return null;
+                if (part == null || !SourceExists(part.SourcePath) || part.SelectedIds == null || part.SelectedIds.Count == 0)
+                {
+                    if (part != null && !SourceExists(part.SourcePath) && !String.IsNullOrWhiteSpace(part.SourcePath)) why = "added part not found at " + part.SourcePath;
+                    return null;
+                }
                 pointer.Parts.Add(new PresetPartPointer { SourcePath = System.IO.Path.GetFullPath(part.SourcePath), SourceStamp = MainForm.SourceStamp(part.SourcePath) ?? "", Mod = part.Mod ?? "", SelectedIds = part.SelectedIds.ToList() });
             }
             return pointer;
         }
-        private static PresetReplacementPointer ReplacementPointer(ReplaceMod m)
+        private static PresetReplacementPointer ReplacementPointer(ReplaceMod m, out string why)
         {
-            if (m == null || !SourceExists(m.SourcePath)) return null;
+            why = "";
+            if (m == null) return null;
+            // 1.0.10: a recorded source that is gone (renamed or moved outside the Manager) is not guessed; it is copied and says so.
+            if (!SourceExists(m.SourcePath)) { why = NotFound(m.SourcePath); return null; }
             string source = System.IO.Path.GetFullPath(m.SourcePath);
             return new PresetReplacementPointer { Name = m.Name ?? "", SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "", Kind = m.Kind ?? "", SelectedIds = (m.SelectedIds ?? new List<string>()).ToList() };
         }
+        internal const string ManualDrop = "manual drop";
+        internal static string NotFound(string path) { return String.IsNullOrWhiteSpace(path) ? "" : "not found at " + path; }
 
-        // v3 save: pointers for everything with a library source, copies (SavePreset) for the rest.
-        private static OutfitSetInfo SavePointerPreset(string root, string name, List<InstalledOutfit> enabled, List<ReplaceMod> mods, Func<ReplaceMod, ModFile, string> storeFile, string method)
+        // 1.0.10: the ZIP/RAR/7Z entries of an already listed library (the Mod library's list; nothing is read from
+        // disk). Call it where the list is safe to read (the UI thread for MainForm's).
+        internal static List<LibraryArchive> LibraryArchives(IEnumerable<LibraryEntry> entries)
         {
-            var pointers = new PresetPointers(); var copyOutfits = new List<InstalledOutfit>(); var copyMods = new List<ReplaceMod>();
+            var result = new List<LibraryArchive>();
+            foreach (LibraryEntry e in entries ?? new LibraryEntry[0])
+                if (e != null && e.Size > 0 && IsArchiveName(e.SourcePath)) result.Add(new LibraryArchive { Path = e.SourcePath, Size = e.Size });
+            return result;
+        }
+        private static readonly string[] ArchiveExtensions = { ".zip", ".rar", ".7z" };
+        private static bool IsArchiveName(string path)
+        {
+            try { return !String.IsNullOrEmpty(path) && System.IO.Path.IsPathRooted(path) && ArchiveExtensions.Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase); }
+            catch (ArgumentException) { return false; }
+        }
+        private static bool Inside(string path, string folder)
+        {
+            try { string p = System.IO.Path.GetFullPath(path).TrimEnd('\\'), f = System.IO.Path.GetFullPath(folder).TrimEnd('\\'); return String.Equals(p, f, StringComparison.OrdinalIgnoreCase) || p.StartsWith(f + "\\", StringComparison.OrdinalIgnoreCase); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return false; }
+        }
+
+        // 1.0.10 (the user: a manual drop identical to a library archive was still copied): a ZIP/RAR/7Z in costume_mods
+        // with no library source (a manual drop, or an Install all variants copy whose source is gone) whose bytes equal
+        // a listed library archive becomes an all_variants pointer to it. Only same-size archives are hashed (a same
+        // name first), and the drop only when there is one. `hashes` keeps each file's SHA-256 for this save.
+        private static PresetOutfitPointer IdenticalArchivePointer(string root, InstalledOutfit o, List<LibraryArchive> library, Dictionary<string, string> hashes)
+        {
+            if (o == null || !o.Enabled || o.Managed || library == null || library.Count == 0 || !IsArchiveName(o.Folder) || !Characters.Names.Contains(o.Character)) return null;
+            FileInfo drop;
+            try { drop = new FileInfo(o.Folder); if (!drop.Exists || drop.Length == 0 || drop.Name.StartsWith(".")) return null; }   // a dot name is no valid pointer place
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return null; }
+            List<LibraryArchive> candidates = library.Where(a => a.Size == drop.Length && String.Equals(System.IO.Path.GetExtension(a.Path), drop.Extension, StringComparison.OrdinalIgnoreCase) && !Inside(a.Path, root))
+                .OrderBy(a => String.Equals(System.IO.Path.GetFileName(a.Path), drop.Name, StringComparison.OrdinalIgnoreCase) ? 0 : 1).ToList();
+            string dropHash = null;
+            foreach (LibraryArchive a in candidates)
+            {
+                string path;
+                try { path = System.IO.Path.GetFullPath(a.Path); var info = new FileInfo(path); if (!info.Exists || info.Length != drop.Length) continue; }   // the list can be older than the disk
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; continue; }
+                if (dropHash == null && (dropHash = FileHash(drop.FullName, hashes)) == null) return null;
+                if (FileHash(path, hashes) == dropHash)
+                    return new PresetOutfitPointer { Character = o.Character, Folder = drop.Name, Name = drop.Name, Mode = ModeAllVariants, SourcePath = path, SourceStamp = MainForm.SourceStamp(path) ?? "" };
+            }
+            return null;
+        }
+        // A file's SHA-256 (hex), read once per `hashes`; null when it can't be read. Cancellable between 1 MB reads.
+        private static string FileHash(string path, Dictionary<string, string> hashes)
+        {
+            string hash;
+            if (hashes.TryGetValue(path, out hash)) return hash;
+            try
+            {
+                using (var sha = FastHash.Sha256())
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 1 << 16))
+                {
+                    var buffer = new byte[1 << 20]; int read;
+                    while ((read = stream.Read(buffer, 0, buffer.Length)) > 0) { OperationContext.ThrowIfCancellationRequested(); sha.TransformBlock(buffer, 0, read, null, 0); }
+                    sha.TransformFinalBlock(buffer, 0, 0);
+                    hash = BitConverter.ToString(sha.Hash).Replace("-", "");
+                }
+            }
+            catch (Exception ex) { if (Fatal(ex)) throw; Program.Log(ex); hash = null; }
+            hashes[path] = hash;
+            return hash;
+        }
+        // Two files with the same bytes (the size first; hashed only when it matches).
+        private static bool SameBytes(string a, string b)
+        {
+            try
+            {
+                var x = new FileInfo(a); var y = new FileInfo(b);
+                if (!x.Exists || !y.Exists || x.Length != y.Length) return false;
+                var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                string h = FileHash(x.FullName, hashes);
+                return h != null && h == FileHash(y.FullName, hashes);
+            }
+            catch (Exception ex) { if (Fatal(ex)) throw; return false; }
+        }
+
+        // v3 save: pointers for everything with a library source, copies (SavePreset) for the rest. 1.0.10: `library`
+        // (null = none) gives manual archives their twin (IdenticalArchivePointer); each copy keeps why.
+        private static OutfitSetInfo SavePointerPreset(string root, string name, List<InstalledOutfit> enabled, List<ReplaceMod> mods, Func<ReplaceMod, ModFile, string> storeFile, string method, List<LibraryArchive> library)
+        {
+            var pointers = new PresetPointers { CopiedOutfitReasons = new List<string>(), CopiedReplacementReasons = new List<string>() };
+            var copyOutfits = new List<InstalledOutfit>(); var copyMods = new List<ReplaceMod>();
+            var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < enabled.Count; i++)
             {
                 OperationContext.Report("Listing outfit " + (i + 1) + " of " + enabled.Count, i, enabled.Count);
-                PresetOutfitPointer p = OutfitPointer(enabled[i]);
-                if (p != null) pointers.Outfits.Add(p); else copyOutfits.Add(enabled[i]);
+                string why;
+                PresetOutfitPointer p = OutfitPointer(enabled[i], out why) ?? IdenticalArchivePointer(root, enabled[i], library, hashes);
+                if (p != null) pointers.Outfits.Add(p); else { copyOutfits.Add(enabled[i]); pointers.CopiedOutfitReasons.Add(why); }
             }
             List<ReplaceMod> all = mods ?? new List<ReplaceMod>();
             for (int i = 0; i < all.Count; i++)
             {
-                PresetReplacementPointer p = ReplacementPointer(all[i]);
-                if (p != null) { p.Order = i; pointers.Replacements.Add(p); } else copyMods.Add(all[i]);
+                string why;
+                PresetReplacementPointer p = ReplacementPointer(all[i], out why);
+                if (p != null) { p.Order = i; pointers.Replacements.Add(p); } else { copyMods.Add(all[i]); pointers.CopiedReplacementReasons.Add(why); }
             }
             if (pointers.Outfits.Count + pointers.Replacements.Count + copyOutfits.Count + copyMods.Count == 0) throw new IOException("Nothing enabled to save.");
             return SavePreset(root, name, copyOutfits, copyMods, storeFile, method, pointers);
@@ -242,7 +343,7 @@ namespace SlotsInstaller
                 bool alreadyCopied = p.Mode == ModeAllVariants && installed.Any(o => o.WholeArchive && o.Enabled && String.Equals(o.Character, p.Character, StringComparison.OrdinalIgnoreCase) && ReplacePlanner.SameSource(o.SourcePath, p.SourcePath));
                 if (there != null || Exists(destination) || alreadyCopied)
                 {
-                    bool same = alreadyCopied || (there != null && there.Enabled && ReplacePlanner.SameSource(there.SourcePath, p.SourcePath) && (p.Mode == ModeAllVariants ? there.WholeArchive : there.Managed && SameIds(there.SelectedIds, p.SelectedIds)));
+                    bool same = alreadyCopied || (there != null && there.Enabled && SamePointed(there, p));
                     if (same && !alreadyCopied && p.Mode == ModeComposed && !SameParts(there, p.Parts)) result.Notes.Add(label + ": installed, but its added parts differ from the preset; left as is.");
                     else if (same) result.Skipped++;
                     else result.Notes.Add(label + ": a different outfit is installed there; left as is.");
@@ -252,7 +353,7 @@ namespace SlotsInstaller
                 try
                 {
                     var notes = new List<string>();
-                    if (p.Mode == ModeAllVariants) ArchiveInstalls.Install(p.SourcePath, root, p.Character, p.Name);
+                    if (p.Mode == ModeAllVariants) ArchiveInstalls.Install(p.SourcePath, root, p.Character, p.Name, SavedArchiveName(p));
                     else
                     {
                         ModPackage package = PackageReader.Load(p.SourcePath, sevenZip);
@@ -280,6 +381,21 @@ namespace SlotsInstaller
                 }
                 catch (Exception ex) { if (Fatal(ex)) throw; result.Notes.Add(label + ": not restored. " + ex.Message); }
             }
+        }
+
+        // The installed outfit in a pointer's place is the saved one: same source (and options); for all_variants also a
+        // manual archive with the source's bytes (1.0.10: a manual drop saved as a pointer to its library twin).
+        private static bool SamePointed(InstalledOutfit there, PresetOutfitPointer p)
+        {
+            if (p.Mode == ModeAllVariants) return (there.WholeArchive && ReplacePlanner.SameSource(there.SourcePath, p.SourcePath)) || (!there.Managed && SameBytes(there.Folder, p.SourcePath));
+            return there.Managed && ReplacePlanner.SameSource(there.SourcePath, p.SourcePath) && SameIds(there.SelectedIds, p.SelectedIds);
+        }
+        // 1.0.10: an all_variants outfit comes back under its saved file name (Slotsloader's variant choices are keyed by
+        // it, and a twin can be named differently in the library); null = the source's name.
+        private static string SavedArchiveName(PresetOutfitPointer p)
+        {
+            try { return String.Equals(System.IO.Path.GetExtension(p.Folder), System.IO.Path.GetExtension(p.SourcePath), StringComparison.OrdinalIgnoreCase) ? p.Folder : null; }
+            catch (ArgumentException) { return null; }
         }
 
         // The parts added to an installed outfit (its manifest) are the saved ones: same sources and options, same order.

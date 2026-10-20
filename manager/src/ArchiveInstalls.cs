@@ -116,11 +116,14 @@ namespace SlotsInstaller
             }
         }
 
-        // The archive's place in costume_mods, as a manual drop would have it.
-        internal static string Destination(string costumeRoot, string character, string source)
+        // The archive's place in costume_mods, as a manual drop would have it. `fileName` (1.0.10, a list preset's saved
+        // name): the name in costume_mods; null = the source's.
+        internal static string Destination(string costumeRoot, string character, string source) { return Destination(costumeRoot, character, source, null); }
+        internal static string Destination(string costumeRoot, string character, string source, string fileName)
         {
             string root = Installer.CostumeRoot(costumeRoot);
-            Safety.Segment(character); string name = System.IO.Path.GetFileName(source); Safety.Segment(name);
+            Safety.Segment(character); string name = String.IsNullOrEmpty(fileName) ? System.IO.Path.GetFileName(source) : fileName; Safety.Segment(name);
+            if (!String.IsNullOrEmpty(fileName) && (name.StartsWith(".") || !Extensions.Contains(System.IO.Path.GetExtension(name), StringComparer.OrdinalIgnoreCase))) throw new IOException("Install all variants needs a ZIP, RAR or 7Z name.");
             return Safety.Under(Safety.Under(root, character), name);
         }
 
@@ -166,13 +169,14 @@ namespace SlotsInstaller
                 throw new IOException(System.IO.Path.GetFileName(path) + " changed since the Manager installed it. Uninstall or rename it before reinstalling.");
         }
 
-        internal static InstallResult Install(string source, string costumeRoot, string character, string modName)
+        internal static InstallResult Install(string source, string costumeRoot, string character, string modName) { return Install(source, costumeRoot, character, modName, null); }
+        internal static InstallResult Install(string source, string costumeRoot, string character, string modName, string fileName)
         {
             if (!IsArchive(source)) throw new IOException("Install all variants needs a ZIP, RAR or 7Z archive.");
             if (!Characters.Names.Contains(character)) throw new IOException("Choose a known character.");
             using (Installer.AcquireMutation(costumeRoot))
             {
-                string dest = Destination(costumeRoot, character, source);
+                string dest = Destination(costumeRoot, character, source, fileName);
                 ArchiveInstallFile records; lock (Sync) records = Load();
                 ArchiveInstallRecord previous = ExistingCopy(records, source, dest, character);
                 if (previous != null) { dest = System.IO.Path.GetFullPath(previous.Path); VerifyCopy(previous, dest); }

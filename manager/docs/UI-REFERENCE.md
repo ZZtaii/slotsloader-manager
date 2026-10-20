@@ -36,6 +36,14 @@ Read this before changing layout, navigation, option selection, previews, or scr
 
 These cover the custom screens. **Edit options** loads a managed outfit back into the existing Options view; it is not another editor window. Archive/executable pickers and folder browsers are standard Windows dialogs. Since 2.4.1 there are no confirmations for recoverable actions (they act at once with Undo) and errors are inline; the few remaining questions (permanent deletes, another tool's changes) use the themed message box (2.0.3; standard MessageBoxes before). A successful install uses a green checked status line rather than a popup. Taking screenshots does not require installing, disabling, removing, or replacing an outfit.
 
+## 1.0.10 Presets: what is copied, 2026-10-20
+
+Source: [OutfitSetsForm.cs](../src/OutfitSetsForm.cs), [OutfitSetPointers.cs](../src/OutfitSetPointers.cs). Checks: `--set-check` ("list presets (1.0.10)"), `--set-ui-check` (Save in the window).
+
+- **The copies in the details** (the user: a preset was 723 MB with no explanation). A list preset that keeps copies shows them right under its first line: "N items have no library mod and are copied (size):", then one line per copy with its size and reason, "Juri/Goth Juri · 12 B · manual drop" or "Cammy Alt · 2 MB · not found at <path>" (an added part's mod: "added part not found at <path>"). The "(copy)" marks in the lists and the row subtitle "N copied · size" stay as they were.
+- **After Save** the status reads "Saved “Friday night” · 2 extra outfits · 2 replacements · 1 copied (12 B), listed below." and the new preset is selected, so its details show the list. Save still asks nothing.
+- A manual drop identical to a library archive is listed, not copied, and has no line of its own (README "Save and restore presets").
+
 ## 1.0.8 MY FILTERS, list presets, scrolling inspector, 2026-10-20
 
 Source: [LibraryFilters.cs](../src/LibraryFilters.cs), [MainFormCustomFilters.cs](../src/MainFormCustomFilters.cs), [CustomFilterEditor.cs](../src/CustomFilterEditor.cs), [OutfitSetPointers.cs](../src/OutfitSetPointers.cs), [OverlayScroll.cs](../src/OverlayScroll.cs), [MainFormInspectorScroll.cs](../src/MainFormInspectorScroll.cs). Checks: `--filter-check` ("MY FILTERS", "inspector scroll"), `--set-check` ("list presets").

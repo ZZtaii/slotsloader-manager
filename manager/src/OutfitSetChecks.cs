@@ -57,7 +57,8 @@ namespace SlotsInstaller
                 check("preset scope (2.4.1): SF6 running refuses a replacement restore (nothing changes, no store leftovers); Fluffy open refuses PAK-method rows; all-identical restores still pass",delegate { RunningRefused(Path.Combine(run,"scope-running"),probe); });
                 check("list presets (1.0.8): v3 saves library pointers (outfit source, options, place; replacements in priority order, no Slotsloader) and copies only what has no source; info, labels, old-format mark; a damaged pointer is refused",delegate { probe.Game=false;probe.Fluffy=false;PointerSave(Path.Combine(run,"list-save")); });
                 check("list presets (1.0.8): restore reinstalls from the library (saved order, same game files, same options), skips what is installed, notes a missing mod, a taken place and a changed source while the rest goes on; a library rename moves the pointers",delegate { probe.Game=false;probe.Fluffy=false;PointerRestore(Path.Combine(run,"list-restore")); });
-                check("list presets (1.0.8): copied and listed replacements restore in one saved priority order",delegate { probe.Game=false;probe.Fluffy=false;PointerMixedOrder(Path.Combine(run,"list-mixed")); });
+                check("list presets (1.0.8): copied and listed replacements restore in one saved priority order; 1.0.10: a copied replacement says its mod was not found at the recorded path",delegate { probe.Game=false;probe.Fluffy=false;PointerMixedOrder(Path.Combine(run,"list-mixed")); });
+                check("list presets (1.0.10): a manual drop identical to a listed library archive is saved as a pointer to it (a same-size one with other bytes is not), a different drop is still copied as a manual drop; the copy list, its size and reasons show in the details and the save summary; restore skips the drop while it is installed, brings it back from the library under its own name, and leaves a changed one alone",delegate { probe.Game=false;probe.Fluffy=false;PointerTwins(Path.Combine(run,"list-twins")); });
             }
             finally { GameProcesses.Probe=previousProbe; }
             Console.WriteLine("Outfit set checks: "+(count-failures-skips)+" passed, "+failures+" failed, "+skips+" skipped.");
@@ -632,6 +633,11 @@ namespace SlotsInstaller
             Directory.Move(Path.Combine(s.R.Mods,"modB"),Path.Combine(s.R.Mods,"modB gone"));
             OutfitSetInfo mods=OutfitSetStore.CreatePreset(s.CostumeRoot,"Mixed",PresetScope.Replacements,s.Engine);
             Require(mods.Pointers && mods.Replacements.SequenceEqual(new[]{"Script Pack","Cammy Alt (copy)","Cammy Colors"}),"Mixed preset contents: "+String.Join(", ",mods.Replacements));
+            // 1.0.10: the recorded source is gone (moved outside the Manager): copied, not guessed, and the details say why.
+            string gone="not found at "+s.B.SourcePath, size=Utilities.FriendlyBytes(s.B.Files.Sum(f=>f.Size));
+            Require(mods.Copies.Count==1 && mods.Copies[0].Name=="Cammy Alt" && mods.Copies[0].Reason==gone && OutfitSetsForm.Contents(mods).Contains("\r\n1 item has no library mod and is copied ("+size+"):\r\nCammy Alt · "+size+" · "+gone+"\r\n"),"Copied replacement reason: "+OutfitSetsForm.Contents(mods));
+            var older=Manifest(mods); ((Dictionary<string,object>)older["Pointers"]).Remove("CopiedReplacementReasons"); WriteManifest(mods,older); mods=Fresh(s,mods);
+            Require(mods.Copies.Single().Reason==gone,"A preset saved before 1.0.10 lost the reason: "+mods.Copies.Single().Reason);
             UninstallAll(s,"Script Pack","Cammy Alt","Cammy Colors");
             var r=OutfitSetStore.Restore(s.CostumeRoot,mods,PresetScope.Replacements,s.Engine);
             Require(r.ReplacementsRestored==3 && r.Notes.Count==0 && String.Join("|",s.Order())=="Script Pack|Cammy Alt|Cammy Colors|Slotsloader","Mixed restore order: "+String.Join("|",s.Order())+" "+String.Join(" | ",r.Notes));
@@ -640,6 +646,67 @@ namespace SlotsInstaller
             UninstallAll(s,"Cammy Alt");
             r=OutfitSetStore.Restore(s.CostumeRoot,mods,PresetScope.Replacements,s.Engine);
             Require(r.ReplacementsRestored==1 && String.Join("|",s.Order())=="Script Pack|Cammy Alt|Cammy Colors|Slotsloader","Copied one restored out of order: "+String.Join("|",s.Order()));
+        }
+
+        // 1.0.10: a manual drop whose bytes equal a listed library archive is listed as a pointer to it, not copied.
+        private static void PointerTwins(string root)
+        {
+            ScopeFixture s=CreateScope(root);
+            string previousData=ArchiveInstalls.DataDirOverride; ArchiveInstalls.DataDirOverride=Path.Combine(root,"manager-data");
+            try
+            {
+                string drop=Safety.Under(s.CostumeRoot,"Juri/Manual zip.zip"), other=Safety.Under(s.CostumeRoot,"Juri/Other drop.zip");
+                byte[] bytes=File.ReadAllBytes(drop), otherBytes=new byte[]{1,2,3};
+                File.WriteAllBytes(other,otherBytes);
+                string library=Path.Combine(root,"library"); Directory.CreateDirectory(library);
+                string decoy=Path.Combine(library,"Decoy.zip"), twin=Path.Combine(library,"Juri twin.zip"), near=Path.Combine(library,"Near miss.zip");
+                File.WriteAllBytes(decoy,bytes.Take(bytes.Length-1).Concat(new byte[]{(byte)(bytes[bytes.Length-1]^1)}).ToArray());   // same size, other bytes, listed first
+                File.WriteAllBytes(twin,bytes);
+                File.WriteAllBytes(near,new byte[]{1,2,4});
+                var listed=new List<LibraryEntry> { new LibraryEntry {SourcePath=decoy,Size=bytes.Length,Kind="ZIP"}, new LibraryEntry {SourcePath=twin,Size=bytes.Length,Kind="ZIP"},
+                    new LibraryEntry {SourcePath=near,Size=3,Kind="ZIP"}, new LibraryEntry {SourcePath=Path.Combine(root,"outfit-source"),Size=0,Kind="Folder"} };
+                List<LibraryArchive> archives=OutfitSetStore.LibraryArchives(listed);
+                Require(archives.Count==3,"Listed library archives: "+archives.Count);
+                OutfitSetInfo set=OutfitSetStore.CreatePreset(s.CostumeRoot,"Twins",PresetScope.Both,s.Engine,archives);
+                var outfits=((System.Collections.IEnumerable)PointerRecord(set)["Outfits"]).Cast<Dictionary<string,object>>().ToList();
+                var pointer=outfits.SingleOrDefault(o=>(string)o["Folder"]=="Manual zip.zip");
+                Require(pointer!=null && (string)pointer["Character"]=="Juri" && (string)pointer["Mode"]=="all_variants" && String.Equals((string)pointer["SourcePath"],twin,StringComparison.OrdinalIgnoreCase),"The manual drop is not a pointer to its twin: "+Json.Serializer().Serialize(outfits));
+                var entries=((System.Collections.IEnumerable)Manifest(set)["Entries"]).Cast<Dictionary<string,object>>().ToList();
+                Require(entries.Count==1 && (string)entries[0]["RelativePath"]=="Juri/Other drop.zip","Copied entries: "+String.Join(", ",entries.Select(e=>(string)e["RelativePath"])));
+                Require(set.Copied==1 && set.Copies.Count==1 && set.Copies[0].Name=="Juri/Other drop.zip" && set.Copies[0].Bytes==3 && set.Copies[0].Reason==OutfitSetStore.ManualDrop,"Copies: "+String.Join(", ",set.Copies.Select(c=>c.Name+" "+c.Bytes+" "+c.Reason)));
+                Require(set.Outfits.Contains("Juri/Manual zip.zip") && set.Outfits.Contains("Juri/Other drop.zip (copy)"),"Listed contents: "+String.Join(", ",set.Outfits));
+                // The window: what is copied, its size and why; the save summary; the subtitle as before.
+                string size=Utilities.FriendlyBytes(3), details=OutfitSetsForm.Contents(set);
+                Require(details.Contains("\r\n1 item has no library mod and is copied ("+size+"):\r\nJuri/Other drop.zip · "+size+" · manual drop\r\n"),"Details: "+details);
+                Require(OutfitSetsForm.SaveSummary(set)=="Saved “Twins” · 3 extra outfits · 3 replacements · 1 copied ("+size+"), listed below.","Save summary: "+OutfitSetsForm.SaveSummary(set));
+                Require(OutfitSetsForm.Subtitle(set).StartsWith("3 extra outfits · 3 replacements · 1 copied · "+Utilities.FriendlyBytes(set.Bytes)+" · "),"Subtitle: "+OutfitSetsForm.Subtitle(set));
+                var two=new OutfitSetInfo {Pointers=true,Copies=new List<OutfitSetCopy>{new OutfitSetCopy{Name="A",Bytes=1024},new OutfitSetCopy{Name="B",Bytes=1024,Reason="manual drop"}}};
+                Require(OutfitSetsForm.CopiedLines(two).SequenceEqual(new[]{"2 items have no library mod and are copied ("+Utilities.FriendlyBytes(2048)+"):","A · "+Utilities.FriendlyBytes(1024),"B · "+Utilities.FriendlyBytes(1024)+" · manual drop"}),"Plural lines: "+String.Join(" | ",OutfitSetsForm.CopiedLines(two)));
+                // Without a listed library both drops are copied, as in 1.0.8.
+                OutfitSetInfo plain=OutfitSetStore.CreatePreset(s.CostumeRoot,"No library",PresetScope.ExtraOutfits,null);
+                Require(plain.Copies.Count==2 && plain.Copies.All(c=>c.Reason==OutfitSetStore.ManualDrop),"Without the library: "+plain.Copies.Count);
+                // Still installed: the identical drop counts as the saved outfit.
+                var r=OutfitSetStore.Restore(s.CostumeRoot,set,PresetScope.ExtraOutfits,s.Engine);
+                Require(r.Restored==0 && r.Skipped==3 && r.Notes.Count==0,"Restore while installed: "+r.Restored+"/"+r.Skipped+" "+String.Join(" | ",r.Notes));
+                // Gone: the drop comes back from its twin under its own name, linked to the twin; the other from its copy.
+                OutfitSetStore.UninstallOutfits(s.CostumeRoot,Installer.ListInstalled(s.CostumeRoot),new CheckRecycleBin());
+                Require(Installer.ListInstalled(s.CostumeRoot).Count==0,"Fixture: outfits left after uninstall.");
+                r=OutfitSetStore.Restore(s.CostumeRoot,set,PresetScope.ExtraOutfits,s.Engine);
+                Require(r.Restored==3 && r.Notes.Count==0,"Restore: "+r.Restored+" "+String.Join(" | ",r.Notes));
+                Require(File.ReadAllBytes(drop).SequenceEqual(bytes) && !File.Exists(Safety.Under(s.CostumeRoot,"Juri/Juri twin.zip")) && File.ReadAllBytes(other).SequenceEqual(otherBytes),"Restored drops differ.");
+                InstalledOutfit back=Installer.ListInstalled(s.CostumeRoot).Single(o=>String.Equals(o.Folder,drop,StringComparison.OrdinalIgnoreCase));
+                Require(back.WholeArchive && ReplacePlanner.SameSource(back.SourcePath,twin),"The restored drop is not linked to its library twin.");
+                r=OutfitSetStore.Restore(s.CostumeRoot,set,PresetScope.ExtraOutfits,s.Engine);
+                Require(r.Restored==0 && r.Skipped==3 && r.Notes.Count==0,"Second restore: "+r.Restored+"/"+r.Skipped+" "+String.Join(" | ",r.Notes));
+                // Same size, other bytes in the place: a different outfit, left as is.
+                File.WriteAllBytes(drop,File.ReadAllBytes(decoy));
+                r=OutfitSetStore.Restore(s.CostumeRoot,set,PresetScope.ExtraOutfits,s.Engine);
+                Require(r.Restored==0 && r.Skipped==2 && r.Notes.SequenceEqual(new[]{"Juri/Manual zip.zip: a different outfit is installed there; left as is."}) && File.ReadAllBytes(drop).SequenceEqual(File.ReadAllBytes(decoy)),"A changed drop: "+String.Join(" | ",r.Notes));
+                // A preset saved before 1.0.10 (no reasons kept): a manual entry still says manual drop.
+                var older=Manifest(set); ((Dictionary<string,object>)older["Pointers"]).Remove("CopiedOutfitReasons"); WriteManifest(set,older);
+                Require(Fresh(s,set).Copies.Single().Reason==OutfitSetStore.ManualDrop,"An older preset's copy reason: "+Fresh(s,set).Copies.Single().Reason);
+            }
+            finally { ArchiveInstalls.DataDirOverride=previousData; }
         }
 
         private static void RunningRefused(string root,FakeProcessProbe probe)

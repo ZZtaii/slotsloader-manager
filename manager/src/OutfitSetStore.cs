@@ -58,7 +58,10 @@ namespace SlotsInstaller
         // 1.0.8: a list preset (v3): restores from the library; Copied = the entries it still keeps a copy of (no source).
         internal bool Pointers;
         internal int Copied;
+        // 1.0.10: those entries (outfits, then replacements), each with its size and why it has no library mod.
+        internal List<OutfitSetCopy> Copies=new List<OutfitSetCopy>();
     }
+    internal sealed class OutfitSetCopy { internal string Name, Reason; internal long Bytes; }
     internal sealed class OutfitSetListing
     {
         internal readonly List<OutfitSetInfo> Entries=new List<OutfitSetInfo>();
@@ -141,10 +144,13 @@ namespace SlotsInstaller
         // (never SlotsLoader) with their order, options and method; Both = each kind that has something enabled.
         // `engine` is needed unless the scope is ExtraOutfits. 1.0.8: a list of library sources (v3, OutfitSetPointers.cs);
         // only what has no library source is copied.
-        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine) { return CreatePreset(costumeRoot,name,scope,engine,true); }
+        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine) { return CreatePreset(costumeRoot,name,scope,engine,null); }
+        // 1.0.10: `library` = the listed library's archives (LibraryArchives; null = none): a manual drop identical to one
+        // of them is listed as a pointer to it instead of copied.
+        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine,List<LibraryArchive> library) { return CreatePreset(costumeRoot,name,scope,engine,true,library); }
         // Tests: the 2.4.1 format (v1/v2, everything copied).
-        internal static OutfitSetInfo CreateCopyPreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine) { return CreatePreset(costumeRoot,name,scope,engine,false); }
-        private static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine,bool pointers)
+        internal static OutfitSetInfo CreateCopyPreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine) { return CreatePreset(costumeRoot,name,scope,engine,false,null); }
+        private static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine,bool pointers,List<LibraryArchive> library)
         {
             if (PresetScopes.Replacements(scope) && engine==null) throw new IOException("Replacements can't be saved without the game folder.");
             using (Installer.AcquireMutation(costumeRoot))
@@ -156,14 +162,14 @@ namespace SlotsInstaller
                 if (!PresetScopes.Replacements(scope))
                 {
                     if (enabled.Count==0) throw new IOException("No enabled outfits to save.");
-                    return pointers ? SavePointerPreset(root,name,enabled,null,null,"") : SavePreset(root,name,enabled,null,null,"",null);
+                    return pointers ? SavePointerPreset(root,name,enabled,null,null,"",library) : SavePreset(root,name,enabled,null,null,"",null);
                 }
                 return engine.WithPresetSnapshot(delegate(ReplaceState state,List<ReplaceMod> mods,string method)
                 {
                     if (scope==PresetScope.Replacements && mods.Count==0) throw new IOException("No enabled replacements to save.");
                     if (enabled.Count==0 && mods.Count==0) throw new IOException("Nothing enabled to save.");
                     Func<ReplaceMod,ModFile,string> storeFile=delegate(ReplaceMod m,ModFile f) { return engine.StoreFile(state,m,f); };
-                    return pointers ? SavePointerPreset(root,name,enabled,mods,storeFile,method) : SavePreset(root,name,enabled,mods,storeFile,method,null);
+                    return pointers ? SavePointerPreset(root,name,enabled,mods,storeFile,method,library) : SavePreset(root,name,enabled,mods,storeFile,method,null);
                 });
             }
         }
@@ -605,10 +611,23 @@ namespace SlotsInstaller
             PresetPointers p=record.Pointers;
             var outfits=(p==null ? new List<string>() : p.Outfits.Select(o=>o.Character+"/"+o.Folder).ToList()).Concat(record.Entries.Select(e=>e.RelativePath+(e.Enabled ? "" : " (disabled)")+(p==null ? "" : " (copy)"))).ToList();
             var replacements=p==null ? mods.Select(r=>r.Mod.Name).ToList() : SavedReplacementOrder(record).Select(x=>x.Key ? p.Replacements[x.Value].Name : mods[x.Value].Mod.Name+" (copy)").ToList();
+            // 1.0.10: the copies with their size and why; presets saved before keep no reason, so it is read from the entry.
+            var copies=new List<OutfitSetCopy>();
+            if (p!=null)
+            {
+                for (int i=0;i<record.Entries.Count;i++) copies.Add(new OutfitSetCopy {Name=record.Entries[i].RelativePath,Bytes=record.Entries[i].Files.Sum(f=>f.Length),Reason=CopyReason(p.CopiedOutfitReasons,i,record.Entries.Count,record.Entries[i].Managed ? "" : ManualDrop)});
+                for (int i=0;i<mods.Count;i++) copies.Add(new OutfitSetCopy {Name=mods[i].Mod.Name,Bytes=mods[i].Mod.Files.Sum(f=>f.Size),Reason=CopyReason(p.CopiedReplacementReasons,i,mods.Count,NotFound(mods[i].Mod.SourcePath))});
+            }
             return new OutfitSetInfo {Folder=folder,Id=record.Id,Name=record.Name,Kind=(OutfitSetKind)Enum.Parse(typeof(OutfitSetKind),record.Kind),CreatedUtc=DateTime.Parse(record.CreatedUtc,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind).ToUniversalTime(),
                 Bytes=record.Entries.Sum(e=>e.Files.Sum(f=>f.Length))+mods.Sum(r=>r.Mod.Files.Sum(f=>f.Size))+(p==null ? 0 : RecordBytes(text)),OutfitCount=outfits.Count,Outfits=outfits,ManifestText=text,
                 Scope=PresetScopes.Of(outfits.Count>0,replacements.Count>0),ReplacementCount=replacements.Count,Replacements=replacements,ReplacementMethod=record.Replacements==null ? "" : record.Replacements.Method ?? "",
-                Pointers=p!=null,Copied=p==null ? 0 : record.Entries.Count+mods.Count};
+                Pointers=p!=null,Copied=p==null ? 0 : record.Entries.Count+mods.Count,Copies=copies};
+        }
+        // The saved reason when the record kept one per copy, else `fallback`.
+        private static string CopyReason(List<string> saved,int index,int count,string fallback)
+        {
+            string reason=saved!=null && saved.Count==count ? saved[index] : fallback;
+            return reason==null ? "" : reason.Length>600 ? reason.Substring(0,600) : reason;
         }
 
         // 2.4.1: the confirmation's list of what a restore of `scope` would change. Reads the record without
