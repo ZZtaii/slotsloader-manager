@@ -24,14 +24,15 @@ namespace SlotsInstaller
         private readonly ProgressBar progress;
         private readonly ImageList rows;
         private bool busy,closeRequested,fittingList;
+        private List<string> restoreNotes=new List<string>(); private string restoreNotesId;   // 1.0.8: the last restore's notes
         private CancellationTokenSource cancellation;
         internal bool Changed {get;private set;}
         // 2.4.1: a restore installed replacements (the main window refreshes its replacement list).
         internal bool ReplacementsChanged {get;private set;}
         internal bool OutfitsChanged {get;private set;}
 
-        internal const string NoteText="Saves copies of what's enabled. Uses disk space.";
-        internal const string HelpText="Restore adds what's missing, skips identical ones. Restart SF6 after.";
+        internal const string NoteText="Saves a list of what's enabled. Restore reinstalls it from your libraries; anything without a library source is copied.";   // 1.0.8 (the user): a list, not copies
+        internal const string HelpText="Restore adds what's missing and skips what's already installed. Restart SF6 after.";
 
         internal static bool ShowPresets(IWin32Window owner,string costumeRoot) {return ShowPresets(owner,costumeRoot,null,null);}
         // 2.4.1: engine = the main window's replace engine (Fluffy roots included); ensureLooseLoader = its loose file
@@ -123,10 +124,16 @@ namespace SlotsInstaller
             if(e.ReplacementCount>0)parts.Add(ReplacePlanner.N(e.ReplacementCount,"replacement"));
             return String.Join(" · ",parts);
         }
-        // The list's second line: "12 extra outfits · 3 replacements · 1.2 GB · 2026-10-15 14:02".
+        // The list's second line: "12 extra outfits · 3 replacements · 2026-10-15 14:02"; 1.0.8: a list preset says how
+        // many entries it copied ("2 copied · 140 MB"), an older one "full copy · 4.3 GB".
         internal static string Subtitle(OutfitSetInfo e)
         {
-            return (e.Kind==OutfitSetKind.Removed ? "Removed selection · " : "")+Counts(e)+" · "+Utilities.FriendlyBytes(e.Bytes)+" · "+e.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+            return (e.Kind==OutfitSetKind.Removed ? "Removed selection · " : "")+Counts(e)+" · "+SizeText(e)+e.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+        }
+        internal static string SizeText(OutfitSetInfo e)
+        {
+            if(e.Pointers) return e.Copied>0 ? e.Copied+" copied · "+Utilities.FriendlyBytes(e.Bytes)+" · " : "";
+            return (e.Kind==OutfitSetKind.Preset ? "full copy · " : "")+Utilities.FriendlyBytes(e.Bytes)+" · ";
         }
         private void DrawSet(object sender,DrawListViewSubItemEventArgs e)
         {
@@ -139,7 +146,7 @@ namespace SlotsInstaller
         }
         internal static string Contents(OutfitSetInfo e)
         {
-            var lines=new List<string> {e.Name+" · "+Counts(e)+" · "+Utilities.FriendlyBytes(e.Bytes)};
+            var lines=new List<string> {e.Name+" · "+Counts(e)+(e.Pointers && e.Copied==0 ? "" : " · "+Utilities.FriendlyBytes(e.Bytes))};
             bool both=e.OutfitCount>0 && e.ReplacementCount>0;
             if(both)lines.Add("Extra outfits");
             lines.AddRange(e.Outfits ?? new List<string>());
@@ -156,7 +163,7 @@ namespace SlotsInstaller
             var selected=Selected();save.Enabled=!busy && !String.IsNullOrWhiteSpace(nameInput.Text);restore.Enabled=delete.Enabled=!busy && selected!=null;refresh.Enabled=!busy;nameInput.Enabled=!busy;scope.Locked=busy;
             restoreScope.Visible=selected!=null && Holds(selected)==PresetScope.Both;restoreScope.Locked=busy;
             sets.InputLocked=busy;
-            details.Text=selected==null ? HelpText : Contents(selected);
+            details.Text=selected==null ? HelpText : (restoreNotesId==selected.Id && restoreNotes.Count>0 ? "Last restore\r\n"+String.Join("\r\n",restoreNotes)+"\r\n\r\n" : "")+Contents(selected);
             details.Select(0,0);
         }
         private void RefreshSets(string completion)
@@ -167,7 +174,7 @@ namespace SlotsInstaller
                 string selectedId=Selected()==null ? null : Selected().Id;
                 sets.BeginUpdate();try {sets.Items.Clear();foreach(var entry in listing.Entries.OrderByDescending(entry=>entry.CreatedUtc)) {var row=new ListViewItem(entry.Name) {Tag=entry};sets.Items.Add(row);row.Selected=entry.Id==selectedId;}}
                 finally {sets.EndUpdate();FitList();}
-                status.Text=completion ?? (listing.Entries.Count==1 ? "1 saved copy" : listing.Entries.Count+" saved copies")+" · "+Utilities.FriendlyBytes(listing.Entries.Sum(entry=>entry.Bytes));
+                status.Text=completion ?? (listing.Entries.Count==1 ? "1 preset" : listing.Entries.Count+" presets")+" · "+Utilities.FriendlyBytes(listing.Entries.Sum(entry=>entry.Bytes));
                 if(listing.Warnings.Count>0)status.Text+=" · "+listing.Warnings.Count+" unreadable copies left untouched";
                 UpdateSelection();
             });
@@ -217,6 +224,7 @@ namespace SlotsInstaller
                 Run("Restoring…",delegate {return OutfitSetStore.Restore(costumeRoot,selected,chosen,engine);},delegate(OutfitSetRestoreResult result)
                 {
                     Changed=true;if(result.ReplacementsRestored>0)ReplacementsChanged=true;if(result.Restored>0)OutfitsChanged=true;
+                    restoreNotes=result.Notes;restoreNotesId=selected.Id;   // 1.0.8: shown above the preset's contents
                     RefreshSets(RestoreSummary(result,chosen));
                 });
             });
@@ -238,6 +246,7 @@ namespace SlotsInstaller
             int skipped=r.Skipped+r.ReplacementsSkipped;
             if(skipped>0)text+=" · "+skipped+" identical skipped";
             if(r.ReplacementConflicts.Count>0)text+=" · skipped "+String.Join(", ",r.ReplacementConflicts.Select(n=>"“"+n+"”"))+" (a different version is installed)";
+            if(r.Notes.Count>0)text+=" · "+ReplacePlanner.N(r.Notes.Count,"note")+" below";
             text+=". Restart SF6.";
             if(!String.IsNullOrEmpty(r.ReplaceMessage))text+=" "+r.ReplaceMessage;
             return text;

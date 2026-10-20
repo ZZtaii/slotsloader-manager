@@ -66,7 +66,7 @@ namespace SlotsInstaller
         private CheckBox settingsCrashReporter, settingsSwapRepairs;
         private Label settingsMethodStatus, settingsToolStatus, settingsGameFiles, settingsStoreStatus, settingsFluffyStatus;
         private PaddedTextField settingsStore;
-        private FlatButton loaderOnButton, loaderOffButton, installSlotsLoaderButton;
+        private FlatButton loaderOnButton, loaderOffButton, installSlotsLoaderButton, installReFrameworkButton;
         private bool loadingReplaceSettings;
         private string gameMethod = "";
         // Loose-method replacements of natives files may change while SF6 runs (the engine re-checks).
@@ -135,7 +135,7 @@ namespace SlotsInstaller
             modeToggle.SelectionChanged += delegate { SetInstallMode(modeToggle.SelectedIndex == 1 ? InstallModes.Replace : InstallModes.Slot, true); };
             toggle.Controls.Add(modeToggle);
             modeNotice = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = Palette.Tiny, ForeColor = Palette.Muted, AutoEllipsis = true, Padding = new Padding(0, 4, 0, 0) };
-            modeNotice.Click += delegate { if (!IsReplaceMode && !toolStatus.SlotsLoader) OfferSlotsLoaderInstall(); };
+            modeNotice.Click += delegate { if (IsReplaceMode || toolStatus == null) return; if (toolStatus.ReFrameworkOffer) OfferReFrameworkInstall(); else if (toolStatus.ReFramework && !toolStatus.SlotsLoader) OfferSlotsLoaderInstall(); };   // 1.0.8: REFramework first
             modePanel.Controls.Add(modeNotice); modePanel.Controls.Add(toggle); modePanel.Controls.Add(captionRow);
             return modePanel;
         }
@@ -143,11 +143,17 @@ namespace SlotsInstaller
         private Panel BuildReplacesPanel()
         {
             replacesPanel = new Panel { Dock = DockStyle.Bottom, Height = 70, Padding = new Padding(0, 6, 0, 0), Visible = false };
-            Label caption = Caption("REPLACES"); caption.Dock = DockStyle.Top; caption.Height = 20;
+            Label caption = Caption("REPLACES"); caption.Dock = DockStyle.Fill;
+            // 1.0.8 (the user): "Scroll to expand" at the right of the heading while notes are cut short; a click expands too.
+            expandHint = new Label { UseMnemonic = false, Text = "Scroll to expand", Dock = DockStyle.Right, AutoSize = false, Font = Palette.Tiny, ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleRight, Cursor = Cursors.Hand, Visible = false, AccessibleName = "Show all details", AccessibleRole = AccessibleRole.PushButton };
+            expandHint.Click += delegate { ExpandInspectorDetails(); };
+            expandHint.MouseEnter += delegate { expandHint.ForeColor = Palette.Text; }; expandHint.MouseLeave += delegate { expandHint.ForeColor = Palette.Muted; };
+            var captionRow = new Panel { Dock = DockStyle.Top, Height = 20 };
+            captionRow.Controls.Add(caption); captionRow.Controls.Add(expandHint);
             replacesLabel = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 24, Font = Palette.Strong, ForeColor = Palette.Text, AutoEllipsis = true, Text = "Checking…" };
             replacesDetail = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 20, Font = Palette.Tiny, ForeColor = Palette.Muted, AutoEllipsis = true };
             conflictView = new ConflictView { Dock = DockStyle.Fill }; conflictView.ShowReason = delegate(string why) { SetPageStatus(libraryPage, why, Palette.Accent); };
-            replacesPanel.Controls.Add(conflictView); replacesPanel.Controls.Add(replacesDetail); replacesPanel.Controls.Add(replacesLabel); replacesPanel.Controls.Add(caption);
+            replacesPanel.Controls.Add(conflictView); replacesPanel.Controls.Add(replacesDetail); replacesPanel.Controls.Add(replacesLabel); replacesPanel.Controls.Add(captionRow);
             replacesPanel.Resize += delegate { if (conflictView.Entries.Count > 0) conflictView.Invalidate(); };
             return replacesPanel;
         }
@@ -201,15 +207,29 @@ namespace SlotsInstaller
             else
             {
                 toolStatus = ToolStatus.Detect(config.GameRoot);
-                modeNotice.Text = toolStatus.SlotsLoader ? "Adds the outfit as a new slot · Slotsloader is installed" : "Slotsloader isn't installed, so extra outfits won't load · click to install it";
-                modeNotice.ForeColor = toolStatus.SlotsLoader ? Palette.Muted : Palette.Accent;
-                modeNotice.Cursor = toolStatus.SlotsLoader ? Cursors.Default : Cursors.Hand;
+                // 1.0.8 (the user): REFramework comes first; Slotsloader is its plugin.
+                string notice = ReFrameworkNotice(toolStatus); bool clickable = toolStatus.ReFrameworkOffer;
+                if (notice == null) { notice = toolStatus.SlotsLoader ? "Adds the outfit as a new slot · Slotsloader is installed" : "Slotsloader isn't installed, so extra outfits won't load · click to install it"; clickable = !toolStatus.SlotsLoader; }
+                bool fine = notice.StartsWith("Adds the outfit", StringComparison.Ordinal);
+                modeNotice.Text = notice;
+                modeNotice.ForeColor = fine ? Palette.Muted : Palette.Accent;
+                modeNotice.Cursor = clickable ? Cursors.Hand : Cursors.Default;
                 installButton.Text = "Install"; previewButton.Text = "Review files"; previewButton.AccessibleName = "Review files";
                 // Extra outfit mode always shows Uninstall outfit (UpdateLibraryUninstall).
             }
             UpdateLibraryUninstall();
             UpdateFooter();
             UpdateDestination();
+        }
+
+        // 1.0.8: the Extra outfit notice for REFramework, or null when it is fine (then Slotsloader's notice shows).
+        internal static string ReFrameworkNotice(ToolStatus tools)
+        {
+            if (!tools.GameFound) return null;
+            if (!tools.ReFrameworkFile) return "REFramework isn't installed, so extra outfits won't load · click to install it";
+            if (!tools.ReFramework) return "Start SF6 once so REFramework can finish setting up; extra outfits load after that";
+            if (tools.ReFrameworkOutdated) return "REFramework from " + tools.ReFrameworkBuild.DateText + " is out of date · click to update it";
+            return null;
         }
 
         private static bool IsLoaderPackage(ModPackage p) { return p != null && p.Components.SelectMany(c => c.RootAssets).Any(a => String.Equals(PakHash.Normalize(a.DestinationPath).TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase)); }
@@ -424,6 +444,25 @@ namespace SlotsInstaller
                 Work("Downloading Slotsloader " + shown + "…", delegate { return LoaderRelease.Download(pin, downloads); }, OpenLoader);
             });
         }
+        // ---- 1.0.8 REFramework offer: the pinned nightly (ReFramework.cs) from Data\downloads or a verified download, opened
+        // in Replace original like Slotsloader; Install puts dinput8.dll in the game folder (an existing one is backed up and
+        // put back on uninstall) and replaces the REFramework this app installed before.
+        internal LoaderFile LastReFrameworkFile;   // tests
+        private void OfferReFrameworkInstall()
+        {
+            if (busy) { SetPageStatus(currentPage, "Another task is running. Click again when it finishes.", Palette.Accent); return; }
+            ReFrameworkPin pin = ReFrameworkRelease.Pin; string downloads = LoaderRelease.DownloadDir;
+            Work("Getting " + pin.Label + "…", delegate { return ReFrameworkRelease.Fetch(pin, downloads); }, delegate(LoaderFile file)
+            {
+                LastReFrameworkFile = file;
+                Program.LogLine(pin.Label + " from the " + file.SourceLabel + ": " + file.Path + " · SHA-256 " + file.Sha256);
+                SetInstallMode(InstallModes.Replace, false);
+                ShowPage(libraryPage);
+                LoadPackage(new LibraryEntry { SourcePath = file.Path, Name = pin.Label });
+                SetPageStatus(libraryPage, pin.Label + " is open below: click Install to add it to the game.", Palette.Accent);
+            });
+        }
+
         private void OpenLoader(LoaderFile file)
         {
             LastLoaderFile = file;
@@ -1001,7 +1040,9 @@ namespace SlotsInstaller
             add(left, Caption("REFramework and Slotsloader"));
             settingsToolStatus = note("", 52); add(left, settingsToolStatus);
             installSlotsLoaderButton = Button("Install Slotsloader " + LoaderRelease.Pin.Version + "…", false, 230, delegate { OfferSlotsLoaderInstall(); }); installSlotsLoaderButton.Height = 32; installSlotsLoaderButton.Font = Palette.Small; installSlotsLoaderButton.Margin = Padding.Empty;
-            var toolRow = buttonRow(8); toolRow.Controls.Add(installSlotsLoaderButton); add(left, toolRow);
+            // 1.0.8: REFramework first (Slotsloader is its plugin); shown while it is missing or out of date.
+            installReFrameworkButton = Button("Install " + ReFrameworkRelease.Pin.Label + "…", false, 260, delegate { OfferReFrameworkInstall(); }); installReFrameworkButton.Height = 32; installReFrameworkButton.Font = Palette.Small; installReFrameworkButton.Margin = new Padding(0, 0, 8, 0);
+            var toolRow = buttonRow(8); toolRow.Controls.Add(installReFrameworkButton); toolRow.Controls.Add(installSlotsLoaderButton); add(left, toolRow);
 
             add(right, Caption("Game files"));
             settingsGameFiles = note("", 76); add(right, settingsGameFiles);
@@ -1057,8 +1098,10 @@ namespace SlotsInstaller
                 loaderOnButton.Enabled = loader == LooseLoaderState.Disabled; loaderOffButton.Enabled = loader == LooseLoaderState.Enabled;
                 ToolStatus tools = ToolStatus.Detect(config.GameRoot);
                 settingsToolStatus.Text = tools.ReFrameworkDetail + Environment.NewLine + tools.SlotsLoaderDetail;
-                settingsToolStatus.ForeColor = tools.SlotsLoader ? Palette.Muted : Palette.Accent;
+                settingsToolStatus.ForeColor = tools.SlotsLoader && !tools.ReFrameworkOffer && tools.ReFramework ? Palette.Muted : Palette.Accent;
                 installSlotsLoaderButton.Enabled = !tools.SlotsLoader;
+                installReFrameworkButton.Visible = tools.ReFrameworkOffer;
+                installReFrameworkButton.Text = (tools.ReFrameworkFile ? "Update to " : "Install ") + ReFrameworkRelease.Pin.Label + "…";
                 if (state != null)
                 {
                     string pak = "Base PAK: not found";

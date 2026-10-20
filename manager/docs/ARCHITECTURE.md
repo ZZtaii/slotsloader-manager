@@ -18,7 +18,9 @@ The primary entry points and current source locations are:
 | `OperationContext.cs` | Thread-local cancellation and progress; non-cancellable commit scopes |
 | `LoaderResults.cs` | Read-only mapping of installed sources to the last native-loader result |
 | `RecoveryStore.cs`, `RecoveryForm.cs` | Inspect, restore or explicitly delete retained managed copies |
-| `OutfitSetStore.cs`, `OutfitSetsForm.cs` | Source-independent named presets, explicitly selected batch removal and reusable set restoration |
+| `OutfitSetStore.cs`, `OutfitSetPointers.cs`, `OutfitSetsForm.cs` | Named presets (1.0.8: lists of library sources, v3; older full-copy v1/v2 still restore), explicitly selected batch removal and reusable set restoration |
+| `LibraryFilters.cs`, `MainFormCustomFilters.cs`, `CustomFilterEditor.cs` | 1.0.8 MY FILTERS: keyword filters (default NSFW) in the Filters panel, `Data\library-filters.json` |
+| `OverlayScroll.cs`, `MainFormInspectorScroll.cs` | 1.0.8 scrolling inspector with a thin overlay thumb |
 | `CommandLine.cs`, `NativeModCheck.cs` | Headless composition/integrity checks and isolated native-loader runs |
 | `MainForm.cs`, `OptionTree.cs`, `UiControls.cs`, `UiPolish.cs` | Screens, view preferences, option interaction, drawing and DPI behavior; vector glyphs, chips, drop target, dark title bar and shortcut table |
 | `Program.cs`, `AssemblyInfo.cs`, `app.manifest`, `app.config` | Entry point, version and runtime configuration |
@@ -226,6 +228,8 @@ Install, enable, disable, uninstall, recovery and outfit-set mutations share a n
 **Recover removed outfits** uses `RecoveryStore` to inspect retained backup/trash directories, restore a selected managed copy without replacing any existing destination, or explicitly delete that retained copy. Ownership, generated folder naming, containment, links and the reviewed manifest/size/count snapshot are rechecked. Unknown/manual folders remain protected; source-inside-copy records cannot be deleted. Recovery does not rehash every payload against its old manifest, automatically purge old copies, or recover arbitrary interrupted staging trees.
 
 ## Named presets and selected outfit sets
+
+1.0.8: a preset is a list (format v3, `OutfitSetPointers.cs`): each enabled outfit and replacement by library source, options, place and order; restore reinstalls item by item and reports what it couldn't (`OutfitSetRestoreResult.Notes`). Only entries without a library source are copied, in the v1/v2 layout described below, which older presets keep using. Details: `src/API.md`.
 
 `OutfitSetStore.CreatePreset` enumerates the current installed entries afresh and copies **all enabled entries**, regardless of Installed-page search, filters or selection. Empty presets and duplicate preset names (case-insensitive) are refused. Managed folders, manual folders and direct manual ZIP/RAR/7Z/PAK files are included. Archives and PAKs are opaque files: saving or restoring them needs neither archive extraction nor the original library source. Existing component composition behavior is unchanged.
 

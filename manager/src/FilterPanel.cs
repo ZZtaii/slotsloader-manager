@@ -21,6 +21,11 @@ namespace SlotsInstaller
         internal readonly FighterGrid Kinds = new FighterGrid { KeepOrder = true };
         internal readonly FlowLayoutPanel MiscChips;
         internal readonly Label Title, KindsTitle;
+        // 1.0.8: MY FILTERS, the user's keyword filters (LibraryFilters.cs): one chip each, "+ New filter", and the
+        // inline editor below them (MainFormCustomFilters.cs fills and drives them).
+        internal readonly FlowLayoutPanel CustomChips;
+        internal readonly Label CustomTitle;
+        internal readonly CustomFilterEditor Editor;
         private readonly Panel body, header, kindsHeader;
         private bool arranging;
 
@@ -45,7 +50,15 @@ namespace SlotsInstaller
             Kinds.SetPortrait(InstalledKind, KindArt.Placeholder(InstalledKind), "placeholder");
             Kinds.SelectionChanged += delegate { MiscChips.Visible = Kinds.Selected.Contains(MiscKind); Arrange(); Raise(); };
             MiscChips = new FlowLayoutPanel { Dock = DockStyle.Top, WrapContents = true, Visible = false, BackColor = Palette.Surface, Padding = new Padding(4, 2, 0, 4), Margin = Padding.Empty, AccessibleName = "Misc kinds" };
+            // The MY FILTERS caption starts the chip row (a line of its own made the panel scroll at 1460x920 with the
+            // Misc chips showing); MainFormCustomFilters.FillCustomChips keeps it first and sizes it like a chip.
+            CustomTitle = new Label { UseMnemonic = false, Text = "MY FILTERS", AutoSize = false, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
+            CustomChips = new FlowLayoutPanel { Dock = DockStyle.Top, WrapContents = true, BackColor = Palette.Surface, Padding = new Padding(4, 6, 0, 0), Margin = Padding.Empty, AccessibleName = "My filters" };
+            CustomChips.Controls.Add(CustomTitle);
+            Editor = new CustomFilterEditor { Dock = DockStyle.Top, Visible = false };
+            Editor.HeightChanged += delegate { Arrange(); };
             // Dock order: the last control added is docked first (top).
+            body.Controls.Add(Editor); body.Controls.Add(CustomChips);
             body.Controls.Add(MiscChips); body.Controls.Add(Kinds); body.Controls.Add(kindsHeader); body.Controls.Add(Grid); body.Controls.Add(header);
             Controls.Add(body);
         }
@@ -67,7 +80,10 @@ namespace SlotsInstaller
                 if (Kinds.Height != kindsHeight) Kinds.Height = kindsHeight;
                 int chips = 0;
                 if (MiscChips.Visible) { chips = MiscChips.GetPreferredSize(new Size(width, 0)).Height; if (MiscChips.Height != chips) MiscChips.Height = chips; }
-                var size = new Size(width, header.Height + gridHeight + kindsHeader.Height + kindsHeight + chips);
+                int custom = CustomChips.GetPreferredSize(new Size(width, 0)).Height; if (CustomChips.Height != custom) CustomChips.Height = custom;
+                int editor = 0;
+                if (Editor.Visible) { editor = Editor.HeightFor(width); if (Editor.Height != editor) Editor.Height = editor; }
+                var size = new Size(width, header.Height + gridHeight + kindsHeader.Height + kindsHeight + chips + custom + editor);
                 if (body.Size != size) body.Size = size;
                 if (body.Left != Padding.Left + AutoScrollPosition.X) body.Left = Padding.Left + AutoScrollPosition.X;
             }
@@ -143,6 +159,18 @@ namespace SlotsInstaller
         internal void SetKinds(IEnumerable<string> kinds)
         {
             Kinds.SetSelected(kinds, false); MiscChips.Visible = MiscOn; Arrange();
+        }
+        // 1.0.8: scrolls the panel so the open filter editor is in view (its bottom first, then its top).
+        internal void ShowEditor()
+        {
+            if (!Editor.Visible) return;
+            // Content coordinates: the client position plus the scrolled distance.
+            int top = -AutoScrollPosition.Y, view = ClientSize.Height;
+            int sectionTop = body.Top + CustomChips.Top + top, editorBottom = body.Top + Editor.Bottom + top;
+            int y = top;
+            if (editorBottom > top + view) y = editorBottom - view;
+            if (sectionTop < y) y = sectionTop;
+            if (y != top) AutoScrollPosition = new Point(0, Math.Max(0, y));
         }
         internal void RaiseChanged() { Raise(); }
         private void Raise() { var handler = FiltersChanged; if (handler != null) handler(this, EventArgs.Empty); }

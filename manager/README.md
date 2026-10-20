@@ -10,6 +10,14 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 
 ## What changed
 
+- 1.0.8:
+  - **MY FILTERS** in the Filters panel: filters you make from keywords. A filter matches a mod whose name or any option name or folder contains one of its keywords (case, spaces and dashes don't matter). Click a filter to show only its mods, again to hide them, a third time to turn it off; right-click for the same choices and **Edit filter**. **+ New filter** and Edit open a small editor under the chips: while you type keywords the list shows what they match. Filters are saved in the Manager's Data and their on/hide state is remembered like the other filters.
+  - A ready-made **NSFW** filter (nsfw, nude, naked, topless, bottomless, pubic, futa, see through, …), picked from real mod and option names. Edit or delete it like your own.
+  - **Presets are now a list**, not copies: each enabled extra outfit and replacement is saved by its library mod, options, outfit name and order, so a preset takes a few KB instead of gigabytes. Restore installs them again from your libraries, one by one: what is already installed is skipped, and a mod no longer in your libraries, a different outfit in its place or a failed install is listed under the preset while the rest goes on. Only things with no library mod (manual drops) are still copied. Presets saved by older versions keep working; save a new one and delete the old to free the space.
+  - **REFramework is checked too.** Slotsloader runs inside REFramework, so the Extra outfit line now says when REFramework is missing, when SF6 hasn't been started with it yet, or when it is older than the build Slotsloader is tested with (REFramework nightly 01432, 11 Oct 2026). Click it to download that build from the REFramework-nightly releases on GitHub (checked against its SHA-256); it opens in Replace original, and **Install** puts it in the game folder. The REFramework it replaces is backed up and comes back if you uninstall it, and a newer pinned build later updates the same install. Settings → Game files & replacements shows the installed build and has the same button. Upscaler builds are recognised and never called old.
+  - The mod details column stays compact so INSTALL AS is always in view: REPLACES notes show their headline, and **Scroll to expand** at the right of REPLACES shows they continue. Scrolling down over the column (or clicking that hint) shows everything, each note as a headline with its details under it; the column then scrolls, with a thin scroll bar that shows only while you scroll. Opening another mod makes it compact again.
+  - The Installed page's Refresh icon is a clockwise arrow (it looked like a power button).
+
 - 1.0.7:
   - **Faster start.** The Mod library lists every mod at once (2,554 mods in under half a second here) and reads the ones it doesn't know yet in the background while you use the app; the list caption shows `· READING n%`. Fighters, outfits and option folders come first; the names from modinfo.ini (the Name view, option names for Deep search, authors) follow, shown as `· NAMES n%`. A mod not read yet shows **Reading…** on its row.
   - Updating from 1.0.5 no longer reads every archive again: what the library already knows stays, and only the names are read.
@@ -126,11 +134,15 @@ The **character** filter opens the fighter portraits, as in the library; pick on
 
 ## Save and restore presets
 
-1. Open **Installed → Presets…**, enter a name, and choose **Save enabled outfits**. This saves every enabled installed entry, including manual archives, regardless of your search, filters or selected rows. Disabled outfits are excluded.
-2. Close Presets and uninstall the outfits you no longer want enabled; the preset keeps its own copy of them.
-3. Later, select the named preset and choose **Restore outfits**. Missing entries return to their original paths; exact file/structure duplicates there are skipped. Different contents at an existing name stop the whole restore before any change. Other installed outfits remain in place. Restart SF6 afterward.
+1. Open **Installed → Presets…**, enter a name, choose what to include (Extra outfits, Replacements or Both) and click **Save**. This saves everything enabled of that kind, regardless of your search, filters or selected rows. Disabled outfits are excluded.
+2. A preset is a list: for each outfit and replacement, the library mod it came from, its options, its outfit name and its order. Only an outfit or replacement with no library mod (a manual drop, a mod you deleted) is copied into the preset.
+3. Later, select the preset and click **Restore**. Everything missing is installed again from your libraries; what is already installed is skipped. Restored replacements go back into their saved priority order. A replacement installed under the same name from another archive or version is skipped and named in the result. A mod no longer in your libraries, a different outfit in the same place or an install that fails is listed under the preset, and the rest still goes ahead. A mod that changed since you saved installs its current version (also listed). Restart SF6 afterward.
 
-Presets are reusable and contain actual files, so restoration does not require the source mod library. Keep the sibling `reframework/.slotsloader-installer-presets` folder if moving your game (`.slotsloader-installer-removed-sets` only holds copies from older versions). Each preset uses disk space for a full copy; **Delete saved copy** removes only that retained set after confirmation. Slot numbers still come from Slotsloader's next run.
+Presets live in `reframework/.slotsloader-installer-presets`; keep that folder if you move your game. Presets saved before 1.0.8 hold full copies and still restore as before (they show "full copy" and their size); save a new preset and delete the old one to free that space. **Delete** removes a preset after confirmation. Slot numbers still come from Slotsloader's next run.
+
+## Filter the library
+
+**Filters** (Ctrl+Shift+F) opens the panel beside the list: fighters, Tool mods, Misc (with its kinds), Installed and, with several libraries, one tile per library. **MY FILTERS** holds keyword filters you make. Click one to show only its mods, again to hide its mods, once more to turn it off; right-click offers the same and **Edit filter** (F2 on a focused chip). **+ New filter** opens the editor: a name and keywords separated by commas or new lines. A keyword matches a mod whose file name, own name, the name you typed for it, or any option name or folder contains it, ignoring case, spaces and dashes (`see through` also finds `See-Through`); one- and two-letter keywords must start a word. While you edit, the list shows what the keywords match. The **NSFW** filter comes ready-made; edit or delete it like your own. **Clear** turns every filter off.
 
 ## Move the app folder
 

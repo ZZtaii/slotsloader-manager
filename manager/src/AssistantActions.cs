@@ -425,7 +425,7 @@ namespace SlotsInstaller
                     if (PresetScopes.Replacements(scope))
                         text += (PresetScopes.Outfits(scope) ? "; replacements: " : ": replacements: ") + result.ReplacementsRestored + " installed, " + result.ReplacementsSkipped + " identical skipped"
                             + (result.ReplacementConflicts.Count > 0 ? ", skipped " + String.Join(", ", result.ReplacementConflicts.Select(n => "'" + n + "'")) + " (a different version is installed)" : "");
-                    return text + "." + (String.IsNullOrEmpty(result.ReplaceMessage) ? "" : " " + result.ReplaceMessage);
+                    return text + "." + (String.IsNullOrEmpty(result.ReplaceMessage) ? "" : " " + result.ReplaceMessage) + (result.Notes.Count > 0 ? " Notes: " + String.Join(" ", result.Notes) : "");   // 1.0.8: v3 items not restored or changed
                 }
             }
         }

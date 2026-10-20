@@ -227,6 +227,11 @@ namespace SlotsInstaller
     {
         internal bool GameFound, ReFramework, SlotsLoader, SlotsLoaderData;
         internal string ReFrameworkDetail = "", SlotsLoaderDetail = "", CrashReporterState = "";
+        // 1.0.8 (ReFramework.cs): dinput8.dll present; its build (null when unreadable); older than the supported nightly
+        // (never for an upscaler build). ReFrameworkOffer: missing or old, so the one-click install applies.
+        internal bool ReFrameworkFile, ReFrameworkOutdated;
+        internal ReFrameworkBuild ReFrameworkBuild;
+        internal bool ReFrameworkOffer { get { return !ReFrameworkFile || ReFrameworkOutdated; } }
 
         internal static ToolStatus Detect(string gameRoot)
         {
@@ -235,8 +240,15 @@ namespace SlotsInstaller
             {
                 s.GameFound = Directory.Exists(gameRoot) && File.Exists(Path.Combine(gameRoot, "StreetFighter6.exe"));
                 bool dinput = File.Exists(Path.Combine(gameRoot, "dinput8.dll")), refDir = Directory.Exists(Path.Combine(gameRoot, "reframework"));
-                s.ReFramework = dinput && refDir;
-                s.ReFrameworkDetail = s.ReFramework ? "REFramework installed" : dinput ? "REFramework incomplete: no reframework folder yet (start SF6 once)" : "REFramework not installed";
+                s.ReFramework = dinput && refDir; s.ReFrameworkFile = dinput;
+                s.ReFrameworkBuild = dinput ? ReFrameworkBuild.Read(Path.Combine(gameRoot, "dinput8.dll")) : null;
+                ReFrameworkPin pin = ReFrameworkRelease.Pin;
+                s.ReFrameworkOutdated = s.ReFrameworkBuild != null && s.ReFrameworkBuild.OlderThan(pin);
+                string built = s.ReFrameworkBuild == null || !s.ReFrameworkBuild.BuildDate.HasValue ? "" : " · built " + s.ReFrameworkBuild.DateText + (s.ReFrameworkBuild.Upscaler ? " (upscaler build)" : "");
+                s.ReFrameworkDetail = !dinput ? "REFramework not installed: Slotsloader needs it, so extra outfits won't load"
+                    : !refDir ? "REFramework incomplete: no reframework folder yet (start SF6 once)"
+                    : s.ReFrameworkOutdated ? "REFramework out of date" + built + "; Slotsloader is tested with " + pin.Label + " (" + pin.BuildDate.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture) + ")"
+                    : "REFramework installed" + built;
                 string plugin = Path.Combine(gameRoot, "reframework", "plugins", "SF6_CostumeSlotsNative.dll");
                 string ags = Path.Combine(gameRoot, "amd_ags_x64.dll"), real = Path.Combine(gameRoot, "amd_ags_x64_real.dll");
                 bool proxy = File.Exists(ags) && File.Exists(real) && new FileInfo(ags).Length > 200 * 1024;

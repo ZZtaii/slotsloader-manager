@@ -55,6 +55,9 @@ namespace SlotsInstaller
         internal int ReplacementCount;
         internal List<string> Replacements=new List<string>();
         internal string ReplacementMethod="";
+        // 1.0.8: a list preset (v3): restores from the library; Copied = the entries it still keeps a copy of (no source).
+        internal bool Pointers;
+        internal int Copied;
     }
     internal sealed class OutfitSetListing
     {
@@ -67,6 +70,7 @@ namespace SlotsInstaller
         internal int ReplacementsRestored, ReplacementsSkipped; // 2.4.1: installed / identical skipped
         internal List<string> ReplacementConflicts=new List<string>();   // same name, other contents: skipped
         internal string ReplaceMessage="";
+        internal List<string> Notes=new List<string>();   // 1.0.8: v3 items not restored (and why) or restored with a change
     }
     // 2.4.1: what a restore would change, for the confirmation (no hashing: an existing extra outfit is skipped
     // only when identical, which the restore checks).
@@ -88,7 +92,8 @@ namespace SlotsInstaller
         public string Format="sf6-slotsloader-outfit-set-v1", Id, Name, Kind, CreatedUtc;
         public string Scope;   // 2.4.1: extra_outfits | replacements | both (absent = extra_outfits)
         public List<OutfitSetItem> Entries=new List<OutfitSetItem>();
-        public OutfitSetReplacements Replacements;   // 2.4.1, v2 only
+        public OutfitSetReplacements Replacements;   // 2.4.1, v2 only (v3: the copied ones)
+        public PresetPointers Pointers;   // 1.0.8, v3 only (OutfitSetPointers.cs); Entries/Replacements hold only what had no library source
     }
     public sealed class OutfitSetReplacements
     {
@@ -106,7 +111,7 @@ namespace SlotsInstaller
     }
     internal sealed class OutfitSetFile { public string Path, Sha256; public long Length; }
 
-    internal static class OutfitSetStore
+    internal static partial class OutfitSetStore
     {
         private const string RecordName="set.json";
         private sealed class SourceItem { internal InstalledOutfit Outfit; internal OutfitSetItem Item; }
@@ -130,11 +135,16 @@ namespace SlotsInstaller
             result.Entries.Sort((a,b)=>b.CreatedUtc.CompareTo(a.CreatedUtc)); return result;
         }
 
-        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name) { return CreatePreset(costumeRoot,name,PresetScope.ExtraOutfits,null); }
+        // Tests: an old-format preset (a full copy of every enabled extra outfit, v1), which this version still restores.
+        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name) { return CreateCopyPreset(costumeRoot,name,PresetScope.ExtraOutfits,null); }
         // 2.4.1: Extra outfits = enabled outfits in costume_mods; Replacements = enabled replacements and tool mods
-        // (never SlotsLoader) copied from the replacement store with their order, options and method; Both = each
-        // kind that has something enabled. `engine` is needed unless the scope is ExtraOutfits.
-        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine)
+        // (never SlotsLoader) with their order, options and method; Both = each kind that has something enabled.
+        // `engine` is needed unless the scope is ExtraOutfits. 1.0.8: a list of library sources (v3, OutfitSetPointers.cs);
+        // only what has no library source is copied.
+        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine) { return CreatePreset(costumeRoot,name,scope,engine,true); }
+        // Tests: the 2.4.1 format (v1/v2, everything copied).
+        internal static OutfitSetInfo CreateCopyPreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine) { return CreatePreset(costumeRoot,name,scope,engine,false); }
+        private static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine,bool pointers)
         {
             if (PresetScopes.Replacements(scope) && engine==null) throw new IOException("Replacements can't be saved without the game folder.");
             using (Installer.AcquireMutation(costumeRoot))
@@ -143,18 +153,24 @@ namespace SlotsInstaller
                 if (List(root).Entries.Any(e=>e.Kind==OutfitSetKind.Preset && String.Equals(e.Name,name,StringComparison.OrdinalIgnoreCase)))
                     throw new IOException("A preset with that name already exists. Choose another name.");
                 List<InstalledOutfit> enabled=PresetScopes.Outfits(scope) ? Installer.ListInstalled(root).Where(o=>o.Enabled).ToList() : new List<InstalledOutfit>();
-                if (!PresetScopes.Replacements(scope)) return SavePreset(root,name,enabled,null,null,"");
+                if (!PresetScopes.Replacements(scope))
+                {
+                    if (enabled.Count==0) throw new IOException("No enabled outfits to save.");
+                    return pointers ? SavePointerPreset(root,name,enabled,null,null,"") : SavePreset(root,name,enabled,null,null,"",null);
+                }
                 return engine.WithPresetSnapshot(delegate(ReplaceState state,List<ReplaceMod> mods,string method)
                 {
                     if (scope==PresetScope.Replacements && mods.Count==0) throw new IOException("No enabled replacements to save.");
                     if (enabled.Count==0 && mods.Count==0) throw new IOException("Nothing enabled to save.");
-                    return SavePreset(root,name,enabled,mods,delegate(ReplaceMod m,ModFile f) { return engine.StoreFile(state,m,f); },method);
+                    Func<ReplaceMod,ModFile,string> storeFile=delegate(ReplaceMod m,ModFile f) { return engine.StoreFile(state,m,f); };
+                    return pointers ? SavePointerPreset(root,name,enabled,mods,storeFile,method) : SavePreset(root,name,enabled,mods,storeFile,method,null);
                 });
             }
         }
-        private static OutfitSetInfo SavePreset(string root,string name,List<InstalledOutfit> enabled,List<ReplaceMod> mods,Func<ReplaceMod,ModFile,string> storeFile,string method)
+        // `pointers` (1.0.8): a v3 list preset whose enabled/mods are only the entries without a library source.
+        private static OutfitSetInfo SavePreset(string root,string name,List<InstalledOutfit> enabled,List<ReplaceMod> mods,Func<ReplaceMod,ModFile,string> storeFile,string method,PresetPointers pointers)
         {
-                if (enabled.Count==0 && (mods==null || mods.Count==0)) throw new IOException("No enabled outfits to save.");
+                if (enabled.Count==0 && (mods==null || mods.Count==0) && pointers==null) throw new IOException("No enabled outfits to save.");
                 List<SourceItem> sources=enabled.Count==0 ? new List<SourceItem>() : Prepare(root,enabled);
                 OutfitSetRecord record=Record(name,OutfitSetKind.Preset,sources);
                 var replacements=new List<OutfitSetReplacement>();
@@ -163,7 +179,13 @@ namespace SlotsInstaller
                     for (int i=0;i<mods.Count;i++) replacements.Add(new OutfitSetReplacement {Storage=i.ToString("D6",CultureInfo.InvariantCulture),Mod=SavedCopy(mods[i])});
                     record.Format=FormatV2; record.Replacements=new OutfitSetReplacements {Method=method ?? "",Mods=replacements};
                 }
-                record.Scope=PresetScopes.Code(PresetScopes.Of(record.Entries.Count>0,replacements.Count>0));
+                if (pointers!=null)
+                {
+                    record.Format=FormatV3; record.Pointers=pointers;
+                    if (replacements.Count==0 && pointers.Replacements.Count>0) record.Replacements=new OutfitSetReplacements {Method=method ?? "",Mods=replacements};
+                }
+                int outfitTotal=record.Entries.Count+(pointers==null ? 0 : pointers.Outfits.Count), replacementTotal=replacements.Count+(pointers==null ? 0 : pointers.Replacements.Count);
+                record.Scope=PresetScopes.Code(PresetScopes.Of(outfitTotal>0,replacementTotal>0));
                 string stage=NewStage(root), final=Safety.Under(Container(root,OutfitSetKind.Preset),record.Id);
                 bool published=false;
                 try
@@ -337,22 +359,29 @@ namespace SlotsInstaller
         // anything changes; replacements go first, through the replace engine (SF6 closed, Fluffy PAK rule,
         // journal), missing ones in saved order, identical and same-named ones skipped. The loose file loader
         // question is the caller's (OutfitSetsForm asks, the Assistant refuses), before this runs.
-        internal static OutfitSetRestoreResult Restore(string costumeRoot,OutfitSetInfo selected,PresetScope scope,ReplaceEngine engine)
+        internal static OutfitSetRestoreResult Restore(string costumeRoot,OutfitSetInfo selected,PresetScope scope,ReplaceEngine engine) { return Restore(costumeRoot,selected,scope,engine,null); }
+        // 1.0.8 v3: copied replacements, then the listed ones (installed from the library), then copied extra outfits,
+        // then listed ones; item by item, problems go to result.Notes. `sevenZip` = the settings' 7-Zip when null.
+        internal static OutfitSetRestoreResult Restore(string costumeRoot,OutfitSetInfo selected,PresetScope scope,ReplaceEngine engine,string sevenZip)
         {
             using (Installer.AcquireMutation(costumeRoot))
             {
                 string root=Root(costumeRoot); OutfitSetRecord record=Snapshot(root,selected);
-                var result=new OutfitSetRestoreResult(); var missing=new List<OutfitSetItem>();
+                var result=new OutfitSetRestoreResult(); var missing=new List<OutfitSetItem>(); var taken=new List<OutfitSetItem>();
+                bool v3=record.Pointers!=null;
                 bool outfits=PresetScopes.Outfits(scope), replacements=PresetScopes.Replacements(scope) && record.Replacements!=null && record.Replacements.Mods.Count>0;
-                if (replacements && engine==null) throw new IOException("Replacements can't be restored without the game folder.");
+                bool listedReplacements=v3 && PresetScopes.Replacements(scope) && record.Pointers.Replacements.Count>0;
+                if ((replacements || listedReplacements) && engine==null) throw new IOException("Replacements can't be restored without the game folder.");
                 if (outfits)
                     foreach (OutfitSetItem item in record.Entries)
                     {
                         string destination=Destination(root,item); Safety.NoReparseChain(destination);
                         if (!Exists(destination)) missing.Add(item);
                         else if (Matches(Inventory(destination,item.Directory,true),item,true)) result.Skipped++;
+                        else if (v3) { result.Notes.Add(item.RelativePath+": a different outfit is installed there; left as is."); taken.Add(item); }
                         else throw new IOException("A different outfit already exists at "+item.RelativePath+". Nothing was restored.");
                     }
+                PresetReplacementPlan copied=null;
                 if (replacements)
                 {
                     List<OutfitSetReplacement> saved=record.Replacements.Mods;
@@ -364,15 +393,34 @@ namespace SlotsInstaller
                     },out done) ?? "";
                     result.ReplacementsRestored=done.Missing.Count; result.ReplacementsSkipped=done.Identical.Count;
                     result.ReplacementConflicts=done.Conflicts.Select(i=>saved[i].Mod.Name).ToList();
+                    copied=done;
                 }
-                if (missing.Count==0) return result;
-                if (result.ReplacementsRestored==0) { RestoreOutfits(root,selected,record,missing,result); return result; }
-                try { RestoreOutfits(root,selected,record,missing,result); return result; }
-                catch (OperationCanceledException ex) { throw new IOException(ReplacePlanner.N(result.ReplacementsRestored,"replacement")+" restored; extra outfits cancelled and unchanged.",ex); }
-                catch (IOException ex) { throw new IOException(ReplacePlanner.N(result.ReplacementsRestored,"replacement")+" restored; extra outfits failed: "+ex.Message,ex); }
+                var listed=new Dictionary<int,string>();
+                if (listedReplacements) RestorePointers(root,record,false,true,engine,sevenZip,result,listed);
+                // 1.0.8: listed and copied replacements back in the preset's one saved priority order.
+                if (v3 && PresetScopes.Replacements(scope) && (listed.Count>0 || (copied!=null && copied.Created.Count>0))) ArrangeReplacements(record,copied,listed,engine,result);
+                if (missing.Count>0)
+                {
+                    List<OutfitSetItem> considered=record.Entries.Where(e=>!taken.Contains(e)).ToList();
+                    if (v3)
+                    {
+                        try { RestoreOutfits(root,selected,record,considered,missing,result); }
+                        catch (IOException ex) { result.Notes.Add("Copied extra outfits: not restored. "+ex.Message); }
+                    }
+                    else if (result.ReplacementsRestored==0) RestoreOutfits(root,selected,record,considered,missing,result);
+                    else
+                    {
+                        try { RestoreOutfits(root,selected,record,considered,missing,result); }
+                        catch (OperationCanceledException ex) { throw new IOException(ReplacePlanner.N(result.ReplacementsRestored,"replacement")+" restored; extra outfits cancelled and unchanged.",ex); }
+                        catch (IOException ex) { throw new IOException(ReplacePlanner.N(result.ReplacementsRestored,"replacement")+" restored; extra outfits failed: "+ex.Message,ex); }
+                    }
+                }
+                if (v3 && outfits) RestorePointers(root,record,true,false,null,sevenZip,result,null);
+                return result;
             }
         }
-        private static void RestoreOutfits(string root,OutfitSetInfo selected,OutfitSetRecord record,List<OutfitSetItem> missing,OutfitSetRestoreResult result)
+        // `considered`: the saved entries checked again before publishing (v3 leaves out those whose place is taken).
+        private static void RestoreOutfits(string root,OutfitSetInfo selected,OutfitSetRecord record,List<OutfitSetItem> considered,List<OutfitSetItem> missing,OutfitSetRestoreResult result)
         {
             {
                 string stage=NewStage(root); var moved=new List<Move>(); bool preserve=false;
@@ -386,7 +434,7 @@ namespace SlotsInstaller
                     }
                     // A changed identical destination is also a conflict; check the
                     // entire set again before publishing any of the missing entries.
-                    foreach (OutfitSetItem item in record.Entries)
+                    foreach (OutfitSetItem item in considered)
                     {
                         string destination=Destination(root,item); Safety.NoReparseChain(destination);
                         bool wasMissing=missing.Contains(item);
@@ -497,13 +545,22 @@ namespace SlotsInstaller
             try { record=Json.Serializer().Deserialize<OutfitSetRecord>(text); }
             catch (Exception ex) { if (!(ex is ArgumentException) && !(ex is InvalidOperationException)) throw; throw new IOException("Unreadable saved-set record; left untouched.",ex); }
             DateTime created;
-            bool v2=record!=null && record.Format==FormatV2;
-            if (record==null || (record.Format!=FormatV1 && !v2) || record.Id!=leaf || record.Kind!=kind.ToString() || record.Entries==null || (record.Entries.Count==0 && !v2) || !DateTime.TryParse(record.CreatedUtc,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind,out created)) throw new IOException("Invalid saved-set record; left untouched.");
-            // v1 holds extra outfits only; v2 is a preset with at least one replacement. A stated scope must match.
-            if (v2 ? kind!=OutfitSetKind.Preset || record.Replacements==null || record.Replacements.Mods==null || record.Replacements.Mods.Count==0 : record.Replacements!=null) throw new IOException("Invalid saved-set record; left untouched.");
-            if (!String.IsNullOrEmpty(record.Scope) && record.Scope!=PresetScopes.Code(PresetScopes.Of(record.Entries.Count>0,v2))) throw new IOException("Invalid saved-set record; left untouched.");
+            bool v2=record!=null && record.Format==FormatV2, v3=record!=null && record.Format==FormatV3;
+            if (record==null || (record.Format!=FormatV1 && !v2 && !v3) || record.Id!=leaf || record.Kind!=kind.ToString() || record.Entries==null || (record.Entries.Count==0 && !v2 && !v3) || !DateTime.TryParse(record.CreatedUtc,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind,out created)) throw new IOException("Invalid saved-set record; left untouched.");
+            // v1 holds extra outfits only; v2 is a preset with at least one replacement; v3 (1.0.8) a preset of pointers
+            // plus copies of what had no library source (each part may be empty, not all). A stated scope must match.
+            if (v3)
+            {
+                if (kind!=OutfitSetKind.Preset || record.Pointers==null || (record.Replacements!=null && record.Replacements.Mods==null)) throw new IOException("Invalid saved-set record; left untouched.");
+                ValidatePointers(root,record,new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            }
+            else if (record.Pointers!=null || (v2 ? kind!=OutfitSetKind.Preset || record.Replacements==null || record.Replacements.Mods==null || record.Replacements.Mods.Count==0 : record.Replacements!=null)) throw new IOException("Invalid saved-set record; left untouched.");
+            bool copiedReplacements=record.Replacements!=null && record.Replacements.Mods.Count>0;
+            int outfitTotal=record.Entries.Count+(v3 ? record.Pointers.Outfits.Count : 0), replacementTotal=(copiedReplacements ? record.Replacements.Mods.Count : 0)+(v3 ? record.Pointers.Replacements.Count : 0);
+            if (outfitTotal+replacementTotal==0) throw new IOException("Invalid saved-set record; left untouched.");
+            if (!String.IsNullOrEmpty(record.Scope) && record.Scope!=PresetScopes.Code(PresetScopes.Of(outfitTotal>0,replacementTotal>0))) throw new IOException("Invalid saved-set record; left untouched.");
             var savedReplacements=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (v2)
+            if (copiedReplacements)
                 foreach (OutfitSetReplacement r in record.Replacements.Mods)
                 {
                     if (r==null || r.Mod==null || !Regex.IsMatch(r.Storage ?? "",@"^[0-9]{6}$") || !savedReplacements.Add(r.Storage) || String.IsNullOrWhiteSpace(r.Mod.Name) || r.Mod.Name.Length>300 || r.Mod.Files==null || r.Mod.Files.Count==0) throw new IOException("Invalid saved replacement; left untouched.");
@@ -519,6 +576,7 @@ namespace SlotsInstaller
                     if (!Matches(Inventory(ReplacementPayload(full,r),true,hash),ReplacementItem(r),hash)) throw new IOException("Saved replacement files changed or are incomplete: "+r.Mod.Name);
                 }
             SetName(record.Name); var destinations=new HashSet<string>(StringComparer.OrdinalIgnoreCase); var storage=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (v3) foreach (PresetOutfitPointer p in record.Pointers.Outfits) destinations.Add(Safety.Under(root,p.Character+"/"+p.Folder));   // a copy may not share a pointer's place
             foreach (OutfitSetItem item in record.Entries)
             {
                 if (item==null || item.Files==null || item.Directories==null || !Regex.IsMatch(item.Storage ?? "",@"^[0-9]{6}$") || !storage.Add(item.Storage) || !destinations.Add(Destination(root,item))) throw new IOException("Invalid or repeated saved outfit entry.");
@@ -535,16 +593,22 @@ namespace SlotsInstaller
             }
             string payload=System.IO.Path.Combine(full,"payload"); Safety.NoReparseChain(payload);
             string replacementsDir=System.IO.Path.Combine(full,ReplacementsFolder); Safety.NoReparseChain(replacementsDir);
-            if (!System.IO.Directory.Exists(payload) || System.IO.Directory.EnumerateFileSystemEntries(full).Any(p=>!String.Equals(System.IO.Path.GetFileName(p),RecordName,StringComparison.Ordinal) && !String.Equals(System.IO.Path.GetFileName(p),"payload",StringComparison.Ordinal) && !(v2 && String.Equals(System.IO.Path.GetFileName(p),ReplacementsFolder,StringComparison.Ordinal))) || System.IO.Directory.EnumerateFileSystemEntries(payload).Any(p=>!storage.Contains(System.IO.Path.GetFileName(p)))) throw new IOException("Unrecognized extra files in saved set; left untouched.");
-            if (v2 && (!System.IO.Directory.Exists(replacementsDir) || System.IO.Directory.EnumerateFileSystemEntries(replacementsDir).Any(p=>!savedReplacements.Contains(System.IO.Path.GetFileName(p))))) throw new IOException("Unrecognized extra files in saved set; left untouched.");
+            if (!System.IO.Directory.Exists(payload) || System.IO.Directory.EnumerateFileSystemEntries(full).Any(p=>!String.Equals(System.IO.Path.GetFileName(p),RecordName,StringComparison.Ordinal) && !String.Equals(System.IO.Path.GetFileName(p),"payload",StringComparison.Ordinal) && !(copiedReplacements && String.Equals(System.IO.Path.GetFileName(p),ReplacementsFolder,StringComparison.Ordinal))) || System.IO.Directory.EnumerateFileSystemEntries(payload).Any(p=>!storage.Contains(System.IO.Path.GetFileName(p)))) throw new IOException("Unrecognized extra files in saved set; left untouched.");
+            if (copiedReplacements && (!System.IO.Directory.Exists(replacementsDir) || System.IO.Directory.EnumerateFileSystemEntries(replacementsDir).Any(p=>!savedReplacements.Contains(System.IO.Path.GetFileName(p))))) throw new IOException("Unrecognized extra files in saved set; left untouched.");
             return record;
         }
         private static OutfitSetInfo Info(string folder,OutfitSetRecord record,string text)
         {
             List<OutfitSetReplacement> mods=record.Replacements==null || record.Replacements.Mods==null ? new List<OutfitSetReplacement>() : record.Replacements.Mods;
+            // 1.0.8 v3: pointers first, then the copied entries, marked "(copy)"; replacements in their one saved priority
+            // order (SavedReplacementOrder). Bytes = the copies plus the record.
+            PresetPointers p=record.Pointers;
+            var outfits=(p==null ? new List<string>() : p.Outfits.Select(o=>o.Character+"/"+o.Folder).ToList()).Concat(record.Entries.Select(e=>e.RelativePath+(e.Enabled ? "" : " (disabled)")+(p==null ? "" : " (copy)"))).ToList();
+            var replacements=p==null ? mods.Select(r=>r.Mod.Name).ToList() : SavedReplacementOrder(record).Select(x=>x.Key ? p.Replacements[x.Value].Name : mods[x.Value].Mod.Name+" (copy)").ToList();
             return new OutfitSetInfo {Folder=folder,Id=record.Id,Name=record.Name,Kind=(OutfitSetKind)Enum.Parse(typeof(OutfitSetKind),record.Kind),CreatedUtc=DateTime.Parse(record.CreatedUtc,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind).ToUniversalTime(),
-                Bytes=record.Entries.Sum(e=>e.Files.Sum(f=>f.Length))+mods.Sum(r=>r.Mod.Files.Sum(f=>f.Size)),OutfitCount=record.Entries.Count,Outfits=record.Entries.Select(e=>e.RelativePath+(e.Enabled ? "" : " (disabled)")).ToList(),ManifestText=text,
-                Scope=PresetScopes.Of(record.Entries.Count>0,mods.Count>0),ReplacementCount=mods.Count,Replacements=mods.Select(r=>r.Mod.Name).ToList(),ReplacementMethod=record.Replacements==null ? "" : record.Replacements.Method ?? ""};
+                Bytes=record.Entries.Sum(e=>e.Files.Sum(f=>f.Length))+mods.Sum(r=>r.Mod.Files.Sum(f=>f.Size))+(p==null ? 0 : RecordBytes(text)),OutfitCount=outfits.Count,Outfits=outfits,ManifestText=text,
+                Scope=PresetScopes.Of(outfits.Count>0,replacements.Count>0),ReplacementCount=replacements.Count,Replacements=replacements,ReplacementMethod=record.Replacements==null ? "" : record.Replacements.Method ?? "",
+                Pointers=p!=null,Copied=p==null ? 0 : record.Entries.Count+mods.Count};
         }
 
         // 2.4.1: the confirmation's list of what a restore of `scope` would change. Reads the record without
@@ -555,22 +619,24 @@ namespace SlotsInstaller
             if (selected==null) throw new IOException("Select a preset or removed selection.");
             OutfitSetRecord record=Read(root,selected.Folder,selected.Kind,false,out text);
             if (record.Id!=selected.Id || text!=selected.ManifestText) throw new IOException("This saved copy changed. Refresh the list.");
-            var preview=new OutfitSetPreview {Holds=PresetScopes.Of(record.Entries.Count>0,record.Replacements!=null)};
+            bool copied=record.Replacements!=null && record.Replacements.Mods.Count>0;
+            var preview=new OutfitSetPreview {Holds=PresetScopes.Of(record.Entries.Count>0 || (record.Pointers!=null && record.Pointers.Outfits.Count>0),copied || (record.Pointers!=null && record.Pointers.Replacements.Count>0))};
             if (PresetScopes.Outfits(scope))
                 foreach (OutfitSetItem item in record.Entries) (Exists(Destination(root,item)) ? preview.ExistingOutfits : preview.AddOutfits).Add(item.RelativePath+(item.Enabled ? "" : " (disabled)"));
-            if (PresetScopes.Replacements(scope) && record.Replacements!=null)
+            if (record.Pointers!=null) PreviewPointers(record,scope,engine,root,preview);   // 1.0.8 v3
+            if (PresetScopes.Replacements(scope) && copied)
             {
                 List<ReplaceMod> saved=record.Replacements.Mods.Select(r=>r.Mod).ToList();
                 try
                 {
                     if (engine==null) throw new IOException("No game folder.");
                     PresetReplacementPlan plan=engine.PlanPresetReplacements(saved);
-                    preview.AddReplacements=plan.Missing.Select(i=>saved[i].Name).ToList();
-                    preview.SameReplacements=plan.Identical.Select(i=>saved[i].Name).ToList();
-                    preview.ConflictReplacements=plan.Conflicts.Select(i=>saved[i].Name).ToList();
-                    preview.InstallsNatives=plan.InstallsNatives;
+                    preview.AddReplacements.AddRange(plan.Missing.Select(i=>saved[i].Name));
+                    preview.SameReplacements.AddRange(plan.Identical.Select(i=>saved[i].Name));
+                    preview.ConflictReplacements.AddRange(plan.Conflicts.Select(i=>saved[i].Name));
+                    preview.InstallsNatives|=plan.InstallsNatives;
                 }
-                catch (IOException ex) { preview.ReplacementError=ex.Message; preview.AddReplacements=saved.Select(m=>m.Name).ToList(); }
+                catch (IOException ex) { preview.ReplacementError=ex.Message; preview.AddReplacements.AddRange(saved.Select(m=>m.Name)); }
             }
             return preview;
         }
