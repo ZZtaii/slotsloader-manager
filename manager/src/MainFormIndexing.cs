@@ -124,9 +124,9 @@ namespace SlotsInstaller
                 if (finished || previousIdentity < identityTotal && identityApplied >= identityTotal) facetRowsSource = null;
             }
             // Drain bursts promptly in small slices; refresh the full list at most
-            // five times a second, plus the final flush.
+            // every 400 ms (the old timer's pace), plus the final flush.
             indexTimer.Interval = indexQueue.IsEmpty ? 400 : 16;
-            if (indexUiDirty && (finished || (DateTime.UtcNow - indexLastUiUpdate).TotalMilliseconds >= 200))
+            if (indexUiDirty && (finished || (DateTime.UtcNow - indexLastUiUpdate).TotalMilliseconds >= 400))
             {
                 indexUiDirty = false; indexLastUiUpdate = DateTime.UtcNow;
                 ApplyFilters(); modList.Invalidate();

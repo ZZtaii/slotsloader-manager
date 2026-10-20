@@ -117,7 +117,7 @@ namespace SlotsInstaller
                 filterMatchWorker = null; filterMatchCancel = null;
                 cancel.Dispose(); worker.Dispose();
                 if (IsDisposed || Disposing) return;
-                if (e.Error != null) { Program.Log(e.Error); SetPageStatus(libraryPage, "Could not match filters. Try changing the filter.", Palette.Red); return; }
+                if (e.Error != null) { Program.Log(e.Error); customMatchesPending = false; UpdateLibraryCaption(); UpdateCustomDraftStatus(); SetPageStatus(libraryPage, "Could not match filters. Try changing the filter.", Palette.Red); return; }
                 ApplyFilters();
             };
             worker.RunWorkerAsync();
