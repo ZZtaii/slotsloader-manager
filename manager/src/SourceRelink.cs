@@ -14,8 +14,10 @@ namespace SlotsInstaller
     //   Candidates: a compact name (letters and digits) equal to the record's name or its old file name, or a modinfo
     //   name equal to one of them; a version after the name counts as the same ("X - v1.0" = "X"). Each is read like an install: its listing, the record's options composed (paths as
     //   ReplacePlanner.Prepare names them, an old version suffix it renamed included), and every file of the record
-    //   must be there with its size, then its SHA-256. A file the Manager changed (ModFile.Fixes) only has to be
-    //   there; at least one unchanged file must be compared. A patch PAK matches one of the mod's PAKs by its bytes.
+    //   must be there with its size, then its SHA-256. A file the Manager changed (ModFile.Fixes) is fixed again the same
+    //   way (ModFixes.UpgradeModFile with this game's reference, as ReplacePlanner.Prepare runs it) and must then give the
+    //   recorded SHA-256 (1.0.10 review: "present" let another mod match through its unchanged files and restore other
+    //   texture data); no reference, no match. A patch PAK matches one of the mod's PAKs by its bytes.
     //   Exactly one match: SourcePath is updated (the replace state or the outfit's manifest, as a library rename
     //   writes it; no game file changes) with a Rename history event. None or several: left as is (the preset copies it).
     internal static class SourceRelink
@@ -25,20 +27,30 @@ namespace SlotsInstaller
             internal string Name = "", OldSource = "";
             internal List<string> SelectedIds = new List<string>();
             internal bool Replace;
+            internal Func<GameReference> Reference;   // replacements: the game reference fixed files are checked with (null: none)
             internal readonly List<WantedFile> Files = new List<WantedFile>();
         }
-        private sealed class WantedFile { internal string Path = "", Sha256 = ""; internal long Size; internal bool Fixed, Pak; }
+        private sealed class WantedFile { internal string Path = "", Recorded = "", Sha256 = ""; internal long Size; internal bool Fixed, Pak; }
 
         // Replacements and tool mods (not Slotsloader, not test installs) whose source is gone. Returns how many were relinked.
         internal static int Replacements(ReplaceEngine engine, List<LibraryMod> library, string sevenZip)
         {
             if (engine == null || library == null || library.Count == 0 || !File.Exists(engine.StatePath)) return 0;
             var found = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // record id -> new source
+            GameReference reference = null; bool referenceRead = false;
+            Func<GameReference> game = delegate
+            {
+                if (referenceRead) return reference;
+                referenceRead = true;
+                try { GamePaks paks = GamePaks.Load(engine.GameRoot); reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc); reference.SwapRepairs = engine.Settings.SwapRepairs; }
+                catch (Exception ex) { if (Fatal(ex)) throw; Program.Log(ex); reference = null; }
+                return reference;
+            };
             foreach (ReplaceMod m in engine.LoadState().Mods)
             {
                 if (m == null || m.Test || LoaderCostumePak.IsLoaderMod(m) || String.IsNullOrWhiteSpace(m.SourcePath) || Exists(m.SourcePath) || m.Files == null || m.Files.Count == 0) continue;
-                var want = new Wanted { Name = m.Name ?? "", OldSource = m.SourcePath, SelectedIds = (m.SelectedIds ?? new List<string>()).ToList(), Replace = true };
-                foreach (ModFile f in m.Files) want.Files.Add(new WantedFile { Path = Key(f.Path, true), Sha256 = f.Sha256 ?? "", Size = f.Size, Fixed = !String.IsNullOrEmpty(f.Fixes), Pak = ReplaceEngine.IsPatchPakPath(f.Path) });
+                var want = new Wanted { Name = m.Name ?? "", OldSource = m.SourcePath, SelectedIds = (m.SelectedIds ?? new List<string>()).ToList(), Replace = true, Reference = game };
+                foreach (ModFile f in m.Files) want.Files.Add(new WantedFile { Path = Key(f.Path, true), Recorded = f.Path ?? "", Sha256 = f.Sha256 ?? "", Size = f.Size, Fixed = !String.IsNullOrEmpty(f.Fixes), Pak = ReplaceEngine.IsPatchPakPath(f.Path) });
                 string to = Find(want, library, sevenZip);
                 if (to != null) found[m.Id] = to;
             }
@@ -165,7 +177,7 @@ namespace SlotsInstaller
                     List<PlannedFile> same; if (!byStem.TryGetValue(stem, out same)) byStem[stem] = same = new List<PlannedFile>();
                     same.Add(f);
                 }
-                var compare = new List<KeyValuePair<WantedFile, PlannedFile>>(); var wantedPaks = new List<WantedFile>();
+                var compare = new List<KeyValuePair<WantedFile, PlannedFile>>(); var wantedPaks = new List<WantedFile>(); var refixed = new List<KeyValuePair<WantedFile, PlannedFile>>();
                 foreach (WantedFile w in want.Files)
                 {
                     if (w.Pak) { wantedPaks.Add(w); continue; }
@@ -177,11 +189,13 @@ namespace SlotsInstaller
                         if (stem == null || !byStem.TryGetValue(stem, out same) || same.Count != 1) return false;
                         f = same[0];
                     }
-                    if (w.Fixed) continue;   // changed by the Manager: present is enough
+                    if (w.Fixed) { refixed.Add(new KeyValuePair<WantedFile, PlannedFile>(w, f)); continue; }   // changed by the Manager: compared after the same fix (below)
                     if (f.Asset.Size != w.Size) return false;
                     compare.Add(new KeyValuePair<WantedFile, PlannedFile>(w, f));
                 }
                 if (compare.Count + wantedPaks.Count == 0) return false;   // nothing unchanged to compare
+                GameReference reference = refixed.Count == 0 ? null : want.Reference == null ? null : want.Reference();
+                if (refixed.Count > 0 && reference == null) return false;   // fixed files can't be checked: no guess
                 List<PlannedFile> sizedPaks = paks.Where(p => wantedPaks.Any(w => w.Size == p.Asset.Size)).ToList();
                 if (sizedPaks.Count < wantedPaks.Count) return false;
                 Dictionary<string, string> hashes = reader.VerifyFiles(compare.Select(p => p.Value).Concat(sizedPaks).Distinct().ToList());
@@ -191,6 +205,12 @@ namespace SlotsInstaller
                     PlannedFile hit = sizedPaks.FirstOrDefault(p => p.Asset.Size == w.Size && SameHash(hashes, p, w.Sha256));
                     if (hit == null) return false;
                     sizedPaks.Remove(hit);
+                }
+                foreach (var pair in refixed)
+                {
+                    byte[] data = reader.ReadBytes(pair.Value.Asset.EntryPath, 256 * 1024 * 1024);   // Prepare fixes files up to 256 MB
+                    ModFixes.UpgradeModFile(ref data, reference, pair.Key.Recorded);
+                    if (!String.Equals(ReplaceEngine.Sha(data), pair.Key.Sha256, StringComparison.OrdinalIgnoreCase)) return false;
                 }
                 return true;
             }

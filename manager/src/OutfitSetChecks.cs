@@ -709,6 +709,20 @@ namespace SlotsInstaller
                 OutfitSetInfo kept=OutfitSetStore.CreatePreset(t.CostumeRoot,"Unsure",PresetScope.Replacements,t.Engine,OutfitSetStore.LibraryMods(new[]{Listed(sameB1,"Cammy Alt"),Listed(sameB2,"Cammy Alt"),Listed(onlyA,"Cammy Colors")}));
                 Require(File.ReadAllText(t.Engine.StatePath)==stateBefore,"An unsure match changed the replace state.");
                 Require(kept.Copies.Count==2 && kept.Copies.Any(c=>c.Name=="Cammy Alt" && c.Reason=="not found at "+twoB) && kept.Copies.Any(c=>c.Name=="Cammy Colors" && c.Reason=="not found at "+twoA),"Unsure copies: "+String.Join(" | ",kept.Copies.Select(c=>c.Name+": "+c.Reason)));
+
+                // Review: a same-named mod whose unchanged files are identical but whose fixed file differs (same size) is
+                // not the source: the fixed file is fixed again and compared, so it is no match and the record is copied.
+                ScopeFixture u=CreateScope(Path.Combine(root,"three"));
+                string threeA=Path.Combine(u.R.Mods,"modA"), fixedRel=u.Engine.LoadState().Mods.Single(m=>m.Name=="Cammy Colors").Files.First(f=>!String.IsNullOrEmpty(f.Fixes)).Path;
+                string impostorDir=Path.Combine(root,"three","impostor"); CopyTree(threeA,impostorDir);
+                Func<string,string> stem=delegate(string x) { return System.Text.RegularExpressions.Regex.Replace(Path.GetFileName(x.Replace('/','\\')),@"\.\d+$",""); };   // the fixed texture was renamed from .tex.143230113
+                string impostorFile=Directory.GetFiles(impostorDir,"*",SearchOption.AllDirectories).Single(x=>String.Equals(stem(x),stem(fixedRel),StringComparison.OrdinalIgnoreCase));
+                byte[] fixedBytes=File.ReadAllBytes(impostorFile); fixedBytes[fixedBytes.Length-1]^=0x5A; File.WriteAllBytes(impostorFile,fixedBytes);
+                string impostorZip=Path.Combine(u.R.Mods,"Cammy Colors.zip"); ZipFile.CreateFromDirectory(impostorDir,impostorZip); Directory.Delete(threeA,true);
+                string threeState=File.ReadAllText(u.Engine.StatePath);
+                OutfitSetInfo impostor=OutfitSetStore.CreatePreset(u.CostumeRoot,"Impostor",PresetScope.Replacements,u.Engine,OutfitSetStore.LibraryMods(new[]{Listed(impostorZip,"Cammy Colors")}));
+                Require(File.ReadAllText(u.Engine.StatePath)==threeState,"A mod that differs only in a fixed file was taken as the source.");
+                Require(impostor.Copies.Count==1 && impostor.Copies[0].Name=="Cammy Colors" && impostor.Copies[0].Reason=="not found at "+threeA,"Impostor copies: "+String.Join(" | ",impostor.Copies.Select(c=>c.Name+": "+c.Reason)));
             }
             finally { HistoryStore.DefaultDir=previousHistory; }
         }
@@ -770,6 +784,24 @@ namespace SlotsInstaller
                 // A preset saved before 1.0.10 (no reasons kept): a manual entry still says manual drop.
                 var older=Manifest(set); ((Dictionary<string,object>)older["Pointers"]).Remove("CopiedOutfitReasons"); WriteManifest(set,older);
                 Require(Fresh(s,set).Copies.Single().Reason==OutfitSetStore.ManualDrop,"An older preset's copy reason: "+Fresh(s,set).Copies.Single().Reason);
+
+                // Review: two identical drops with different names point at the same twin; both come back, neither stands in for the other.
+                ScopeFixture p=CreateScope(Path.Combine(root,"pair"));
+                string first=Safety.Under(p.CostumeRoot,"Juri/Manual zip.zip"), second=Safety.Under(p.CostumeRoot,"Juri/Manual copy.zip");
+                byte[] pairBytes=File.ReadAllBytes(first); File.WriteAllBytes(second,pairBytes);
+                string pairTwin=Path.Combine(root,"pair-library","Pair twin.zip"); Directory.CreateDirectory(Path.GetDirectoryName(pairTwin)); File.WriteAllBytes(pairTwin,pairBytes);
+                OutfitSetInfo pair=OutfitSetStore.CreatePreset(p.CostumeRoot,"Pair",PresetScope.ExtraOutfits,p.Engine,OutfitSetStore.LibraryMods(new List<LibraryEntry>{new LibraryEntry{SourcePath=pairTwin,Size=pairBytes.Length,Kind="ZIP"}}));
+                var pairPointers=((System.Collections.IEnumerable)PointerRecord(pair)["Outfits"]).Cast<Dictionary<string,object>>().Where(o=>(string)o["Mode"]=="all_variants").ToList();
+                Require(pair.Copies.Count==0 && pairPointers.Count==2 && pairPointers.All(o=>String.Equals((string)o["SourcePath"],pairTwin,StringComparison.OrdinalIgnoreCase)),"Twin drops: "+Json.Serializer().Serialize(pairPointers)+" copies "+pair.Copies.Count);
+                OutfitSetStore.UninstallOutfits(p.CostumeRoot,Installer.ListInstalled(p.CostumeRoot),new CheckRecycleBin());
+                r=OutfitSetStore.Restore(p.CostumeRoot,pair,PresetScope.ExtraOutfits,p.Engine);
+                Require(r.Restored==3 && r.Skipped==0 && r.Notes.Count==0 && File.ReadAllBytes(first).SequenceEqual(pairBytes) && File.ReadAllBytes(second).SequenceEqual(pairBytes),"Twin drops restored: "+r.Restored+"/"+r.Skipped+" "+String.Join(" | ",r.Notes)+" first "+File.Exists(first)+" second "+File.Exists(second));
+                r=OutfitSetStore.Restore(p.CostumeRoot,pair,PresetScope.ExtraOutfits,p.Engine);
+                Require(r.Restored==0 && r.Skipped==3 && r.Notes.Count==0,"Twin drops, second restore: "+r.Restored+"/"+r.Skipped+" "+String.Join(" | ",r.Notes));
+                // One of them gone: only that one comes back, not counted as the other.
+                OutfitSetStore.UninstallOutfits(p.CostumeRoot,Installer.ListInstalled(p.CostumeRoot).Where(o=>String.Equals(o.Folder,second,StringComparison.OrdinalIgnoreCase)).ToList(),new CheckRecycleBin());
+                r=OutfitSetStore.Restore(p.CostumeRoot,pair,PresetScope.ExtraOutfits,p.Engine);
+                Require(r.Restored==1 && r.Skipped==2 && File.ReadAllBytes(second).SequenceEqual(pairBytes),"One twin restored: "+r.Restored+"/"+r.Skipped+" "+String.Join(" | ",r.Notes));
             }
             finally { ArchiveInstalls.DataDirOverride=previousData; }
         }

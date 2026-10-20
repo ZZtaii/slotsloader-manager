@@ -334,14 +334,23 @@ namespace SlotsInstaller
 
         private static void RestoreOutfitPointers(string root, List<PresetOutfitPointer> saved, string sevenZip, OutfitSetRestoreResult result)
         {
+            // 1.0.10 review: an installed archive answers for one saved outfit only. Two manual drops with different names
+            // can point at the same library twin; the copy of one (in its own place, or already counted) is never taken as
+            // the other's, so both come back.
+            Func<string, string> full = delegate(string path) { return System.IO.Path.GetFullPath(path).TrimEnd('\\'); };
+            var places = new HashSet<string>(saved.Select(x => Safety.Under(root, x.Character + "/" + x.Folder)), StringComparer.OrdinalIgnoreCase);
+            var counted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < saved.Count; i++)
             {
                 PresetOutfitPointer p = saved[i]; string label = p.Character + "/" + p.Folder;
                 OperationContext.Report("Restoring outfit " + (i + 1) + " of " + saved.Count, i, saved.Count);
                 List<InstalledOutfit> installed = Installer.ListInstalled(root);
                 string destination = Safety.Under(root, p.Character + "/" + p.Folder);
-                InstalledOutfit there = installed.FirstOrDefault(o => String.Equals(System.IO.Path.GetFullPath(o.Folder).TrimEnd('\\'), destination, StringComparison.OrdinalIgnoreCase));
-                bool alreadyCopied = p.Mode == ModeAllVariants && installed.Any(o => o.WholeArchive && o.Enabled && String.Equals(o.Character, p.Character, StringComparison.OrdinalIgnoreCase) && ReplacePlanner.SameSource(o.SourcePath, p.SourcePath));
+                InstalledOutfit there = installed.FirstOrDefault(o => String.Equals(full(o.Folder), destination, StringComparison.OrdinalIgnoreCase));
+                InstalledOutfit copied = p.Mode != ModeAllVariants ? null : installed.FirstOrDefault(o => o.WholeArchive && o.Enabled && String.Equals(o.Character, p.Character, StringComparison.OrdinalIgnoreCase) && ReplacePlanner.SameSource(o.SourcePath, p.SourcePath)
+                    && !places.Contains(full(o.Folder)) && !counted.Contains(full(o.Folder)));
+                bool alreadyCopied = copied != null;
+                counted.Add(alreadyCopied ? full(copied.Folder) : destination);
                 if (there != null || Exists(destination) || alreadyCopied)
                 {
                     bool same = alreadyCopied || (there != null && there.Enabled && SamePointed(there, p));
@@ -354,7 +363,12 @@ namespace SlotsInstaller
                 try
                 {
                     var notes = new List<string>();
-                    if (p.Mode == ModeAllVariants) ArchiveInstalls.Install(p.SourcePath, root, p.Character, p.Name, SavedArchiveName(p));
+                    // 1.0.10 review: Install all variants keeps one linked copy of a library archive per character (a second
+                    // install replaces it). A twin drop whose library archive is already linked under another name comes
+                    // back as the plain copy it was saved from.
+                    if (p.Mode == ModeAllVariants && installed.Any(o => o.WholeArchive && String.Equals(o.Character, p.Character, StringComparison.OrdinalIgnoreCase) && ReplacePlanner.SameSource(o.SourcePath, p.SourcePath) && !String.Equals(full(o.Folder), destination, StringComparison.OrdinalIgnoreCase)))
+                        CopyArchive(p.SourcePath, destination);
+                    else if (p.Mode == ModeAllVariants) ArchiveInstalls.Install(p.SourcePath, root, p.Character, p.Name, SavedArchiveName(p));
                     else
                     {
                         ModPackage package = PackageReader.Load(p.SourcePath, sevenZip);
@@ -391,6 +405,24 @@ namespace SlotsInstaller
             if (p.Mode == ModeAllVariants) return (there.WholeArchive && ReplacePlanner.SameSource(there.SourcePath, p.SourcePath)) || (!there.Managed && SameBytes(there.Folder, p.SourcePath));
             return there.Managed && ReplacePlanner.SameSource(there.SourcePath, p.SourcePath) && SameIds(there.SelectedIds, p.SelectedIds);
         }
+        // A library archive copied into its saved place as a manual drop (not linked): through a dot-named temporary file,
+        // which Slotsloader skips, so a half-copied archive is never read.
+        private static void CopyArchive(string source, string destination)
+        {
+            string folder = System.IO.Path.GetDirectoryName(destination), name = System.IO.Path.GetFileName(destination);
+            Safety.NoReparseChain(destination);
+            if (File.Exists(destination) || System.IO.Directory.Exists(destination)) throw new IOException(name + " is already there.");
+            System.IO.Directory.CreateDirectory(folder);
+            string temp = System.IO.Path.Combine(folder, "." + name + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".partial");
+            try
+            {
+                File.Copy(source, temp, false);
+                OperationContext.ThrowIfCancellationRequested();
+                using (OperationContext.NonCancellable()) File.Move(temp, destination);
+            }
+            finally { try { if (File.Exists(temp)) File.Delete(temp); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; } }
+        }
+
         // 1.0.10: an all_variants outfit comes back under its saved file name (Slotsloader's variant choices are keyed by
         // it, and a twin can be named differently in the library); null = the source's name.
         private static string SavedArchiveName(PresetOutfitPointer p)
