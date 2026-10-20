@@ -229,7 +229,7 @@ namespace SlotsInstaller
         internal string ReFrameworkDetail = "", SlotsLoaderDetail = "", CrashReporterState = "";
         // 1.0.8 (ReFramework.cs): dinput8.dll present; its build (null when unreadable); older than the supported nightly
         // (never for an upscaler build). ReFrameworkOffer: missing or old, so the one-click install applies.
-        // 1.0.11: ReFrameworkFluffy = the external mod manager installed dinput8.dll, so REFramework is updated there (no offer).
+        // 1.0.10: ReFrameworkFluffy = the external mod manager installed dinput8.dll, so REFramework is updated there (no offer).
         internal bool ReFrameworkFile, ReFrameworkOutdated, ReFrameworkFluffy;
         internal ReFrameworkBuild ReFrameworkBuild;
         internal bool ReFrameworkOffer { get { return (!ReFrameworkFile || ReFrameworkOutdated) && !ReFrameworkFluffy; } }
@@ -267,7 +267,7 @@ namespace SlotsInstaller
             return s;
         }
 
-        // 1.0.11: what Detect reads (sizes, write times, folders), cheap enough for every poll, so a change made outside the
+        // 1.0.10: what Detect reads (sizes, write times, folders), cheap enough for every poll, so a change made outside the
         // Manager (REFramework copied in by hand or by the external mod manager) refreshes the notice without a restart.
         internal static string Stamp(string gameRoot)
         {

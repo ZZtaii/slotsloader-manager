@@ -1144,7 +1144,7 @@ namespace SlotsInstaller
             return n == 0 ? null : "The external mod manager has " + ReplacePlanner.N(n, "mod") + " installed, so only Extra outfit, Slotsloader and REFramework install here. Uninstall them there to use Replace original.";
         }
         internal string ExternalLockReason() { return ExternalLockReason(Fluffy()); }
-        // 1.0.11 (the user): plain REFramework installs and updates past the lockout like Slotsloader (one dinput8.dll in
+        // 1.0.10 (the user): plain REFramework installs and updates past the lockout like Slotsloader (one dinput8.dll in
         // the game folder, no PAK or natives edits), unless the external manager installed dinput8.dll: then it is updated there.
         internal const string ReFrameworkFluffyReason = "The external mod manager installed REFramework (dinput8.dll), so update it there.";
         internal static bool ReFrameworkByFluffy(FluffyInstalls fluffy) { return fluffy != null && fluffy.OwnersOf("dinput8.dll").Count > 0; }
@@ -1164,7 +1164,7 @@ namespace SlotsInstaller
         {
             if (options.Choice == DriftChoice.Repair) return true;
             if (methodOverride != null && !String.Equals(methodOverride, currentMethod, StringComparison.OrdinalIgnoreCase)) return true;
-            foreach (ReplaceMod m in next.Mods.Where(x => x.Enabled && ExternalLockReason(fluffy, x.Files.Select(f => f.Path)) != null))   // Slotsloader, plain REFramework (1.0.11)
+            foreach (ReplaceMod m in next.Mods.Where(x => x.Enabled && ExternalLockReason(fluffy, x.Files.Select(f => f.Path)) != null))   // Slotsloader, plain REFramework (1.0.10)
             {
                 ReplaceMod was = current.Find(m.Id);
                 if (was == null || !was.Enabled || !was.Files.Select(f => f.Path + "|" + f.Sha256).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).SequenceEqual(m.Files.Select(f => f.Path + "|" + f.Sha256).OrderBy(x => x, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase)) return true;

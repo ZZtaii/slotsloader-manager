@@ -115,7 +115,7 @@ namespace SlotsInstaller
             // Slotsloader installs; the Manager's own mods disable and uninstall.
             ReplaceMod loader = ReplaceChecks.Install(f, "tool", "Slotsloader");
             Require(Text(G(f, "amd_ags_x64.dll")) == "slotsloader proxy", "Slotsloader did not install during the lockout");
-            // 1.0.11 (the user): plain REFramework installs too, unless the external manager installed dinput8.dll (updated there).
+            // 1.0.10 (the user): plain REFramework installs too, unless the external manager installed dinput8.dll (updated there).
             ReplaceChecks.Put(f.Mods, "refw/dinput8.dll", B("REFramework 12.10.2026"));
             ReplaceChecks.Put(f.Mods, "refw/reframework_revision.txt", B("fixture revision"));
             ReplaceChecks.Put(f.Mods, "refwBundle/dinput8.dll", B("REFramework 12.10.2026"));
