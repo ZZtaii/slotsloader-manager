@@ -43,7 +43,7 @@ namespace SlotsInstaller
                     ReplaceChecks.Fixture f = ReplaceChecks.Create(Path.Combine(root, "fixture"), false, ReplaceMethods.Pak);
                     string fluffy = Path.Combine(root, "Fluffy", "Games", "SF6");
                     Directory.CreateDirectory(Path.Combine(fluffy, "Mods"));
-                    // 1.0.1: empty (with a mod in it only Extra outfit and Slotsloader install: the lockout); the checks
+                    // 1.0.1: empty (with a mod in it only Extra outfit, Slotsloader and REFramework install: the lockout); the checks
                     // about the external manager add their mods and put this back.
                     File.WriteAllText(Path.Combine(fluffy, "installed.ini"), "");
                     var config = new AppConfig { GameRoot = f.Game, Libraries = new List<string> { f.Mods, Path.Combine(fluffy, "Mods") }, SevenZipPath = "" };
@@ -1131,7 +1131,23 @@ namespace SlotsInstaller
             {
                 File.WriteAllText(ini, saved + "[Fluffy Cammy]\r\nModName=Fluffy Cammy\r\ninstalltype=invalidate\r\nfile=natives/stm/product/model/esf/esf009/002/esf009_002_cmd_001.user.2\r\n");
                 Load(form, f, "modC"); WaitReview(form);
-                Require(Summary(form) == "Cannot install" && Details(form).Contains("only Extra outfit and Slotsloader install here") && !Get<FlatButton>(form, "installButton").Enabled, "Fluffy footer: " + Summary(form) + " / " + Details(form));
+                Require(Summary(form) == "Cannot install" && Details(form).Contains("only Extra outfit, Slotsloader and REFramework install here") && !Get<FlatButton>(form, "installButton").Enabled, "Fluffy footer: " + Summary(form) + " / " + Details(form));
+                // 1.0.11: REFramework the external manager installed is updated there, so the notice offers no click.
+                string dll = Path.Combine(f.Game, "dinput8.dll"), dir = Path.Combine(f.Game, "reframework"); bool hadDir = Directory.Exists(dir);
+                byte[] oldDll = File.Exists(dll) ? File.ReadAllBytes(dll) : null;
+                try
+                {
+                    File.WriteAllText(ini, saved + "[Fluffy REFramework]\r\nModName=Fluffy REFramework\r\ninstalltype=normal\r\nfile=dinput8.dll\r\n");
+                    File.WriteAllBytes(dll, Encoding.ASCII.GetBytes("REFramework 01.01.2025")); Directory.CreateDirectory(dir);
+                    Call(form, "SetInstallMode", InstallModes.Slot, true);
+                    Label notice = Get<Label>(form, "modeNotice");
+                    Require(notice.Text == "REFramework from 1 Jan 2025 is out of date · update it in the external mod manager" && notice.Cursor == Cursors.Default, "notice for the external manager's REFramework: " + notice.Text);
+                }
+                finally
+                {
+                    if (oldDll != null) File.WriteAllBytes(dll, oldDll); else if (File.Exists(dll)) File.Delete(dll);
+                    if (!hadDir && Directory.Exists(dir)) Directory.Delete(dir, true);
+                }
             }
             finally { File.WriteAllText(ini, saved); }
         }
@@ -1357,6 +1373,11 @@ namespace SlotsInstaller
                     Require(notice().StartsWith("Slotsloader isn't installed"), "current build: " + notice());
                     putDll("REFramework 01.01.2025");
                     Require(notice() == "REFramework from 1 Jan 2025 is out of date · click to update it", "old build: " + notice());
+                    // 1.0.11 (tester report): a dinput8.dll replaced outside the Manager updates the notice at the next poll.
+                    putDll("REFramework 13.10.2026"); Call(form, "CheckToolStamp");
+                    Require(Get<Label>(form, "modeNotice").Text.StartsWith("Slotsloader isn't installed"), "a REFramework updated outside the Manager kept the old notice: " + Get<Label>(form, "modeNotice").Text);
+                    putDll("REFramework 01.01.2025"); Call(form, "CheckToolStamp");
+                    Require(Get<Label>(form, "modeNotice").Text.StartsWith("REFramework from 1 Jan 2025 is out of date"), "poll after an older build: " + Get<Label>(form, "modeNotice").Text);
                     putDll("REFramework Upscaler 01.01.2025");
                     Require(notice().StartsWith("Slotsloader isn't installed"), "an upscaler build was called old: " + notice());
                     // One click: the pinned nightly downloaded, verified and opened in Replace original; Install puts it in.

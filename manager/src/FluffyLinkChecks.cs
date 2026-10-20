@@ -102,12 +102,12 @@ namespace SlotsInstaller
                 ReplacePlan check = ReplaceChecks.Check(f, mod);
                 Require(!check.CanInstall && check.Errors.Contains(reason), mod + ": health check not blocked: " + String.Join(" | ", check.Errors));
                 string name = mod;
-                ReplaceChecks.Refused(delegate { ReplaceChecks.Install(f, name, name); }, "only Extra outfit and Slotsloader install");
+                ReplaceChecks.Refused(delegate { ReplaceChecks.Install(f, name, name); }, "only Extra outfit, Slotsloader and REFramework install");
             }
             // Changes that put game files in place: enabling, moving, Reapply.
-            ReplaceChecks.Refused(delegate { f.Engine.SetEnabled(a.Id, true); }, "only Extra outfit and Slotsloader install");
-            ReplaceChecks.Refused(delegate { f.Engine.Move(b.Id, -1); }, "only Extra outfit and Slotsloader install");
-            ReplaceChecks.Refused(delegate { f.Engine.Reapply(); }, "only Extra outfit and Slotsloader install");
+            ReplaceChecks.Refused(delegate { f.Engine.SetEnabled(a.Id, true); }, "only Extra outfit, Slotsloader and REFramework install");
+            ReplaceChecks.Refused(delegate { f.Engine.Move(b.Id, -1); }, "only Extra outfit, Slotsloader and REFramework install");
+            ReplaceChecks.Refused(delegate { f.Engine.Reapply(); }, "only Extra outfit, Slotsloader and REFramework install");
             ReplaceChecks.SameSnapshot(before, ReplaceChecks.Snapshot(f.Game), "after the refusals");
             // The external manager's mod is uninstalled there.
             ReplaceChecks.Refused(delegate { string folder; f.Engine.UninstallFluffy(fluffy.Root, "Other Script", out folder); }, "Uninstall it in the external mod manager.");
@@ -115,6 +115,22 @@ namespace SlotsInstaller
             // Slotsloader installs; the Manager's own mods disable and uninstall.
             ReplaceMod loader = ReplaceChecks.Install(f, "tool", "Slotsloader");
             Require(Text(G(f, "amd_ags_x64.dll")) == "slotsloader proxy", "Slotsloader did not install during the lockout");
+            // 1.0.11 (the user): plain REFramework installs too, unless the external manager installed dinput8.dll (updated there).
+            ReplaceChecks.Put(f.Mods, "refw/dinput8.dll", B("REFramework 12.10.2026"));
+            ReplaceChecks.Put(f.Mods, "refw/reframework_revision.txt", B("fixture revision"));
+            ReplaceChecks.Put(f.Mods, "refwBundle/dinput8.dll", B("REFramework 12.10.2026"));
+            ReplaceChecks.Put(f.Mods, "refwBundle/reframework/autorun/helper.lua", B("-- helper"));
+            ReplaceChecks.Refused(delegate { ReplaceChecks.Install(f, "refwBundle", "REFramework bundle"); }, "only Extra outfit, Slotsloader and REFramework install");
+            ReplaceMod refw = ReplaceChecks.Install(f, "refw", "REFramework");
+            Require(Text(G(f, "dinput8.dll")) == "REFramework 12.10.2026", "REFramework did not install during the lockout");
+            f.Engine.Uninstall(refw.Id);
+            fluffy.Install("Fluffy REFramework", "Fluffy REFramework", "normal", new Dictionary<string, byte[]> { { "dinput8.dll", B("REFramework 01.01.2025") } }, false, null);
+            ReplacePlan owned = ReplaceChecks.Check(f, "refw");
+            Require(!owned.CanInstall && owned.Errors.Contains(ReplaceEngine.ReFrameworkFluffyReason), "REFramework over the external manager's: " + String.Join(" | ", owned.Errors));
+            ReplaceChecks.Refused(delegate { ReplaceChecks.Install(f, "refw", "REFramework"); }, "update it there");
+            Require(Text(G(f, "dinput8.dll")) == "REFramework 01.01.2025", "the external manager's REFramework was replaced");
+            ToolStatus tools = ToolStatus.Detect(f.Game, fluffy.Load());
+            Require(tools.ReFrameworkFluffy && !tools.ReFrameworkOffer && tools.ReFrameworkDetail.EndsWith("update it there"), "tool status with the external manager's REFramework: " + tools.ReFrameworkDetail);
             f.Engine.SetEnabled(b.Id, false);
             f.Engine.Uninstall(a.Id); f.Engine.Uninstall(b.Id); f.Engine.Uninstall(loader.Id);
             Require(f.Engine.LoadState().Mods.Count == 0 && Text(G(f, "amd_ags_x64.dll")) == "genuine AMD AGS library", "uninstalls during the lockout");
@@ -323,7 +339,7 @@ namespace SlotsInstaller
                 var before = ReplaceChecks.Snapshot(f.Game);
                 // 1.0.1: the lockout: with mods in the external manager a replacement doesn't install.
                 string locked = ReplaceChecks.Cli("replace-install", f.Mod("modA"), "--game", f.Game, "--name", "Cammy Colors", "--no-loader");
-                Require(!locked.StartsWith("0\n") && locked.Contains("only Extra outfit and Slotsloader install"), "replace-install during the lockout: " + locked);
+                Require(!locked.StartsWith("0\n") && locked.Contains("only Extra outfit, Slotsloader and REFramework install"), "replace-install during the lockout: " + locked);
                 ReplaceChecks.SameSnapshot(before, ReplaceChecks.Snapshot(f.Game), "after the refused CLI install");
                 string asked = ReplaceChecks.Cli("replace-uninstall", "SF6 Slots Loader 1.9.7", "--game", f.Game);
                 Require(asked.StartsWith("1\n") && asked.Contains("amd_ags_x64.dll was replaced by the external mod manager's mod 'SF6 Mod Suite'") && asked.Contains("--restore-originals") && asked.Contains("--keep-current"), "replace-uninstall without a choice: " + asked);
