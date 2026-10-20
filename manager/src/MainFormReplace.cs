@@ -94,7 +94,7 @@ namespace SlotsInstaller
             Shown += delegate { if (!Program.Headless) { PollGame(); gameTimer.Start(); FinishLeftoverTest(); if (screenshotFile == null) StartUpdates(); } string shot = (screenshotPage ?? "").Replace("min-", ""); SetInstallMode(shot == "replace" || shot == "health" || shot == "checking" ? InstallModes.Replace : replaceSettings.StartMode(), false); };
             FormClosing += delegate { gameTimer.Stop(); };
             Disposed += delegate { gameTimer.Dispose(); if (fluffyWatcher != null) fluffyWatcher.Dispose(); };
-            Activated += delegate { CheckFluffyStamp(); CheckOpenPackageOnActivate(); };
+            Activated += delegate { CheckFluffyStamp(); CheckOpenPackageOnActivate(); CheckToolStamp(); };
             return tools;
         }
 
@@ -112,6 +112,29 @@ namespace SlotsInstaller
             if (changed) { UpdateFooter(); ShowInstalledSelection(); UpdateBanner(); UpdateLibraryUninstall(); }
             if (leftoverTestPending && !gameRunning && !busy) FinishLeftoverTest();
             CheckFluffyStamp();
+            CheckToolStamp();
+        }
+
+        // 1.0.11 (tester report): the REFramework/Slotsloader notice was read only on a mode change, an opened mod or a full
+        // refresh, so a dinput8.dll replaced outside the Manager kept "out of date" until something else refreshed (closing
+        // the external mod manager rewrites installed.ini, which did). Checked on every poll and on activation. The external
+        // manager's installed.ini is part of the stamp: it decides who updates REFramework, and it can start or stop listing
+        // dinput8.dll without the file changing (PR #9 review).
+        private string toolStamp;
+        private string ToolStampNow()
+        {
+            string fluffy = "";
+            try { fluffy = FluffyInstalls.StampOf(fluffyRoots); } catch (Exception ex) { Program.Log(ex); }
+            return ToolStatus.Stamp(config.GameRoot) + "#" + fluffy;
+        }
+        internal void CheckToolStamp()
+        {
+            if (IsDisposed || busy) return;
+            string now = ToolStampNow();
+            if (now == toolStamp) return;
+            toolStamp = now;
+            UpdateModeUi();
+            if (currentPage == settingsPage) LoadReplaceSettingsFields();
         }
 
         private void LaunchGame()
@@ -136,7 +159,8 @@ namespace SlotsInstaller
             modeToggle.SelectionChanged += delegate { SetInstallMode(modeToggle.SelectedIndex == 1 ? InstallModes.Replace : InstallModes.Slot, true); };
             toggle.Controls.Add(modeToggle);
             modeNotice = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = Palette.Tiny, ForeColor = Palette.Muted, AutoEllipsis = true, Padding = new Padding(0, 4, 0, 0) };
-            modeNotice.Click += delegate { if (IsReplaceMode || toolStatus == null) return; if (toolStatus.ReFrameworkOffer) OfferReFrameworkInstall(); else if (toolStatus.ReFramework && !toolStatus.SlotsLoader) OfferSlotsLoaderInstall(); };   // 1.0.8: REFramework first
+            // 1.0.8: REFramework first; 1.0.11: a REFramework notice without an offer (the external manager's) does nothing.
+            modeNotice.Click += delegate { if (IsReplaceMode || toolStatus == null) return; if (ReFrameworkNotice(toolStatus) != null) { if (toolStatus.ReFrameworkOffer) OfferReFrameworkInstall(); } else if (toolStatus.ReFramework && !toolStatus.SlotsLoader) OfferSlotsLoaderInstall(); };
             modePanel.Controls.Add(modeNotice); modePanel.Controls.Add(toggle); modePanel.Controls.Add(captionRow);
             return modePanel;
         }
@@ -198,8 +222,9 @@ namespace SlotsInstaller
                 modeNotice.ForeColor = Palette.Muted; modeNotice.Cursor = Cursors.Default;
                 // 1.0.1: the external-manager lockout (ReplaceEngine.ExternalLockReason); the health check gives the full reason.
                 string locked = null;
-                try { if (engine != null && !IsLoaderPackage(package)) locked = engine.ExternalLockReason(); } catch (Exception ex) { Program.Log(ex); }
-                if (locked != null) { modeNotice.Text = "Off while the external mod manager has mods installed · use Extra outfit"; modeNotice.ForeColor = Palette.Accent; }
+                // 1.0.11: Slotsloader and plain REFramework install past it (ReplaceEngine.ExternalLockReason(fluffy, files)).
+                try { if (engine != null) locked = ReplaceEngine.ExternalLockReason(engine.Fluffy(), PackagePaths(package)); } catch (Exception ex) { Program.Log(ex); }
+                if (locked != null) { modeNotice.Text = locked == ReplaceEngine.ReFrameworkFluffyReason ? "REFramework came from the external mod manager · update it there" : "Off while the external mod manager has mods installed · use Extra outfit"; modeNotice.ForeColor = Palette.Accent; }
                 // 2.4.1: INSTALL AS already names the mode; "Health" opens the health-check report.
                 installButton.Text = editingReplacement != null ? "Update" : "Install";
                 previewButton.Text = "Health"; previewButton.AccessibleName = "Health check report";
@@ -207,7 +232,10 @@ namespace SlotsInstaller
             }
             else
             {
-                toolStatus = ToolStatus.Detect(config.GameRoot);
+                toolStamp = ToolStampNow();   // 1.0.11 (CheckToolStamp)
+                FluffyInstalls external = null;
+                try { external = Engine().Fluffy(); } catch (Exception ex) { Program.Log(ex); }
+                toolStatus = ToolStatus.Detect(config.GameRoot, external);
                 // 1.0.8 (the user): REFramework comes first; Slotsloader is its plugin.
                 string notice = ReFrameworkNotice(toolStatus); bool clickable = toolStatus.ReFrameworkOffer;
                 if (notice == null) { notice = toolStatus.SlotsLoader ? "Adds the outfit as a new slot · Slotsloader is installed" : "Slotsloader isn't installed, so extra outfits won't load · click to install it"; clickable = !toolStatus.SlotsLoader; }
@@ -227,13 +255,14 @@ namespace SlotsInstaller
         internal static string ReFrameworkNotice(ToolStatus tools)
         {
             if (!tools.GameFound) return null;
-            if (!tools.ReFrameworkFile) return "REFramework isn't installed, so extra outfits won't load · click to install it";
+            // 1.0.11: REFramework the external mod manager installed is updated there, so no click.
+            if (!tools.ReFrameworkFile) return "REFramework isn't installed, so extra outfits won't load" + (tools.ReFrameworkFluffy ? " · install it in the external mod manager" : " · click to install it");
             if (!tools.ReFramework) return "Start SF6 once so REFramework can finish setting up; extra outfits load after that";
-            if (tools.ReFrameworkOutdated) return "REFramework from " + tools.ReFrameworkBuild.DateText + " is out of date · click to update it";
+            if (tools.ReFrameworkOutdated) return "REFramework from " + tools.ReFrameworkBuild.DateText + " is out of date · " + (tools.ReFrameworkFluffy ? "update it in the external mod manager" : "click to update it");
             return null;
         }
 
-        private static bool IsLoaderPackage(ModPackage p) { return p != null && p.Components.SelectMany(c => c.RootAssets).Any(a => String.Equals(PakHash.Normalize(a.DestinationPath).TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase)); }
+        private static IEnumerable<string> PackagePaths(ModPackage p) { return p == null ? new string[0] : p.Components.SelectMany(c => c.Assets.Concat(c.RootAssets)).Select(a => a.DestinationPath); }
         private static bool IsToolPackage(ModPackage p) { return p != null && p.Components.All(c => c.Assets.Count == 0) && p.Components.Any(c => c.RootAssets.Count > 0) && !IsPakPackage(p); }
         // 2.5.6: only .pak files outside natives (a stage, UI or other PAK mod): added as the next patch PAK (ReplacePakMods.cs).
         // Extra outfit mode copies natives files only, so it can't install one; the notice says what Replace does, nothing more.
@@ -690,7 +719,7 @@ namespace SlotsInstaller
             var lines = new List<string>();
             if (row.Fluffy != null)
             {
-                lines.Add("Installed by an external mod manager (" + row.Fluffy.IniPath + "). The Manager never overwrites its files, and while that manager has mods installed only Extra outfit and Slotsloader install here.");   // 1.0.1
+                lines.Add("Installed by an external mod manager (" + row.Fluffy.IniPath + "). The Manager never overwrites its files, and while that manager has mods installed only Extra outfit, Slotsloader and REFramework install here.");   // 1.0.1
                 string blocker = row.Fluffy.UninstallBlocker;
                 // 2.4.2: PAK installs too (FluffyPakUninstall.cs).
                 if (blocker == null && row.Fluffy.PakInstall) lines.Add("PAK install (" + row.Fluffy.InstallType + "): Uninstall also restores the game entries it invalidated (only ones the Manager can prove; otherwise nothing changes) and removes its patch PAK, leaving an empty placeholder where another PAK sits above.");
@@ -931,6 +960,7 @@ namespace SlotsInstaller
             fluffyChangePending = false;
             try { fluffyStamp = FluffyInstalls.StampOf(fluffyRoots); } catch (Exception ex) { Program.Log(ex); }
             FluffyRefreshCount++;
+            CheckToolStamp();   // 1.0.11: REFramework's owner may have changed (the notice offers its update or points there)
             RefreshInstalled("External mod manager's mods changed · list updated");
         }
         private void EditGameRow(GameModRow row)
@@ -1099,7 +1129,8 @@ namespace SlotsInstaller
                 settingsMethodStatus.Text = "In use: " + current + (state != null && state.Mods.Count > 0 && engine.DesiredMethod() != engine.CurrentMethod(state) ? " · changing it converts installed replacements" : "") + Environment.NewLine + detail;
                 settingsMethodStatus.ForeColor = loader == LooseLoaderState.Unreadable ? Palette.Red : Palette.Muted;
                 loaderOnButton.Enabled = loader == LooseLoaderState.Disabled; loaderOffButton.Enabled = loader == LooseLoaderState.Enabled;
-                ToolStatus tools = ToolStatus.Detect(config.GameRoot);
+                FluffyInstalls fluffy = engine.Fluffy();
+                ToolStatus tools = ToolStatus.Detect(config.GameRoot, fluffy);
                 settingsToolStatus.Text = tools.ReFrameworkDetail + Environment.NewLine + tools.SlotsLoaderDetail;
                 settingsToolStatus.ForeColor = tools.SlotsLoader && !tools.ReFrameworkOffer && tools.ReFramework ? Palette.Muted : Palette.Accent;
                 installSlotsLoaderButton.Enabled = !tools.SlotsLoader;
@@ -1117,7 +1148,6 @@ namespace SlotsInstaller
                     string store = engine.StoreRoot(state);
                     settingsStoreStatus.Text = StoreStatusText(InstalledStoreBytes(store), state.Mods.Count, engine.ListRemoved(), store);
                 }
-                FluffyInstalls fluffy = engine.Fluffy();
                 settingsFluffyStatus.Text = ReplacePlanner.N(fluffy.Mods.Count, "mod") + " installed by an external mod manager (protected) · " + (fluffyRunning ? "it is running" : "it is closed") + " · " + ReplacePlanner.N(FluffyPresets.PresetFiles(fluffy.Roots).Count, "preset") + (fluffy.Roots.Count == 0 ? Environment.NewLine + "No external mod manager found next to your libraries." : String.Concat(fluffy.Roots.Select(r => Environment.NewLine + r)));
             }
             catch (Exception ex) { Program.Log(ex); settingsGameFiles.Text = ex.Message; }

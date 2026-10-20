@@ -10,6 +10,10 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 
 ## What changed
 
+- 1.0.11:
+  - **The REFramework line updates by itself.** When REFramework changes outside the Manager (you copy in a new `dinput8.dll`, or another mod manager installs it), the Extra outfit line and Settings show the new build within a couple of seconds. Before, an "out of date" line could stay until the Manager refreshed for another reason, such as the external mod manager closing.
+  - **REFramework installs while an external mod manager has mods installed**, like Slotsloader. Only plain REFramework (`dinput8.dll` and its revision note) is let through; a mod that bundles `dinput8.dll` with scripts or plugins still waits. If the external mod manager installed REFramework itself, the line says to update it there and offers no download.
+
 - 1.0.10:
   - **Presets copy less.** An archive you dropped into costume_mods yourself that is identical to an archive in your libraries is now saved as that library mod instead of being copied. Only archives of the same size are compared, so saving stays quick. Restore puts it back from the library under its own file name, and skips it while it is still installed.
   - **The Presets window says what it copies and why.** After **Save**, the status line says how many items were copied and their size ("1 copied (12 MB), listed below"), and the new preset is selected. Its details start with "N items have no library mod and are copied (size):" and one line per item: **manual drop**, or **not found at** the path where its mod was when it was installed (renamed or moved outside the Manager). Presets saved by 1.0.8 and 1.0.9 show the list too.
@@ -68,7 +72,7 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
   - The loader is now called **Slotsloader** too, so the app and the loader share one spelling. The release bundles **Slotsloader Fork 1.10.1** in a `Slotsloader` folder beside the exe. It keeps the patch PAK row free of gaps that could stop the game at a black screen, and treats a patch PAK it can't read as another tool's. It also reads a texture that a Replace-original install switched off from its loose copy. An extra outfit whose own scene lists a different number of parts than the game's (SF5 Sakura over Ryu) keeps its own hair and cloth physics.
   - **Uninstall means uninstall.** Uninstalling keeps no copy: reinstall from the Mod library. Outfits with no library source (manual drops) go to the Recycle Bin.
   - Gear → **Restore** has two choices. **Remove this Manager's mods** removes every replacement and tool mod this app installed, with Undo. Its copies are kept only while that Undo is available. **Restore game to vanilla…** removes those mods and also the external mod manager's installs, every patch PAK (other tools' too) and the `natives` folder. It asks first and has no Undo.
-  - While an external mod manager has any mod installed, only Extra outfit and Slotsloader install here, so two managers never change the same game files.
+  - While an external mod manager has any mod installed, only Extra outfit and Slotsloader install here (and REFramework since 1.0.11), so two managers never change the same game files.
   - **INSTALL AS** remembers your last choice. PAK and tool mods switch to Replace original by themselves, and **Tab** in the Mod library switches between the two.
   - Installed page:
     - an **All · Extra · Installed** type toggle;
@@ -108,7 +112,7 @@ If another tool replaced or deleted a file this app installed, the banner says w
 
 ## Switching from another mod manager
 
-- **While the external mod manager has any mod installed, only Extra outfit and Slotsloader install here.** Replace original, PAK mods and other tool mods wait until it is empty, so two managers never change the same game files. Uninstalling, disabling and Restore original game files still work for this app's own mods.
+- **While the external mod manager has any mod installed, only Extra outfit, Slotsloader and REFramework install here.** Replace original, PAK mods and other tool mods wait until it is empty, so two managers never change the same game files. REFramework that the external mod manager installed is updated there. Uninstalling, disabling and Restore original game files still work for this app's own mods.
 - **Moving over**: uninstall your mods in the external mod manager (this app no longer uninstalls them), then install them here with Replace original, or import its preset.
 - Close the external mod manager before changing game files here. Don't install the same mod in both managers.
 - External mod manager features this app does not reproduce:

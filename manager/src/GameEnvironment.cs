@@ -229,13 +229,15 @@ namespace SlotsInstaller
         internal string ReFrameworkDetail = "", SlotsLoaderDetail = "", CrashReporterState = "";
         // 1.0.8 (ReFramework.cs): dinput8.dll present; its build (null when unreadable); older than the supported nightly
         // (never for an upscaler build). ReFrameworkOffer: missing or old, so the one-click install applies.
-        internal bool ReFrameworkFile, ReFrameworkOutdated;
+        // 1.0.11: ReFrameworkFluffy = the external mod manager installed dinput8.dll, so REFramework is updated there (no offer).
+        internal bool ReFrameworkFile, ReFrameworkOutdated, ReFrameworkFluffy;
         internal ReFrameworkBuild ReFrameworkBuild;
-        internal bool ReFrameworkOffer { get { return !ReFrameworkFile || ReFrameworkOutdated; } }
+        internal bool ReFrameworkOffer { get { return (!ReFrameworkFile || ReFrameworkOutdated) && !ReFrameworkFluffy; } }
 
-        internal static ToolStatus Detect(string gameRoot)
+        internal static ToolStatus Detect(string gameRoot) { return Detect(gameRoot, null); }
+        internal static ToolStatus Detect(string gameRoot, FluffyInstalls fluffy)
         {
-            var s = new ToolStatus();
+            var s = new ToolStatus { ReFrameworkFluffy = ReplaceEngine.ReFrameworkByFluffy(fluffy) };
             try
             {
                 s.GameFound = Directory.Exists(gameRoot) && File.Exists(Path.Combine(gameRoot, "StreetFighter6.exe"));
@@ -249,6 +251,7 @@ namespace SlotsInstaller
                     : !refDir ? "REFramework incomplete: no reframework folder yet (start SF6 once)"
                     : s.ReFrameworkOutdated ? "REFramework out of date" + built + "; Slotsloader is tested with " + pin.Label + " (" + pin.BuildDate.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture) + ")"
                     : "REFramework installed" + built;
+                if (s.ReFrameworkFluffy && (!dinput || s.ReFrameworkOutdated)) s.ReFrameworkDetail += " · installed by the external mod manager: update it there";
                 string plugin = Path.Combine(gameRoot, "reframework", "plugins", "SF6_CostumeSlotsNative.dll");
                 string ags = Path.Combine(gameRoot, "amd_ags_x64.dll"), real = Path.Combine(gameRoot, "amd_ags_x64_real.dll");
                 bool proxy = File.Exists(ags) && File.Exists(real) && new FileInfo(ags).Length > 200 * 1024;
@@ -264,6 +267,23 @@ namespace SlotsInstaller
             return s;
         }
 
+        // 1.0.11: what Detect reads (sizes, write times, folders), cheap enough for every poll, so a change made outside the
+        // Manager (REFramework copied in by hand or by the external mod manager) refreshes the notice without a restart.
+        internal static string Stamp(string gameRoot)
+        {
+            var parts = new List<string>();
+            foreach (string rel in new[] { "StreetFighter6.exe", "dinput8.dll", "amd_ags_x64.dll", "amd_ags_x64_real.dll", @"reframework\plugins\SF6_CostumeSlotsNative.dll" })
+            {
+                try { var info = new FileInfo(Path.Combine(gameRoot ?? "", rel)); parts.Add(info.Exists ? info.Length + "@" + info.LastWriteTimeUtc.Ticks : "-"); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; parts.Add("?"); }
+            }
+            foreach (string dir in new[] { "reframework", @"reframework\data\SF6_Costumes_Data\loader" })
+            {
+                try { parts.Add(Directory.Exists(Path.Combine(gameRoot ?? "", dir)) ? "d" : "-"); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; parts.Add("?"); }
+            }
+            return String.Join("|", parts);
+        }
     }
 
     internal static class CrashReporter

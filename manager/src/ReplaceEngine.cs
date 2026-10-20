@@ -815,8 +815,9 @@ namespace SlotsInstaller
                 ReplaceState next = mutate(Clone(current));
                 string method = methodOverride ?? CurrentMethod(current);
                 if (current.Mods.Count == 0 && current.Deployed.Count == 0 && methodOverride == null) method = DesiredMethod();
-                string locked = ExternalLockReason();   // 1.0.1: nothing the mutation staged is kept (each caller cleans up on a throw)
-                if (locked != null && AddsGameFiles(current, next, options, methodOverride, CurrentMethod(current))) throw new IOException(locked);
+                FluffyInstalls external = Fluffy();
+                string locked = ExternalLockReason(external);   // 1.0.1: nothing the mutation staged is kept (each caller cleans up on a throw)
+                if (locked != null && AddsGameFiles(current, next, options, methodOverride, CurrentMethod(current), external)) throw new IOException(locked);
                 GamePaks paks = GamePaks.Load(GameRoot);
                 if (method == ReplaceMethods.Pak && paks.Base == null && next.Mods.Any(m => m.Enabled && m.Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))))
                     throw new IOException("re_chunk_000.pak is missing from the game folder, so the PAK method can't be used.");
@@ -1140,17 +1141,30 @@ namespace SlotsInstaller
         internal static string ExternalLockReason(FluffyInstalls fluffy)
         {
             int n = fluffy == null ? 0 : fluffy.Mods.Count;
-            return n == 0 ? null : "The external mod manager has " + ReplacePlanner.N(n, "mod") + " installed, so only Extra outfit and Slotsloader install here. Uninstall them there to use Replace original.";
+            return n == 0 ? null : "The external mod manager has " + ReplacePlanner.N(n, "mod") + " installed, so only Extra outfit, Slotsloader and REFramework install here. Uninstall them there to use Replace original.";
         }
         internal string ExternalLockReason() { return ExternalLockReason(Fluffy()); }
+        // 1.0.11 (the user): plain REFramework installs and updates past the lockout like Slotsloader (one dinput8.dll in
+        // the game folder, no PAK or natives edits), unless the external manager installed dinput8.dll: then it is updated there.
+        internal const string ReFrameworkFluffyReason = "The external mod manager installed REFramework (dinput8.dll), so update it there.";
+        internal static bool ReFrameworkByFluffy(FluffyInstalls fluffy) { return fluffy != null && fluffy.OwnersOf("dinput8.dll").Count > 0; }
+        // The lockout for one package's or record's files: null for Slotsloader and for plain REFramework the external manager doesn't own.
+        internal static string ExternalLockReason(FluffyInstalls fluffy, IEnumerable<string> files)
+        {
+            List<string> list = (files ?? new string[0]).ToList();
+            if (list.Any(p => String.Equals(PakHash.Normalize(p ?? "").TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase))) return null;
+            string locked = ExternalLockReason(fluffy);
+            if (locked == null || !ReplacePlanner.IsPlainReFramework(list)) return locked;
+            return ReFrameworkByFluffy(fluffy) ? ReFrameworkFluffyReason : null;
+        }
 
         // A change that puts game files in place: a mod added, enabled, updated or moved, Reapply, or a method switch.
         // Removing or disabling never does (the files under it are the game's or the Manager's own lower copies).
-        private static bool AddsGameFiles(ReplaceState current, ReplaceState next, ChangeOptions options, string methodOverride, string currentMethod)
+        private static bool AddsGameFiles(ReplaceState current, ReplaceState next, ChangeOptions options, string methodOverride, string currentMethod, FluffyInstalls fluffy)
         {
             if (options.Choice == DriftChoice.Repair) return true;
             if (methodOverride != null && !String.Equals(methodOverride, currentMethod, StringComparison.OrdinalIgnoreCase)) return true;
-            foreach (ReplaceMod m in next.Mods.Where(x => x.Enabled && !LoaderCostumePak.IsLoaderMod(x)))
+            foreach (ReplaceMod m in next.Mods.Where(x => x.Enabled && ExternalLockReason(fluffy, x.Files.Select(f => f.Path)) != null))   // Slotsloader, plain REFramework (1.0.11)
             {
                 ReplaceMod was = current.Find(m.Id);
                 if (was == null || !was.Enabled || !was.Files.Select(f => f.Path + "|" + f.Sha256).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).SequenceEqual(m.Files.Select(f => f.Path + "|" + f.Sha256).OrderBy(x => x, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase)) return true;

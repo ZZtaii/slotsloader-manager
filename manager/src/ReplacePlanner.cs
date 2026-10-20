@@ -68,7 +68,8 @@ namespace SlotsInstaller
             GameReference reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc);
             reference.SwapRepairs = engine.Settings.SwapRepairs;   // 1.0.5: Settings, off by default
             FluffyInstalls fluffy = engine.Fluffy();
-            string externalLock = plugin == null ? ReplaceEngine.ExternalLockReason(fluffy) : null;   // 1.0.1: Slotsloader still installs
+            // 1.0.1: Slotsloader still installs; 1.0.11: plain REFramework too, unless the external manager installed it.
+            string externalLock = ReplaceEngine.ExternalLockReason(fluffy, composition.Files.Values.Select(f => f.Asset.DestinationPath));
             if (externalLock != null) plan.Items.Add(new HealthItem("error", externalLock));
             paks.SetModPaks(state.Mods);   // 2.5.7: installed PAK mods are mods, not the game's patch PAKs
             if (reference.CurrentCrcs.Count == 0) plan.Items.Add(new HealthItem("warn", "Couldn't read the game's colour-file signatures (" + reference.CrcSource + "); outdated colour files are not fixed."));
@@ -313,6 +314,12 @@ namespace SlotsInstaller
         private static bool PlainReFramework(IEnumerable<string> paths)
         {
             return paths.All(p => ReFrameworkFiles.Contains(PakHash.Normalize(p ?? "").TrimStart('/'), StringComparer.OrdinalIgnoreCase));
+        }
+        // 1.0.11: dinput8.dll with at most its revision note: installs past the external-manager lockout (ReplaceEngine).
+        internal static bool IsPlainReFramework(IEnumerable<string> paths)
+        {
+            List<string> list = (paths ?? new string[0]).ToList();
+            return list.Any(p => String.Equals(PakHash.Normalize(p ?? "").TrimStart('/'), "dinput8.dll", StringComparison.OrdinalIgnoreCase)) && PlainReFramework(list);
         }
         internal static string ReFrameworkUpdateTarget(IEnumerable<ReplaceMod> mods, IEnumerable<string> newFiles)
         {

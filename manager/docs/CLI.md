@@ -77,7 +77,7 @@ Exit codes: **0** success, **1** refused or failed (the reason is printed), **2*
 & '.\Slotsloader CLI.exe' replace-restore-original amd_ags_x64.dll                  # the genuine file behind a kept one
 ```
 
-- 1.0.1: `manager-uninstall` refuses every mod (the external mod manager uninstalls its own), and while that manager has any mod installed `replace-install` refuses everything except Slotsloader (exit 1, "only Extra outfit and Slotsloader install here"). `manager-restore` needs the external mod manager and SF6 closed.
+- 1.0.1: `manager-uninstall` refuses every mod (the external mod manager uninstalls its own), and while that manager has any mod installed `replace-install` refuses everything except Slotsloader (exit 1, "only Extra outfit, Slotsloader and REFramework install here"; 1.0.11: plain REFramework installs too unless that manager installed `dinput8.dll`). `manager-restore` needs the external mod manager and SF6 closed.
 
 ```powershell
 & '.\Slotsloader CLI.exe' pak-repair          # dry run: game entries another tool left invalidated, each with its proof

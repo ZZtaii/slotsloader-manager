@@ -879,7 +879,7 @@ namespace SlotsInstaller
             // Loose method with a real installed.ini that "Fluffy" changes while it is open.
             Fixture f = Create(Path.Combine(root, "loose"), true, ReplaceMethods.Loose);
             string fluffyRoot = Path.Combine(root, "Fluffy", "Games", "SF6"); Directory.CreateDirectory(Path.Combine(fluffyRoot, "Mods"));
-            // 1.0.1: open with nothing installed (with a mod in it only Extra outfit and Slotsloader install: the lockout).
+            // 1.0.1: open with nothing installed (with a mod in it only Extra outfit, Slotsloader and REFramework install: the lockout).
             File.WriteAllText(Path.Combine(fluffyRoot, "installed.ini"), "");
             f.Engine.FluffyProvider = delegate { return FluffyInstalls.Load(new[] { fluffyRoot }); };
             var clean = Snapshot(f.Game);
@@ -896,9 +896,9 @@ namespace SlotsInstaller
             SameSnapshot(before, Snapshot(f.Game), "after the refused conversion");
             // Fluffy installs something meanwhile (installed.ini is read again at each change): the lockout starts.
             File.AppendAllText(Path.Combine(fluffyRoot, "installed.ini"), "[Cammy Mesh]\r\nModName=Cammy Mesh From Fluffy\r\nfile=" + V5 + "\r\n");
-            Refused(delegate { Install(f, "modB", "Cammy Alt"); }, "only Extra outfit and Slotsloader install");
+            Refused(delegate { Install(f, "modB", "Cammy Alt"); }, "only Extra outfit, Slotsloader and REFramework install");
             f.Engine.SetEnabled(a.Id, false);
-            Refused(delegate { f.Engine.SetEnabled(a.Id, true); }, "only Extra outfit and Slotsloader install");
+            Refused(delegate { f.Engine.SetEnabled(a.Id, true); }, "only Extra outfit, Slotsloader and REFramework install");
             f.Engine.Uninstall(a.Id); f.Engine.Uninstall(tool.Id);
             var after = Snapshot(f.Game); after.Remove(LooseLoader.ConfigName); var expected = new Dictionary<string, string>(clean, StringComparer.OrdinalIgnoreCase); expected.Remove(LooseLoader.ConfigName);
             SameSnapshot(expected, after, "loose/tool uninstalls with Fluffy open");
