@@ -350,6 +350,13 @@ Extra outfits (Slotsloader) are unchanged. Replace original installs a composed 
 - Replacement store: `Data\replace-store\<mod id>\...` holds each installed mod's prepared (fixed) files, so enable, disable, priority changes and Reapply re-materialize without re-reading archives. Uninstall deletes that copy after commit.
 - `replace-journal.json`: the intent of one change (see below).
 - `test-session.json`: a Test-in-game session left by 2.2.0 or older (2.3.0 only reads it once at start-up, keeps the install, restores the logging keys and deletes it).
+- 1.0.9, in the game folder: `reframework\data\SF6_Costumes_Data\manager_installs.json` (`sf6-manager-installs-1`, the format the upstream loader's author proposed). It lets other costume loaders leave the Manager's replacements alone without searching for `Data\replace-state.json`. It is written by `ManagerInstalls` after every committed change and at start-up and every refresh, only when that folder exists (a costume loader keeps its data there).
+  - Layout, keys in this order, 2-space indent, LF, UTF-8 without BOM: `format`, `generated` (UTC), `manager` ("Slotsloader Manager x.y.z"), `mods`.
+  - `mods` is every record of `replace-state.json` in priority order (first = the one whose file is in the game). Each has `id`, `name`, `installed_utc`, `enabled`, `files` and `paks`. Each file entry is `{ "path", "sha256", "size" }`, where `path` is relative to the game folder with `/` and `sha256` is lower case.
+  - `paks` are the `re_chunk_000.pak.patch_NNN.pak` files; `files` is everything else.
+  - Files kept with "Keep current file" (`Released`) are not listed. `mods` is `[]` when nothing is installed.
+  - Rewritten whole (temporary file, then replaced) only when something besides `generated` changed. A failure is logged and never fails the change.
+  - Readers match files by size and treat `enabled: false` as claiming nothing. `generated`, `manager`, `id` and `installed_utc` are for logs only. Adding fields keeps the format string; an incompatible layout would get a new one.
 
 **Transactions.**
 - `ReplaceEngine.Change` takes a named mutex for the game root and refuses while SF6 or an external mod manager runs (`GameProcesses.Probe`). The one exception: with the loose method, a change made only of `natives` file operations may run while SF6 runs. It then runs `Recover()` and builds the next state.

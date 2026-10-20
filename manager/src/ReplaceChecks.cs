@@ -54,6 +54,7 @@ namespace SlotsInstaller
                 check("a path inside a patch PAK is refused with the PAK method; no change is made", delegate { PatchBlock(Path.Combine(run, "patch")); });
                 check("PAK mods (2.5.6): a mod's .pak is added as the next patch PAK (a pre-numbered name too); removing or disabling one below another PAK leaves an empty placeholder, at the top it is deleted; Undo and re-enabling fill the placeholder; a number another PAK took meanwhile is never overwritten; the other mod's patch PAK never changes", delegate { PakMods(Path.Combine(run, "pak-mods")); });
                 check("PAK mods with the loose file loader on (2.5.9): the .pak is still added as the next patch PAK (the method only affects natives files) and uninstalls cleanly", delegate { PakModsLoose(Path.Combine(run, "pak-mods-loose")); });
+                check("installs list (1.0.9): manager_installs.json beside the costume loader's data lists every replacement in priority order (enabled, loose files, patch PAKs; path, sha256, size), leaves out kept files, is rewritten only when it changes, empty when nothing is installed, never where no costume loader keeps data", delegate { InstallsList(Path.Combine(run, "installs-list")); });
                 check("files owned by an installed Fluffy mod are refused; a missing installed.ini means no Fluffy mods", delegate { FluffyOwnership(Path.Combine(run, "fluffy")); });
                 check("running SF6 or Fluffy blocks every game-file change", delegate { RunningBlocks(Path.Combine(run, "running"), probe); });
                 check("journal recovery after a simulated crash at every step of an install and an uninstall", delegate { CrashRecovery(Path.Combine(run, "crash")); });
@@ -425,6 +426,51 @@ namespace SlotsInstaller
         }
 
         // 2.5.6: PAK mods are added as the next patch PAK (fixture: patch_001 is another mod's).
+        // 1.0.9: the list other costume loaders read (ManagerInstalls.cs).
+        private static void InstallsList(string root)
+        {
+            Fixture f = Create(root, false, ReplaceMethods.Pak);
+            string list = ManagerInstalls.FilePath(f.Game), folder = ManagerInstalls.Folder(f.Game);
+            ReplaceMod colors = Install(f, "modA", "Cammy Colors");
+            Require(!File.Exists(list) && !Directory.Exists(folder), "written (or its folder made) where no costume loader keeps data");
+            Directory.CreateDirectory(folder);
+            Require(ManagerInstalls.Sync(f.Engine) && File.Exists(list), "start-up sync did not write the list");
+            Put(f.Mods, "stagePak/Stage/modinfo.ini", Bytes("name=Stage PAK\r\n"));
+            PakWriter.WriteFixture(Path.Combine(f.Mods, "stagePak", "Stage", "NULSPACE.pak"), new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>("natives/stm/product/environment/stage_fixture.user.2", Bytes("stage")) }, 0, 0);
+            ReplaceMod alt = Install(f, "modB", "Cammy Alt"), stage = Install(f, "stagePak", "Stage PAK");
+            f.Engine.SetEnabled(alt.Id, false);
+            byte[] raw = File.ReadAllBytes(list); string text = Encoding.UTF8.GetString(raw);
+            Require(raw[0] == (byte)'{' && text.StartsWith("{\n  \"format\": \"sf6-manager-installs-1\",\n  \"generated\": \"") && text.Contains("\n  \"manager\": \"Slotsloader Manager ") && !text.Contains("\r"), "layout (no BOM, key order, LF): " + text.Substring(0, Math.Min(120, text.Length)));
+            Require(Directory.GetFiles(folder).Length == 1, "temporary files left beside the list");
+            var data = Json.Serializer().Deserialize<Dictionary<string, object>>(text);
+            var mods = ((System.Collections.IEnumerable)data["mods"]).Cast<Dictionary<string, object>>().ToList();
+            Require(String.Join("|", mods.Select(m => (string)m["name"])) == "Stage PAK|Cammy Alt|Cammy Colors" && mods.Select(m => (string)m["id"]).SequenceEqual(new[] { stage.Id, alt.Id, colors.Id }), "priority order: " + String.Join("|", mods.Select(m => (string)m["name"])));
+            Require(!(bool)mods[1]["enabled"] && (bool)mods[0]["enabled"] && (bool)mods[2]["enabled"], "enabled flags");
+            Func<Dictionary<string, object>, string, List<Dictionary<string, object>>> entries = delegate(Dictionary<string, object> m, string key) { return ((System.Collections.IEnumerable)m[key]).Cast<Dictionary<string, object>>().ToList(); };
+            var pak = entries(mods[0], "paks");
+            Require(entries(mods[0], "files").Count == 0 && pak.Count == 1 && (string)pak[0]["path"] == "re_chunk_000.pak.patch_002.pak" && Convert.ToInt64(pak[0]["size"]) == new FileInfo(GameFile(f, "re_chunk_000.pak.patch_002.pak")).Length
+                && (string)pak[0]["sha256"] == ReplaceEngine.Sha(GameFile(f, "re_chunk_000.pak.patch_002.pak")).ToLowerInvariant(), "patch PAK entry: " + Json.Serializer().Serialize(pak));
+            ReplaceMod colorsNow = f.Engine.LoadState().Find(colors.Id);
+            var files = entries(mods[2], "files");
+            Require(entries(mods[2], "paks").Count == 0 && files.Count == colorsNow.Files.Count && files.All(x => colorsNow.Files.Any(cf => cf.Path == (string)x["path"] && cf.Size == Convert.ToInt64(x["size"]) && cf.Sha256.ToLowerInvariant() == (string)x["sha256"])), "loose file entries: " + Json.Serializer().Serialize(files));
+            Require(files.All(x => File.Exists(GameFile(f, (string)x["path"])) && new FileInfo(GameFile(f, (string)x["path"])).Length == Convert.ToInt64(x["size"])), "a listed size is not the game file's");
+            // Nothing changed: not rewritten (no new "generated").
+            DateTime written = File.GetLastWriteTimeUtc(list); File.SetLastWriteTimeUtc(list, written.AddMinutes(-5));
+            Require(!ManagerInstalls.Sync(f.Engine) && File.ReadAllBytes(list).SequenceEqual(raw) && File.GetLastWriteTimeUtc(list) == written.AddMinutes(-5), "rewritten although nothing changed");
+            // Kept files ("Keep current file") are not listed; names are escaped, times in UTC.
+            var state = new ReplaceState();
+            state.Mods.Add(new ReplaceMod { Id = "x", Name = "Quote \" back\\slash ü", InstalledUtc = "2026-10-20T22:58:12.1234567+02:00", Files = new List<ModFile> { new ModFile { Path = "natives\\stm\\kept.tex", Size = 1 }, new ModFile { Path = "natives/stm/mine.tex", Sha256 = "AB", Size = 2 } } });
+            state.Released.Add(new ReleasedFile { Path = "natives/stm/kept.tex" });
+            string one = ManagerInstalls.Text(state, new DateTime(2026, 10, 20, 21, 0, 0, DateTimeKind.Utc));
+            Require(one.Contains("\"name\": \"Quote \\\" back\\\\slash ü\"") && one.Contains("\"installed_utc\": \"2026-10-20T20:58:12Z\"") && one.Contains("\"generated\": \"2026-10-20T21:00:00Z\"")
+                && !one.Contains("kept.tex") && one.Contains("{ \"path\": \"natives/stm/mine.tex\", \"sha256\": \"ab\", \"size\": 2 }"), "escaping/kept files: " + one);
+            Require(Json.Serializer().Deserialize<Dictionary<string, object>>(one) != null, "not valid JSON: " + one);
+            // Everything uninstalled: an empty list, not a missing file.
+            foreach (ReplaceMod m in f.Engine.LoadState().Mods.ToList()) { string removed; f.Engine.Uninstall(m.Id, false, out removed); }
+            text = File.ReadAllText(list);
+            Require(text.Contains("\n  \"mods\": []\n}") && ((System.Collections.IEnumerable)Json.Serializer().Deserialize<Dictionary<string, object>>(text)["mods"]).Cast<object>().Count() == 0, "empty list: " + text);
+        }
+
         private static void PakMods(string root)
         {
             Fixture f = Create(root, false, ReplaceMethods.Pak);

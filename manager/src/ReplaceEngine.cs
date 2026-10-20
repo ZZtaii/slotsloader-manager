@@ -469,6 +469,7 @@ namespace SlotsInstaller
                 trashWarning = FinishTrash(journal.TrashAfterCommit) ?? trashWarning;
                 File.Delete(JournalPath);
             }
+            ManagerInstalls.Write(GameRoot, next);   // 1.0.9: the list other costume loaders read (never throws)
         }
 
         // Recoverable uninstall: the removed mod's stored files and its record move to <store>\.removed.
