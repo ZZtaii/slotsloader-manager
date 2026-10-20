@@ -292,6 +292,10 @@ namespace SlotsInstaller
             finally { try { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); } catch { } }
         }
 
+        internal static bool IsReFrameworkComposition(CompositionPlan composition)
+        {
+            return composition != null && composition.Files.Keys.Any(k => String.Equals(PakHash.Normalize(k).TrimStart('/'), "dinput8.dll", StringComparison.OrdinalIgnoreCase));
+        }
         internal static bool IsLoaderComposition(CompositionPlan composition)
         {
             return composition != null && composition.Files.Keys.Any(k => String.Equals(PakHash.Normalize(k).TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase));
@@ -318,6 +322,12 @@ namespace SlotsInstaller
                 {
                     ReplaceMod loader = engine.LoadState().Mods.FirstOrDefault(LoaderCostumePak.IsLoaderMod);
                     if (loader != null) replaceId = loader.Id;
+                }
+                // 1.0.8: another REFramework build (a newer pinned nightly) updates the REFramework this app installed in place.
+                if (String.IsNullOrEmpty(replaceId) && IsReFrameworkComposition(composition))
+                {
+                    ReplaceMod refw = engine.LoadState().Mods.FirstOrDefault(m => m.Files.Any(x => String.Equals(x.Path, "dinput8.dll", StringComparison.OrdinalIgnoreCase)));
+                    if (refw != null) replaceId = refw.Id;
                 }
                 string keep = replaceId;
                 others = same.Where(m => !String.Equals(m.Id, keep, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -439,6 +449,30 @@ namespace SlotsInstaller
             if (!c.NewWins)
                 return area + " already has '" + c.ModName + "' (" + facts + ") · it is higher in the list and keeps " + N(c.Shared, "shared file") + "; change the order on the Installed page.";
             return area + " already has '" + c.ModName + "' (" + facts + ") · this install overrides " + (rest == 0 ? AllOfIts(c.TheirFiles) : c.Shared + " of its " + c.TheirFiles + " files; its other " + (rest == 1 ? "file stays" : rest + " stay") + " active (the outfit may mix both mods)") + ".";
+        }
+
+        // 1.0.8 (the user: easier to read, two paragraphs where the text is ours): the inspector's REPLACES note as a short
+        // headline (what is there) and the details (its state and what this install does). Report and Assistant keep Text.
+        internal static string[] ConflictParagraphs(ReplaceConflict c)
+        {
+            string area = c.Areas.Count == 0 ? "This outfit" : ShortArea(c.Areas[0]) + (c.Areas.Count > 1 ? " (+" + (c.Areas.Count - 1) + ")" : "");
+            string when = When(c.InstalledUtc), name = "'" + c.ModName + "'";
+            string facts = (c.Enabled ? "Enabled" : "Disabled") + (when.Length > 0 ? " · installed " + when : "") + " · " + N(c.TheirFiles, "file");
+            int rest = c.TheirFiles - c.Shared;
+            if (c.Kind == "stack")
+                return new[] { "Also on " + area + ": " + name + ".", (c.Enabled ? "Enabled" : "Disabled") + " · no shared files, so both stay installed." };
+            if (c.Kind == "files")
+            {
+                string where = c.Areas.Count == 0 ? "" : " · " + String.Join(", ", c.Areas.Take(2).Select(ShortArea));
+                if (!c.Enabled) return new[] { "Shares " + N(c.Shared, "file") + " with " + name + ".", "It is disabled" + where + "." };
+                return c.NewWins ? new[] { "Overrides " + N(c.Shared, "file") + " from " + name + ".", "This install wins" + where + "." }
+                    : new[] { name + " keeps " + N(c.Shared, "shared file") + ".", "It is higher in the list; change the order on the Installed page" + where + "." };
+            }
+            if (!c.Enabled)
+                return new[] { area + " also has " + name + ".", facts + " · " + N(c.Shared, "shared file") + ". " + (rest > 0 ? "If re-enabled, its other " + (rest == 1 ? "file" : rest + " files") + " would mix in." : "It stays hidden below this one.") };
+            if (!c.NewWins)
+                return new[] { area + " already has " + name + ", higher in the list.", facts + ". It keeps " + N(c.Shared, "shared file") + "; change the order on the Installed page." };
+            return new[] { area + " already has " + name + ".", facts + ". This install overrides " + (rest == 0 ? AllOfIts(c.TheirFiles) + "." : c.Shared + " of them; the other " + (rest == 1 ? "one stays" : rest + " stay") + " active, so the outfit may mix both mods.") };
         }
 
         internal static string Report(ReplacePlan plan)

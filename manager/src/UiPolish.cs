@@ -136,15 +136,24 @@ namespace SlotsInstaller
             }
             else if (glyph == ButtonGlyph.Refresh)
             {
-                // 1.0.6 Installed-page Refresh icon: a circle open at the upper right whose end is an arrow head.
+                // Installed-page Refresh icon (1.0.8 redraw: the 1.0.6 one, open at the top with a tiny tick, read as a power
+                // symbol): a clockwise circle open at the right, its end an arrow head along the turn; History's mirror.
                 SmoothingMode previous = graphics.SmoothingMode; graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                float s = scale, x = center.X, y = center.Y, r = 7F * s;
+                float s = scale, x = center.X, y = center.Y, r = 7.5F * s;   // History's size
+                const float start = 25F, sweep = 285F;   // degrees, clockwise from 3 o'clock: the gap spans 310°..385° (the right side)
                 using (var pen = new Pen(color, stroke) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                 {
-                    graphics.DrawArc(pen, x - r, y - r, r * 2, r * 2, -60, 300);
-                    double end = -60 * Math.PI / 180;
-                    var tip = new PointF(x + (float)(Math.Cos(end) * r), y + (float)(Math.Sin(end) * r));
-                    graphics.DrawLines(pen, new[] { new PointF(tip.X - 3.6F * s, tip.Y - 0.8F * s), tip, new PointF(tip.X - 0.2F * s, tip.Y + 3.6F * s) });
+                    graphics.DrawArc(pen, x - r, y - r, r * 2, r * 2, start, sweep);
+                    double end = (start + sweep) * Math.PI / 180;
+                    // Direction of travel at the end (clockwise on screen) and the head: a tip a little past the arc end, two arms back.
+                    double tx = -Math.Sin(end), ty = Math.Cos(end);
+                    var tip = new PointF(x + (float)(Math.Cos(end) * r + tx * 1.2 * s), y + (float)(Math.Sin(end) * r + ty * 1.2 * s));
+                    Func<double, PointF> arm = delegate(double turn)
+                    {
+                        double c = Math.Cos(turn), n = Math.Sin(turn), bx = -tx * c + ty * n, by = -tx * n - ty * c;   // back direction turned by `turn`
+                        return new PointF(tip.X + (float)(bx * 4.2 * s), tip.Y + (float)(by * 4.2 * s));
+                    };
+                    graphics.DrawLines(pen, new[] { arm(Math.PI / 4.2), tip, arm(-Math.PI / 4.2) });
                 }
                 graphics.SmoothingMode = previous;
             }

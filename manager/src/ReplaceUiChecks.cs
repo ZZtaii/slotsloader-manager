@@ -5,6 +5,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -73,7 +74,8 @@ namespace SlotsInstaller
                         check("Uninstall from the Installed page restores the clean game folder", delegate { Uninstall(form, f, clean); });
                         check("library uninstall (2.0.3): right-click and footer offer Uninstall replacement for a source installed as a replacement, disabled with the reason while Fluffy runs, uninstall for good (no copy kept, 1.0.1); extra-outfit entries unchanged", delegate { LibraryReplacementUninstall(form, f, probe, clean); });
                         check("Settings: Game files & replacements tab shows method, store, Fluffy and tool status without hiding General", delegate { SettingsTab(form, root); });
-                        check("Extra outfit mode warns when Slotsloader is missing", delegate { SlotsLoaderNotice(form); });
+                        check("Extra outfit mode warns when Slotsloader is missing (1.0.8: after REFramework, which comes first)", delegate { SlotsLoaderNotice(form, f); });
+                        check("REFramework (1.0.8): build date, commit and upscaler mark read from dinput8.dll; Extra outfit notice for missing, not started and out-of-date builds (an upscaler build is never old; an unknown date is fine); one click downloads the pinned nightly, verified, opened in Replace original; Install puts dinput8.dll in the game, a newer pin updates that record in place, uninstall puts the earlier dinput8.dll back", delegate { ReFrameworkFlow(form, f); });
                         check("Slotsloader offer (2.3.1, no questions in 2.4.1): only the pinned build: a library copy found by SHA-256 (a renamed SF6_SlotsLoader_v9.9.zip beside it is ignored), else a download (the click is the consent, no dialog) verified into Data\\downloads and opened in Replace original, then the cached copy; a 404 shows the reason and the release page", delegate { LoaderOffer(form, f); });
                         check("automatic health check (2.0.1): Checking… then Ready without clicking; Install enables automatically; the button reads Report", delegate { AutoCheck(form, f, root); });
                         check("debounce and supersede (2.0.1): rapid changes start one run; a stale run is discarded and the last selection's result applies", delegate { Supersede(form, f); });
@@ -1008,7 +1010,7 @@ namespace SlotsInstaller
             Load(form, f, "modA"); WaitReview(form);
             Require(Details(form).StartsWith("Cammy Outfit 2 already has '" + alt.Name + "' · overrides 1 of its 2 files; 1 stays active") && Get<Label>(form, "planDetails").ForeColor == Palette.Accent && Summary(form).StartsWith("Ready to install"), "footer conflict line: " + Details(form));
             var view = Get<ConflictView>(form, "conflictView");
-            Require(view.Entries.Count >= 1 && view.Entries[0].Link == "Uninstall '" + alt.Name + "'" && view.Entries[0].LinkEnabled && view.Entries[0].Text.Contains("already has '" + alt.Name + "' (enabled, installed "), "inspector conflict entry");
+            Require(view.Entries.Count >= 1 && view.Entries[0].Link == "Uninstall '" + alt.Name + "'" && view.Entries[0].LinkEnabled && view.Entries[0].Text.EndsWith("already has '" + alt.Name + "'.") && view.Entries[0].Detail.StartsWith("Enabled · installed ") && view.Entries[0].Detail.Contains("This install overrides 1 of them; the other one stays active"), "inspector conflict entry (1.0.8: headline + details): " + view.Entries[0].Text + " / " + view.Entries[0].Detail);
             Require(view.Height > 0 && Get<Panel>(form, "replacesPanel").ClientRectangle.Contains(BoundsIn(view, Get<Panel>(form, "replacesPanel"))), "conflict lines clipped");
             Render(form, Path.Combine(root, "library-conflict-" + form.DeviceDpi + ".png"));
             probe.Fluffy = true; Call(form, "PollGame");
@@ -1254,11 +1256,94 @@ namespace SlotsInstaller
             }
         }
 
-        private static void SlotsLoaderNotice(MainForm form)
+        private static void SlotsLoaderNotice(MainForm form, ReplaceChecks.Fixture f)
         {
             ShowLibrary(form);
             Call(form, "SetInstallMode", InstallModes.Slot, true);
-            Require(Get<Label>(form, "modeNotice").Text.Contains("Slotsloader isn't installed"), "notice: " + Get<Label>(form, "modeNotice").Text);
+            Require(Get<Label>(form, "modeNotice").Text.StartsWith("REFramework isn't installed, so extra outfits won't load"), "notice without REFramework: " + Get<Label>(form, "modeNotice").Text);
+            string dll = Path.Combine(f.Game, "dinput8.dll"), dir = Path.Combine(f.Game, "reframework"); bool hadDir = Directory.Exists(dir);
+            try
+            {
+                File.WriteAllBytes(dll, Encoding.ASCII.GetBytes("placeholder REFramework, no build date")); Directory.CreateDirectory(dir);
+                Call(form, "SetInstallMode", InstallModes.Slot, true);
+                Require(Get<Label>(form, "modeNotice").Text.Contains("Slotsloader isn't installed"), "notice: " + Get<Label>(form, "modeNotice").Text);
+            }
+            finally { File.Delete(dll); if (!hadDir && Directory.Exists(dir)) Directory.Delete(dir, true); }
+        }
+
+        private static string Sha(byte[] b) { using (var sha = System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(b)).Replace("-", ""); }
+        private static byte[] ReFrameworkZip(string dll)
+        {
+            using (var ms = new MemoryStream())
+            {
+                using (var zip = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Create, true))
+                    foreach (var e in new[] { new KeyValuePair<string, string>("dinput8.dll", dll), new KeyValuePair<string, string>("reframework_revision.txt", "fixture revision") })
+                        using (var w = new StreamWriter(zip.CreateEntry(e.Key).Open())) w.Write(e.Value);
+                return ms.ToArray();
+            }
+        }
+        private static void ReFrameworkFlow(MainForm form, ReplaceChecks.Fixture f)
+        {
+            // Reading builds.
+            ReFrameworkBuild up = ReFrameworkBuild.Parse(Encoding.ASCII.GetBytes("x 961c151d2e87f2686a955a9be24d316f1362bf21 date 31.08.2026 a2cd2f0a734e68fc9bc2127a7f4a385487afb484 Upscaler v1.31.08.20261 x"));
+            ReFrameworkBuild nightly = ReFrameworkBuild.Parse(Encoding.ASCII.GetBytes("d052e8fd3fd41d0a1a33394fcf6e6c19be39b1ee 11.10.2026")), old = ReFrameworkBuild.Parse(Encoding.ASCII.GetBytes("built 01.01.2025")), none = ReFrameworkBuild.Parse(Encoding.ASCII.GetBytes("no date here"));
+            ReFrameworkPin supported = ReFrameworkRelease.Supported;
+            var engine = new ReplaceEngine(f.Game, AppConfig.DataDir, ReplaceSettings.Load());   // the window's Data (the fixture engine keeps its own)
+            Require(up.BuildDate == new DateTime(2026, 8, 31) && up.Commit == "a2cd2f0a734e68fc9bc2127a7f4a385487afb484" && up.Upscaler && !up.OlderThan(supported), "upscaler build: " + up.BuildDate + " " + up.Commit);
+            Require(nightly.BuildDate == new DateTime(2026, 10, 11) && !nightly.Upscaler && !nightly.OlderThan(supported) && old.OlderThan(supported) && none.BuildDate == null && !none.OlderThan(supported), "nightly/old/unknown builds");
+            Require(supported.Size == 13272178 && supported.Sha256 == "27376E1DA177DDCDE9C46B3541BDC6FA1AD54A11D0CAB9F7782EFF0481455E94" && supported.Url == "https://github.com/praydog/REFramework-nightly/releases/download/" + supported.Tag + "/REFramework.zip", "supported pin");
+            string dll = Path.Combine(f.Game, "dinput8.dll"), dir = Path.Combine(f.Game, "reframework"); bool hadDir = Directory.Exists(dir);
+            Func<string> notice = delegate { Call(form, "SetInstallMode", InstallModes.Slot, true); return Get<Label>(form, "modeNotice").Text; };
+            Action<string> putDll = delegate(string text) { File.WriteAllBytes(dll, Encoding.ASCII.GetBytes(text)); File.SetLastWriteTimeUtc(dll, DateTime.UtcNow.AddSeconds(-new Random().Next(10, 100000))); };
+            using (var server = new LoaderChecks.LoopbackServer())
+            {
+                try
+                {
+                    ShowLibrary(form);
+                    Require(notice().StartsWith("REFramework isn't installed") && Get<Label>(form, "modeNotice").Cursor == Cursors.Hand, "missing: " + notice());
+                    putDll("REFramework 11.10.2026");
+                    Require(notice() == "Start SF6 once so REFramework can finish setting up; extra outfits load after that" && Get<Label>(form, "modeNotice").Cursor == Cursors.Default, "not started: " + notice());
+                    Directory.CreateDirectory(dir);
+                    Require(notice().StartsWith("Slotsloader isn't installed"), "current build: " + notice());
+                    putDll("REFramework 01.01.2025");
+                    Require(notice() == "REFramework from 1 Jan 2025 is out of date · click to update it", "old build: " + notice());
+                    putDll("REFramework Upscaler 01.01.2025");
+                    Require(notice().StartsWith("Slotsloader isn't installed"), "an upscaler build was called old: " + notice());
+                    // One click: the pinned nightly downloaded, verified and opened in Replace original; Install puts it in.
+                    putDll("REFramework 01.01.2025"); byte[] before = File.ReadAllBytes(dll);
+                    byte[] first = ReFrameworkZip("REFramework fixture build one 12.10.2026");
+                    server.Routes["/refw-one.zip"] = new LoaderChecks.LoopbackServer.Route { Body = first };
+                    ReFrameworkPin pin = ReFrameworkRelease.Make("nightly-09998-fixture", "09998", first.Length, Sha(first), "fixture", new DateTime(2026, 10, 12));
+                    pin.Url = server.Base + "/refw-one.zip"; ReFrameworkRelease.Pin = pin; LoaderRelease.AllowLoopbackHttp = true;
+                    form.LastReFrameworkFile = null; Call(form, "OfferReFrameworkInstall"); WaitIdle(form);
+                    LoaderFile got = form.LastReFrameworkFile;
+                    Require(got != null && got.Source == LoaderSource.Download && File.ReadAllBytes(got.Path).SequenceEqual(first) && server.Requests == 1, "download: " + (got == null ? Get<Label>(form, "statusText").Text : got.Source + " " + got.Path));
+                    Require(form.IsReplaceMode && String.Equals(Get<ModPackage>(form, "package").SourcePath, got.Path, StringComparison.OrdinalIgnoreCase), "not opened in Replace original: " + Get<Label>(form, "statusText").Text);
+                    WaitReview(form);
+                    Call(form, "InstallCurrent"); WaitReview(form);
+                    List<ReplaceMod> refw = engine.LoadState().Mods.Where(m => m.Files.Any(x => x.Path == "dinput8.dll")).ToList();
+                    Require(refw.Count == 1 && Encoding.ASCII.GetString(File.ReadAllBytes(dll)).Contains("build one"), "install: " + refw.Count + " records");
+                    // A newer pin updates that record in place (one REFramework record).
+                    byte[] second = ReFrameworkZip("REFramework fixture build two 13.10.2026");
+                    server.Routes["/refw-two.zip"] = new LoaderChecks.LoopbackServer.Route { Body = second };
+                    ReFrameworkPin pin2 = ReFrameworkRelease.Make("nightly-09999-fixture", "09999", second.Length, Sha(second), "fixture", new DateTime(2026, 10, 13));
+                    pin2.Url = server.Base + "/refw-two.zip"; ReFrameworkRelease.Pin = pin2;
+                    Call(form, "OfferReFrameworkInstall"); WaitIdle(form); WaitReview(form);
+                    Call(form, "InstallCurrent"); WaitReview(form);
+                    refw = engine.LoadState().Mods.Where(m => m.Files.Any(x => x.Path == "dinput8.dll")).ToList();
+                    Require(refw.Count == 1 && Encoding.ASCII.GetString(File.ReadAllBytes(dll)).Contains("build two"), "update in place: " + refw.Count + " records");
+                    // Uninstall puts the earlier dinput8.dll back.
+                    string removed; engine.Uninstall(refw[0].Id, false, out removed);
+                    Require(File.ReadAllBytes(dll).SequenceEqual(before), "uninstall did not restore the earlier dinput8.dll");
+                }
+                finally
+                {
+                    ReFrameworkRelease.Pin = ReFrameworkRelease.Supported; LoaderRelease.AllowLoopbackHttp = false;
+                    foreach (ReplaceMod m in engine.LoadState().Mods.Where(m => m.Files.Any(x => x.Path == "dinput8.dll")).ToList()) { string removed; try { engine.Uninstall(m.Id, false, out removed); } catch (IOException) { } }
+                    if (File.Exists(dll)) File.Delete(dll);
+                    if (!hadDir && Directory.Exists(dir)) Directory.Delete(dir, true);
+                }
+            }
         }
     }
 }

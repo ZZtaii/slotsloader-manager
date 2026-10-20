@@ -329,6 +329,17 @@ namespace SlotsInstaller
             if (e == null || String.IsNullOrEmpty(term)) return false;
             return WordsIn(OptionKeys(e), OptionTokens(e), term, true);
         }
+        // 1.0.8 MY FILTERS keyword (LibraryFilters): `compact` (Compact of the keyword) inside a name or an option folder/name,
+        // as one run ("see through" = "See-Through" = "seethrough", never "see … through" or "Normal panties" for "no panties");
+        // one or two characters must start a word, as in search.
+        internal static bool HasCompact(LibraryEntry e, string compact)
+        {
+            if (e == null || String.IsNullOrEmpty(compact)) return false;
+            if (compact.Length <= 2) return ShortWordIn(NameTokens(e), compact) || ShortWordIn(OptionTokens(e), compact);
+            foreach (string k in NameKeys(e)) if (k.IndexOf(compact, StringComparison.Ordinal) >= 0) return true;
+            foreach (string k in OptionKeys(e)) if (k.IndexOf(compact, StringComparison.Ordinal) >= 0) return true;
+            return false;
+        }
         // Every word of `term` is in one of `keys` (sameKey: all in the same one); the whole term without spaces also counts.
         // One- and two-character words go by `tokens` (ShortWordIn): inside a longer word they match almost anything.
         private static bool WordsIn(string[] keys, string[] tokens, string term, bool sameKey)

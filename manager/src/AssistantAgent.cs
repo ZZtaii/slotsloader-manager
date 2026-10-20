@@ -33,7 +33,7 @@ namespace SlotsInstaller
 "- Each character can have many extra outfits. An outfit is a folder under the game's costume_mods/<Character>/<Outfit name>, composed from one mod package.\n" +
 "- A mod package has selectable options: main files (the base outfit, required whenever anything else from that package is chosen), optional add-ons, and choose-one groups (pick exactly one branch, e.g. one color). Later options overwrite earlier ones where files overlap.\n" +
 "- Outfit names must be unique per character. At game start the loader assigns the in-game labels (Outfit I, II, …); changes appear only after SF6 is restarted.\n" +
-"- Uninstalling deletes outfits (the library source reinstalls them; manual outfits with no source go to the Recycle Bin); presets are restorable copies of all enabled outfits.\n\n" +
+"- Uninstalling deletes outfits (the library source reinstalls them; manual outfits with no source go to the Recycle Bin); presets list what is enabled and restore it by reinstalling from the library (anything without a library source is copied).\n\n" +
 "How to work\n" +
 "- Search with search_mods, read options with get_mod_options, verify with check_outfit, then call install_outfit.\n" +
 "- Prefer one well-chosen option per choose-one group and include the main files. Respect limits the user gives (how many outfits, which characters).\n" +

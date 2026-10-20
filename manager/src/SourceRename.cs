@@ -100,6 +100,7 @@ namespace SlotsInstaller
                     }
                 }
                 Library.CompleteSourceRename(full, target, cachedIdentity, sevenZipPath);
+                if (hasCostumes) OutfitSetStore.RenameSource(costumeRoot, full, target);   // 1.0.8: list presets follow the mod (logs, never throws)
                 History.Record(null, new HistoryEvent { Kind = HistoryKinds.Rename, Source = target, PrevId = History.Normalize(full), Name = folder ? Path.GetFileName(target) : Path.GetFileNameWithoutExtension(target), Detail = "from " + Path.GetFileName(full) });   // never throws
                 o.Done = true;
             }

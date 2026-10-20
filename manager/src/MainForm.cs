@@ -35,6 +35,8 @@ namespace SlotsInstaller
         // 1.0.6: library rows show "name" (modinfo.ini) or "file" names (missing = file); Deep search on/off.
         public string LibraryNames = "";
         public bool DeepSearch;
+        // 1.0.8: MY FILTERS chips showing only their matches / hiding them, by filter id (LibraryFilters.cs).
+        public List<string> FiltersOnly = new List<string>(), FiltersHidden = new List<string>();
         internal static ViewPreferences Load(string file)
         {
             try
@@ -89,7 +91,7 @@ namespace SlotsInstaller
         // selection made by the user closes the Filters panel and a programmatic one (repopulating after a filter,
         // count or search change) does not.
         private bool userPickingMod;
-        private void ClosePanelForPickedMod() { if (FiltersOpen) ShowFilters(false, false); }
+        private void ClosePanelForPickedMod() { if (FiltersOpen && !CustomEditorOpen) ShowFilters(false, false); }   // 1.0.8: not while a filter is edited
         // W/S in the library list: the next or previous row, like Down/Up (nothing past the ends).
         private void MoveLibrarySelection(int delta)
         {
@@ -352,7 +354,8 @@ namespace SlotsInstaller
                 FiltersOpen=filterPanel.Visible,
                 Fighters=filterPanel.Grid.Selected.OrderBy(c=>c,StringComparer.Ordinal).ToList(),
                 Kinds=new[]{FilterPanel.ToolsKind,FilterPanel.MiscKind}.Where(k=>filterPanel.Kinds.Selected.Contains(k)).ToList(),SelectedLibraries=filterPanel.LibrariesSelected.OrderBy(k=>k,StringComparer.OrdinalIgnoreCase).ToList(),MiscAreas=MiscKindsSelectedOrPending().ToList(),
-                LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn
+                LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,
+                FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide)
             };
         }
         // Older builds read one character name; keep it meaningful when exactly one fighter is selected.
@@ -582,6 +585,7 @@ namespace SlotsInstaller
             // 2.3.1: no hover tooltips anywhere in the panel (the help text is in UI-REFERENCE.md); accessible names stay.
             // 2.4.1: the panel has no Clear of its own; the list header's Clear (filterClearButton) is the only one.
             filterPanel.SetLibraries(config.Libraries);
+            BuildCustomFilters();   // 1.0.8: MY FILTERS (MainFormCustomFilters.cs)
             // 2.3.0: the costume, format, library and mod-type dropdowns were removed; their search tokens remain
             // (c1 / costume:1, format:zip, is:bundle, is:normal, is:unreadable, is:tool). "Installed mods only" is the
             // Installed tile (FilterPanel.InstalledOn).
@@ -814,18 +818,29 @@ namespace SlotsInstaller
             info.Controls.Add(packageHint); info.Controls.Add(packageDescription); info.Controls.Add(packageMeta); info.Controls.Add(componentTitle); info.Controls.Add(visual);
             inspector.Controls.Add(info); inspector.Controls.Add(target); inspector.Controls.Add(BuildAllVariantsRow()); inspector.Controls.Add(BuildReplacesPanel()); inspector.Controls.Add(BuildModePanel()); info.BringToFront();   // 2.5.4: Install all variants between the name and INSTALL AS
             targetPanel = target;
-            body.Controls.Add(inspector, 2, 0);
+            // 1.0.8 (the user): the inspector scrolls when its details don't fit (OverlayScroll.cs): the option description
+            // and the REPLACES notes are shown in full, the preview keeps its minimum, and a thin thumb shows while scrolling.
+            inspectorScroller = new OverlayScroller { Dock = DockStyle.Fill, Margin = new Padding(0), AccessibleName = "Mod details" };
+            inspectorScroller.SetContent(inspector, InspectorNaturalHeight);
+            inspectorScroller.Expand = ExpandInspectorDetails;   // compact until the user scrolls down over it
+            inspectorScroller.Resize += delegate { if (!inspectorDetailsOpen) SizeReplacesPanel(); };   // compact notes fit the column's new height
+            body.Controls.Add(inspectorScroller, 2, 0);
             detail.Controls.Add(body); body.BringToFront();
             Action sizeInspector = delegate
             {
-                // Only the inspector scrolls when short. The option list retains the entire centre height.
+                // The preview takes what the text leaves, down to its minimum; below that the column scrolls.
                 packageHint.Visible = false; packageMeta.Visible = packageMeta.Text.Length > 0;
-                visual.Height = Math.Max(Px(100), info.ClientSize.Height - Px(packageMeta.Visible ? 80 : 56));
+                FitDescription();
+                visual.Height = Math.Max(Px(InspectorPreviewMin), info.ClientSize.Height - InspectorTextHeight());
             };
             layoutInspectorInfo = sizeInspector;
             Action sizeBody=delegate { body.ColumnStyles[2].Width = detail.Width >= Px(1050) ? Px(460) : detail.Width >= Px(900) ? Px(390) : Px(340); sizeInspector(); };
             body.Resize += delegate { sizeBody(); }; dpiLayouts.Add(sizeBody);
             info.Resize += delegate { sizeInspector(); };
+            packageDescription.TextChanged += delegate { sizeInspector(); };
+            foreach (Control part in new Control[] { modePanel, replacesPanel, allVariantsRow, target, componentTitle, packageMeta, packageDescription })
+            { part.SizeChanged += delegate { inspectorScroller.Relayout(); }; part.VisibleChanged += delegate { inspectorScroller.Relayout(); }; }
+            replacesPanel.SizeChanged += delegate { if (replacesPanel.Width != replacesWidth) { replacesWidth = replacesPanel.Width; SizeReplacesPanel(); } };   // notes re-wrap at a new width
             ShowDetailTab(false);
             UpdateFooter();
             return detail;
@@ -1548,6 +1563,15 @@ namespace SlotsInstaller
             var libraryCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             int toolCount = 0, miscCount = 0, installedCount = 0;
             Action<Dictionary<string, int>, string> count = delegate(Dictionary<string, int> map, string key) { int n; map.TryGetValue(key, out n); map[key] = n + 1; };
+            // 1.0.8 MY FILTERS (MainFormCustomFilters.cs): Only chips OR-ed, each Hide chip leaves its matches out, both
+            // AND-ed with the rest. While a filter is edited its own state is ignored and the typed keywords (customDraft)
+            // narrow the list instead. A chip counts its matches among the mods the other filters and Hide chips leave.
+            List<CustomFilter> custom = customFilters; int customCount = custom.Count;
+            string[] customKeys = custom.Select(LibraryFilters.MatchKey).ToArray();
+            CustomFilterState[] customState = custom.Select(f => f.Id == customEditingId ? CustomFilterState.Off : CustomState(f.Id)).ToArray();
+            bool anyOnly = customState.Contains(CustomFilterState.Only);
+            CustomFilter draft = customDraft; string draftKey = draft == null ? null : LibraryFilters.MatchKey(draft);
+            var customHit = new bool[customCount]; var customTotals = new int[customCount];
             libraryRanks.Clear();
             var ranked = new List<KeyValuePair<LibraryEntry, int>>();
             foreach (LibraryEntry e in library)
@@ -1562,15 +1586,27 @@ namespace SlotsInstaller
                 bool fighterOk = fighters.Count == 0 || codes.Overlaps(fighters);
                 bool kindOk = !kindsOn || (toolsOn && isTool) || (miscOn && isMisc && (miscKinds.Count == 0 || e.MiscAreas.Any(miscKinds.Contains)));
                 bool installedOk = !installedOn || isInstalled, libraryOk = libraries.Count == 0 || libraries.Contains(from);
-                if (kindOk && installedOk && libraryOk) foreach (string code in codes) count(fighterCounts, code);
-                if (fighterOk && installedOk && libraryOk) { if (isTool) toolCount++; if (isMisc) { miscCount++; foreach (string label in e.MiscAreas) count(miscCounts, label); } }
-                if (fighterOk && kindOk && libraryOk && isInstalled) installedCount++;
-                if (fighterOk && kindOk && installedOk) count(libraryCounts, from);
-                if (!fighterOk || !kindOk || !installedOk || !libraryOk) continue;
+                bool onlyOk = !anyOnly, draftOk = draft == null || LibraryFilters.Matches(e, draft, draftKey); int hides = 0;
+                for (int i = 0; i < customCount; i++)
+                {
+                    bool hit = customHit[i] = LibraryFilters.Matches(e, custom[i], customKeys[i]);
+                    if (hit && customState[i] == CustomFilterState.Only) onlyOk = true;
+                    if (hit && customState[i] == CustomFilterState.Hide) hides++;
+                }
+                bool customOk = onlyOk && hides == 0 && draftOk;
+                if (fighterOk && kindOk && installedOk && libraryOk && draftOk)
+                    for (int i = 0; i < customCount; i++) if (customHit[i] && hides - (customState[i] == CustomFilterState.Hide ? 1 : 0) == 0) customTotals[i]++;
+                if (kindOk && installedOk && libraryOk && customOk) foreach (string code in codes) count(fighterCounts, code);
+                if (fighterOk && installedOk && libraryOk && customOk) { if (isTool) toolCount++; if (isMisc) { miscCount++; foreach (string label in e.MiscAreas) count(miscCounts, label); } }
+                if (fighterOk && kindOk && libraryOk && customOk && isInstalled) installedCount++;
+                if (fighterOk && kindOk && installedOk && customOk) count(libraryCounts, from);
+                if (!fighterOk || !kindOk || !installedOk || !libraryOk || !customOk) continue;
                 ranked.Add(new KeyValuePair<LibraryEntry, int>(e, rank));
                 if (query.HasCostume) libraryRanks[e] = rank;
             }
             UpdateFacetCounts(fighterCounts, miscCounts, toolCount, miscCount, installedCount, libraryCounts);
+            customCounts.Clear(); for (int i = 0; i < customCount; i++) customCounts[custom[i].Id] = customTotals[i];
+            UpdateCustomChipLooks();
             UpdateFilterButton();
             // Costume searches list mods that change that costume first, then shared parts, then title-only matches.
             // 2.4.1: installed mods (the Installed tile's definition, from the cached state) come first within the same
@@ -1682,8 +1718,9 @@ namespace SlotsInstaller
         // Selected fighters, the kind tiles, and each shared filter count once.
         internal int ActiveFilterCount()
         {
-            return (filterPanel.Grid.Selected.Count > 0 ? 1 : 0) + (filterPanel.ToolsOn || filterPanel.MiscOn ? 1 : 0) 
-                + (filterPanel.InstalledOn ? 1 : 0) + (filterPanel.LibrariesSelected.Count > 0 ? 1 : 0);
+            return (filterPanel.Grid.Selected.Count > 0 ? 1 : 0) + (filterPanel.ToolsOn || filterPanel.MiscOn ? 1 : 0)
+                + (filterPanel.InstalledOn ? 1 : 0) + (filterPanel.LibrariesSelected.Count > 0 ? 1 : 0)
+                + customFilters.Count(f => CustomState(f.Id) != CustomFilterState.Off);   // 1.0.8: each MY FILTERS chip that is on
         }
 
         // ---- 2.3.0 Filters panel ----------------------------------------------------------------------------
@@ -1708,6 +1745,7 @@ namespace SlotsInstaller
             if (filterPanel == null) return;
             if (open && currentPage != libraryPage) ShowPage(libraryPage);
             if (open && BatchVisible) HideBatch();   // 1.0.6: the Filters panel shows in the inspector's place, which the queue covers
+            if (!open) EndCustomFilterEdit();   // 1.0.8: closing the panel cancels a filter edit (and its preview)
             if (filterPanel.Visible != open)
             {
                 bool hadFocus = filterPanel.ContainsFocus;
@@ -1722,6 +1760,7 @@ namespace SlotsInstaller
         {
             // Fighters, Tool mods/Misc, the Misc chips, Installed and libraries; the search text stays (it is not a filter).
             filterPanel.ClearSelections(); pendingMiscKinds.Clear();
+            customStates.Clear(); UpdateCustomChipLooks();   // 1.0.8: MY FILTERS chips too
             libraryToTop = true; ApplyFilters(); QueueViewSave();
         }
 
@@ -1754,6 +1793,7 @@ namespace SlotsInstaller
             pendingMiscKinds.Clear(); pendingMiscKinds.UnionWith(miscKinds);
             foreach (FlatButton chip in filterPanel.MiscChips.Controls.OfType<FlatButton>()) chip.SetActive(pendingMiscKinds.Contains((string)chip.Tag));
             pendingMiscKinds.RemoveWhere(k => filterPanel.MiscChips.Controls.OfType<FlatButton>().Any(b => (string)b.Tag == k));
+            RestoreCustomStates(saved);   // 1.0.8
         }
 
         // Fighters of the grid: the built-in roster, fighters found in the game and fighter codes of library mods.
@@ -1812,6 +1852,7 @@ namespace SlotsInstaller
             }
             finally { chips.ResumeLayout(); }
             pendingMiscKinds.RemoveWhere(k => kinds.Contains(k));
+            FillCustomChips();   // 1.0.8: MY FILTERS, at the same time and size rules as the Misc chips
             filterPanel.Arrange();
         }
 
@@ -2019,6 +2060,7 @@ namespace SlotsInstaller
             try { remembered = ReplaceSettings.Load().StartMode(); } catch (Exception ex) { Program.Log(ex); }
             bool replaceLoad = restoreReplace != null || remembered == InstallModes.Replace;
             PackageReload reload = pendingReload; pendingReload = null;   // 2.4.1: a reload after the source changed on disk
+            if (reload == null) CollapseInspectorDetails();   // 1.0.8: another mod opens with compact details
             if (reload != null) replaceLoad = reload.Mode == InstallModes.Replace || restoreReplace != null;
             Work((reload != null ? "Reloading " : "Reading ") + entry.Name + "…", delegate
             {
@@ -3060,6 +3102,7 @@ namespace SlotsInstaller
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             if (RenameKey(keyData)) return true;   // 1.0.5: the rename box's Enter / Esc / Tab first (MainFormRename.cs)
+            if (CustomFilterKey(keyData)) return true;   // 1.0.8: the filter editor's Esc / Enter / Tab (MainFormCustomFilters.cs)
             // 2.4.1: Space installs the selected options, exactly like a click on the footer's Install.
             if (keyData == Keys.Space && SpaceInstallsHere())
             {

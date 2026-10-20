@@ -55,6 +55,8 @@ namespace SlotsInstaller
                 check("preset scope (2.4.1): presets without a scope (older Managers) read as Extra outfits and restore as before; a damaged saved replacement refuses restore without changes",delegate { OlderPresets(Path.Combine(run,"scope-old")); });
                 check("preset scope (2.4.1): restore of each part without the library: missing replacements installed in saved order (also between ones still installed), identical skipped, a same-named different replacement skipped and reported, extra outfits only touch costume_mods, an extra-outfit conflict stops Both before any replacement changes",delegate { probe.Game=false;probe.Fluffy=false;ScopedRestore(Path.Combine(run,"scope-restore")); });
                 check("preset scope (2.4.1): SF6 running refuses a replacement restore (nothing changes, no store leftovers); Fluffy open refuses PAK-method rows; all-identical restores still pass",delegate { RunningRefused(Path.Combine(run,"scope-running"),probe); });
+                check("list presets (1.0.8): v3 saves library pointers (outfit source, options, place; replacements in priority order, no Slotsloader) and copies only what has no source; info, labels, old-format mark; a damaged pointer is refused",delegate { probe.Game=false;probe.Fluffy=false;PointerSave(Path.Combine(run,"list-save")); });
+                check("list presets (1.0.8): restore reinstalls from the library (saved order, same game files, same options), skips what is installed, notes a missing mod, a taken place and a changed source while the rest goes on; a library rename moves the pointers",delegate { probe.Game=false;probe.Fluffy=false;PointerRestore(Path.Combine(run,"list-restore")); });
             }
             finally { GameProcesses.Probe=previousProbe; }
             Console.WriteLine("Outfit set checks: "+(count-failures-skips)+" passed, "+failures+" failed, "+skips+" skipped.");
@@ -414,9 +416,9 @@ namespace SlotsInstaller
             ScopeFixture s=CreateScope(root);
             s.Engine.SetEnabled(s.B.Id,false);   // disabled: not saved
             var before=GameFiles(s);
-            OutfitSetInfo outfits=OutfitSetStore.CreatePreset(s.CostumeRoot,"Outfits",PresetScope.ExtraOutfits,s.Engine);
-            OutfitSetInfo mods=OutfitSetStore.CreatePreset(s.CostumeRoot,"Mods",PresetScope.Replacements,s.Engine);
-            OutfitSetInfo both=OutfitSetStore.CreatePreset(s.CostumeRoot,"Both",PresetScope.Both,s.Engine);
+            OutfitSetInfo outfits=OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Outfits",PresetScope.ExtraOutfits,s.Engine);
+            OutfitSetInfo mods=OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Mods",PresetScope.Replacements,s.Engine);
+            OutfitSetInfo both=OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Both",PresetScope.Both,s.Engine);
             SameGame(before,GameFiles(s),"Saving presets");
             Require(outfits.Scope==PresetScope.ExtraOutfits && outfits.OutfitCount==2 && outfits.ReplacementCount==0,"Extra outfits preset holds the wrong things.");
             Require(mods.Scope==PresetScope.Replacements && mods.OutfitCount==0 && String.Join("|",mods.Replacements)=="Script Pack|Cammy Colors" && mods.ReplacementMethod==ReplaceMethods.Pak,"Replacements preset: "+String.Join("|",mods.Replacements)+" method "+mods.ReplacementMethod);
@@ -429,17 +431,17 @@ namespace SlotsInstaller
             var plain=Manifest(outfits);
             Require((string)plain["Format"]=="sf6-slotsloader-outfit-set-v1" && (string)plain["Scope"]=="extra_outfits" && (!plain.ContainsKey("Replacements") || plain["Replacements"]==null) && !Directory.Exists(Path.Combine(outfits.Folder,"replacements")),"An extra-outfit preset is no longer the v1 format older Managers read.");
             Require(!File.ReadAllText(Path.Combine(mods.Folder,"set.json")).Contains("SF6_CostumeSlotsNative"),"Slotsloader was saved in a preset.");
-            Refused(delegate { OutfitSetStore.CreatePreset(s.CostumeRoot,"No engine",PresetScope.Both,null); });
+            Refused(delegate { OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"No engine",PresetScope.Both,null); });
             // Labels.
             Require(OutfitSetsForm.Counts(outfits)=="2 extra outfits" && OutfitSetsForm.Counts(mods)=="2 replacements" && OutfitSetsForm.Counts(both)=="2 extra outfits · 2 replacements","Counts: "+OutfitSetsForm.Counts(both));
-            Require(OutfitSetsForm.Subtitle(both).StartsWith("2 extra outfits · 2 replacements · "+Utilities.FriendlyBytes(both.Bytes)+" · "),"Subtitle: "+OutfitSetsForm.Subtitle(both));
+            Require(OutfitSetsForm.Subtitle(both).StartsWith("2 extra outfits · 2 replacements · full copy · "+Utilities.FriendlyBytes(both.Bytes)+" · "),"Subtitle: "+OutfitSetsForm.Subtitle(both));   // 1.0.8: an old-format preset is marked
             var single=new OutfitSetInfo {Name="One",OutfitCount=1,ReplacementCount=1,Bytes=10,CreatedUtc=DateTime.UtcNow};
             Require(OutfitSetsForm.Counts(single)=="1 extra outfit · 1 replacement","Singular counts: "+OutfitSetsForm.Counts(single));
             Require(OutfitSetsForm.Contents(both).Contains("Replacements · saved with the PAK method") && OutfitSetsForm.Contents(both).Contains("1. Script Pack"),"Details: "+OutfitSetsForm.Contents(both));
             // Nothing of a kind enabled.
             UninstallAll(s,"Script Pack","Cammy Colors");
-            Refused(delegate { OutfitSetStore.CreatePreset(s.CostumeRoot,"Empty mods",PresetScope.Replacements,s.Engine); });
-            Require(OutfitSetStore.CreatePreset(s.CostumeRoot,"Both, outfits only",PresetScope.Both,s.Engine).Scope==PresetScope.ExtraOutfits,"Both with no enabled replacements must save the extra outfits.");
+            Refused(delegate { OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Empty mods",PresetScope.Replacements,s.Engine); });
+            Require(OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Both, outfits only",PresetScope.Both,s.Engine).Scope==PresetScope.ExtraOutfits,"Both with no enabled replacements must save the extra outfits.");
             Require(PresetScopes.Parse("both")==PresetScope.Both && PresetScopes.Parse("")==null && PresetScopes.Limit(PresetScope.Both,PresetScope.Replacements)==PresetScope.Replacements,"Scope codes.");
         }
         private static void OlderPresets(string root)
@@ -457,7 +459,7 @@ namespace SlotsInstaller
             // A v1 record must not carry replacements, and a damaged saved replacement refuses restore.
             data=Manifest(listed); data["Replacements"]=new Dictionary<string,object> {{"Method","pak"},{"Mods",new object[0]}}; WriteManifest(listed,data);
             Require(!OutfitSetStore.List(s.CostumeRoot).Entries.Any(e=>e.Id==listed.Id),"A v1 record with replacements stayed actionable.");
-            OutfitSetInfo mods=OutfitSetStore.CreatePreset(s.CostumeRoot,"Mods",PresetScope.Replacements,s.Engine);
+            OutfitSetInfo mods=OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Mods",PresetScope.Replacements,s.Engine);
             UninstallAll(s,"Cammy Colors");
             var game=GameFiles(s); string state=File.ReadAllText(s.Engine.StatePath);
             string file=Directory.EnumerateFiles(Path.Combine(mods.Folder,"replacements"),"*",SearchOption.AllDirectories).First(p=>p.EndsWith(".user.2",StringComparison.OrdinalIgnoreCase));
@@ -470,7 +472,7 @@ namespace SlotsInstaller
         private static void ScopedRestore(string root)
         {
             ScopeFixture s=CreateScope(root);
-            OutfitSetInfo both=OutfitSetStore.CreatePreset(s.CostumeRoot,"Everything",PresetScope.Both,s.Engine);
+            OutfitSetInfo both=OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Everything",PresetScope.Both,s.Engine);
             var fullGame=GameFiles(s); var fullOutfits=Outfits(s);
             Directory.Delete(s.R.Mods,true);   // self-contained: no library needed
             // Replacements part only: every replacement missing.
@@ -523,10 +525,83 @@ namespace SlotsInstaller
             SameGame(fullGame,GameFiles(s),"Both restore"); Equal(fullOutfits,Outfits(s),"Both restore outfits.");
             Require(OutfitSetsForm.RestoreSummary(r,PresetScope.Both)=="Restored 1 extra outfit · 1 replacement · 3 identical skipped. Restart SF6.","Both summary: "+OutfitSetsForm.RestoreSummary(r,PresetScope.Both));
         }
+        // ---- 1.0.8 list presets (v3, OutfitSetPointers.cs) ----
+        private static Dictionary<string,object> PointerRecord(OutfitSetInfo set) { return (Dictionary<string,object>)Manifest(set)["Pointers"]; }
+        private static void PointerSave(string root)
+        {
+            ScopeFixture s=CreateScope(root);
+            var before=GameFiles(s);
+            OutfitSetInfo both=OutfitSetStore.CreatePreset(s.CostumeRoot,"List",PresetScope.Both,s.Engine);
+            SameGame(before,GameFiles(s),"Saving a list preset");
+            var record=Manifest(both); var pointers=PointerRecord(both);
+            var outfits=((System.Collections.IEnumerable)pointers["Outfits"]).Cast<Dictionary<string,object>>().ToList();
+            var mods=((System.Collections.IEnumerable)pointers["Replacements"]).Cast<Dictionary<string,object>>().ToList();
+            Require((string)record["Format"]=="sf6-slotsloader-outfit-set-v3" && (string)record["Scope"]=="both","List preset format/scope: "+record["Format"]);
+            Require(outfits.Count==1 && (string)outfits[0]["Character"]=="Ingrid" && (string)outfits[0]["Folder"]=="Managed A" && (string)outfits[0]["Mode"]=="composed" && String.Equals((string)outfits[0]["SourcePath"],Path.Combine(root,"outfit-source"),StringComparison.OrdinalIgnoreCase) && ((System.Collections.IList)outfits[0]["SelectedIds"]).Count>0,"Outfit pointer: "+Json.Serializer().Serialize(outfits));
+            Require(String.Join("|",mods.Select(m=>(string)m["Name"]))=="Script Pack|Cammy Alt|Cammy Colors" && mods.All(m=>Directory.Exists((string)m["SourcePath"])),"Replacement pointers (priority order, no Slotsloader): "+String.Join("|",mods.Select(m=>(string)m["Name"])));
+            // Only the manual zip (no library source) is copied; no replacement store copies.
+            var entries=((System.Collections.IEnumerable)record["Entries"]).Cast<Dictionary<string,object>>().ToList();
+            Require(entries.Count==1 && (string)entries[0]["RelativePath"]=="Juri/Manual zip.zip" && !Directory.Exists(Path.Combine(both.Folder,"replacements")) && Directory.GetFileSystemEntries(Path.Combine(both.Folder,"payload")).Length==1,"Copied part of a list preset: "+entries.Count);
+            long copy=new FileInfo(Safety.Under(s.CostumeRoot,"Juri/Manual zip.zip")).Length;
+            Require(both.Pointers && both.Copied==1 && both.OutfitCount==2 && both.ReplacementCount==3 && both.Bytes>=copy && both.Bytes<copy+64*1024,"List preset info: copied "+both.Copied+", bytes "+both.Bytes);
+            Require(both.Outfits.SequenceEqual(new[]{"Ingrid/Managed A","Juri/Manual zip.zip (copy)"}) && both.Replacements.SequenceEqual(new[]{"Script Pack","Cammy Alt","Cammy Colors"}),"Listed contents: "+String.Join(", ",both.Outfits));
+            Require(OutfitSetsForm.Subtitle(both).StartsWith("2 extra outfits · 3 replacements · 1 copied · "+Utilities.FriendlyBytes(both.Bytes)+" · ") && OutfitSetsForm.NoteText.StartsWith("Saves a list"),"Subtitle: "+OutfitSetsForm.Subtitle(both));
+            OutfitSetInfo old=OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Copies",PresetScope.Both,s.Engine);
+            Require(!old.Pointers && OutfitSetsForm.Subtitle(old).Contains("full copy · "),"An old-format preset is not marked: "+OutfitSetsForm.Subtitle(old));
+            // A damaged pointer makes the preset unreadable (left untouched, not listed).
+            var bad=Manifest(both); ((Dictionary<string,object>)((System.Collections.IList)((Dictionary<string,object>)bad["Pointers"])["Outfits"])[0])["SourcePath"]="relative\\path"; WriteManifest(both,bad);
+            Require(!OutfitSetStore.List(s.CostumeRoot).Entries.Any(e=>e.Id==both.Id),"A list preset with a relative source stayed actionable.");
+            // Nothing with a source and nothing enabled: refused.
+            UninstallAll(s,"Script Pack","Cammy Alt","Cammy Colors");
+            Refused(delegate { OutfitSetStore.CreatePreset(s.CostumeRoot,"Empty list",PresetScope.Replacements,s.Engine); });
+        }
+        private static void PointerRestore(string root)
+        {
+            ScopeFixture s=CreateScope(root);
+            OutfitSetInfo both=OutfitSetStore.CreatePreset(s.CostumeRoot,"Everything",PresetScope.Both,s.Engine);
+            var fullGame=GameFiles(s);
+            InstalledOutfit managed=Installer.ListInstalled(s.CostumeRoot).Single(o=>o.Name=="Managed A");
+            List<string> ids=managed.SelectedIds.ToList();
+            // Everything gone: reinstalled from the library (replacements in their saved order), the manual zip from its copy.
+            UninstallAll(s,"Script Pack","Cammy Alt","Cammy Colors");
+            OutfitSetStore.UninstallOutfits(s.CostumeRoot,Installer.ListInstalled(s.CostumeRoot),new CheckRecycleBin());
+            Require(Installer.ListInstalled(s.CostumeRoot).Count==0,"Fixture: outfits left after uninstall.");
+            OutfitSetPreview preview=OutfitSetStore.Preview(s.CostumeRoot,both,PresetScope.Both,s.Engine);
+            Require(preview.AddReplacements.Count==3 && preview.AddOutfits.Count==2 && preview.InstallsNatives,"List preview: "+preview.AddReplacements.Count+"/"+preview.AddOutfits.Count);
+            var r=OutfitSetStore.Restore(s.CostumeRoot,both,PresetScope.Both,s.Engine);
+            Require(r.ReplacementsRestored==3 && r.Restored==2 && r.Notes.Count==0,"List restore counts: "+r.ReplacementsRestored+"/"+r.Restored+" notes "+String.Join(" | ",r.Notes));
+            Require(String.Join("|",s.Order())=="Script Pack|Cammy Alt|Cammy Colors|Slotsloader","Saved order not kept: "+String.Join("|",s.Order()));
+            SameGame(fullGame,GameFiles(s),"List restore");
+            InstalledOutfit back=Installer.ListInstalled(s.CostumeRoot).Single(o=>o.Name=="Managed A");
+            Require(back.Managed && back.Enabled && back.Character=="Ingrid" && ReplacePlanner.SameSource(back.SourcePath,managed.SourcePath) && back.SelectedIds.SequenceEqual(ids) && File.Exists(Safety.Under(s.CostumeRoot,"Juri/Manual zip.zip")),"Restored outfits differ.");
+            Require(OutfitSetsForm.RestoreSummary(r,PresetScope.Both)=="Restored 2 extra outfits · 3 replacements. Restart SF6.","Summary: "+OutfitSetsForm.RestoreSummary(r,PresetScope.Both));
+            // Again: everything already there is skipped.
+            r=OutfitSetStore.Restore(s.CostumeRoot,both,PresetScope.Both,s.Engine);
+            Require(r.Restored==0 && r.Skipped==2 && r.ReplacementsRestored==0 && r.ReplacementsSkipped==3 && r.Notes.Count==0,"Second restore: "+r.Restored+"/"+r.Skipped+"/"+r.ReplacementsSkipped+" "+String.Join(" | ",r.Notes));
+            // A mod no longer in the library, a different outfit in the place and a changed source: noted, the rest goes on.
+            UninstallAll(s,"Cammy Alt","Cammy Colors");
+            Directory.Move(Path.Combine(s.R.Mods,"modB"),Path.Combine(s.R.Mods,"modB gone"));
+            OutfitSetStore.UninstallOutfits(s.CostumeRoot,Installer.ListInstalled(s.CostumeRoot).Where(o=>o.Name=="Managed A").ToList(),new CheckRecycleBin());
+            Put(s.CostumeRoot,"Ingrid/Managed A/readme.txt","someone else's outfit");
+            Put(Path.Combine(root,"outfit-source"),"extra.txt","changed after saving");
+            r=OutfitSetStore.Restore(s.CostumeRoot,both,PresetScope.Both,s.Engine);
+            Require(r.ReplacementsRestored==1 && r.ReplacementsSkipped==1 && r.Restored==0 && r.Skipped==1,"Partial restore counts: "+r.ReplacementsRestored+"/"+r.ReplacementsSkipped+"/"+r.Restored+"/"+r.Skipped);
+            Require(r.Notes.Count==2 && r.Notes.Any(n=>n.StartsWith("Cammy Alt: not in your libraries any more")) && r.Notes.Any(n=>n.StartsWith("Ingrid/Managed A: a different outfit is installed there")),"Notes: "+String.Join(" | ",r.Notes));
+            Require(File.ReadAllText(Safety.Under(s.CostumeRoot,"Ingrid/Managed A/readme.txt"))=="someone else's outfit","A different outfit in the place was changed.");
+            Require(OutfitSetsForm.RestoreSummary(r,PresetScope.Both).Contains(" · 2 notes below."),"Summary with notes: "+OutfitSetsForm.RestoreSummary(r,PresetScope.Both));
+            Directory.Delete(Safety.Under(s.CostumeRoot,"Ingrid/Managed A"),true);
+            r=OutfitSetStore.Restore(s.CostumeRoot,both,PresetScope.ExtraOutfits,s.Engine);
+            Require(r.Restored==1 && r.Notes.Count==1 && r.Notes[0].StartsWith("Ingrid/Managed A: the mod changed since the preset was saved"),"Changed source note: "+String.Join(" | ",r.Notes));
+            // A library rename moves the preset's pointers with the mod.
+            string renamed=Path.Combine(s.R.Mods,"modA renamed"); Directory.Move(Path.Combine(s.R.Mods,"modA"),renamed);
+            OutfitSetStore.RenameSource(s.CostumeRoot,Path.Combine(s.R.Mods,"modA"),renamed);
+            Require(Json.Serializer().Serialize(PointerRecord(Fresh(s,both))).Contains(Json.Serializer().Serialize(renamed).Trim('"')),"Rename did not move the pointer.");
+        }
+
         private static void RunningRefused(string root,FakeProcessProbe probe)
         {
             ScopeFixture s=CreateScope(root);
-            OutfitSetInfo mods=OutfitSetStore.CreatePreset(s.CostumeRoot,"Mods",PresetScope.Replacements,s.Engine);
+            OutfitSetInfo mods=OutfitSetStore.CreateCopyPreset(s.CostumeRoot,"Mods",PresetScope.Replacements,s.Engine);
             probe.Game=true;
             var same=OutfitSetStore.Restore(s.CostumeRoot,mods,PresetScope.Replacements,s.Engine);
             Require(same.ReplacementsSkipped==3 && same.ReplacementsRestored==0,"An all-identical restore should pass while SF6 runs (nothing changes).");

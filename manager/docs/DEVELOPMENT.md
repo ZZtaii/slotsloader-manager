@@ -253,6 +253,10 @@ For an installed update, back up and replace only selected EXE/config/docs in th
 - `--filter-real-check` adds `filters-portrait-band-2x.png` (the band top row is not darker than its neighbours at 288 DPI) and `filters-mod-picked.png` (a posted click on a real mod closes the panel and shows its options).
 - `--replace-ui-check`: no "· remembered" hint; "· locked for this mod" while forced.
 
+## Bumping the REFramework pin (1.0.8)
+
+The Extra outfit notice and the REFramework offer use `ReFrameworkRelease.Supported` (`src/ReFramework.cs`): a praydog/REFramework-nightly release (`tag`, nightly number, `REFramework.zip` size and SHA-256 = the release asset digest, commit, build date). External mod managers download that repository's latest `REFramework.zip` (one `dinput8.dll` for every game plus `reframework_revision.txt`). To move to a newer nightly: test it in game with Slotsloader, then take its tag and asset digest from `gh api repos/praydog/REFramework-nightly/releases/tags/<tag>` and the build date its `dinput8.dll` prints (ASCII `dd.MM.yyyy`, read by `ReFrameworkBuild.Parse`). Installed builds older than that date are flagged (never upscaler builds, recognised by the word "Upscaler"; an unreadable date is not flagged). Run `test.ps1 -Only replace-ui` (check "REFramework (1.0.8)").
+
 ## Bumping the Slotsloader pin
 
 The "install Slotsloader" offer and `loader-fetch` only ever use `LoaderPin.Release` (`src/LoaderRelease.cs`), read from `assets\loader-pin.json` (`tag`, `version`, `asset`, `size`, `sha256`), which `build.ps1` embeds as `SlotsInstaller.LoaderPin.json`; the URL and release page follow the tag. Since 2.5.9 the pin is set by packaging, not by hand:

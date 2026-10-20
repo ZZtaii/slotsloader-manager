@@ -17,14 +17,19 @@ namespace SlotsInstaller
         internal sealed class Entry
         {
             internal string Text = "", Link = "", LinkTip = "";
+            internal string Detail = "";   // 1.0.8: a second paragraph in the muted colour under Text (ReplacePlanner.ConflictParagraphs)
             internal Color Color = Palette.Muted;
             internal Action OnLink;
             internal bool LinkEnabled = true;
-            internal int MaxLines = 3;
+            internal int MaxLines = 50;   // 1.0.8: in full (the inspector scrolls); was 3
         }
         private readonly List<Entry> entries = new List<Entry>();
         private readonly List<KeyValuePair<Rectangle, Entry>> links = new List<KeyValuePair<Rectangle, Entry>>();
         internal Action<string> ShowReason;   // a disabled link's reason, shown in the status strip when clicked
+        // 1.0.8 (the user): compact until the details are asked for (MainFormInspectorScroll.cs): headlines only, each at most
+        // CompactLines; "Scroll to expand" in the REPLACES heading row says when something is left out.
+        internal bool Compact;
+        internal const int CompactLines = 2;
         private Entry hovered;
         internal IList<Entry> Entries { get { return entries.AsReadOnly(); } }
 
@@ -35,14 +40,16 @@ namespace SlotsInstaller
             AccessibleRole = AccessibleRole.Grouping; AccessibleName = "Conflicts with installed mods";
         }
 
-        internal void LimitLines(int lines) { foreach (Entry e in entries) e.MaxLines = Math.Min(e.MaxLines, lines); Invalidate(); }
+        // 1.0.8: a limit of the compact view (0 = CompactLines), not a change of the entries, so opening the details shows them all.
+        private int compactLimit;
+        internal void LimitLines(int lines) { compactLimit = lines; Invalidate(); }
 
         internal void SetEntries(IEnumerable<Entry> values)
         {
             List<Entry> snapshot = values == null ? new List<Entry>() : values.ToList();   // 2.4.2: a copy, never a live view of entries
             entries.Clear(); entries.AddRange(snapshot);
             hovered = null; Cursor = Cursors.Default;
-            AccessibleDescription = String.Join(" ", snapshot.Select(e => e.Text + (e.Link.Length > 0 ? " [" + e.Link + "]" : "")));
+            AccessibleDescription = String.Join(" ", snapshot.Select(e => e.Text + (String.IsNullOrEmpty(e.Detail) ? "" : " " + e.Detail) + (e.Link.Length > 0 ? " [" + e.Link + "]" : "")));
             Invalidate();
         }
 
@@ -53,10 +60,27 @@ namespace SlotsInstaller
         private int TextHeight(Graphics g, Entry e, int width)
         {
             int line = LineHeight(g);
-            int h = TextRenderer.MeasureText(g, e.Text, Font, new Size(Math.Max(1, width), int.MaxValue), Wrap).Height;
-            return Math.Min(h, line * e.MaxLines);
+            int h = FullTextHeight(g, e, width);
+            return Math.Min(h, line * (Compact ? Math.Min(e.MaxLines, compactLimit > 0 ? compactLimit : CompactLines) : e.MaxLines));
+        }
+        private int FullTextHeight(Graphics g, Entry e, int width) { return TextRenderer.MeasureText(g, e.Text, Font, new Size(Math.Max(1, width), int.MaxValue), Wrap).Height; }
+        // Compact and something is left out (a details paragraph, or lines of a headline).
+        internal bool HidesDetails(int width)
+        {
+            if (!Compact || entries.Count == 0) return false;
+            using (Graphics g = CreateGraphics()) return HidesDetails(g, width);
+        }
+        private bool HidesDetails(Graphics g, int width)
+        {
+            if (!Compact) return false;
+            foreach (Entry e in entries) if (!String.IsNullOrEmpty(e.Detail) || FullTextHeight(g, e, width) > TextHeight(g, e, width)) return true;
+            return false;
         }
 
+        private int DetailHeight(Graphics g, Entry e, int width)
+        {
+            return Compact || String.IsNullOrEmpty(e.Detail) ? 0 : Px(2) + TextRenderer.MeasureText(g, e.Detail, Font, new Size(Math.Max(1, width), int.MaxValue), Wrap).Height;
+        }
         // Height needed to show every entry at `width`.
         internal int PreferredHeightFor(int width)
         {
@@ -64,8 +88,8 @@ namespace SlotsInstaller
             using (Graphics g = CreateGraphics())
             {
                 int line = LineHeight(g), total = 0;
-                foreach (Entry e in entries) total += TextHeight(g, e, width) + (e.Link.Length > 0 ? line : 0) + Px(6);
-                return total;
+                foreach (Entry e in entries) total += TextHeight(g, e, width) + DetailHeight(g, e, width) + (e.Link.Length > 0 ? line : 0) + Px(6);
+                return total - Px(6);   // 1.0.8: no gap after the last entry
             }
         }
 
@@ -82,6 +106,12 @@ namespace SlotsInstaller
                 h = Math.Min(h, Math.Max(line, (ClientSize.Height - y - reserve) / line * line));
                 TextRenderer.DrawText(pe.Graphics, e.Text, Font, new Rectangle(0, y, width, h), e.Color, Wrap);
                 y += h;
+                int detail = DetailHeight(pe.Graphics, e, width);
+                if (detail > 0 && y + detail + reserve <= ClientSize.Height)
+                {
+                    TextRenderer.DrawText(pe.Graphics, e.Detail, Font, new Rectangle(0, y + Px(2), width, detail - Px(2)), Palette.Muted, Wrap);
+                    y += detail;
+                }
                 if (e.Link.Length > 0 && y + line <= ClientSize.Height)
                 {
                     Size size = TextRenderer.MeasureText(pe.Graphics, e.Link, Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
@@ -347,31 +377,46 @@ namespace SlotsInstaller
                 foreach (ReplaceConflict c in slots.Take(2))
                 {
                     ReplaceConflict target = c;
-                    entries.Add(new ConflictView.Entry { Text = c.Text, Color = Palette.Accent, Link = "Uninstall '" + c.ModName + "'", LinkEnabled = blocker == null, LinkTip = blocker ?? "Uninstall '" + c.ModName + "'", OnLink = delegate { UninstallConflict(target); } });
+                    string[] text = ReplacePlanner.ConflictParagraphs(c);   // 1.0.8: headline + muted details
+                    entries.Add(new ConflictView.Entry { Text = text[0], Detail = text[1], Color = Palette.Accent, Link = "Uninstall '" + c.ModName + "'", LinkEnabled = blocker == null, LinkTip = blocker ?? "Uninstall '" + c.ModName + "'", OnLink = delegate { UninstallConflict(target); } });
                 }
                 if (slots.Count > 2)
                     entries.Add(new ConflictView.Entry { Text = (slots.Count - 2) + " more mods change the same outfit.", Color = Palette.Accent, Link = "View report", OnLink = delegate { ShowReviewOrWait(true); }, MaxLines = 1 });
                 ReplaceConflict files = replacePlan.ConflictList.FirstOrDefault(c => c.Kind == "files");
-                if (files != null && slots.Count == 0) entries.Add(new ConflictView.Entry { Text = files.Text, Color = Palette.Accent, MaxLines = 2 });
-                foreach (ReplaceConflict c in replacePlan.ConflictList.Where(c => c.Kind == "stack").Take(2)) entries.Add(new ConflictView.Entry { Text = c.Text, Color = Palette.Muted, MaxLines = 2 });
-                if (replacePlan.UnknownLoose.Count > 0) entries.Add(new ConflictView.Entry { Text = ReplacePlanner.N(replacePlan.UnknownLoose.Count, "file") + " already in the game folder, not installed by the Manager (backed up, put back on uninstall).", Color = Palette.Muted, MaxLines = 2 });
+                if (files != null && slots.Count == 0) { string[] text = ReplacePlanner.ConflictParagraphs(files); entries.Add(new ConflictView.Entry { Text = text[0], Detail = text[1], Color = Palette.Accent }); }
+                foreach (ReplaceConflict c in replacePlan.ConflictList.Where(c => c.Kind == "stack").Take(2)) { string[] text = ReplacePlanner.ConflictParagraphs(c); entries.Add(new ConflictView.Entry { Text = text[0], Detail = text[1], Color = Palette.Text }); }
+                if (replacePlan.UnknownLoose.Count > 0) entries.Add(new ConflictView.Entry { Text = ReplacePlanner.N(replacePlan.UnknownLoose.Count, "file") + " already in the game folder, not installed by the Manager (backed up, put back on uninstall).", Color = Palette.Muted });
             }
             conflictView.SetEntries(entries);
             SizeReplacesPanel();
         }
 
-        // The REPLACES block grows with its conflict lines, keeping at least the preview minimum above it.
+        // The REPLACES block grows with its conflict lines. 1.0.8 (the user): compact (headlines, cut to fit the visible
+        // column above INSTALL AS, keeping at least the preview minimum) until the user scrolls the inspector; then every
+        // line in full and the inspector scrolls (MainFormInspectorScroll.cs).
         private void SizeReplacesPanel()
         {
             if (replacesPanel == null || conflictView == null) return;
             int baseHeight = Px(70), width = Math.Max(Px(100), replacesPanel.ClientSize.Width);
-            Control inspector = replacesPanel.Parent;
-            int room = inspector == null ? Int32.MaxValue : inspector.ClientSize.Height - inspector.Padding.Vertical - (modePanel == null ? 0 : modePanel.Height) - Px(154) - baseHeight;
-            // Short inspectors (1110x610): fewer text lines first, so the inline links stay visible.
-            int want = conflictView.Entries.Count == 0 ? 0 : conflictView.PreferredHeightFor(width);
-            for (int lines = 2; lines >= 1 && want > room; lines--) { conflictView.LimitLines(lines); want = conflictView.PreferredHeightFor(width); }
+            conflictView.Compact = !inspectorDetailsOpen; conflictView.LimitLines(0);
+            int want = conflictView.Entries.Count == 0 ? 0 : conflictView.PreferredHeightFor(width), room = Int32.MaxValue;
+            if (!inspectorDetailsOpen)
+            {
+                Control inspector = replacesPanel.Parent;
+                int view = inspectorScroller != null ? inspectorScroller.ClientSize.Height : inspector == null ? Int32.MaxValue : inspector.ClientSize.Height;
+                // Every other row at the bottom (INSTALL AS, Install all variants, the outfit name) and the preview with its text.
+                int others = 0;
+                if (inspector != null) foreach (Control row in inspector.Controls) if (row != replacesPanel && row.Dock == DockStyle.Bottom && OverlayScroller.OwnVisible(row)) others += row.Height;
+                room = inspector == null ? Int32.MaxValue : view - inspector.Padding.Vertical - others - Math.Max(Px(154), Px(InspectorPreviewMin) + InspectorTextHeight()) - baseHeight;
+                // Short inspectors (1110x610): fewer lines first, so the inline links stay visible.
+                for (int lines = 1; lines >= 1 && want > room; lines--) { conflictView.LimitLines(lines); want = conflictView.PreferredHeightFor(width); }
+            }
             int height = baseHeight + Math.Max(0, Math.Min(want, room));
             if (replacesPanel.Height != height) replacesPanel.Height = height;
+            conflictView.Invalidate();
+            bool hint = !inspectorDetailsOpen && conflictView.Entries.Count > 0 && conflictView.HidesDetails(width);
+            if (expandHint != null && expandHint.Visible != hint) expandHint.Visible = hint;
+            if (expandHint != null && hint) { int w = TextRenderer.MeasureText(expandHint.Text, expandHint.Font, Size.Empty, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width + Px(6); if (expandHint.Width != w) expandHint.Width = w; }   // GDI's width at this DPI (AutoSize measured too narrow)
         }
 
         private string FooterConflictText(ReplacePlan health)
