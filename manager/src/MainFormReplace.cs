@@ -117,12 +117,20 @@ namespace SlotsInstaller
 
         // 1.0.11 (tester report): the REFramework/Slotsloader notice was read only on a mode change, an opened mod or a full
         // refresh, so a dinput8.dll replaced outside the Manager kept "out of date" until something else refreshed (closing
-        // the external mod manager rewrites installed.ini, which did). Checked on every poll and on activation.
+        // the external mod manager rewrites installed.ini, which did). Checked on every poll and on activation. The external
+        // manager's installed.ini is part of the stamp: it decides who updates REFramework, and it can start or stop listing
+        // dinput8.dll without the file changing (PR #9 review).
         private string toolStamp;
+        private string ToolStampNow()
+        {
+            string fluffy = "";
+            try { fluffy = FluffyInstalls.StampOf(fluffyRoots); } catch (Exception ex) { Program.Log(ex); }
+            return ToolStatus.Stamp(config.GameRoot) + "#" + fluffy;
+        }
         internal void CheckToolStamp()
         {
             if (IsDisposed || busy) return;
-            string now = ToolStatus.Stamp(config.GameRoot);
+            string now = ToolStampNow();
             if (now == toolStamp) return;
             toolStamp = now;
             UpdateModeUi();
@@ -224,7 +232,7 @@ namespace SlotsInstaller
             }
             else
             {
-                toolStamp = ToolStatus.Stamp(config.GameRoot);   // 1.0.11 (CheckToolStamp)
+                toolStamp = ToolStampNow();   // 1.0.11 (CheckToolStamp)
                 FluffyInstalls external = null;
                 try { external = Engine().Fluffy(); } catch (Exception ex) { Program.Log(ex); }
                 toolStatus = ToolStatus.Detect(config.GameRoot, external);
@@ -952,6 +960,7 @@ namespace SlotsInstaller
             fluffyChangePending = false;
             try { fluffyStamp = FluffyInstalls.StampOf(fluffyRoots); } catch (Exception ex) { Program.Log(ex); }
             FluffyRefreshCount++;
+            CheckToolStamp();   // 1.0.11: REFramework's owner may have changed (the notice offers its update or points there)
             RefreshInstalled("External mod manager's mods changed · list updated");
         }
         private void EditGameRow(GameModRow row)

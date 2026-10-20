@@ -1137,11 +1137,16 @@ namespace SlotsInstaller
                 byte[] oldDll = File.Exists(dll) ? File.ReadAllBytes(dll) : null;
                 try
                 {
-                    File.WriteAllText(ini, saved + "[Fluffy REFramework]\r\nModName=Fluffy REFramework\r\ninstalltype=normal\r\nfile=dinput8.dll\r\n");
                     File.WriteAllBytes(dll, Encoding.ASCII.GetBytes("REFramework 01.01.2025")); Directory.CreateDirectory(dir);
                     Call(form, "SetInstallMode", InstallModes.Slot, true);
                     Label notice = Get<Label>(form, "modeNotice");
+                    Require(notice.Text == "REFramework from 1 Jan 2025 is out of date · click to update it" && notice.Cursor == Cursors.Hand, "notice before the external manager lists dinput8.dll: " + notice.Text);
+                    // The external manager starts listing the same dinput8.dll (the file doesn't change): the next poll follows (PR #9 review).
+                    File.WriteAllText(ini, saved + "[Fluffy REFramework]\r\nModName=Fluffy REFramework\r\ninstalltype=normal\r\nfile=dinput8.dll\r\n");
+                    Call(form, "CheckToolStamp");
                     Require(notice.Text == "REFramework from 1 Jan 2025 is out of date · update it in the external mod manager" && notice.Cursor == Cursors.Default, "notice for the external manager's REFramework: " + notice.Text);
+                    File.WriteAllText(ini, saved); Call(form, "CheckToolStamp");
+                    Require(notice.Text == "REFramework from 1 Jan 2025 is out of date · click to update it", "notice after the external manager stopped listing dinput8.dll: " + notice.Text);
                 }
                 finally
                 {
