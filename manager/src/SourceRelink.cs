@@ -55,7 +55,7 @@ namespace SlotsInstaller
                     events.Add(Renamed(m.SourcePath, to));
                     m.SourcePath = to;
                 }
-                if (events.Count > 0) DurableFile.WriteJson(engine.StatePath, state);
+                if (events.Count > 0) { state.Generation++; DurableFile.WriteJson(engine.StatePath, state); }   // like every direct state write
             }
             if (events.Count > 0) History.Record(null, events);   // never throws
             return events.Count;
