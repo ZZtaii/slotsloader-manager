@@ -219,9 +219,9 @@ namespace SlotsInstaller
             if(busy || String.IsNullOrWhiteSpace(nameInput.Text))return;string name=nameInput.Text.Trim();PresetScope chosen=SaveScope;
             ReplaceEngine engine=null;
             if(PresetScopes.Replacements(chosen)) {try {engine=Engine();} catch(Exception ex) {if(ex is OutOfMemoryException)throw;ShowError(ex.Message);return;}}
-            // 1.0.10: the library's archives as listed now (no disk scan), for manual drops identical to one of them.
-            List<LibraryArchive> library=null;
-            if(libraryEntries!=null) {try {library=OutfitSetStore.LibraryArchives(libraryEntries());} catch(Exception ex) {if(ex is OutOfMemoryException)throw;Program.Log(ex);}}
+            // 1.0.10: the library as listed now (no disk scan), for renamed sources and manual drops identical to a library archive.
+            List<LibraryMod> library=null;
+            if(libraryEntries!=null) {try {library=OutfitSetStore.LibraryMods(libraryEntries());} catch(Exception ex) {if(ex is OutOfMemoryException)throw;Program.Log(ex);}}
             Run("Saving…",delegate {return OutfitSetStore.CreatePreset(costumeRoot,name,chosen,engine,library);},delegate(OutfitSetInfo saved) {nameInput.Clear();RefreshSets(SaveSummary(saved),saved.Id);});
         }
 

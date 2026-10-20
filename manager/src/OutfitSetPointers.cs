@@ -19,8 +19,9 @@ namespace SlotsInstaller
         // record's Entries and Replacements.Mods. Null in presets saved before (OutfitSetInfo.Copies then reads the entry).
         public List<string> CopiedOutfitReasons, CopiedReplacementReasons;
     }
-    // 1.0.10: a library archive as the Mod library listed it, for finding a manual drop's identical twin at save.
-    internal sealed class LibraryArchive { internal string Path; internal long Size; }
+    // 1.0.10: a library mod as the Mod library listed it (path, archive size or 0 for a folder, modinfo name or ""), for
+    // finding a manual drop's identical archive and a renamed source (SourceRelink) at save.
+    internal sealed class LibraryMod { internal string Path, Name = ""; internal long Size; }
     public sealed class PresetOutfitPointer
     {
         public string Character = "", Folder = "", Name = "", Mode = "", SourcePath = "", SourceStamp = "";   // Mode: composed | all_variants
@@ -91,13 +92,13 @@ namespace SlotsInstaller
         internal const string ManualDrop = "manual drop";
         internal static string NotFound(string path) { return String.IsNullOrWhiteSpace(path) ? "" : "not found at " + path; }
 
-        // 1.0.10: the ZIP/RAR/7Z entries of an already listed library (the Mod library's list; nothing is read from
-        // disk). Call it where the list is safe to read (the UI thread for MainForm's).
-        internal static List<LibraryArchive> LibraryArchives(IEnumerable<LibraryEntry> entries)
+        // 1.0.10: the mods of an already listed library (the Mod library's list; nothing is read from disk). Call it where
+        // the list is safe to read (the UI thread for MainForm's).
+        internal static List<LibraryMod> LibraryMods(IEnumerable<LibraryEntry> entries)
         {
-            var result = new List<LibraryArchive>();
+            var result = new List<LibraryMod>();
             foreach (LibraryEntry e in entries ?? new LibraryEntry[0])
-                if (e != null && e.Size > 0 && IsArchiveName(e.SourcePath)) result.Add(new LibraryArchive { Path = e.SourcePath, Size = e.Size });
+                if (e != null && e.Kind != "Library" && !String.IsNullOrEmpty(e.SourcePath) && System.IO.Path.IsPathRooted(e.SourcePath)) result.Add(new LibraryMod { Path = e.SourcePath, Size = e.Size, Name = e.DisplayName ?? "" });
             return result;
         }
         private static readonly string[] ArchiveExtensions = { ".zip", ".rar", ".7z" };
@@ -116,16 +117,16 @@ namespace SlotsInstaller
         // with no library source (a manual drop, or an Install all variants copy whose source is gone) whose bytes equal
         // a listed library archive becomes an all_variants pointer to it. Only same-size archives are hashed (a same
         // name first), and the drop only when there is one. `hashes` keeps each file's SHA-256 for this save.
-        private static PresetOutfitPointer IdenticalArchivePointer(string root, InstalledOutfit o, List<LibraryArchive> library, Dictionary<string, string> hashes)
+        private static PresetOutfitPointer IdenticalArchivePointer(string root, InstalledOutfit o, List<LibraryMod> library, Dictionary<string, string> hashes)
         {
             if (o == null || !o.Enabled || o.Managed || library == null || library.Count == 0 || !IsArchiveName(o.Folder) || !Characters.Names.Contains(o.Character)) return null;
             FileInfo drop;
             try { drop = new FileInfo(o.Folder); if (!drop.Exists || drop.Length == 0 || drop.Name.StartsWith(".")) return null; }   // a dot name is no valid pointer place
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; return null; }
-            List<LibraryArchive> candidates = library.Where(a => a.Size == drop.Length && String.Equals(System.IO.Path.GetExtension(a.Path), drop.Extension, StringComparison.OrdinalIgnoreCase) && !Inside(a.Path, root))
+            List<LibraryMod> candidates = library.Where(a => a.Size == drop.Length && IsArchiveName(a.Path) && String.Equals(System.IO.Path.GetExtension(a.Path), drop.Extension, StringComparison.OrdinalIgnoreCase) && !Inside(a.Path, root))
                 .OrderBy(a => String.Equals(System.IO.Path.GetFileName(a.Path), drop.Name, StringComparison.OrdinalIgnoreCase) ? 0 : 1).ToList();
             string dropHash = null;
-            foreach (LibraryArchive a in candidates)
+            foreach (LibraryMod a in candidates)
             {
                 string path;
                 try { path = System.IO.Path.GetFullPath(a.Path); var info = new FileInfo(path); if (!info.Exists || info.Length != drop.Length) continue; }   // the list can be older than the disk
@@ -172,7 +173,7 @@ namespace SlotsInstaller
 
         // v3 save: pointers for everything with a library source, copies (SavePreset) for the rest. 1.0.10: `library`
         // (null = none) gives manual archives their twin (IdenticalArchivePointer); each copy keeps why.
-        private static OutfitSetInfo SavePointerPreset(string root, string name, List<InstalledOutfit> enabled, List<ReplaceMod> mods, Func<ReplaceMod, ModFile, string> storeFile, string method, List<LibraryArchive> library)
+        private static OutfitSetInfo SavePointerPreset(string root, string name, List<InstalledOutfit> enabled, List<ReplaceMod> mods, Func<ReplaceMod, ModFile, string> storeFile, string method, List<LibraryMod> library)
         {
             var pointers = new PresetPointers { CopiedOutfitReasons = new List<string>(), CopiedReplacementReasons = new List<string>() };
             var copyOutfits = new List<InstalledOutfit>(); var copyMods = new List<ReplaceMod>();

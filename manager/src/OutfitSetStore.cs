@@ -145,12 +145,13 @@ namespace SlotsInstaller
         // `engine` is needed unless the scope is ExtraOutfits. 1.0.8: a list of library sources (v3, OutfitSetPointers.cs);
         // only what has no library source is copied.
         internal static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine) { return CreatePreset(costumeRoot,name,scope,engine,null); }
-        // 1.0.10: `library` = the listed library's archives (LibraryArchives; null = none): a manual drop identical to one
-        // of them is listed as a pointer to it instead of copied.
-        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine,List<LibraryArchive> library) { return CreatePreset(costumeRoot,name,scope,engine,true,library); }
+        // 1.0.10: `library` = the listed library (LibraryMods; null = none): a record whose source is gone is first pointed
+        // at its renamed library mod (SourceRelink), and a manual drop identical to a library archive is listed as a
+        // pointer to it instead of copied.
+        internal static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine,List<LibraryMod> library) { return CreatePreset(costumeRoot,name,scope,engine,true,library); }
         // Tests: the 2.4.1 format (v1/v2, everything copied).
         internal static OutfitSetInfo CreateCopyPreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine) { return CreatePreset(costumeRoot,name,scope,engine,false,null); }
-        private static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine,bool pointers,List<LibraryArchive> library)
+        private static OutfitSetInfo CreatePreset(string costumeRoot,string name,PresetScope scope,ReplaceEngine engine,bool pointers,List<LibraryMod> library)
         {
             if (PresetScopes.Replacements(scope) && engine==null) throw new IOException("Replacements can't be saved without the game folder.");
             using (Installer.AcquireMutation(costumeRoot))
@@ -158,6 +159,7 @@ namespace SlotsInstaller
                 string root=Root(costumeRoot); name=SetName(name);
                 if (List(root).Entries.Any(e=>e.Kind==OutfitSetKind.Preset && String.Equals(e.Name,name,StringComparison.OrdinalIgnoreCase)))
                     throw new IOException("A preset with that name already exists. Choose another name.");
+                if (pointers) Relink(root,scope,engine,library);
                 List<InstalledOutfit> enabled=PresetScopes.Outfits(scope) ? Installer.ListInstalled(root).Where(o=>o.Enabled).ToList() : new List<InstalledOutfit>();
                 if (!PresetScopes.Replacements(scope))
                 {
@@ -172,6 +174,17 @@ namespace SlotsInstaller
                     return pointers ? SavePointerPreset(root,name,enabled,mods,storeFile,method,library) : SavePreset(root,name,enabled,mods,storeFile,method,null);
                 });
             }
+        }
+        // 1.0.10: records whose library source is gone point at their renamed library mod first, so they are listed, not
+        // copied (SourceRelink; the caller holds the costume root's lock). Never fails the save (a cancel aside).
+        private static void Relink(string root,PresetScope scope,ReplaceEngine engine,List<LibraryMod> library)
+        {
+            if (library==null || library.Count==0) return;
+            string sevenZip=SevenZip(null);
+            try { if (PresetScopes.Outfits(scope)) SourceRelink.Outfits(root,library,sevenZip); }
+            catch (Exception ex) { if (Fatal(ex)) throw; Program.Log(ex); }
+            try { if (PresetScopes.Replacements(scope)) SourceRelink.Replacements(engine,library,sevenZip); }
+            catch (Exception ex) { if (Fatal(ex)) throw; Program.Log(ex); }
         }
         // `pointers` (1.0.8): a v3 list preset whose enabled/mods are only the entries without a library source.
         private static OutfitSetInfo SavePreset(string root,string name,List<InstalledOutfit> enabled,List<ReplaceMod> mods,Func<ReplaceMod,ModFile,string> storeFile,string method,PresetPointers pointers)

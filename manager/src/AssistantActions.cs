@@ -355,7 +355,7 @@ namespace SlotsInstaller
                     var errors = ValidateOther(a, null);
                     if (errors.Count > 0) throw new InvalidOperationException(String.Join(" ", errors));
                     PresetScope saveScope = PresetScopes.Parse(a.PresetScopeCode) ?? PresetScope.Both;
-                    OutfitSetInfo set = OutfitSetStore.CreatePreset(root, a.PresetName, saveScope, PresetScopes.Replacements(saveScope) ? workspace.Engine() : null, OutfitSetStore.LibraryArchives(workspace.ListedLibrary()));
+                    OutfitSetInfo set = OutfitSetStore.CreatePreset(root, a.PresetName, saveScope, PresetScopes.Replacements(saveScope) ? workspace.Engine() : null, OutfitSetStore.LibraryMods(workspace.ListedLibrary()));
                     a.PresetId = AssistantWorkspace.PresetId(set);
                     return "Saved preset '" + set.Name + "' with " + ReplacePlanner.N(set.OutfitCount, "outfit") + (set.ReplacementCount > 0 ? " and " + ReplacePlanner.N(set.ReplacementCount, "replacement") : "") + " (" + a.PresetId + ")"
                         + (set.Copies.Count > 0 ? "; " + ReplacePlanner.N(set.Copies.Count, "item") + " with no library mod copied (" + Utilities.FriendlyBytes(set.Copies.Sum(c => c.Bytes)) + ")" : "") + ".";

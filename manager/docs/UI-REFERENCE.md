@@ -43,6 +43,7 @@ Source: [OutfitSetsForm.cs](../src/OutfitSetsForm.cs), [OutfitSetPointers.cs](..
 - **The copies in the details** (the user: a preset was 723 MB with no explanation). A list preset that keeps copies shows them right under its first line: "N items have no library mod and are copied (size):", then one line per copy with its size and reason, "Juri/Goth Juri · 12 B · manual drop" or "Cammy Alt · 2 MB · not found at <path>" (an added part's mod: "added part not found at <path>"). The "(copy)" marks in the lists and the row subtitle "N copied · size" stay as they were.
 - **After Save** the status reads "Saved “Friday night” · 2 extra outfits · 2 replacements · 1 copied (12 B), listed below." and the new preset is selected, so its details show the list. Save still asks nothing.
 - A manual drop identical to a library archive is listed, not copied, and has no line of its own (README "Save and restore presets").
+- **Renamed mods** ([SourceRelink.cs](../src/SourceRelink.cs)): a replacement or extra outfit found again under its new name at Save is listed, not copied. While it is checked, the status reads "Looking for <old file name> in your libraries…". History shows a **Renamed** row with "from <old file name>, found by its files". Nothing else in the window changes.
 
 ## 1.0.8 MY FILTERS, list presets, scrolling inspector, 2026-10-20
 
