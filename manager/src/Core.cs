@@ -19,7 +19,7 @@ namespace SlotsInstaller
         // libraries; an empty game folder means Settings asks for it. Saved settings always store both explicitly.
         public string GameRoot = "";
         public List<string> Libraries = new List<string>();
-        public string SevenZipPath = @"C:\Program Files\7-Zip\7z.exe";
+        public string SevenZipPath = "";   // 1.0.11: empty = SevenZipTool finds one (installed, then the bundled copy)
         public string CostumeRoot { get { return String.IsNullOrWhiteSpace(GameRoot) ? "" : Path.Combine(GameRoot, "reframework", "costume_mods"); } }
         public static string DataDir { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data"); } }
         public static AppConfig Load()
@@ -759,7 +759,8 @@ namespace SlotsInstaller
         private static string ArchiveStamp(string source, string sevenZipPath)
         {
             FileInfo archive = new FileInfo(source);
-            string tool = String.IsNullOrWhiteSpace(sevenZipPath) ? "" : Path.GetFullPath(sevenZipPath);
+            string resolved = SevenZipTool.Resolve(sevenZipPath);   // 1.0.11: the 7z.exe that actually runs
+            string tool = String.IsNullOrWhiteSpace(resolved) ? "" : Path.GetFullPath(resolved);
             string toolStamp = "missing";
             if (File.Exists(tool))
             {

@@ -39,6 +39,17 @@ The GitHub icon on the About cards (`src/BrandGlyphs.cs`) is the `mark-github` p
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## 7-Zip (GNU LGPL, unRAR license restriction, BSD)
+
+Release packages include `7-Zip\7z.exe` and `7-Zip\7z.dll` from [7-Zip](https://www.7-zip.org) by Igor Pavlov, unmodified, so RAR and 7Z archives can be read on a PC without 7-Zip installed. The Manager runs `7z.exe` as a separate program and does not link to it. 7-Zip's own license file, `7-Zip\License.txt`, ships beside them and applies to those files:
+
+> 7-Zip Copyright (C) 1999-2026 Igor Pavlov.
+>
+> - 7z.dll: the GNU LGPL as main license for most of the code; the GNU LGPL with the "unRAR license restriction" for some code; the BSD 3-clause and BSD 2-clause licenses for some code.
+> - All other files: the GNU LGPL.
+
+The unRAR code may be used only to extract RAR archives, not to re-create the RAR compression algorithm. The 7-Zip source code is available at [www.7-zip.org](https://www.7-zip.org). The version and SHA-256 of the bundled files are listed in each release's `VALIDATION.txt`.
+
 ## Brand marks
 
 The Discord, Nexus Mods and Patreon logos on the About cards and in the status bar are trademarks of their owners. They are used only to link to those services. ColorSync's mark is ZZtai's own.

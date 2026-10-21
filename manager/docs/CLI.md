@@ -9,7 +9,7 @@ Keep `Slotsloader CLI.exe.config` beside `Slotsloader CLI.exe`. In PowerShell:
 & '.\Slotsloader CLI.exe' test-mod '<library>\My mod.zip' --json '.\check.json'
 ```
 
-`list-options` prints component IDs, defaults and file counts. `test-mod` builds the GUI's composition, checks required choices and character identity, reads the selected payload, validates ZIP CRC/size limits, and records SHA256 hashes. It does not install anything. RAR/7Z use installed 7-Zip; override with `--sevenzip 'C:\path\7z.exe'`.
+`list-options` prints component IDs, defaults and file counts. `test-mod` builds the GUI's composition, checks required choices and character identity, reads the selected payload, validates ZIP CRC/size limits, and records SHA256 hashes. It does not install anything. RAR/7Z use an installed 7-Zip, else the copy in the Manager's `7-Zip` folder; override with `--sevenzip 'C:\path\7z.exe'`.
 
 For bundles, choose options explicitly with repeated `--select '<ID>'`, or save an ordered array of IDs and pass `--selection '.\selection.json'`. The empty string is a valid root ID. Later options override earlier ones; main files apply first. An installed `.slots-installer.json` is accepted if its source matches. Missing options and incomplete required groups fail; defaults do not guess a skin/outfit choice.
 

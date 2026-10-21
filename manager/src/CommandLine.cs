@@ -39,7 +39,7 @@ namespace SlotsInstaller
         internal sealed class Options
         {
             internal string Command, Source, JsonFile, SelectionFile, Character, Loader, GameRoot, Sandbox;
-            internal string SevenZip = @"C:\Program Files\7-Zip\7z.exe";
+            internal string SevenZip = "";   // 1.0.11: empty = SevenZipTool finds one
             internal List<string> Selected = new List<string>();
             internal bool HasSelection;
         }

@@ -129,6 +129,7 @@ namespace SlotsInstaller
         private FlatButton navLibrary, navInstalled, navSettings;
         private ListView modList, installedList, fileList;
         private PaddedTextField search, outfitName, settingsGame, settingsSevenZip;
+        private Action showSevenZipNote;   // 1.0.11
         private TextBox installedHelp;
         private Label installedSelectionCount;
         private FlatButton selectAllInstalledButton, clearInstalledSelectionButton, presetsButton;
@@ -933,11 +934,13 @@ namespace SlotsInstaller
             FlatButton browseGame=Button("Browse…", false, 108, delegate { ChooseSettingFolder(settingsGame); }); browseGame.Dock=DockStyle.Fill; browseGame.Margin=Padding.Empty; layout.Controls.Add(browseGame, 1, 1);
             Label dest = new Label { UseMnemonic=false, Name = "settingsGameNote", Text = "", ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, Padding = new Padding(0, Rhythm.Related, 0, 0), Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(dest, 0, 2); layout.SetColumnSpan(dest, 2);
             Label sevenCaption = Caption("7-Zip (RAR and 7Z)"); sevenCaption.Dock = DockStyle.Fill; layout.Controls.Add(sevenCaption, 0, 4); layout.SetColumnSpan(sevenCaption, 2);
-            settingsSevenZip = TextField(); settingsSevenZip.AccessibleName="7-Zip executable"; settingsSevenZip.Dock = DockStyle.Fill; settingsSevenZip.Margin = new Padding(0, 0, 10, 0); layout.Controls.Add(settingsSevenZip, 0, 5);
+            settingsSevenZip = TextField(); settingsSevenZip.AccessibleName="7-Zip executable"; settingsSevenZip.PlaceholderText = "Automatic"; settingsSevenZip.Dock = DockStyle.Fill; settingsSevenZip.Margin = new Padding(0, 0, 10, 0); layout.Controls.Add(settingsSevenZip, 0, 5);
             FlatButton browseSevenZip=Button("Browse…", false, 108, delegate { using (OpenFileDialog d = new OpenFileDialog { Filter = "7-Zip executable|7z.exe|Executable|*.exe", FileName = settingsSevenZip.Text }) { if (d.ShowDialog(this) == DialogResult.OK) settingsSevenZip.Text = d.FileName; } }); browseSevenZip.Dock=DockStyle.Fill; browseSevenZip.Margin=Padding.Empty; layout.Controls.Add(browseSevenZip, 1, 5);
             Label sevenHint = new Label { UseMnemonic=false, Name = "settingsSevenZipNote", Text = "ZIP and folders work without 7-Zip.", ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, Padding = new Padding(0, Rhythm.Related, 0, 0), Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(sevenHint, 0, 6); layout.SetColumnSpan(sevenHint, 2);
             settingsGame.TextChanged += delegate { dest.Text = Directory.Exists(settingsGame.Text) ? "Found · extra outfits install to reframework\\costume_mods" : "Folder not found"; dest.ForeColor = Directory.Exists(settingsGame.Text) ? Palette.Green : Palette.Red; };
-            settingsSevenZip.TextChanged += delegate { sevenHint.Text = File.Exists(settingsSevenZip.Text) ? "Found" : "Not found · ZIP and folders still work"; };
+            // 1.0.11: empty = automatic (installed 7-Zip, else the copy beside the Manager); the note says which one runs.
+            showSevenZipNote = delegate { string typed = settingsSevenZip.Text.Trim(); sevenHint.Text = typed.Length > 0 && !File.Exists(typed) ? "Not found at that path · clear the field to find 7-Zip automatically" : SevenZipTool.Describe(typed); };
+            settingsSevenZip.TextChanged += delegate { showSevenZipNote(); };
             Label libCaption = Caption("Libraries"); libCaption.Dock = DockStyle.Fill; layout.Controls.Add(libCaption, 0, 8); layout.SetColumnSpan(libCaption, 2);
             // Padded, owner-drawn library rows with a found/missing state and
             // the mod count from the last scan, framed like the other fields.
@@ -2975,7 +2978,7 @@ namespace SlotsInstaller
         private void LoadSettingsFields()
         {
             RefreshLibraryFolderStatus();
-            settingsGame.Text = config.GameRoot; settingsSevenZip.Text = config.SevenZipPath; settingsLibraries.Items.Clear(); settingsLibraries.Items.AddRange(config.Libraries.Cast<object>().ToArray()); settingsStatus.Text = "Settings folder: " + AppConfig.DataDir;
+            settingsGame.Text = config.GameRoot; settingsSevenZip.Text = File.Exists(config.SevenZipPath ?? "") ? config.SevenZipPath : ""; showSevenZipNote(); settingsLibraries.Items.Clear(); settingsLibraries.Items.AddRange(config.Libraries.Cast<object>().ToArray()); settingsStatus.Text = "Settings folder: " + AppConfig.DataDir;
             settingsStatus.ForeColor = Palette.Muted;
             if (removeLibraryButton != null) removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0;
             LoadClaudeSettings();
@@ -3031,7 +3034,7 @@ namespace SlotsInstaller
                 List<string> paths = settingsLibraries.Items.Cast<string>().Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 string missing = paths.FirstOrDefault(p => !Directory.Exists(p));
                 if (missing != null) throw new InvalidOperationException("Library folder not found: " + missing);
-                config.GameRoot = Path.GetFullPath(game); config.SevenZipPath = seven; config.Libraries = paths; config.Save();
+                config.GameRoot = Path.GetFullPath(game); config.SevenZipPath = seven; config.Libraries = paths; config.Save(); SevenZipTool.ClearCache();
                 UpdateLocation(); UpdateDestination(); settingsStatus.Text = "Saved · " + paths.Count + (paths.Count == 1 ? " library" : " libraries"); settingsStatus.ForeColor = Palette.Green;
                 RefreshLibrary();
             }

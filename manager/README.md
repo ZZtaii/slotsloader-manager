@@ -6,9 +6,12 @@ A Windows mod manager for your ZIP, RAR, 7Z and folder mod libraries. It is buil
 
 The title bar shows **Slotsloader Manager · 1.0.10**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
 
-Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .NET Framework 4.8 runs it; RAR/7Z support uses your installed 7-Zip. No Blender, Node or Python is required. Game/library paths are in Settings. Your existing mod manager libraries are configured by default. `Data` beside the executable holds settings/cache/view preferences and the backups of replaced game files; preserve it during updates. The whole app folder (executables + `Data`) can be moved or renamed; see **Move the app folder** below.
+Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .NET Framework 4.8 runs it. RAR/7Z are read with 7-Zip: your installed 7-Zip if you have one, otherwise the copy in the `7-Zip` folder that comes with the Manager (keep it beside the executables). No Blender, Node or Python is required. Game/library paths are in Settings. Your existing mod manager libraries are configured by default. `Data` beside the executable holds settings/cache/view preferences and the backups of replaced game files; preserve it during updates. The whole app folder (executables + `Data`) can be moved or renamed; see **Move the app folder** below.
 
 ## What changed
+
+- 1.0.11:
+  - **RAR and 7Z mods work without installing 7-Zip.** The Manager now comes with 7-Zip in its `7-Zip` folder and uses it when 7-Zip isn't installed. An installed 7-Zip is still used first, also when it isn't in `C:\Program Files\7-Zip`. In Settings, the 7-Zip field can stay empty ("Automatic"); the line under it says which 7-Zip is used. A path you chose yourself still comes first.
 
 - 1.0.10:
   - **Presets copy less.** An archive you dropped into costume_mods yourself that is identical to an archive in your libraries is now saved as that library mod instead of being copied. Only archives of the same size are compared, so saving stays quick. Restore puts it back from the library under its own file name, and skips it while it is still installed.
@@ -179,6 +182,6 @@ Source: this folder (`src/`). Use `build.ps1` to build both executables and `tes
 
 ## License and third-party notices
 
-Slotsloader Manager is source-available for personal, non-commercial use: see [LICENSE](LICENSE). Parts adapted from other projects (code ported from Slotsloader, the bcdec texture decoder, the Octicons GitHub mark) keep their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Slotsloader Manager is source-available for personal, non-commercial use: see [LICENSE](LICENSE). Parts adapted from other projects (code ported from Slotsloader, the bcdec texture decoder, the Octicons GitHub mark) keep their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The `7-Zip` folder holds unmodified 7-Zip by Igor Pavlov under the GNU LGPL with the unRAR license restriction; its license is `7-Zip\License.txt`, and its source is at [7-zip.org](https://www.7-zip.org).
 
 Fighter portraits and stage names are read at run time from your own installed game and cached in `Data\portraits`; they are not part of this app.
