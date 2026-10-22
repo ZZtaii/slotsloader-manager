@@ -555,18 +555,19 @@ namespace SlotsInstaller
             librarySplit=split;
             Panel browser = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(10) };
             // 2.4.1: row 2 is the sort strip (LibrarySort.cs): 20 px chips and the Rhythm.Related gap to the list.
-            TableLayoutPanel filters = new TableLayoutPanel { Dock = DockStyle.Top, Height = 63 + SearchOptionsHeight + SortChipHeight + Rhythm.Related, ColumnCount = 2, RowCount = 4, Padding = new Padding(0), Margin = new Padding(0) };
+            // 1.0.11 (the user): a Rhythm.Related gap under the count / Filters row, so Filters doesn't sit on the search box.
+            TableLayoutPanel filters = new TableLayoutPanel { Dock = DockStyle.Top, Height = 63 + Rhythm.Related + SearchOptionsHeight + SortChipHeight + Rhythm.Related, ColumnCount = 2, RowCount = 4, Padding = new Padding(0), Margin = new Padding(0) };
             // 2.4.1: the right cell holds Filters and, while a filter is active, Clear. Its width is fixed, so neither
             // the Filters button nor the count moves when Clear appears.
             filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 142));
-            filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 37)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SearchOptionsHeight)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SortChipHeight + Rhythm.Related));
+            filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 26 + Rhythm.Related)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 37)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SearchOptionsHeight)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SortChipHeight + Rhythm.Related));
             // The caption carries the live count that previously used its own row.
-            libraryCount = Caption("MOD LIBRARY"); libraryCount.Dock = DockStyle.Fill; libraryCount.AutoEllipsis = true; filters.Controls.Add(libraryCount, 0, 0);
+            libraryCount = Caption("MOD LIBRARY"); libraryCount.Dock = DockStyle.Fill; libraryCount.AutoEllipsis = true; libraryCount.Margin = new Padding(libraryCount.Margin.Left, 0, libraryCount.Margin.Right, Rhythm.Related); filters.Controls.Add(libraryCount, 0, 0);
             filterButton = Button("Filters", false, 84, delegate { ShowFilters(!filterPanel.Visible, false); });
             filterButton.Dock = DockStyle.Right; filterButton.Height = 25; filterButton.Margin = new Padding(0, 0, 0, 1); filterButton.Font = Palette.Small; filterButton.AccessibleName = "Show library filters"; filterButton.TabIndex = 0;
             filterClearButton = Button("Clear", false, 54, delegate { bool hadFocus = filterClearButton.Focused; ClearLibraryFilters(); if (hadFocus && filterButton.CanFocus) filterButton.Focus(); });
             filterClearButton.Dock = DockStyle.Right; filterClearButton.Height = 25; filterClearButton.Font = Palette.Small; filterClearButton.AccessibleName = "Clear filters"; filterClearButton.Visible = false; filterClearButton.TabIndex = 1;
-            var filterActions = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 1), Padding = Padding.Empty };
+            var filterActions = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 1 + Rhythm.Related), Padding = Padding.Empty };
             filterActions.Controls.Add(filterClearButton); filterActions.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); filterActions.Controls.Add(filterButton);
             filterButton.SendToBack();   // docked first: the rightmost
             filters.Controls.Add(filterActions, 1, 0);
