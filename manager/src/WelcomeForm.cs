@@ -32,9 +32,10 @@ namespace SlotsInstaller
             new Topic { Tab = "Repair", Title = "When something breaks", Lead = "Start with the smallest fix.", Points = new[] {
                 "After an SF6 update, a \"Game files changed\" banner appears. Click Reapply to put your replacements back.",
                 "Game won't start? Gear → Restore → Remove this Manager's mods. You can undo it.",
-                "Still broken? Gear → Restore → Restore game to vanilla removes your mods and your mod manager's. REFramework and Slotsloader installed with SLM stay." } },
+                "Still broken? Gear → Restore → Restore game to vanilla removes all mods, your mod manager's too. If SLM installed REFramework and Slotsloader, they stay." } },
         };
 
+        internal const double DimOpacity = 0.65;   // the user: the window behind faded well back
         private readonly WelcomePage page;
         private readonly FlatButton next;
         internal int Index { get { return page.Index; } }
@@ -42,8 +43,8 @@ namespace SlotsInstaller
         internal static void ShowWelcome(Form owner)
         {
             if (Program.Headless) return;
-            // The main window dims behind the card: a black layer at half opacity over its client area, owning the card.
-            using (var dim = new Form { FormBorderStyle = FormBorderStyle.None, BackColor = Color.Black, Opacity = 0.5, ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Bounds = owner.RectangleToScreen(owner.ClientRectangle) })
+            // The main window dims behind the card: a black layer (DimOpacity) over its client area, owning the card.
+            using (var dim = new Form { FormBorderStyle = FormBorderStyle.None, BackColor = Color.Black, Opacity = DimOpacity, ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Bounds = owner.RectangleToScreen(owner.ClientRectangle) })
             using (var form = new WelcomeForm())
             {
                 dim.Show(owner);
@@ -56,7 +57,7 @@ namespace SlotsInstaller
             SuspendLayout();
             AutoScaleDimensions = new SizeF(96F, 96F); AutoScaleMode = AutoScaleMode.Dpi;
             Text = "Welcome to Slotsloader Manager"; StartPosition = FormStartPosition.CenterParent;
-            BackColor = Palette.Surface; ForeColor = Palette.Text; ShowInTaskbar = false; Padding = new Padding(31, 16, 31, 21); FormBorderStyle = FormBorderStyle.None;
+            BackColor = Palette.Surface; ForeColor = Palette.Text; ShowInTaskbar = false; Padding = new Padding(28, 14, 28, 19); FormBorderStyle = FormBorderStyle.None;
             AppBranding.Apply(this); WindowChrome.Round(this);
             // 1.0.11 (the user): ✕ is the only close and the tabs move back, so the footer has just Next / Done; both buttons compact.
             var header = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(0, 3, 0, 3) };
@@ -70,7 +71,7 @@ namespace SlotsInstaller
             next = new FlatButton("Next", true) { Width = 88, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeNext" }; next.Click += delegate { if (page.Index == Topics.Length - 1) Close(); else page.Index++; };
             footer.Controls.Add(hint); footer.Controls.Add(next);
             Controls.Add(page); Controls.Add(header); Controls.Add(footer);
-            ClientSize = new Size(722, 520);   // 1.0.11 (the user): a bigger card; the height follows the tallest topic (OnLoad)
+            ClientSize = new Size(662, 500);   // 1.0.11 (the user): the card's size; the height follows the tallest topic (OnLoad)
             AcceptButton = next;
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
@@ -110,7 +111,7 @@ namespace SlotsInstaller
     {
         private const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl;
         private const TextFormatFlags Line = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter;
-        private static readonly Font TitleFont = new Font("Segoe UI", 15F, FontStyle.Bold), BadgeFont = new Font("Segoe UI", 8.5F, FontStyle.Bold), Body = new Font("Segoe UI", 10.5F);
+        private static readonly Font TitleFont = new Font("Segoe UI", 14.5F, FontStyle.Bold), BadgeFont = new Font("Segoe UI", 8F, FontStyle.Bold), Body = new Font("Segoe UI", 10.25F);
         private int index, hover = -1;
         internal event EventHandler IndexChanged;
 
@@ -141,7 +142,7 @@ namespace SlotsInstaller
         }
 
         private int Px(int logical) { return DpiMetrics.Px(this, logical); }
-        private int TabsHeight { get { return Px(38); } }
+        private int TabsHeight { get { return Px(36); } }
         private Rectangle TabBounds(int i) { int w = ClientSize.Width / WelcomeForm.Topics.Length; return new Rectangle(i * w, 0, i == WelcomeForm.Topics.Length - 1 ? ClientSize.Width - i * w : w, TabsHeight); }
         private int TabAt(Point p) { for (int i = 0; i < WelcomeForm.Topics.Length; i++) if (TabBounds(i).Contains(p)) return i; return -1; }
 

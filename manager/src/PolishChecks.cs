@@ -447,14 +447,14 @@ namespace SlotsInstaller
                 Func<string, FlatButton> button = delegate(string name) { return (FlatButton)welcome.Controls.Find(name, true).Single(); };
                 Require(page.Height >= page.TallestHeight(), "welcome cut short: " + page.Height + " < " + page.TallestHeight());
                 Require(welcome.FormBorderStyle == FormBorderStyle.None && welcome.Controls.Find("welcomeDismiss", true).Length == 1, "the welcome has window chrome or no ✕");
-                // How it looks over the app: the main window under ShowWelcome's half-opacity black layer, the card centred.
+                // How it looks over the app: the main window under ShowWelcome's black layer (DimOpacity), the card centred.
                 using (var shot = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                 using (var card = new Bitmap(welcome.Width, welcome.Height))
                 {
                     form.DrawToBitmap(shot, new Rectangle(Point.Empty, shot.Size)); welcome.DrawToBitmap(card, new Rectangle(Point.Empty, card.Size));
                     using (Graphics g = Graphics.FromImage(shot))
                     {
-                        using (var dim = new SolidBrush(Color.FromArgb(128, Color.Black))) g.FillRectangle(dim, 0, 0, shot.Width, shot.Height);
+                        using (var dim = new SolidBrush(Color.FromArgb((int)Math.Round(255 * WelcomeForm.DimOpacity), Color.Black))) g.FillRectangle(dim, 0, 0, shot.Width, shot.Height);
                         g.DrawImage(card, (shot.Width - card.Width) / 2, (shot.Height - card.Height) / 2);
                     }
                     shot.Save(Path.Combine(root, "welcome-overlay-" + welcome.DeviceDpi + ".png"), ImageFormat.Png);
