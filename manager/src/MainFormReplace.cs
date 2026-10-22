@@ -214,7 +214,9 @@ namespace SlotsInstaller
             // 1.0.1: the external-manager lockout (ReplaceEngine.ExternalLockReason); the health check gives the full reason.
             // 1.0.10: Slotsloader and plain REFramework install past it (ReplaceEngine.ExternalLockReason(fluffy, files)).
             FluffyInstalls external = null; string locked = null;
-            try { external = Engine().Fluffy(); locked = ReplaceEngine.ExternalLockReason(external, PackagePaths(package)); } catch (Exception ex) { Program.Log(ex); }
+            // No game folder: nothing to lock and no engine (it threw and logged on every refresh; PR #12 review).
+            if (Directory.Exists(config.GameRoot))
+                try { external = Engine().Fluffy(); locked = ReplaceEngine.ExternalLockReason(external, PackagePaths(package)); } catch (Exception ex) { Program.Log(ex); }
             // 1.0.11 (the user): Extra outfit mode says up front that Replace original is off and why, so it isn't a surprise after switching.
             bool replaceOff = ReplaceEngine.IsExternalLock(locked);
             modeLockHint.Text = forced ? "· locked for this mod" : !IsReplaceMode && replaceOff ? "· Replace off: the external mod manager has " + ReplacePlanner.N(external.Mods.Count, "mod") : "";

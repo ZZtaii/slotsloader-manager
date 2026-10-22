@@ -273,11 +273,11 @@ The Installed page lists each one as **Leftover PAK**, with "not listed by any m
 - If a higher-numbered patch PAK exists, an empty placeholder keeps the removed PAK's number, so the PAKs after it still load. Other PAKs are never renumbered.
 
 ### Undo
-**Undo** puts the PAK back while its number is still free or held by the placeholder. If another PAK has taken the number meanwhile, it can't go back. When the Undo ends unused (your next change, or closing the Manager), the removed PAK goes to the Recycle Bin.
+**Undo** puts the PAK back while its number is still free or held by the placeholder. If another PAK has taken the number meanwhile, it can't go back. When the Undo ends unused (your next change, or closing the Manager), the removed PAK goes to the Recycle Bin. If the Recycle Bin can't take it (a drive without one, or a file too big for it), it is deleted.
 
 !! CHECK FIRST: A PAK you copied into the game folder by hand looks exactly the same. Nothing is removed without your click, so remove only PAKs you don't want.
 
-If your external mod manager's list can't be read, nothing counts as leftover.
+Leftover PAKs are only looked for when the Manager finds your external mod manager, through its `Mods` folder in your **Mod libraries**. If it isn't found, or its list can't be read, nothing counts as leftover.
 
 ## RAR or 7Z mods won't open
 > How the Manager finds 7-Zip, and what to do when an archive won't read.

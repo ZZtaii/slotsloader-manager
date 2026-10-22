@@ -51,6 +51,11 @@ namespace SlotsInstaller
             Require(status.LeftoverPaks.Count == 2 && status.Summary == "" && status.Details.Last() == "2 leftover PAKs not listed by any mod manager (SF6 still loads them): re_chunk_000.pak.patch_001.pak, re_chunk_000.pak.patch_007.pak", "status: '" + status.Summary + "' / " + String.Join(" | ", status.Details));
             using (new FileStream(Path.Combine(a, "installed.ini"), FileMode.Open, FileAccess.Read, FileShare.None))
                 Require(f.Engine.LeftoverPaks().Count == 0, "an unreadable installed.ini must mean no leftovers");
+            // No external mod manager found (its Mods folder isn't a library): its PAKs must never look like leftovers.
+            Func<FluffyInstalls> withManagers = f.Engine.FluffyProvider;
+            f.Engine.FluffyProvider = delegate { return FluffyInstalls.Load(new string[0]); };
+            Require(f.Engine.LeftoverPaks().Count == 0, "no external mod manager found must mean no leftovers");
+            f.Engine.FluffyProvider = withManagers;
             // The disabled PAK mod (its number is the empty placeholder now) is never a leftover either; it stays disabled
             // (enabling waits for the external manager's lockout).
             f.Engine.SetEnabled(owned.Id, false);
@@ -59,7 +64,12 @@ namespace SlotsInstaller
             WritePak(Pak(f, 2), "refilled");
             Require(Names(f.Engine.LeftoverPaks()) == "re_chunk_000.pak.patch_001.pak, re_chunk_000.pak.patch_007.pak", "a disabled record's number: " + Names(f.Engine.LeftoverPaks()));
             File.WriteAllBytes(Pak(f, 2), ReplaceEngine.FluffyDummyPak);
-            string cli = ReplaceChecks.Cli("replace-status", "--game", f.Game);
+            // The CLI finds the two external managers through its settings (this fixture has no Mods library).
+            var replaceSettings = ReplaceSettings.Load(); List<string> savedRoots = replaceSettings.FluffyRoots;
+            replaceSettings.FluffyRoots = new List<string> { a, b }; replaceSettings.Save();
+            string cli;
+            try { cli = ReplaceChecks.Cli("replace-status", "--game", f.Game); }
+            finally { replaceSettings.FluffyRoots = savedRoots; replaceSettings.Save(); }
             Require(cli.Contains("re_chunk_000.pak.patch_001.pak (leftover: no mod manager lists it, ") && cli.Contains("re_chunk_000.pak.patch_005.pak (empty placeholder)") && cli.Contains("leftover PAK") && cli.Contains("(remove: select it on the Installed page, then Remove PAK)"), "replace-status: " + cli);
 
             // Refused while SF6 or the external manager runs, and for a PAK that isn't a leftover; nothing changes.

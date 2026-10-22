@@ -100,6 +100,7 @@ namespace SlotsInstaller
         }
         private bool MoveTo(int next)
         {
+            next = Math.Max(0, Math.Min(next, MaxOffset));   // a glide under way when the window shrinks (PR #12 review)
             if (next == offset || content == null) return false;
             offset = next;
             content.Top = -offset;

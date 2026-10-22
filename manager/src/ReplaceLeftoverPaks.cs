@@ -35,9 +35,11 @@ namespace SlotsInstaller
         }
         internal static List<PatchPak> LeftoverPaks(IEnumerable<PatchPak> paks, ReplaceState state, FluffyInstalls fluffy)
         {
-            if (fluffy != null && fluffy.Warnings.Count > 0) return new List<PatchPak>();   // an unreadable installed.ini: who owns what is unknown
+            // An unreadable installed.ini, or no external mod manager found (it is found through its Mods folder in the mod
+            // libraries; PR #12 review): who owns what is unknown, so nothing counts as leftover.
+            if (fluffy == null || fluffy.Roots.Count == 0 || fluffy.Warnings.Count > 0) return new List<PatchPak>();
             var owned = new HashSet<string>((state == null ? new List<ReplaceMod>() : state.Mods).SelectMany(m => m.Files).Select(f => FluffyInstalls.Key(f.Path)), StringComparer.OrdinalIgnoreCase);
-            return (paks ?? new PatchPak[0]).Where(p => p.Kind == PatchPakKind.Mod && !owned.Contains(p.Name) && (fluffy == null || fluffy.OwnersOf(p.Name).Count == 0) && !IsFluffyDummy(p.Path)).ToList();
+            return (paks ?? new PatchPak[0]).Where(p => p.Kind == PatchPakKind.Mod && !owned.Contains(p.Name) && fluffy.OwnersOf(p.Name).Count == 0 && !IsFluffyDummy(p.Path)).ToList();
         }
         internal static string LeftoverDetail(PatchPak p) { return LeftoverReason + " · " + Utilities.FriendlyBytes(p.Length); }
         internal static string LeftoverStatusText(List<string> names) { return ReplacePlanner.N(names.Count, "leftover PAK") + " " + LeftoverReason + " (SF6 still loads " + (names.Count == 1 ? "it" : "them") + "): " + String.Join(", ", names.Take(6)) + (names.Count > 6 ? ", …" : ""); }

@@ -11,7 +11,7 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 ## What changed
 
 - 1.0.11:
-  - **RAR and 7Z mods work without installing 7-Zip.** The Manager now comes with 7-Zip in its `7-Zip` folder and uses it when 7-Zip isn't installed. An installed 7-Zip is still used first, also when it isn't in `C:\Program Files\7-Zip`, unless it is older than the Manager's copy (7-Zip before 15.06 can't open RAR5 archives). In Settings, the 7-Zip field can stay empty ("Automatic"); the line under it says which 7-Zip is used. A path you chose yourself still comes first.
+  - **RAR and 7Z mods work without installing 7-Zip.** The Manager now comes with 7-Zip in its `7-Zip` folder and uses it when 7-Zip isn't installed. An installed 7-Zip is still used first, also when it isn't in `C:\Program Files\7-Zip`, unless it is older than the Manager's copy (7-Zip before 15.06 can't open RAR5 archives). In Settings, the 7-Zip field can stay empty ("Automatic"); the line under it says which 7-Zip is used. A path you chose yourself still comes first; the `C:\Program Files\7-Zip\7z.exe` that earlier versions saved by default counts as Automatic.
   - **Credits:** Settings → About thanks BrewedVFX for testing and recommendations, with a link to their page.
   - **Mod libraries:** in Settings, "Libraries" is now "Mod libraries", with a short line under it saying what they are. The replacement store (Settings → Game files & replacements) has one too.
   - **Welcome:** at the first start (and once after updating), a short welcome covers what matters most: using the Manager beside your external mod manager, using it on its own, and what to do when something breaks. Open it again from Settings → General → **Show welcome**.
