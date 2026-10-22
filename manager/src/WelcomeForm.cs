@@ -8,7 +8,7 @@ namespace SlotsInstaller
 {
     // 1.0.11 (the user): only what a new user must know, as three topics: using the Manager beside an external mod
     // manager, on its own, and what to do when something breaks. Shown once at the first start (ViewPreferences
-    // .WelcomeSeen, so also once after updating from 1.0.10) and from gear → Welcome. Esc, ✕, Close or Done close it.
+    // .WelcomeSeen, so also once after updating from 1.0.10) and from gear → Welcome. Esc, ✕ or Done close it.
     // A borderless card over the dimmed main window (the user: no title bar, no window chrome).
     internal sealed class WelcomeForm : Form
     {
@@ -36,7 +36,7 @@ namespace SlotsInstaller
         };
 
         private readonly WelcomePage page;
-        private readonly FlatButton close, back, next;
+        private readonly FlatButton next;
         internal int Index { get { return page.Index; } }
 
         internal static void ShowWelcome(Form owner)
@@ -58,18 +58,17 @@ namespace SlotsInstaller
             Text = "Welcome to Slotsloader Manager"; StartPosition = FormStartPosition.CenterParent;
             BackColor = Palette.Surface; ForeColor = Palette.Text; ShowInTaskbar = false; Padding = new Padding(25, 12, 25, 17); FormBorderStyle = FormBorderStyle.None;
             AppBranding.Apply(this); WindowChrome.Round(this);
-            var header = new Panel { Dock = DockStyle.Top, Height = 30 };
+            // 1.0.11 (the user): ✕ is the only close and the tabs move back, so the footer has just Next / Done; both buttons compact.
+            var header = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(0, 3, 0, 3) };
             var caption = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Text = "WELCOME TO SLOTSLOADER MANAGER" };
-            var dismiss = new FlatButton("✕", false) { Width = 36, Padding = Padding.Empty, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeDismiss", AccessibleName = "Close the welcome" }; dismiss.Click += delegate { Close(); };
+            var dismiss = new FlatButton("✕", false) { Width = 26, Padding = Padding.Empty, Dock = DockStyle.Right, Font = Palette.Tiny, Name = "welcomeDismiss", AccessibleName = "Close the welcome" }; dismiss.Click += delegate { Close(); };
             header.Controls.Add(caption); header.Controls.Add(dismiss);
             page = new WelcomePage { Dock = DockStyle.Fill, Name = "welcomePage" };
             page.IndexChanged += delegate { UpdateButtons(); };
-            var footer = new Panel { Dock = DockStyle.Bottom, Height = 54, Padding = new Padding(0, 14, 0, 0) };
+            var footer = new Panel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(0, 16, 0, 0) };
             var hint = new Label { UseMnemonic = false, Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Small, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, Text = "Open this again from gear → Welcome" };
-            next = new FlatButton("Next", true) { Width = 100, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeNext" }; next.Click += delegate { if (page.Index == Topics.Length - 1) Close(); else page.Index++; };
-            back = new FlatButton("Back", false) { Width = 88, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeBack" }; back.Click += delegate { page.Index--; };
-            close = new FlatButton("Close", false) { Width = 88, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeClose" }; close.Click += delegate { Close(); };
-            footer.Controls.Add(hint); footer.Controls.Add(close); footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); footer.Controls.Add(back); footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); footer.Controls.Add(next);
+            next = new FlatButton("Next", true) { Width = 88, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeNext" }; next.Click += delegate { if (page.Index == Topics.Length - 1) Close(); else page.Index++; };
+            footer.Controls.Add(hint); footer.Controls.Add(next);
             Controls.Add(page); Controls.Add(header); Controls.Add(footer);
             ClientSize = new Size(602, 490);
             AcceptButton = next;
@@ -101,10 +100,7 @@ namespace SlotsInstaller
 
         private void UpdateButtons()
         {
-            bool last = page.Index == Topics.Length - 1;
-            back.Visible = page.Index > 0;
-            close.Visible = !last;
-            next.Text = last ? "Done" : "Next";
+            next.Text = page.Index == Topics.Length - 1 ? "Done" : "Next";
         }
     }
 

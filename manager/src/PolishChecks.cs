@@ -462,17 +462,20 @@ namespace SlotsInstaller
                 for (int i = 0; i < WelcomeForm.Topics.Length; i++)
                 {
                     bool last = i == WelcomeForm.Topics.Length - 1;
-                    Require(welcome.Index == i && button("welcomeBack").Visible == (i > 0) && button("welcomeClose").Visible == !last && button("welcomeNext").Text == (last ? "Done" : "Next"), "welcome topic " + i + " buttons");
+                    Require(welcome.Index == i && button("welcomeNext").Text == (last ? "Done" : "Next"), "welcome topic " + i + " button");
                     Require(page.AccessibleName == WelcomeForm.Topics[i].Tab + ": " + WelcomeForm.Topics[i].Title, "welcome accessible name: " + page.AccessibleName);
                     using (var b = new Bitmap(welcome.Width, welcome.Height)) { welcome.DrawToBitmap(b, new Rectangle(Point.Empty, b.Size)); b.Save(Path.Combine(root, "welcome-" + (i + 1) + "-" + welcome.DeviceDpi + ".png"), ImageFormat.Png); }
                     if (!last) button("welcomeNext").PerformClick(); Application.DoEvents();
                 }
                 page.Index = 0; Application.DoEvents();
-                Require(welcome.Index == 0 && !button("welcomeBack").Visible, "welcome back to the first topic");
+                Require(welcome.Index == 0, "welcome back to the first topic");
+                // Only ✕ and Next / Done (1.0.11, the user), both compact.
+                Require(welcome.Controls.Find("welcomeBack", true).Length == 0 && welcome.Controls.Find("welcomeClose", true).Length == 0, "the welcome still has Back or Close");
+                Require(button("welcomeNext").Height <= DpiMetrics.Px(welcome, 32) && button("welcomeDismiss").Height <= DpiMetrics.Px(welcome, 26), "welcome buttons too tall: " + button("welcomeNext").Height + " / " + button("welcomeDismiss").Height);
                 button("welcomeNext").PerformClick(); button("welcomeNext").PerformClick(); button("welcomeNext").PerformClick(); Application.DoEvents();
                 Require(welcome.IsDisposed || !welcome.Visible, "Done did not close the welcome");
             }
-            report.Add("PASS: welcome (1.0.11): a borderless card with ✕, three topics with tabs, Back / Next / Done and Close; sized to the tallest topic; never opens by itself in a check window; renders welcome-1..3.png and welcome-overlay.png.");
+            report.Add("PASS: welcome (1.0.11): a borderless card with ✕, three topics with tabs, Next / Done (no Back or Close); sized to the tallest topic; never opens by itself in a check window; renders welcome-1..3.png and welcome-overlay.png.");
         }
 
         private static void CheckNoTooltips(MainForm form, List<string> report)
