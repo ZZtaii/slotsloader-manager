@@ -9,9 +9,9 @@ $patterns = @('C:\Users\')
 $localConfig = Join-Path $Project 'tests.local.json'
 if (Test-Path -LiteralPath $localConfig) { $private = (Get-Content -LiteralPath $localConfig -Raw | ConvertFrom-Json).PrivatePatterns; if ($private) { $patterns += @($private) } }
 $allow = @()   # e.g. 'src\SomeRealCheck.cs'
-$roots = @('src', 'docs', 'tests', 'assets', 'tools')
+$roots = @('src', 'docs', 'tests', 'assets', 'tools', 'linux')
 $files = @()
-foreach ($r in $roots) { $dir = Join-Path $Project $r; if (Test-Path -LiteralPath $dir) { $files += Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object { $_.Extension -in '.cs', '.md', '.ps1', '.json', '.py', '.txt', '.config', '.manifest' -and $_.FullName -notmatch '\\(bin|obj)\\' } } }
+foreach ($r in $roots) { $dir = Join-Path $Project $r; if (Test-Path -LiteralPath $dir) { $files += Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object { $_.Extension -in '.cs', '.md', '.ps1', '.json', '.py', '.txt', '.config', '.manifest', '.yml', '.sh', '.desktop' -and $_.FullName -notmatch '\\(bin|obj)\\' } } }
 foreach ($name in 'README.md', 'AGENTS.md', 'test.ps1', 'build.ps1', 'tests.local.example.json', 'SF6-SlotsLoader-Installer.csproj') { $f = Join-Path $Project $name; if (Test-Path -LiteralPath $f) { $files += Get-Item -LiteralPath $f } }
 foreach ($e in $Extra) { if (Test-Path -LiteralPath $e) { $files += Get-Item -LiteralPath $e } }
 $hits = @()

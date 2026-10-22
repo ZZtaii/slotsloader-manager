@@ -461,6 +461,7 @@ namespace SlotsInstaller
         }
         private static int UpdateInstallManager(Args a)
         {
+            if (LinuxPlatform.IsLinux) throw new IOException(LinuxPlatform.UpdateMessage);
             if (!String.Equals(a.Target, "manager", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("update-install needs loader or manager.");
             UpdateCheckResult r = CheckOrThrow(a);
             ReleaseOffer offer = UpdateCheck.ManagerUpdate(r, UpdateCheck.Running);

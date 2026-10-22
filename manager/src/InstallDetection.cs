@@ -20,7 +20,7 @@ namespace SlotsInstaller
 
         // Steam (HKCU SteamPath, then HKLM InstallPath), its libraryfolders.vdf, the library holding
         // appmanifest_1364780.acf (its installdir), else steamapps\common\Street Fighter 6 in any library; null if none.
-        internal static string FindGame() { return FindGame(SteamRoots()); }
+        internal static string FindGame() { return LinuxPlatform.IsLinux ? LinuxPlatform.StringValue(LinuxPlatform.Discover(), "game_root") : FindGame(SteamRoots()); }
         internal static string FindGame(IEnumerable<string> steamRoots)
         {
             var libraries = new List<string>();
@@ -59,6 +59,7 @@ namespace SlotsInstaller
             {
                 string value = m.Groups[1].Value.Replace("\\\\", "\\");
                 if (value.Length > 2 && value[1] == ':') Add(result, value);
+                else if (LinuxPlatform.IsLinux && value.StartsWith("/", StringComparison.Ordinal)) Add(result, LinuxPlatform.WinePath(value));
             }
             return result;
         }
@@ -72,7 +73,7 @@ namespace SlotsInstaller
         // <Fluffy>\Games\SF6\Mods for every Fluffy install found: a running Fluffy's folder, the Fluffy folders the
         // replace settings already know, and folders named like Fluffy at the top of each fixed drive (and one level
         // under it, e.g. <drive>\Games\Fluffy), in the user's Downloads, Desktop and Documents.
-        internal static List<string> FindLibraries() { return FindLibraries(FluffyCandidates()); }
+        internal static List<string> FindLibraries() { return LinuxPlatform.IsLinux ? LinuxPlatform.Strings(LinuxPlatform.Discover(), "libraries") : FindLibraries(FluffyCandidates()); }
         internal static List<string> FindLibraries(IEnumerable<string> candidates)
         {
             var result = new List<string>();

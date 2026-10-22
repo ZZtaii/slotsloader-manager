@@ -188,6 +188,7 @@ namespace SlotsInstaller
         }
         internal static ReleaseOffer ManagerUpdate(UpdateCheckResult r, Version running)
         {
+            if (LinuxPlatform.IsLinux) return null;
             if (r == null || r.Manager == null || r.Manager.Parsed == null || running == null) return null;
             return r.Manager.Parsed > running ? r.Manager : null;
         }

@@ -1,0 +1,6 @@
+# Keep Linux entry points runnable from Windows checkouts opened through WSL.
+manager/linux/*.py text eol=lf
+manager/linux/*.sh text eol=lf
+manager/linux/*.desktop text eol=lf
+manager/linux/*.yml text eol=lf
+manager/linux/*.md text eol=lf

@@ -30,8 +30,8 @@ namespace SlotsInstaller
             }
             return false;
         }
-        public bool IsGameRunning() { return Any(GameNames); }
-        public bool IsFluffyRunning() { return Any(FluffyNames); }
+        public bool IsGameRunning() { return LinuxPlatform.IsLinux ? LinuxPlatform.Status().GameRunning : Any(GameNames); }
+        public bool IsFluffyRunning() { return LinuxPlatform.IsLinux ? LinuxPlatform.Status().FluffyRunning : Any(FluffyNames); }
     }
 
     internal sealed class FakeProcessProbe : IProcessProbe
@@ -46,7 +46,7 @@ namespace SlotsInstaller
     internal sealed class SteamLauncher : IGameLauncher
     {
         internal const string SteamUrl = "steam://rungameid/1364780";
-        public void Launch(string gameRoot) { Process.Start(new ProcessStartInfo(SteamUrl) { UseShellExecute = true }); }
+        public void Launch(string gameRoot) { if (LinuxPlatform.IsLinux) { LinuxPlatform.Launch(); return; } Process.Start(new ProcessStartInfo(SteamUrl) { UseShellExecute = true }); }
     }
 
     internal static class GameProcesses
@@ -57,12 +57,14 @@ namespace SlotsInstaller
         // Throws when SF6 or Fluffy Mod Manager runs: PAK and game-root files must not change then.
         internal static void RequireIdle(string action)
         {
+            if (LinuxPlatform.IsLinux && Probe is SystemProcessProbe) { LinuxPlatform.RequireClosed(action); return; }
             if (Probe.IsGameRunning()) throw new IOException("Close SF6 to " + action + ".");
             if (Probe.IsFluffyRunning()) throw new IOException(FluffyPakMessage(action));
         }
         // 2.1.0: only the game blocks this (REFramework config edits, loose and tool-mod files).
         internal static void RequireGameClosed(string action)
         {
+            if (LinuxPlatform.IsLinux && Probe is SystemProcessProbe) { LinuxPlatform.RequireClosed(action); return; }
             if (Probe.IsGameRunning()) throw new IOException("Close SF6 to " + action + ".");
         }
         // Fluffy Mod Manager edits the same PAK entries with its own method: PAK changes wait until it is closed.

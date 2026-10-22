@@ -33,6 +33,17 @@ namespace SlotsInstaller
             // 1.0.11 (PR #12 review): up to 1.0.10 this path was the default saved in every settings.json, never a choice
             // of the user's. Read as Automatic, so an installed 7-Zip older than the bundled copy gives way to it (RAR5).
             if (String.Equals((c.SevenZipPath ?? "").Trim(), OldDefaultSevenZip, StringComparison.OrdinalIgnoreCase)) c.SevenZipPath = "";
+            if (LinuxPlatform.IsLinux)
+            {
+                // Register storage and trash scope on every launch, without rewriting the
+                // saved paths or silently migrating an existing replacement record.
+                foreach (string path in new[] { c.GameRoot }.Concat(c.Libraries))
+                {
+                    if (String.IsNullOrWhiteSpace(path)) continue;
+                    try { LinuxPlatform.CanonicalRoot(path, path == c.GameRoot ? "game" : "library"); }
+                    catch (IOException ex) { Program.LogLine(ex.Message); }
+                }
+            }
             return c;
         }
         internal const string OldDefaultSevenZip = @"C:\Program Files\7-Zip\7z.exe";
@@ -46,7 +57,16 @@ namespace SlotsInstaller
             try { c.Libraries = InstallDetection.FindLibraries(); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
             return c;
         }
-        public void Save() { Directory.CreateDirectory(DataDir); Json.Write(Path.Combine(DataDir, "settings.json"), this); }
+        public void Save()
+        {
+            if (LinuxPlatform.IsLinux)
+            {
+                string game = LinuxPlatform.CanonicalRoot(GameRoot, "game");
+                List<string> libraries = Libraries.Select(p => LinuxPlatform.CanonicalRoot(p, "library")).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                GameRoot = game; Libraries = libraries;
+            }
+            Directory.CreateDirectory(DataDir); Json.Write(Path.Combine(DataDir, "settings.json"), this);
+        }
     }
     internal static class Json
     {
@@ -1124,6 +1144,12 @@ namespace SlotsInstaller
         }
         internal static IDisposable AcquireMutation(string costumeRoot)
         {
+            LinuxPlatform.RequireClosed("change extra outfits");
+            if (LinuxPlatform.IsLinux)
+            {
+                string parent = Path.GetDirectoryName(Path.GetFullPath(costumeRoot).TrimEnd(Path.DirectorySeparatorChar));
+                if (parent != null && Path.GetFileName(parent).Equals("reframework", StringComparison.OrdinalIgnoreCase)) LinuxPlatform.CanonicalRoot(Path.GetDirectoryName(parent), "game");
+            }
             string root=ValidateRoot(costumeRoot).ToUpperInvariant();
             string key;
             using (var sha=FastHash.Sha256()) key=BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(root))).Replace("-","");
@@ -1188,6 +1214,7 @@ namespace SlotsInstaller
         }
         public static void OpenFolder(string path)
         {
+            if (LinuxPlatform.IsLinux) { LinuxPlatform.OpenPath(path, File.Exists(path)); return; }
             if (File.Exists(path)) { Process.Start(new ProcessStartInfo("explorer.exe","/select,"+ProcessUtil.Quote(Path.GetFullPath(path))) {UseShellExecute=true}); return; }
             if (!Directory.Exists(path)) throw new IOException("Folder does not exist yet: "+path);
             Process.Start(new ProcessStartInfo("explorer.exe",ProcessUtil.Quote(Path.GetFullPath(path))) {UseShellExecute=true});
@@ -1215,10 +1242,14 @@ namespace SlotsInstaller
         }
         internal static void NoReparse(string path)
         {
+            // Wine marks some real mount points as reparse points. Native lstat distinguishes
+            // those from links, and still rejects any symlink in the managed path.
+            if (LinuxPlatform.IsLinux) { string full = Path.GetFullPath(path); LinuxPlatform.ValidateContainedPath(full, Path.GetPathRoot(full)); return; }
             if ((File.GetAttributes(path) & FileAttributes.ReparsePoint)!=0) throw new IOException("Links/junctions are unsupported for managed files: "+path);
         }
         internal static void NoReparseChain(string path)
         {
+            if (LinuxPlatform.IsLinux) { string full = Path.GetFullPath(path); LinuxPlatform.ValidateContainedPath(full, Path.GetPathRoot(full)); return; }
             string current=Path.GetFullPath(path);
             while (!String.IsNullOrEmpty(current))
             {

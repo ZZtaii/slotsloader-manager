@@ -1123,10 +1123,10 @@ namespace SlotsInstaller
             settingsApiKey.Editor.ShortcutsEnabled = true;
             add(settingsApiKey);
             var keyActions = new FlowLayoutPanel { Height = 32 + 8, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
-            saveKeyButton = Button("Save key", false, 110, delegate { SaveApiKey(); });
+            saveKeyButton = Button(LinuxPlatform.IsLinux ? "Use this session" : "Save key", false, LinuxPlatform.IsLinux ? 145 : 110, delegate { SaveApiKey(); });
             removeKeyButton = Button("Remove", false, 96, delegate { RemoveApiKey(); });
             testKeyButton = Button("Test key", false, 110, delegate { TestApiKey(); });
-            removeKeyButton.AccessibleName = "Remove the saved key"; testKeyButton.AccessibleName = "Test the key (one small request)";
+            removeKeyButton.AccessibleName = LinuxPlatform.IsLinux ? "Forget this session's key" : "Remove the saved key"; testKeyButton.AccessibleName = "Test the key (one small request)";
             foreach (FlatButton b in new[] { saveKeyButton, removeKeyButton, testKeyButton }) { b.Height = 32; b.Font = Palette.Small; b.Margin = new Padding(0, 0, 8, 0); keyActions.Controls.Add(b); }
             add(keyActions);
             add(Rhythm.Gap(Rhythm.AfterAction - 4));
@@ -1178,7 +1178,7 @@ namespace SlotsInstaller
         {
             string status; try { status = assistantKeys.Status(); } catch (Exception ex) { status = "Key status unavailable: " + ex.Message; }
             settingsKeyStatus.Text = status;
-            settingsKeyStatus.ForeColor = status.StartsWith("Saved") || status.StartsWith("Using") ? Palette.Green : status == "No key" ? Palette.Muted : Palette.Red;
+            settingsKeyStatus.ForeColor = status.StartsWith("Saved") || status.StartsWith("Using") ? Palette.Green : status.StartsWith("No key") ? Palette.Muted : Palette.Red;
             removeKeyButton.Enabled = assistantKeys.HasSavedKey;
         }
 
@@ -1213,7 +1213,7 @@ namespace SlotsInstaller
 
         private void RemoveApiKey()
         {
-            if (!Program.Headless && ThemedMessageBox.Show(this, "Remove the saved API key from this PC?", "Remove API key", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            if (!Program.Headless && ThemedMessageBox.Show(this, LinuxPlatform.IsLinux ? "Forget the API key used for this session?" : "Remove the saved API key from this PC?", "Remove API key", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
             try { assistantKeys.Remove(); ShowKeyStatus(); if (assistantPage != null) assistantPage.UpdateEmptyState(); }
             catch (Exception ex) { Error(ex); }
         }
@@ -3264,6 +3264,7 @@ namespace SlotsInstaller
             {
                 string path = Path.GetFullPath(entry.SourcePath);
                 if (!File.Exists(path) && !Directory.Exists(path)) throw new IOException("Mod not found: " + path);
+                if (LinuxPlatform.IsLinux) { LinuxPlatform.OpenPath(path, revealInExplorer); return; }
                 if (revealInExplorer)
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", "/select," + ProcessUtil.Quote(path)) { UseShellExecute = true });
                 else

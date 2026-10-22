@@ -28,6 +28,7 @@ namespace SlotsInstaller
             var f = new AssistantFixture { Root = root, Library = Path.Combine(root, "library"), GameRoot = Path.Combine(root, "game"), DataDir = Path.Combine(root, "data") };
             f.CostumeRoot = Path.Combine(f.GameRoot, "reframework", "costume_mods");
             Directory.CreateDirectory(f.Library); Directory.CreateDirectory(f.CostumeRoot); Directory.CreateDirectory(f.DataDir);
+            File.WriteAllText(Path.Combine(f.GameRoot, "StreetFighter6.exe"), "synthetic fixture executable");
             string staging = Path.Combine(root, "staging");
             f.CammyPack = ColorPack(staging, f.Library, "Cammy Barefoot Pack", "009", new[] { "Black", "Crimson", "White" }, new[] { Color.FromArgb(20, 20, 24), Color.FromArgb(120, 10, 20), Color.FromArgb(235, 235, 240) }, "Crimson");
             f.JuriPack = ColorPack(staging, f.Library, "Juri Barefoot Variants", "016", new[] { "Gold", "Midnight", "Pink" }, new[] { Color.FromArgb(210, 170, 40), Color.FromArgb(15, 15, 45), Color.FromArgb(240, 130, 190) }, null);

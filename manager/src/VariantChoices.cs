@@ -156,9 +156,11 @@ namespace SlotsInstaller
 
         private static void Update(string costumeRoot, string source, Func<Dictionary<string, bool>, Dictionary<string, bool>> change)
         {
+            LinuxPlatform.RequireClosed("change outfit variants");
             lock (writeLock)
             {
                 string file = ChoicesFile(costumeRoot);
+                Safety.NoReparseChain(file);
                 VariantChoiceFile current = ReadChoices(costumeRoot);
                 if (current.Malformed && current.Version != 1) throw new IOException("variant_choices.json is from a newer version (" + current.Version + "). Not changed.");
                 if (current.Malformed) Program.LogLine("variant_choices.json was unreadable; replaced (other entries could not be kept).");
@@ -169,8 +171,8 @@ namespace SlotsInstaller
                 if (next != null && next.Count > 0) current.Archives[Normalize(source)] = next;   // the loader's own spelling of the source
                 var archives = new SortedDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
                 foreach (var pair in current.Archives) archives[pair.Key] = new SortedDictionary<string, bool>(pair.Value, StringComparer.Ordinal);
+                Safety.NoReparseChain(file);
                 Directory.CreateDirectory(Path.GetDirectoryName(file));
-                if (File.Exists(file)) Safety.NoReparseChain(file);
                 DurableFile.WriteJson(file, new Dictionary<string, object> { { "version", 1 }, { "archives", archives } });   // temp file + replace
             }
         }

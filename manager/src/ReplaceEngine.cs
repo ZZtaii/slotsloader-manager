@@ -252,6 +252,7 @@ namespace SlotsInstaller
         // ---- Locking
         internal IDisposable Lock()
         {
+            if (LinuxPlatform.IsLinux) { LinuxPlatform.Status(); LinuxPlatform.CanonicalRoot(GameRoot, "game"); }
             string key;
             using (var sha = FastHash.Sha256()) key = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(GameRoot.ToUpperInvariant()))).Replace("-", "");
             var mutex = new Mutex(false, "Local\\SF6SlotsInstaller-game-" + key);
@@ -290,6 +291,7 @@ namespace SlotsInstaller
         internal string Recover()
         {
             if (!File.Exists(JournalPath)) return null;
+            LinuxPlatform.RequireClosed("recover an interrupted change");
             ReplaceJournal journal = ReadJsonShared<ReplaceJournal>(JournalPath);
             if (journal == null || journal.Format != "sf6-replace-journal-v1") throw new IOException("The replacement journal is unreadable: " + JournalPath + ". Nothing was changed; inspect it before continuing.");
             RelocateJournal(journal);
@@ -423,6 +425,7 @@ namespace SlotsInstaller
         private void Move(string from, string to)
         {
             string a = GamePath(from), b = GamePath(to);
+            Safety.NoReparseChain(a); Safety.NoReparseChain(b);
             if (!File.Exists(a) && File.Exists(b)) return;
             if (File.Exists(a) && !File.Exists(b)) { File.Move(a, b); return; }
             throw new IOException("Cannot rename " + from + " to " + to + ": unexpected files present.");
@@ -431,6 +434,7 @@ namespace SlotsInstaller
         private void WriteRows(JournalOp op, bool undo)
         {
             string pak = GamePath(op.Pak);
+            Safety.NoReparseChain(pak);
             var writes = op.Rows.Select(r => new PakHashWrite { Index = r.Index, Expected = Unhex(undo ? r.After : r.Before), Value = Unhex(undo ? r.Before : r.After) }).ToList();
             PakWriter.WriteHashes(pak, op.PakLength, Unhex(op.PakHeader), writes);
             GamePaks.Forget(pak);
@@ -817,6 +821,8 @@ namespace SlotsInstaller
         {
             using (Lock())
             {
+                // The Linux beta never changes live Proton files, including loose replacements.
+                LinuxPlatform.RequireClosed(ActionText(description));
                 bool gameRunning = false, fluffyRunning = false;
                 if (needsIdle)
                 {

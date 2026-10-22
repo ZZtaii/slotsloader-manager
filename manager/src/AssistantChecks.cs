@@ -708,7 +708,10 @@ namespace SlotsInstaller
                 var used = run("last_used", "");
                 Require(((string)used[0]["last_used"]).EndsWith(" UTC") && ((string)used[1]["last_used"]).EndsWith(" UTC") && (string)used[3]["last_used"] == "never" && !used[0].ContainsKey("added"), "last_used values: " + String.Join(", ", used.Select(x => x["last_used"])));
                 var newest = run("added", "");
-                Require((string)newest[0]["added"] == "2026-04-01 00:00 UTC" && !newest[0].ContainsKey("last_used"), "added values: " + String.Join(", ", newest.Select(x => x["added"])));
+                // Linux filesystems can expose modification time as birth time through Wine.
+                var bootsInfo = new FileInfo(h.F.CammyBoots);
+                string expectedAdded = Library.AddedTime(bootsInfo.CreationTimeUtc, bootsInfo.LastWriteTimeUtc).ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " UTC";
+                Require((string)newest[0]["added"] == expectedAdded && !newest[0].ContainsKey("last_used"), "added values: " + String.Join(", ", newest.Select(x => x["added"])));
                 Require(!run("", "")[0].ContainsKey("added"), "the default order carries no sort fields");
                 var bad = new Dictionary<string, object> { { "query", "" }, { "character", "" }, { "kind", "any" }, { "install_state", "any" }, { "limit", 0 }, { "offset", 0 }, { "costume", "" }, { "sort", "newest" }, { "order", "" } };
                 Require(tb.Execute("search_mods", bad).IsError, "an unknown sort was accepted");
@@ -1124,6 +1127,19 @@ namespace SlotsInstaller
             string dir = Path.Combine(runRoot, "keystore");
             var store = new AssistantKeyStore(dir, delegate { return null; });
             string source;
+            if (LinuxPlatform.IsLinux)
+            {
+                Require(store.Load(out source) == null && source == "none" && store.Status().Contains("session only"), "Empty Linux key store wrong.");
+                store.Save("  " + FakeKey + "  ");
+                Require(store.Load(out source) == FakeKey && source == "session" && store.Status() == "Using key for this session · …WXYZ", "Session key or mask wrong.");
+                Require(!File.Exists(Path.Combine(dir, AssistantKeyStore.FileName)), "Linux key was persisted.");
+                var fresh = new AssistantKeyStore(dir, delegate { return "sk-env-should-win-1234"; });
+                Require(fresh.Load(out source) == "sk-env-should-win-1234" && source == "environment", "Session key leaked to a new store.");
+                store.Remove(); Require(store.Load(out source) == null, "Session key not cleared.");
+                bool invalid = false; try { store.Save("short"); } catch (ArgumentException) { invalid = true; }
+                Require(invalid, "Implausible session key accepted.");
+                return;
+            }
             Require(store.Load(out source) == null && source == "none" && store.Status() == "No key", "Empty store wrong.");
             store.Save("  " + FakeKey + "  ");
             byte[] file = File.ReadAllBytes(Path.Combine(dir, AssistantKeyStore.FileName));

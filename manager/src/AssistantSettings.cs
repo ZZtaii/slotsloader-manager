@@ -130,6 +130,7 @@ namespace SlotsInstaller
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("SF6 SlotsLoader Installer/assistant-key/v1");
         private readonly string dataDir;
         private readonly Func<string> environment;
+        private string sessionKey;
 
         internal AssistantKeyStore(string dataDir) : this(dataDir, delegate { return Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"); }) { }
         internal AssistantKeyStore(string dataDir, Func<string> environmentKey) { this.dataDir = dataDir; environment = environmentKey ?? delegate { return null; }; }
@@ -140,6 +141,9 @@ namespace SlotsInstaller
         {
             key = (key ?? "").Trim();
             if (key.Length < 8 || key.Any(c => c < 33 || c > 126)) throw new ArgumentException("Enter a complete API key without spaces.");
+            // Wine's DPAPI is not equivalent to Windows user-secret protection. Linux
+            // keeps an entered key only for this session, never in a file or diagnostics.
+            if (LinuxPlatform.IsLinux) { sessionKey = key; return; }
             Directory.CreateDirectory(dataDir); Safety.NoReparseChain(KeyPath);
             byte[] protectedBytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(key), Entropy, DataProtectionScope.CurrentUser);
             string tmp = KeyPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -147,10 +151,11 @@ namespace SlotsInstaller
             DurableFile.Publish(tmp, KeyPath);
         }
 
-        internal bool HasSavedKey { get { return File.Exists(KeyPath); } }
+        internal bool HasSavedKey { get { return LinuxPlatform.IsLinux ? sessionKey != null : File.Exists(KeyPath); } }
 
         internal void Remove()
         {
+            if (LinuxPlatform.IsLinux) { sessionKey = null; return; }
             Safety.NoReparseChain(KeyPath);
             if (File.Exists(KeyPath)) File.Delete(KeyPath);
         }
@@ -159,7 +164,8 @@ namespace SlotsInstaller
         internal string Load(out string source)
         {
             source = "none";
-            if (File.Exists(KeyPath))
+            if (LinuxPlatform.IsLinux && sessionKey != null) { source = "session"; return sessionKey; }
+            if (!LinuxPlatform.IsLinux && File.Exists(KeyPath))
             {
                 try
                 {
@@ -178,9 +184,9 @@ namespace SlotsInstaller
         internal string Status()
         {
             string source; string key = Load(out source);
-            if (key == null) return source == "unreadable" ? "This Windows user cannot read the saved key · Remove it and save it again" : "No key";
+            if (key == null) return source == "unreadable" ? "This Windows user cannot read the saved key · Remove it and save it again" : LinuxPlatform.IsLinux ? "No key · Linux uses keys for this session only" : "No key";
             string tail = key.Length >= 4 ? key.Substring(key.Length - 4) : "";
-            return source == "saved" ? "Saved · …" + tail : "Using ANTHROPIC_API_KEY from environment · …" + tail;
+            return source == "session" ? "Using key for this session · …" + tail : source == "saved" ? "Saved · …" + tail : "Using ANTHROPIC_API_KEY from environment · …" + tail;
         }
     }
 

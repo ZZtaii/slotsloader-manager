@@ -11,6 +11,7 @@ namespace SlotsInstaller
     // (no copy outlives its Undo; the result says so).
     internal sealed partial class ReplaceEngine
     {
+        internal const string LinuxTrashPendingMarker = ".linux-trash-pending";
         // 1.0.1: every .removed copy except `keep` (the live Undo's) is deleted: since uninstall keeps nothing and
         // Recover removed outfits is gone, only Restore original game files' Undo can use one. Skipped while a change
         // holds the game lock (next refresh).
@@ -24,6 +25,7 @@ namespace SlotsInstaller
                 foreach (RemovedReplacement c in ListRemoved())
                 {
                     if (kept.Contains(Path.GetFullPath(c.Folder).TrimEnd('\\'))) continue;
+                    if (LinuxPlatform.IsLinux && File.Exists(Path.Combine(c.Folder, LinuxTrashPendingMarker))) continue;
                     try { DeleteRemoved(c.Folder); deleted++; bytes += c.Bytes; } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
                 }
             if (deleted > 0) DataRelocation.WriteLog(DataDir, "Deleted " + ReplacePlanner.N(deleted, "removed replacement copy") + " (" + Utilities.FriendlyBytes(bytes) + "): no Undo needs them.");
@@ -63,6 +65,20 @@ namespace SlotsInstaller
             string message = Uninstall(id, keep, out folder, choice) ?? "";
             if (folder == null || !Directory.Exists(folder)) return message;
             string name = mod.Name;
+            if (LinuxPlatform.IsLinux)
+            {
+                // The marker is written with the removed record before its files move.
+                // A failed native Trash operation must not become permanent deletion on refresh.
+                try
+                {
+                    long bytes = new DirectoryInfo(folder).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+                    string why = (bin ?? RecycleBin.Current).Unavailable(folder, true, bytes);
+                    if (why == null) (bin ?? RecycleBin.Current).Recycle(folder, true);
+                    if (!Directory.Exists(folder)) return (message + " Its source is gone, so its files went to Trash.").Trim();
+                }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+                return (message + " Its source is gone. Trash could not take its files, so they are kept at " + folder + ". You can move that folder to Trash using your file manager.").Trim();
+            }
             try
             {
                 long bytes = new DirectoryInfo(folder).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);

@@ -219,6 +219,7 @@ namespace SlotsInstaller
         {
             string game = Path.Combine(root, "game"), file = SwapRepairFlag.FilePath(game);
             Directory.CreateDirectory(game);
+            File.WriteAllText(Path.Combine(game, "StreetFighter6.exe"), "synthetic fixture executable");
             SwapRepairFlag.Sync(game, true);
             Require(!Directory.Exists(Path.Combine(game, "reframework")), "the marker created a reframework folder");
             Directory.CreateDirectory(Path.Combine(game, "reframework"));

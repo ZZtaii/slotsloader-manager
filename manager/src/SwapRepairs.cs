@@ -236,6 +236,8 @@ namespace SlotsInstaller
             string file = FilePath(gameRoot);
             try
             {
+                if (LinuxPlatform.IsLinux && enabled != System.IO.File.Exists(file))
+                { LinuxPlatform.RequireClosed("change swap-repair settings"); LinuxPlatform.CanonicalRoot(gameRoot, "game"); Safety.NoReparseChain(file); }
                 if (enabled && !System.IO.File.Exists(file)) { System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file)); using (System.IO.File.Create(file)) { } }
                 else if (!enabled && System.IO.File.Exists(file)) System.IO.File.Delete(file);
             }

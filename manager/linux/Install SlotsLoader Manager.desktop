@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install SlotsLoader Manager
+Comment=Set up SlotsLoader Manager for Linux and Steam Deck Desktop Mode
+Exec=sh -c "exec sh \\"\\$(dirname \\"\\$1\\")/install.sh\\"" slotsloader %k
+Icon=applications-games
+Terminal=false
+Categories=Game;Utility;
+StartupNotify=true

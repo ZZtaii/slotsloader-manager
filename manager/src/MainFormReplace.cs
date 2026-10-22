@@ -104,13 +104,20 @@ namespace SlotsInstaller
         private void PollGame()
         {
             if (IsDisposed) return;
-            bool game = false, fluffy = false;
-            try { game = GameProcesses.Probe.IsGameRunning(); fluffy = GameProcesses.Probe.IsFluffyRunning(); } catch (Exception ex) { Program.Log(ex); }
+            bool game = false, fluffy = false; string probeError = null;
+            try
+            {
+                if (LinuxPlatform.IsLinux && GameProcesses.Probe is SystemProcessProbe)
+                { LinuxPlatform.ProcessStatus status = LinuxPlatform.Status(); game = status.GameRunning; fluffy = status.FluffyRunning; }
+                else { game = GameProcesses.Probe.IsGameRunning(); fluffy = GameProcesses.Probe.IsFluffyRunning(); }
+            }
+            catch (Exception ex) { if (LinuxPlatform.IsLinux) { probeError = ex.Message; game = fluffy = true; } else Program.Log(ex); }
             bool changed = game != gameRunning || fluffy != fluffyRunning;
             gameRunning = game; fluffyRunning = fluffy;
-            HistoryPoll(game);   // 2.4.1: game sessions and history repaints (MainFormHistory.cs; never throws)
-            gameStateLabel.Text = game ? "● Game running" : fluffy ? "● Mod manager running" : "Game closed";
-            gameStateLabel.ForeColor = game ? Palette.Green : fluffy ? Palette.Accent : Palette.Muted;
+            if (probeError == null) HistoryPoll(game);   // unknown process state is not a game session
+            gameStateLabel.Text = probeError != null ? "Linux link unavailable" : game ? "● Game running" : fluffy ? "● Mod manager running" : "Game closed";
+            gameStateLabel.AccessibleDescription = probeError ?? gameStateLabel.Text;
+            gameStateLabel.ForeColor = probeError != null ? Palette.Red : game ? Palette.Green : fluffy ? Palette.Accent : Palette.Muted;
             launchButton.Enabled = !game && !busy;
             if (changed) { UpdateFooter(); ShowInstalledSelection(); UpdateBanner(); UpdateLibraryUninstall(); }
             if (leftoverTestPending && !gameRunning && !busy) FinishLeftoverTest();

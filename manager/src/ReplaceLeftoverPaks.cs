@@ -114,6 +114,7 @@ namespace SlotsInstaller
             {
                 string why = bin.Unavailable(pak, false, new FileInfo(pak).Length);
                 if (why == null) bin.Recycle(pak, false);
+                if (LinuxPlatform.IsLinux && File.Exists(pak)) throw new IOException("Trash could not take the removed PAK. It is kept at " + pak + ". You can move it to Trash using your file manager.");
                 if (File.Exists(pak)) { File.Delete(pak); Program.LogLine("Removed leftover PAK " + Path.GetFileName(pak) + " deleted: the Recycle Bin can't take it (" + (why ?? "Windows left it in place") + ")."); }
                 else Program.LogLine("Removed leftover PAK " + Path.GetFileName(pak) + " moved to the Recycle Bin (its Undo ended).");
             }

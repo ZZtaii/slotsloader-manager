@@ -56,6 +56,7 @@ namespace SlotsInstaller
         private static Fixture Create(string root)
         {
             var fixture=new Fixture {Root=root,Source=Path.Combine(root,"source"),CostumeRoot=Path.Combine(root,"game","reframework","costume_mods")};
+            Put(Path.Combine(root,"game"),"StreetFighter6.exe","synthetic fixture executable");
             Put(fixture.Source,"modinfo.ini","name=Recovery fixture\n"); Put(fixture.Source,Mesh,"source mesh marker"); Put(fixture.Source,Material,"source material marker");
             ModPackage package=PackageReader.Load(fixture.Source,""); fixture.Plan=Composer.Plan(package,Composer.DefaultSelection(package));
             fixture.Installed=Installer.Install(fixture.Plan,fixture.CostumeRoot,"Ingrid","Recovery fixture","",false).Folder;
@@ -102,6 +103,7 @@ namespace SlotsInstaller
         }
         private static void Junctions(string root)
         {
+            if (LinuxPlatform.IsLinux) throw new FixtureUnavailableException("Windows junction creation is unavailable under Wine; Linux symbolic-link containment is covered by the native host tests.");
             Fixture fixture=Create(root); RecoveryEntry entry=Trash(fixture);
             string protectedRoot=Path.Combine(root,"protected"); Put(protectedRoot,"keep.txt","protected sentinel");
             string link=Path.Combine(entry.Folder,"j");

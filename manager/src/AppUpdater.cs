@@ -131,6 +131,7 @@ namespace SlotsInstaller
         // Copies source's 7 files into appDir; previous (when not null) receives the current 7 first.
         internal static void Apply(string appDir, string source, string previous, string fromVersion, string toVersion, string dataDir)
         {
+            if (LinuxPlatform.IsLinux) throw new IOException(LinuxPlatform.UpdateMessage);
             appDir = Path.GetFullPath(appDir);
             if (ReleaseFiles.Any(f => !File.Exists(Path.Combine(source, f)))) throw new IOException("The files to install are incomplete (" + source + ").");
             // Writable? (a probe file, removed again)

@@ -1007,6 +1007,7 @@ namespace SlotsInstaller
         private static string RunAppCli(string app, params string[] args)
         {
             var info = new System.Diagnostics.ProcessStartInfo(Path.Combine(app, "Slotsloader CLI.exe"), String.Join(" ", args.Select(a => "\"" + a + "\""))) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = app };
+            if (LinuxPlatform.IsLinux && args.Length == 1 && args[0] == "replace-status") info.EnvironmentVariables["SLOTSLOADER_LINUX_READONLY_CHILD"] = "1";
             using (var p = System.Diagnostics.Process.Start(info))
             {
                 var error = p.StandardError.ReadToEndAsync();
@@ -1089,14 +1090,14 @@ namespace SlotsInstaller
             Require(System.Text.RegularExpressions.Regex.Matches(log, System.Text.RegularExpressions.Regex.Escape("Relocation: " + statePath + ": ")).Count == 1, "the rebase must be logged once per load: " + log);
             SameSnapshot(installed, Snapshot(f.Game), "replace-status after the move");
 
-            bool cli = !RealGameOrFluffyRunning;   // the CLI child sees the real processes; with SF6 or Fluffy open the changes run in-process
+            bool cli = !LinuxPlatform.IsLinux && !RealGameOrFluffyRunning;   // a Linux write child would need its own native session; run those operations in the owning fixture process
             ReplaceEngine moved = AppEngine(f, newData);
             if (cli)
             {
                 string first = RunAppCli(newApp, "replace-uninstall", "Cammy Colors");
                 Require(first.StartsWith("0\n") && first.Contains("Manager folder moved") && first.Contains("Uninstalled 'Cammy Colors'"), "uninstall from the new folder: " + first);
             }
-            else { Console.WriteLine("NOTE relocation: SF6 or Fluffy is running; uninstalls run in-process from the moved Data."); Require(moved.PersistRelocation() != null, "PersistRelocation"); moved.Uninstall(a.Id); }
+            else { Console.WriteLine("NOTE relocation: uninstalls run in the owning fixture process from the moved Data."); Require(moved.PersistRelocation() != null, "PersistRelocation"); moved.Uninstall(a.Id); }
             s = moved.LoadState();
             OnlyUnder(s, newData, "after the first change");
             Require(!File.ReadAllText(statePath).Contains(JsonPath(oldApp)), "replace-state.json still names the old folder");

@@ -74,13 +74,21 @@ namespace SlotsInstaller
             return m;
         }
         private string trashWarning;
+        internal static Action<TrashMove> BeforeRemovedMove;   // fixture fault injection; normally null
 
         private void MoveToRemoved(TrashMove move)
         {
             if (!Directory.Exists(move.From)) return;
             Directory.CreateDirectory(move.To);
             DurableFile.Write(Path.Combine(move.To, "record.json"), Encoding.UTF8.GetBytes(move.RecordJson));
+            if (LinuxPlatform.IsLinux)
+            {
+                ReplaceRemovedRecord record = Json.Serializer().Deserialize<ReplaceRemovedRecord>(move.RecordJson);
+                if (record != null && record.Mod != null && !SourceExists(record.Mod.SourcePath))
+                    DurableFile.Write(Path.Combine(move.To, LinuxTrashPendingMarker), Encoding.UTF8.GetBytes("Source missing: retain until native Trash succeeds.\n"));
+            }
             string files = Path.Combine(move.To, "files");
+            if (BeforeRemovedMove != null) BeforeRemovedMove(move);
             if (!Directory.Exists(files)) Directory.Move(move.From, files);
         }
 
@@ -246,6 +254,7 @@ namespace SlotsInstaller
             {
                 foreach (RemovedReplacement c in PruneCandidates(ListRemoved(), keep, nowUtc))
                 {
+                    if (LinuxPlatform.IsLinux && File.Exists(Path.Combine(c.Folder, LinuxTrashPendingMarker))) continue;
                     try { DeleteRemoved(c.Folder); result.Deleted++; result.Bytes += c.Bytes; result.Folders.Add(c.Folder); }
                     catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
                 }

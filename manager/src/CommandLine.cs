@@ -198,6 +198,22 @@ namespace SlotsInstaller
 
     internal static class CommandLineProgram
     {
-        [STAThread] private static int Main(string[] args) { return CommandLine.Run(args); }
+        [STAThread] private static int Main(string[] args)
+        {
+            Program.Headless = true; int code = 1;
+            try
+            {
+                if (args.Length == 2 && args[0] == "--linux-runtime-probe") { code = LinuxPlatform.RuntimeProbe(args[1]); return code; }
+                if (args.Length == 2 && args[0] == "--linux-check") { code = LinuxPlatformChecks.Run(args[1]); return code; }
+                // A diagnostic child of the fixture runner shares its authenticated helper,
+                // but must never end or renew the owning application's session.
+                if (LinuxPlatform.IsLinux && args.Length == 1 && args[0] == "replace-status" && Environment.GetEnvironmentVariable("SLOTSLOADER_LINUX_READONLY_CHILD") == "1") LinuxPlatform.Status();
+                else LinuxPlatform.Initialize();
+                if (LinuxPlatform.IsLinux) RecycleBin.Current = new LinuxRecycleBin();
+                code = CommandLine.Run(args); return code;
+            }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
+            finally { Environment.ExitCode = code; LinuxPlatform.Shutdown(code); }
+        }
     }
 }

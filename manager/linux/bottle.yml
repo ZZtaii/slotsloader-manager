@@ -1,0 +1,13 @@
+# Public Bottles custom-environment recipe. Bottles resolves its current runner.
+# .NET Framework is downloaded by Bottles from its dependency catalogue.
+Parameters:
+  dxvk: false
+  vkd3d: false
+  dxvk_nvapi: false
+  gamemode: false
+  esync: false
+  fsync: false
+  virtual_desktop: false
+  custom_dpi: 96
+Installed_Dependencies:
+  - dotnet48

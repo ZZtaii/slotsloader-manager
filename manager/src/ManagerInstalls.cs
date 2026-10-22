@@ -38,6 +38,7 @@ namespace SlotsInstaller
                 if (String.IsNullOrEmpty(gameRoot) || state == null || !Directory.Exists(Folder(gameRoot))) return false;
                 string path = FilePath(gameRoot), text = Text(state, DateTime.UtcNow);
                 if (File.Exists(path) && SameContent(File.ReadAllText(path, Encoding.UTF8), text)) return false;
+                if (LinuxPlatform.IsLinux) { LinuxPlatform.RequireClosed("sync the installed-mod list"); LinuxPlatform.CanonicalRoot(gameRoot, "game"); Safety.NoReparseChain(path); }
                 DurableFile.Write(path, new UTF8Encoding(false).GetBytes(text));
                 return true;
             }

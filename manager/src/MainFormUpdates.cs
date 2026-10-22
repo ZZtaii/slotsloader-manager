@@ -89,6 +89,7 @@ namespace SlotsInstaller
             string loaderPart = loader != null ? "Slotsloader " + loader.Version + " (you have " + UpdateCheck.ShortVersion(installed) + ")"
                 : installed != null ? "Slotsloader " + UpdateCheck.ShortVersion(installed)
                 : "Slotsloader not installed by the Manager" + (r.Loader != null ? " (newest " + r.Loader.Version + ")" : "");
+            if (LinuxPlatform.IsLinux) return "Linux package " + running + " · " + loaderPart + ". Update the app through its Linux installer.";
             string managerPart = "Manager " + (manager != null ? manager.Version + " (you have " + running + ")" : running);
             int updates = (loader != null ? 1 : 0) + (manager != null ? 1 : 0);
             string lead = updates == 2 ? "Updates available" : updates == 1 ? "Update available" : installed != null ? "Up to date" : "Manager up to date";
@@ -172,7 +173,7 @@ namespace SlotsInstaller
         {
             if (String.IsNullOrEmpty(url) || !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return;
             if (OpenUrlHook != null) { OpenUrlHook(url); return; }
-            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { Error(ex); }
+            try { if (LinuxPlatform.IsLinux) LinuxPlatform.OpenUrl(url); else Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { Error(ex); }
         }
 
         // ---- SlotsLoader update: download + verify, then the tool-mod install in Replace mode, in place.
@@ -217,6 +218,7 @@ namespace SlotsInstaller
         // ---- Manager self-update.
         private void StartManagerUpdate(ReleaseOffer offer)
         {
+            if (LinuxPlatform.IsLinux) { SetPageStatus(currentPage, LinuxPlatform.UpdateMessage, Palette.Accent); return; }
             if (busy) { SetPageStatus(currentPage, "Wait for the current task to finish.", Palette.Red); return; }
             string data = AppConfig.DataDir, downloads = LoaderRelease.DownloadDir;
             Work("Downloading Slotsloader Manager " + offer.Version + "…", delegate
@@ -259,7 +261,7 @@ namespace SlotsInstaller
             settingsUpdateSkipped = new NoteLabel { Height = 0, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdateSkipped" };
             add(settingsUpdateSkipped);
             add(Rhythm.Gap(Rhythm.Group));
-            add(new NoteLabel { Height = 26, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdatePrivacy", Text = "Checks GitHub (" + LoaderPin.Repo + ") once a day. Nothing installs without your OK." });
+            add(new NoteLabel { Height = LinuxPlatform.IsLinux ? 52 : 26, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdatePrivacy", Text = "Checks GitHub (" + LoaderPin.Repo + ") once a day. Nothing installs without your OK." + (LinuxPlatform.IsLinux ? " Update the app using its Linux installer; Slotsloader updates work here." : "") });
             panel.Controls.Add(column);
             return panel;
         }

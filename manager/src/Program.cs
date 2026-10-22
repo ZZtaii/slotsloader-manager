@@ -14,9 +14,20 @@ namespace SlotsInstaller
         [STAThread]
         private static int Main(string[] args)
         {
+            int code = 1;
+            try { code = Run(args); Environment.ExitCode = code; return code; }
+            finally { LinuxPlatform.Shutdown(code); }
+        }
+
+        private static int Run(string[] args)
+        {
             try
             {
-                if (args.Length > 0 && CommandLine.Handles(args[0])) { Headless = true; return CommandLine.Run(args); }
+                if (args.Length == 2 && args[0] == "--linux-runtime-probe") { Headless = true; return LinuxPlatform.RuntimeProbe(args[1]); }
+                if (args.Length == 2 && args[0] == "--linux-check") { Headless = true; return LinuxPlatformChecks.Run(args[1]); }
+                LinuxPlatform.Initialize();
+                if (LinuxPlatform.IsLinux) RecycleBin.Current = new LinuxRecycleBin();
+                if (args.Length > 0 && CommandLine.Handles(args[0])) { Headless = true; Environment.ExitCode = CommandLine.Run(args); return Environment.ExitCode; }
                 Headless = args.Length > 0 && args[0].StartsWith("--") && args[0] != "--open";
                 // 1.0.1: the checks never use the real Recycle Bin (uninstall recycles source-less mods); --delete-check has its own stub.
                 if (Headless && args[0] != "--delete-check") RecycleBin.Current = new CheckRecycleBin();

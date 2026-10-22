@@ -44,6 +44,7 @@ namespace SlotsInstaller
                 Library.ClearIdentityCache();
                 costumeRoot = Path.Combine(root, "sandbox-game", "reframework", "costume_mods");
                 Directory.CreateDirectory(costumeRoot);
+                File.WriteAllText(Path.Combine(root, "sandbox-game", "StreetFighter6.exe"), "synthetic fixture executable");
                 sevenZip = @"C:\Program Files\7-Zip\7z.exe";
                 simpleSource = MakeSimpleDirectory(Path.Combine(library, "Simple Ingrid"));
                 simplePackage = PackageReader.Load(simpleSource, sevenZip);

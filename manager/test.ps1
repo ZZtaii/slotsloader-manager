@@ -19,6 +19,7 @@ $realJuri = if ($local -and $local.Archives.juri) { $local.Archives.juri } else 
 New-Item -ItemType Directory -Path (Join-Path $OutputDirectory 'Data') -Force | Out-Null
 @{ GameRoot = (Join-Path $testFixtures 'game'); Libraries = @(); SevenZipPath = 'C:\Program Files\7-Zip\7z.exe' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory 'Data\settings.json') -Encoding UTF8
 $testCases = @(
+    @{ Name='linux'; Arguments=@('--linux-check', ('"' + (Join-Path $OutputDirectory 'linux-check') + '"')) },
     @{ Name='generated'; Arguments=@('--self-test-extra', ('"' + $testFixtures + '"')) },
     @{ Name='outfit-sets'; Arguments=@('--set-check', ('"' + $testFixtures + '"')) },
     @{ Name='outfit-set-ui'; Arguments=@('--set-ui-check', ('"' + $testFixtures + '"')) },

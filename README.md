@@ -2,6 +2,11 @@
 
 A Windows mod manager with faster search, more utility and safer installs. Currently optimized for Street Fighter 6.
 
+An **experimental Linux / Steam Deck Desktop Mode build** uses the same interface
+through a dedicated Bottles runtime. See the [Linux setup guide](manager/linux/README.md).
+Real Steam Deck and SF6 gameplay acceptance remain volunteer checks; use the
+complete Linux test package and its [validation notes](manager/docs/LINUX-VALIDATION.md).
+
 ![Slotsloader Manager: the mod library filtered to Cammy, with a mod's preview, author and install options](docs/images/slotsloader-manager.webp)
 
 This repo also includes **Slotsloader**, the SF6 loader that allows mods to be installed on extra costume slots
@@ -45,6 +50,7 @@ When there's an update, a small notice shows up in the app. Nothing installs unt
 
 - **Slotsloader:** Visual Studio 2022 (or Build Tools) with the C++ workload, then run `build.bat`. There's also a Linux cross-build with llvm-mingw in [docs/BUILD-CUSTOM.md](docs/BUILD-CUSTOM.md). Tests are in [tests/README.md](tests/README.md).
 - **Slotsloader Manager:** .NET Framework 4.8 (C# 5, no NuGet). Build with `manager\build.ps1` and test with `manager\test.ps1`. `manager\tools\Package-Release.ps1` builds the release zip with the newest published loader inside.
+- **Linux test package:** after building and testing Manager, use `manager/tools/Package-Linux.ps1` with the tested build, pinned loader and 7-Zip archives, and a validation report. See the [implementation plan](manager/docs/LINUX-IMPLEMENTATION-PLAN.md) and [native checks](manager/linux/README.md#advanced-testing).
 
 ## Community
 

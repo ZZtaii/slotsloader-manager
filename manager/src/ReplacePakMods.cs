@@ -62,10 +62,12 @@ namespace SlotsInstaller
             if (!Directory.Exists(GameRoot)) return filled;
             var present = new HashSet<int>(Directory.EnumerateFiles(GameRoot, "re_chunk_000.pak.patch_*.pak").Select(f => PatchNumber(Path.GetFileName(f))).Where(n => n > 0));
             int top = present.DefaultIfEmpty(0).Max();
+            if (top > 1 && Enumerable.Range(1, top - 1).Any(n => !present.Contains(n))) LinuxPlatform.RequireClosed("repair missing patch PAKs");
             for (int n = 1; n < top; n++)
             {
                 if (present.Contains(n)) continue;
                 string full = GamePath(PatchPakName(n)), tmp = full + ".slotsinstaller-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";
+                Safety.NoReparseChain(full); Safety.NoReparseChain(tmp);
                 File.WriteAllBytes(tmp, FluffyDummyPak);
                 try { File.Move(tmp, full); filled.Add(n); }
                 catch (IOException) { try { File.Delete(tmp); } catch { } if (!File.Exists(full)) throw; }   // another tool wrote it meanwhile

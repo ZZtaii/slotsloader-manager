@@ -68,6 +68,12 @@ namespace SlotsInstaller
             string storeB = Path.Combine(f.Data, "store", b.Id), pending = f.Engine.TrashPendingPath;
             string held = Directory.GetFiles(storeB, "*", SearchOption.AllDirectories).First();
             string message, folder;
+            Action<TrashMove> failMove = delegate { throw new IOException("Access denied: fixture removed-copy move"); };
+            // Unix permits renaming an open directory. Inject the same I/O failure at the
+            // move boundary there, so recovery is still tested rather than skipped.
+            if (LinuxPlatform.IsLinux) ReplaceEngine.BeforeRemovedMove = failMove;
+            try
+            {
             using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
                 message = f.Engine.Uninstall(b.Id, true, out folder);
@@ -78,6 +84,8 @@ namespace SlotsInstaller
                 string again = new ReplaceEngine(f.Game, f.Data, f.Engine.Settings).RetryTrash();
                 Require(again != null && again.StartsWith(ReplaceEngine.TrashFailedStart) && File.Exists(pending), "retry while locked: " + again);
             }
+            }
+            finally { ReplaceEngine.BeforeRemovedMove = null; }
             // The next start (a new engine, as the window's LoadGameRows or the CLI): moved, listed, restorable.
             var next = new ReplaceEngine(f.Game, f.Data, f.Engine.Settings); next.FluffyProvider = f.Engine.FluffyProvider;
             string done = next.RetryTrash();
@@ -86,8 +94,13 @@ namespace SlotsInstaller
             ReplaceMod back; next.RestoreRemoved(folder, out back);
             Require(next.LoadState().Mods.Select(m => m.Id).SequenceEqual(new[] { b.Id, a.Id }), "restore after the retry: " + String.Join(",", next.LoadState().Mods.Select(m => m.Name)));
             // A pending move is also finished by the next change (before every change, any process).
-            using (new FileStream(Directory.GetFiles(storeB, "*", SearchOption.AllDirectories).First(), FileMode.Open, FileAccess.Read, FileShare.Read))
-                message = next.Uninstall(b.Id, true, out folder);
+            if (LinuxPlatform.IsLinux) ReplaceEngine.BeforeRemovedMove = failMove;
+            try
+            {
+                using (new FileStream(Directory.GetFiles(storeB, "*", SearchOption.AllDirectories).First(), FileMode.Open, FileAccess.Read, FileShare.Read))
+                    message = next.Uninstall(b.Id, true, out folder);
+            }
+            finally { ReplaceEngine.BeforeRemovedMove = null; }
             Require(message.Contains(ReplaceEngine.TrashFailedStart) && File.Exists(pending), "second failure: " + message);
             next.SetEnabled(a.Id, false);
             Require(!File.Exists(pending) && next.ListRemoved().Any(r => String.Equals(r.Folder, folder, StringComparison.OrdinalIgnoreCase)), "the next change did not finish the pending move");

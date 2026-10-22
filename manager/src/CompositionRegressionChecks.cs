@@ -49,6 +49,8 @@ namespace SlotsInstaller
         private static void InstallAndCheck(CompositionPlan plan,string root,string expectedMaterial)
         {
             Require(plan.CanInstall,"Valid fixture was rejected: "+Errors(plan));
+            Directory.CreateDirectory(Path.Combine(root,"game"));
+            File.WriteAllText(Path.Combine(root,"game","StreetFighter6.exe"),"synthetic fixture executable");
             var result=Installer.Install(plan,Path.Combine(root,"game","reframework","costume_mods"),"Ingrid","Fixture outfit","",false);
             Require(File.ReadAllText(Safety.Under(result.Folder,Material))==expectedMaterial,"Installed material did not match the winning source component.");
             Require(result.FileCount==plan.Files.Count,"Installed file count differs from reviewed composition.");

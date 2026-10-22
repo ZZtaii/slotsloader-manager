@@ -88,6 +88,7 @@ namespace SlotsInstaller
             List<PatchPak> paks = Scan(gameRoot);
             var ours = paks.Where(p => p.Kind == PatchPakKind.Costume).ToList();
             if (ours.Count == 0) return "";
+            LinuxPlatform.RequireClosed("remove the generated costume PAK");
             // 1.0.1: an unreadable pak (locked, in use) counts as foreign: deleting ours below it would leave a gap.
             int topForeign = paks.Where(p => p.Kind == PatchPakKind.Mod || p.Kind == PatchPakKind.Unreadable || (p.Kind == PatchPakKind.Stage && p.Entries != 1)).Select(p => p.Number).DefaultIfEmpty(0).Max();
             var removed = new List<string>(); var kept = new List<string>(); var failed = new List<string>();
@@ -114,6 +115,7 @@ namespace SlotsInstaller
         internal static void WritePlaceholder(string path)
         {
             string tmp = path + ".tmp";
+            Safety.NoReparseChain(path); Safety.NoReparseChain(tmp);
             if (File.Exists(tmp)) File.Delete(tmp);
             PakWriter.WriteFixture(tmp, new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>(CostumeMarker, MarkerBytes) }, 0, 0);
             DurableFile.Publish(tmp, path);
@@ -126,9 +128,10 @@ namespace SlotsInstaller
             try
             {
                 if (!File.Exists(path)) return false;
+                Safety.NoReparseChain(path);
                 string text = File.ReadAllText(path);
                 string next = Regex.Replace(text, "(\"fingerprint\"\\s*:\\s*\")[^\"]*(\")", "$1$2");
-                if (next != text) File.WriteAllText(path, next, new UTF8Encoding(false));
+                if (next != text) { Safety.NoReparseChain(path); File.WriteAllText(path, next, new UTF8Encoding(false)); }
                 return true;
             }
             catch (Exception ex) { if (ex is IOException || ex is UnauthorizedAccessException) { Program.Log(ex); return false; } throw; }
@@ -201,6 +204,8 @@ namespace SlotsInstaller
                 if (name == null || String.IsNullOrEmpty(gameRoot) || !Directory.Exists(Path.Combine(gameRoot, "reframework"))) return false;
                 string folder = Path.Combine(gameRoot, TargetFolder), target = Path.Combine(folder, name);
                 if (File.Exists(target)) return false;
+                LinuxPlatform.RequireClosed("change Slotsloader settings");
+                Safety.NoReparseChain(target);
                 Directory.CreateDirectory(folder);
                 using (File.Create(target)) { }
                 Program.LogLine("Owned-outfit opt-out marker restored.");

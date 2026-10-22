@@ -38,6 +38,7 @@ namespace SlotsInstaller
 
         internal const double DimOpacity = 0.65;   // the user: the window behind faded well back
         internal const string Title = "Welcome to Slotsloader Manager (SLM)";
+        internal static string PointText(string text) { return LinuxPlatform.IsLinux ? text.Replace("→", ">") : text; }
         private readonly WelcomePage page;
         private readonly PictureBox logo;
         private readonly FlatButton next;
@@ -72,7 +73,7 @@ namespace SlotsInstaller
             var header = new Panel { Dock = DockStyle.Top, Height = 32, Padding = new Padding(0, 3, 0, 3) };
             logo = new PictureBox { Dock = DockStyle.Left, Width = 20, SizeMode = PictureBoxSizeMode.CenterImage, Name = "welcomeIcon" };
             var title = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11F, FontStyle.Bold), ForeColor = Palette.Text, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, Text = Title, Name = "welcomeTitle", Padding = new Padding(8, 0, 0, 0) };
-            var dismiss = new FlatButton("✕", false) { Width = 26, Padding = Padding.Empty, Dock = DockStyle.Right, Font = Palette.Tiny, Name = "welcomeDismiss", AccessibleName = "Close the welcome" }; dismiss.Click += delegate { Close(); };
+            var dismiss = new FlatButton(LinuxPlatform.IsLinux ? "x" : "✕", false) { Width = 26, Padding = Padding.Empty, Dock = DockStyle.Right, Font = Palette.Tiny, Name = "welcomeDismiss", AccessibleName = "Close the welcome" }; dismiss.Click += delegate { Close(); };
             header.Controls.Add(title); header.Controls.Add(logo); header.Controls.Add(dismiss);
             page = new WelcomePage { Dock = DockStyle.Fill, Name = "welcomePage" };
             page.IndexChanged += delegate { UpdateButtons(); };
@@ -164,7 +165,7 @@ namespace SlotsInstaller
         {
             WelcomeForm.Topic t = WelcomeForm.Topics[index];
             AccessibleName = t.Tab + ": " + t.Title;
-            AccessibleDescription = t.Lead + " " + String.Join(" ", t.Points);
+            AccessibleDescription = t.Lead + " " + String.Join(" ", t.Points.Select(WelcomeForm.PointText));
         }
 
         private int Px(int logical) { return DpiMetrics.Px(this, logical); }
@@ -208,10 +209,11 @@ namespace SlotsInstaller
             y += h + Px(14);
             for (int k = 0; k < t.Points.Length; k++)
             {
+                string point = WelcomeForm.PointText(t.Points[k]);
                 bool card = k == t.Highlight;
                 int inset = card ? Px(16) : 0, bullet = Px(22), textLeft = inset + bullet, textWidth = width - textLeft - inset;
                 int top = y + (card ? Px(8) : 0), textTop = top + Px(card ? 14 : 12), badge = card ? Px(20) : 0;
-                int textHeight = TextRenderer.MeasureText(g, t.Points[k], Body, new Size(textWidth, Int32.MaxValue), Wrap).Height;
+                int textHeight = TextRenderer.MeasureText(g, point, Body, new Size(textWidth, Int32.MaxValue), Wrap).Height;
                 int bottom = textTop + badge + textHeight + Px(card ? 14 : 12);
                 if (draw)
                 {
@@ -226,7 +228,7 @@ namespace SlotsInstaller
                         using (var line = new SolidBrush(Palette.Border)) g.FillRectangle(line, 0, y, width, Math.Max(1, Px(1)));
                     int dot = Px(6);
                     using (var accent = new SolidBrush(Palette.Accent)) g.FillEllipse(accent, inset + Px(3), textTop + badge + Px(9), dot, dot);
-                    TextRenderer.DrawText(g, t.Points[k], Body, new Rectangle(textLeft, textTop + badge, textWidth, textHeight), Palette.Text, Wrap);
+                    TextRenderer.DrawText(g, point, Body, new Rectangle(textLeft, textTop + badge, textWidth, textHeight), Palette.Text, Wrap);
                 }
                 y = bottom + (card ? Px(8) : 0);
             }
