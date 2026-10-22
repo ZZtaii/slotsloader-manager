@@ -37,6 +37,8 @@ namespace SlotsInstaller
         public bool DeepSearch;
         // 1.0.8: MY FILTERS chips showing only their matches / hiding them, by filter id (LibraryFilters.cs).
         public List<string> FiltersOnly = new List<string>(), FiltersHidden = new List<string>();
+        // 1.0.11: the welcome (WelcomeForm) was shown; missing in older files, so updating users see it once too.
+        public bool WelcomeSeen;
         internal static ViewPreferences Load(string file)
         {
             try
@@ -226,6 +228,9 @@ namespace SlotsInstaller
             {
                 if (!Program.Headless && screenshotFile==null) { RestoreSplitters(); rememberView=true; }
                 if (firstLoad) { firstLoad = false; if (screenshotFile != null && !screenshotAvailableSize) ClientSize = new Size(Px(1460), Px(920)); RefreshLibrary(); }
+                // 1.0.11: the welcome once, over the opened window (marked seen first, so a crash doesn't bring it back).
+                if (rememberView && viewPreferences != null && !viewPreferences.WelcomeSeen)
+                    BeginInvoke((MethodInvoker)delegate { viewPreferences.WelcomeSeen = true; SaveView(); WelcomeForm.ShowWelcome(this); });
             };
             FormClosing += delegate { SaveView(); if (assistantPage != null) assistantPage.Shutdown(); };
             FormClosed += delegate { if (filterMatchCancel != null) filterMatchCancel.Cancel(); ClearPreviewCache(); if (previewImage != null) previewImage.Dispose(); if (hoverTimer != null) hoverTimer.Dispose(); if (portraitLoad != null) portraitLoad.Cancel(); };
@@ -355,7 +360,8 @@ namespace SlotsInstaller
                 Fighters=filterPanel.Grid.Selected.OrderBy(c=>c,StringComparer.Ordinal).ToList(),
                 Kinds=new[]{FilterPanel.ToolsKind,FilterPanel.MiscKind}.Where(k=>filterPanel.Kinds.Selected.Contains(k)).ToList(),SelectedLibraries=filterPanel.LibrariesSelected.OrderBy(k=>k,StringComparer.OrdinalIgnoreCase).ToList(),MiscAreas=MiscKindsSelectedOrPending().ToList(),
                 LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,
-                FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide)
+                FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide),
+                WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen
             };
         }
         // Older builds read one character name; keep it meaningful when exactly one fighter is selected.
@@ -503,6 +509,7 @@ namespace SlotsInstaller
                 if (item.Action == ShortcutAction.AssistantPage) assistantShortcutItem = entry;
             }
             toolsMenu.Items.Add(shortcutsItem);
+            toolsMenu.Items.Add("Welcome", null, delegate { WelcomeForm.ShowWelcome(this); });   // 1.0.11: the start-up welcome again
             toolsMenu.Items.Add("About", null, delegate { ShowPage(settingsPage); LoadSettingsFields(); ShowAboutTab(); });   // 2.5.9: Settings → About
             RoomyMenu(toolsMenu); RoomyMenu(shortcutsMenu); RoomyMenu(restoreMenu);   // 1.0.1: larger text and taller rows (the user)
             toolsMenu.Opening+=delegate {if (assistantShortcutItem != null) assistantShortcutItem.Visible = assistantTabShown;};

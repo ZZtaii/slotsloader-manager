@@ -858,8 +858,9 @@ namespace SlotsInstaller
             ToolStripMenuItem settingsItem = menu.Items.OfType<ToolStripMenuItem>().FirstOrDefault(i => i.Text.StartsWith("Settings", StringComparison.OrdinalIgnoreCase));
             Require(settingsItem != null && settingsItem.Enabled, context + ": Settings menu item is unavailable.");
             // 2.5.9: gear menu without Open costume folder, Refresh libraries and Import external preset; About at the end opens Settings → About.
+            // 1.0.11: Welcome (the start-up welcome) before it.
             string[] gearItems = menu.Items.OfType<ToolStripMenuItem>().Select(i => i.Text).ToArray();
-            Require(gearItems.SequenceEqual(new[] { "Settings…", "History", "Restore", "Keyboard shortcuts", "About" }), context + ": gear menu items: " + String.Join(" | ", gearItems));
+            Require(gearItems.SequenceEqual(new[] { "Settings…", "History", "Restore", "Keyboard shortcuts", "Welcome", "About" }), context + ": gear menu items: " + String.Join(" | ", gearItems));
             ToolStripMenuItem aboutItem = menu.Items.OfType<ToolStripMenuItem>().Last();
             aboutItem.PerformClick(); menu.Close(); Application.DoEvents(); LayoutChildren(layoutHost);
             Panel aboutPanel = ControlField<Panel>(form, "settingsAboutPanel");

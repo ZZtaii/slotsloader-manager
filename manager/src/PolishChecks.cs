@@ -61,6 +61,7 @@ namespace SlotsInstaller
                         CheckNoTooltips(form, report);
                         CheckPopupAllowList(report);
                         CheckOldErrors(form, report);
+                        CheckWelcome(form, root, report);
                         form.Close();
                     }
                     if (!String.IsNullOrWhiteSpace(realArchive) && File.Exists(realArchive)) CheckRealRequired(realArchive, report);
@@ -407,9 +408,10 @@ namespace SlotsInstaller
             "MainForm.ConfirmVanilla",      // 1.0.1: Restore game to vanilla removes every mod for good (no Undo)
         };
         // 2.4.1: modal windows (Form.ShowDialog). Each is opened by the user's own click to view or edit something,
-        // except OutfitSetsForm.Confirm (a saved copy deleted for good, no Undo). Nothing opens one on its own.
+        // except OutfitSetsForm.Confirm (a saved copy deleted for good, no Undo). Only the welcome opens on its own, once.
         internal static readonly string[] WindowAllowList =
         {
+            "WelcomeForm.ShowWelcome",      // 1.0.11 the welcome: once at the first start, then gear → Welcome (Esc / Close)
             "AddPartsForm.Choose",          // 1.0.6 Add to outfit…: pick the installed outfit and the parts (Cancel changes nothing)
             "FluffyPresetForm.Review",      // Import Fluffy preset: map each entry before anything installs (Cancel installs nothing)
             "MainForm.EnlargePreview",      // the preview image, enlarged (click the preview)
@@ -431,6 +433,33 @@ namespace SlotsInstaller
             var gone = PopupAllowList.Where(s => !sites.Contains(s)).ToList();
             Require(unexpected.Count == 0, "popup call sites outside the allow-list: " + String.Join(", ", unexpected));
             report.Add("PASS: popups only on the allow-list (" + sites.Count + " call sites: " + String.Join(", ", sites) + ")" + (gone.Count > 0 ? "; allow-list entries no longer used: " + String.Join(", ", gone) : ""));
+        }
+
+        // 1.0.11 welcome: three topics (tabs, arrows, Back / Next / Done), sized for the tallest topic so nothing is cut;
+        // never opens by itself in a headless window. Renders each topic for review.
+        private static void CheckWelcome(MainForm form, string root, List<string> report)
+        {
+            Require(Application.OpenForms.OfType<WelcomeForm>().Count() == 0, "the welcome opened by itself in a check window");
+            using (var welcome = new WelcomeForm())
+            {
+                welcome.ShowInTaskbar = false; welcome.Opacity = 0; welcome.Show(form); Application.DoEvents();
+                var page = (WelcomePage)welcome.Controls.Find("welcomePage", true).Single();
+                Func<string, FlatButton> button = delegate(string name) { return (FlatButton)welcome.Controls.Find(name, true).Single(); };
+                Require(page.Height >= page.TallestHeight(), "welcome cut short: " + page.Height + " < " + page.TallestHeight());
+                for (int i = 0; i < WelcomeForm.Topics.Length; i++)
+                {
+                    bool last = i == WelcomeForm.Topics.Length - 1;
+                    Require(welcome.Index == i && button("welcomeBack").Visible == (i > 0) && button("welcomeClose").Visible == !last && button("welcomeNext").Text == (last ? "Done" : "Next"), "welcome topic " + i + " buttons");
+                    Require(page.AccessibleName == WelcomeForm.Topics[i].Tab + ": " + WelcomeForm.Topics[i].Title, "welcome accessible name: " + page.AccessibleName);
+                    using (var b = new Bitmap(welcome.Width, welcome.Height)) { welcome.DrawToBitmap(b, new Rectangle(Point.Empty, b.Size)); b.Save(Path.Combine(root, "welcome-" + (i + 1) + "-" + welcome.DeviceDpi + ".png"), ImageFormat.Png); }
+                    if (!last) button("welcomeNext").PerformClick(); Application.DoEvents();
+                }
+                page.Index = 0; Application.DoEvents();
+                Require(welcome.Index == 0 && !button("welcomeBack").Visible, "welcome back to the first topic");
+                button("welcomeNext").PerformClick(); button("welcomeNext").PerformClick(); button("welcomeNext").PerformClick(); Application.DoEvents();
+                Require(welcome.IsDisposed || !welcome.Visible, "Done did not close the welcome");
+            }
+            report.Add("PASS: welcome (1.0.11): three topics with tabs, Back / Next / Done and Close; sized to the tallest topic; never opens by itself in a check window; renders welcome-1..3.png.");
         }
 
         private static void CheckNoTooltips(MainForm form, List<string> report)
