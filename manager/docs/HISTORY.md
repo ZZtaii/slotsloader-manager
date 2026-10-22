@@ -1,6 +1,6 @@
 # Development history
 
-## Unreleased: installation, options and search
+## 1.0.12: installation, options, search and browsing
 
 - Replacement operations reuse each PAK layout hash within one reconciliation. Live file verification, path checks, ownership, journaling and recovery still run. See [measurements and validation](INSTALL-IMPROVEMENTS.md); the measured improvement is from generated fixtures, not an in-game install.
 - Root alternatives with the same bundle metadata and complete file destinations now appear in a choose-one group, with no guessed default. Queue installation skips an unresolved choice instead of selecting the first option. Independent components and partial overlays keep their existing behavior.

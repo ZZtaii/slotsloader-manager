@@ -1,14 +1,23 @@
-# Slotsloader Manager 1.0.11
+# Slotsloader Manager 1.0.12
 
 A Windows mod manager for your ZIP, RAR, 7Z and folder mod libraries. It is built for Street Fighter 6 (more games are planned), and installs SF6 mods two ways:
 - as **extra outfits** through Slotsloader;
 - by **replacing the original** files the way external mod managers do, including tool mods such as REFramework scripts, plugins and Slotsloader itself.
 
-The title bar shows **Slotsloader Manager · 1.0.11**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
+The title bar shows **Slotsloader Manager · 1.0.12**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
 
 Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .NET Framework 4.8 runs it. RAR/7Z are read with 7-Zip: your installed 7-Zip if you have one, otherwise the Manager's own copy, downloaded into its `7-Zip` folder when first needed. No Blender, Node or Python is required. Game/library paths are in Settings. Your existing mod manager libraries are configured by default. `Data` beside the executable holds settings/cache/view preferences and the backups of replaced game files; preserve it during updates. The whole app folder (executables + `Data`) can be moved or renamed; see **Move the app folder** below.
 
 ## What changed
+
+- 1.0.12:
+  - **Browsing is instant.** Opening a mod no longer shows a progress bar or "Reading…", and the library list keeps taking keys and clicks meanwhile: the mod you stop on opens, and the ones you pass over aren't read. Mods opened this session stay ready while unchanged, and the next RAR or 7Z in the list is read ahead, so arrowing through the library shows the options and preview at once.
+  - **The health check waits until you stop on a mod** (about a second), or starts at once when you point at Install or press Space. The footer shows only the result; a check that takes longer shows "Checking…".
+  - **Choose-one options:** when a mod's top-level options all replace the same files (lighting levels, for example), they are one choice with nothing preselected, and the queue skips the mod until you choose. An install made with all of them keeps the one that won.
+  - **Search `pak`** finds PAK mods on Installed and in the library. With a fighter filter on, mods for that fighter alone come first.
+  - **Faster changes with many replacements:** Enable, Disable, priority moves and installs are several times quicker when many files are installed (about 1,000 files in tests: 9.5 s → 1.8 s).
+  - **Missing saved options are said, not skipped.** When a mod no longer has an option you saved, Reinstall and preset restore stop and ask you to review its options instead of installing without it.
+  - The first start after updating reads each library archive once in the background ("READING n%") to find the PAK mods.
 
 - 1.0.11:
   - **RAR and 7Z mods work without installing 7-Zip.** When 7-Zip isn't installed, the Manager downloads its own (7-Zip 26.00, SHA-256 checked) the first time a RAR or 7Z needs it, into its `7-Zip` folder. An installed 7-Zip is still used first, also when it isn't in `C:\Program Files\7-Zip`, unless it is older than the Manager's copy (7-Zip before 15.06 can't open RAR5 archives). In Settings, the 7-Zip field can stay empty ("Automatic"); the line under it says which 7-Zip is used. A path you chose yourself still comes first; the `C:\Program Files\7-Zip\7z.exe` that earlier versions saved by default counts as Automatic.
