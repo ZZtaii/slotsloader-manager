@@ -276,13 +276,14 @@ namespace SlotsInstaller
                 {
                     ModPackage package = PackageReader.Load(p.SourcePath, sevenZip);
                     List<string> dropped; List<string> ids = MapIds(package, p.SelectedIds, out dropped);
-                    CompositionPlan composition = Composer.Plan(package, ids, true);
+                    if (dropped.Count > 0) throw new IOException("Saved options are missing: " + String.Join(", ", dropped) + ". Review the mod's options.");
+                    CompositionPlan composition = Composer.SavedPlan(package, ids, true);
                     if (!composition.CanInstall) throw new IOException(String.Join(" ", composition.Errors.DefaultIfEmpty("Its options changed.")));
                     ReplacePlan plan;
                     ReplaceMod done = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, p.Name, false, null, out plan);
                     if (done != null) restored[i] = done.Id;
                     result.ReplacementsRestored++;
-                    if (dropped.Count > 0) result.Notes.Add(p.Name + ": options no longer in the mod were left out (" + String.Join(", ", dropped) + ").");
+                    foreach (string note in composition.Warnings.Where(w => w.StartsWith("Saved selection resolves to", StringComparison.Ordinal))) result.Notes.Add(p.Name + ": " + note);
                     string changed = ChangedNote(p.SourceStamp, p.SourcePath); if (changed != null) result.Notes.Add(p.Name + ": " + changed + ".");
                 }
                 catch (Exception ex) { if (Fatal(ex)) throw; result.Notes.Add(p.Name + ": not restored. " + ex.Message); }
@@ -373,10 +374,11 @@ namespace SlotsInstaller
                     {
                         ModPackage package = PackageReader.Load(p.SourcePath, sevenZip);
                         List<string> dropped; List<string> ids = MapIds(package, p.SelectedIds, out dropped);
-                        CompositionPlan plan = Composer.Plan(package, ids);
+                        if (dropped.Count > 0) throw new IOException("Saved options are missing: " + String.Join(", ", dropped) + ". Review the mod's options.");
+                        CompositionPlan plan = Composer.SavedPlan(package, ids, false);
                         if (!plan.CanInstall) throw new IOException(String.Join(" ", plan.Errors.DefaultIfEmpty("Its options changed.")));
                         InstallResult done = Installer.Install(plan, root, p.Character, p.Name, sevenZip, false);
-                        if (dropped.Count > 0) notes.Add("options no longer in the mod were left out (" + String.Join(", ", dropped) + ")");
+                        notes.AddRange(plan.Warnings.Where(w => w.StartsWith("Saved selection resolves to", StringComparison.Ordinal)));
                         foreach (PresetPartPointer part in p.Parts)
                         {
                             string partName = String.IsNullOrWhiteSpace(part.Mod) ? System.IO.Path.GetFileName(part.SourcePath) : part.Mod;
@@ -385,7 +387,11 @@ namespace SlotsInstaller
                             {
                                 InstalledOutfit fresh = Installer.ListInstalled(root).FirstOrDefault(o => String.Equals(System.IO.Path.GetFullPath(o.Folder).TrimEnd('\\'), System.IO.Path.GetFullPath(done.Folder).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase));
                                 if (fresh == null) throw new IOException("the outfit was not found after installing it.");
-                                Installer.AddToOutfit(fresh, root, Installer.SelectionFiles(PackageReader.Load(part.SourcePath, sevenZip), part.SelectedIds), sevenZip);
+                                var partPackage = PackageReader.Load(part.SourcePath, sevenZip);
+                                string partNote;
+                                var partIds = Composer.RestoreSelection(partPackage, part.SelectedIds, out partNote);
+                                Installer.AddToOutfit(fresh, root, Installer.SelectionFiles(partPackage, partIds), sevenZip);
+                                if (partNote.Length > 0) notes.Add(partNote);
                             }
                             catch (Exception ex) { if (Fatal(ex)) throw; notes.Add("the part from " + partName + " was not added: " + ex.Message); }
                         }

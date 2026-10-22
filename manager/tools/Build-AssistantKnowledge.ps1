@@ -1,4 +1,4 @@
-# Builds the Assistant's knowledge pack (embedded in both executables as SlotsInstaller.AssistantKnowledge.md)
+﻿# Builds the Assistant's knowledge pack (embedded in both executables as SlotsInstaller.AssistantKnowledge.md)
 # from the user-facing docs only: README (What changed limited to the two newest versions), docs/HELP.md, the two
 # newest sections of docs/UI-REFERENCE.md, docs/CLI.md, and the Slotsloader repository's README.md and
 # COMPATIBILITY.md. Developer docs (DEVELOPMENT, API, ARCHITECTURE, TESTING, handoffs) are never read.

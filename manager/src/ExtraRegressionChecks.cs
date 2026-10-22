@@ -12,6 +12,7 @@ namespace SlotsInstaller
             root=Path.Combine(root,"run-"+DateTime.UtcNow.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N").Substring(0,8));
             Directory.CreateDirectory(root);
             int failed=CompositionRegressionChecks.Run(root);
+            try { InstallImprovementChecks.Run(Path.Combine(root,"install-improvements")); } catch(Exception ex) { failed++; Console.WriteLine("FAIL install improvements: "+ex); }
             try { foreach(string line in ArchiveRegressionChecks.Run(Path.Combine(root,"archives"))) Console.WriteLine(line); } catch(Exception ex) { failed++; Console.WriteLine("FAIL archive regression: "+ex); }
             try { foreach(string line in LibraryRegressionChecks.Run(Path.Combine(root,"libraries"))) Console.WriteLine(line); } catch(Exception ex) { failed++; Console.WriteLine("FAIL library regression: "+ex); }
             try { LoaderResultChecks.Run(Path.Combine(root,"loader-results")); } catch(Exception ex) { failed++; Console.WriteLine("FAIL loader mapping: "+ex); }

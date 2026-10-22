@@ -19,6 +19,10 @@ namespace SlotsInstaller
         }
         internal static ModPackage Load(string sourcePath, SourceReader r, bool preloadPreviews)
         {
+            using (InstallMetrics.Measure("package parse")) return LoadCore(sourcePath, r, preloadPreviews);
+        }
+        private static ModPackage LoadCore(string sourcePath, SourceReader r, bool preloadPreviews)
+        {
             var p = new ModPackage { SourcePath=Path.GetFullPath(sourcePath),Name=Path.GetFileNameWithoutExtension(sourcePath),Character=Characters.Guess(Path.GetFileName(sourcePath)) };
             var componentsById = new Dictionary<string,ModComponent>(StringComparer.OrdinalIgnoreCase);
             {
@@ -109,6 +113,7 @@ namespace SlotsInstaller
             else if (root != null) p.Name=root.Name;
             if (p.CharacterCodes.Count>0) p.Character=p.CharacterCodes.Count==1 && Characters.ByCode.ContainsKey(p.CharacterCodes[0]) ? Characters.ByCode[p.CharacterCodes[0]] : "";
             if (p.Components.Sum(x=>x.Assets.Count)==0) p.Warnings.Add("This mod has no loose natives files, so it can't be an extra outfit.");
+            RootOptionChoices.Add(p); // after original package naming and source option ordering
             p.PrepareChoices();
             return p;
         }

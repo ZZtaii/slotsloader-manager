@@ -19,7 +19,7 @@ namespace SlotsInstaller
         public long TotalBytes { get { return Files.Values.Sum(x=>x.Asset.Size); } }
         public bool CanInstall { get { return Errors.Count==0 && Files.Count>0; } }
     }
-    public static class Composer
+    public static partial class Composer
     {
         internal static bool IsBase(ModComponent c) { return Regex.IsMatch(c.Name ?? "",@"\b(main\s*(files?)?|base|mandatory|required)\b",RegexOptions.IgnoreCase); }
         public static List<string> DefaultSelection(ModPackage package) { return DefaultSelection(package,false); }
@@ -36,13 +36,22 @@ namespace SlotsInstaller
         // extra-outfit mesh/route rules are skipped: a replacement may be colours or textures only.
         public static CompositionPlan Plan(ModPackage package,IEnumerable<string> selectedIds,bool replaceMode)
         {
+            return PlanCore(package, selectedIds, replaceMode, false);
+        }
+        private static CompositionPlan PlanCore(ModPackage package,IEnumerable<string> selectedIds,bool replaceMode,bool savedWinnerCheck)
+        {
             package.PrepareChoices();
             var p=new CompositionPlan {Package=package,ReplaceMode=replaceMode};
             p.Warnings.AddRange(replaceMode ? package.Warnings.Where(w=>!w.Contains("outside natives and will not be installed") && !w.Contains("no loose natives files")) : package.Warnings);
             var selected=selectedIds.Distinct(StringComparer.OrdinalIgnoreCase).Select(id=>package.Find(id)).ToList();
             if (selected.Any(c=>c==null)) p.Errors.Add("An option no longer exists in this mod. Reload it.");
             p.Layers=selected.Where(c=>c!=null && !c.IsDummy && c.HasFiles(replaceMode)).OrderBy(c=>IsBase(c) ? 0 : 1).ToList();
-            if (p.Layers.Count==0) { p.Errors.Add("Select main files and any required options."); return p; }
+            if (p.Layers.Count==0)
+            {
+                var choices = package.Components.Where(c => c.InferredChoice && package.Components.Any(m => m.ParentId == c.Id && m.HasFiles(replaceMode))).ToList();
+                p.Errors.Add(choices.Count == 0 ? "Select main files and any required options." : "Choose an option in '" + String.Join("' or '", choices.Select(c => c.Name)) + "'.");
+                return p;
+            }
             foreach (ModComponent c in p.Layers)
             {
                 foreach (NativeAsset f in replaceMode ? c.Assets.Concat(c.RootAssets) : c.Assets)
@@ -61,7 +70,7 @@ namespace SlotsInstaller
                 if (!ScopeIsActive(package,group.ParentId,p.Layers) && !p.Layers.Any(c=>IsDescendant(package,c,group))) continue;
                 int count=p.Layers.Where(c=>IsDescendant(package,c,group)).Select(c=>ChoiceBranch(package,c,group))
                     .Where(id=>package.IsChoiceBranch(group,package.Find(id))).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-                if (count>1) p.Errors.Add("Choose one option in '"+group.Name+"'.");
+                if (count>1 && !(savedWinnerCheck && group.InferredChoice)) p.Errors.Add("Choose one option in '"+group.Name+"'.");
                 if (count==0 && group.IsChoiceGroup && !Regex.IsMatch(group.Name+" "+group.Description,@"\boptional\b",RegexOptions.IgnoreCase)) p.Errors.Add("Choose an option in '"+group.Name+"'.");
             }
             if (replaceMode)
@@ -101,7 +110,7 @@ namespace SlotsInstaller
             var result=new List<ModComponent>();
             if (package==null) return result;
             var layers=selectedIds.Distinct(StringComparer.OrdinalIgnoreCase).Select(id=>package.Find(id)).Where(c=>c!=null && !c.IsDummy && c.HasFiles(replaceMode)).ToList();
-            if (layers.Count==0) return result;
+            if (layers.Count==0) return package.Components.Where(c => c.InferredChoice && package.Components.Any(m => m.ParentId == c.Id && m.HasFiles(replaceMode))).ToList();
             foreach (ModComponent group in package.Components.Where(package.IsChoice))
             {
                 if (!ScopeIsActive(package,group.ParentId,layers) && !layers.Any(c=>IsDescendant(package,c,group))) continue;

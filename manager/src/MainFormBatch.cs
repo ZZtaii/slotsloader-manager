@@ -42,6 +42,7 @@ namespace SlotsInstaller
                 bool added = false;
                 foreach (ModComponent group in open)
                 {
+                    if (group.InferredChoice) continue; // no author default: leave the decision to the user
                     ModComponent pick = FirstReal(p, group, replace, rank);
                     if (pick != null && !ids.Contains(pick.Id, StringComparer.OrdinalIgnoreCase)) { ids.Add(pick.Id); added = true; }
                 }

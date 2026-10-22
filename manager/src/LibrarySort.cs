@@ -206,6 +206,16 @@ namespace SlotsInstaller
             return result;
         }
         private struct Row { internal LibraryEntry Entry; internal int Rank; internal long Key; internal string Name, Path; }
+        internal static List<LibraryEntry> SpecificFirst(List<LibraryEntry> ordered, IEnumerable<string> selected)
+        {
+            var codes = new HashSet<string>(selected ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            if (codes.Count == 0) return ordered;
+            Func<LibraryEntry, bool> single = e => !e.Pending && (e.Detection == "Native" || e.Detection == "UnknownNative")
+                && e.CharacterCodes.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1 && codes.Contains(e.CharacterCodes[0]);
+            // Stable partition: specificity outranks direction/relevance; every
+            // existing sort and tie-break remains intact inside each group.
+            return ordered.Where(single).Concat(ordered.Where(e => !single(e))).ToList();
+        }
         private static int Compare(Row a, Row b)
         {
             int c = a.Rank.CompareTo(b.Rank); if (c != 0) return c;
@@ -367,7 +377,7 @@ namespace SlotsInstaller
             Func<LibraryEntry, long> lastUsed = null;
             if (librarySort == LibrarySortKey.LastUsed)
                 lastUsed = delegate(LibraryEntry e) { DateTime? t = LibraryLastUsed(e); return t.HasValue ? t.Value.Ticks : 0; };
-            return LibrarySorting.Order(ranked, librarySort, librarySortAscending, isInstalled, lastUsed, LibraryRowName);
+            return LibrarySorting.SpecificFirst(LibrarySorting.Order(ranked, librarySort, librarySortAscending, isInstalled, lastUsed, LibraryRowName), filterPanel == null ? null : filterPanel.Grid.Selected);
         }
 
         private LibraryUsageIndex UsageIndex()

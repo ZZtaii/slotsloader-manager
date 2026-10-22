@@ -395,7 +395,7 @@ namespace SlotsInstaller
                 if (package.Components.Count > cap) result.Add("truncated", "Only the first " + cap + " options are listed.");
                 result.Add("choose_one_groups", groups).Add("default_selection", Composer.DefaultSelection(package))
                     .Add("warnings", package.Warnings.Select(w => workspace.Scrub(Clip(w, 300))).ToArray())
-                    .Add("rules", "Main files are required whenever anything in their scope is selected. In a choose_one group pick exactly one branch; required groups must have one. A child option needs its non-group parent option too.");
+                    .Add("rules", "Main files are required whenever anything in their scope is selected. Required choose_one groups need exactly one branch; other choose_one groups allow at most one. Groups without a default need the user's choice, never a guessed first option. A child option needs its non-group parent option too.");
                 return Ok(result, "Read options of '" + package.Name + "' · " + ReplacePlanner.N(package.Components.Count, "option"));
             });
         }

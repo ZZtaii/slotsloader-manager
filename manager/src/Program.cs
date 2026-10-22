@@ -18,6 +18,9 @@ namespace SlotsInstaller
             {
                 if (args.Length > 0 && CommandLine.Handles(args[0])) { Headless = true; return CommandLine.Run(args); }
                 Headless = args.Length > 0 && args[0].StartsWith("--") && args[0] != "--open";
+                if (args.Length == 2 && args[0] == "--root-option-audit") return RootOptionChoices.Audit(args[1]);
+                if (args.Length == 2 && args[0] == "--install-speed-check") return InstallSpeedChecks.Run(args[1]);
+                if (args.Length == 3 && args[0] == "--install-speed-check" && args[2] == "large") return InstallSpeedChecks.Run(args[1], true);
                 // 1.0.1: the checks never use the real Recycle Bin (uninstall recycles source-less mods); --delete-check has its own stub.
                 if (Headless && args[0] != "--delete-check") RecycleBin.Current = new CheckRecycleBin();
                 // 1.0.11: start-up code compiles on spare cores from a profile of the earlier starts (Data\startup.jitprofile,

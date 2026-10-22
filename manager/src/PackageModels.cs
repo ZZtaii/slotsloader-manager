@@ -11,6 +11,7 @@ namespace SlotsInstaller
     {
         public string Id, Name, Description, Author, Version, AddonFor, ParentId, PreviewEntry;
         public bool IsDummy;
+        internal bool InferredChoice;
         internal bool IsDefaultChoice;   // 1.0.4: a choose-one option identical to the main files' copy (OptionOrder)
         public Dictionary<string,string> Metadata = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         public List<NativeAsset> Assets = new List<NativeAsset>();
@@ -92,6 +93,10 @@ namespace SlotsInstaller
                         foreach (var child in children.Skip(1)) common.IntersectWith(child.Assets.Select(a => a.DestinationPath));
                         if (common.Count > 0) choices[group.Id] = new HashSet<string>(children.Select(c=>c.Id),StringComparer.OrdinalIgnoreCase);
                     }
+                    // Native cohorts use the inference above. Root-only cohorts need
+                    // registration too, but never acquire prose-required semantics.
+                    if (group.InferredChoice && !choices.ContainsKey(group.Id))
+                        choices[group.Id] = new HashSet<string>(directChildren.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
                 }
             }
             choiceGroups = choices;
