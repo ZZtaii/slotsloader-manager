@@ -548,6 +548,9 @@ namespace SlotsInstaller
                 welcome.ShowInTaskbar = false; welcome.Opacity = 0; welcome.Show(form); Application.DoEvents();
                 Control link = welcome.Controls.Find("welcomeHelp", true).Single();
                 Require(link.Text == "Help and troubleshooting (F1)" && link.Visible, "the welcome's Help link: '" + link.Text + "'");
+                Control nextButton = welcome.Controls.Find("welcomeNext", true).Single();
+                int linkMiddle = link.Top + link.Height / 2, nextMiddle = nextButton.Top + nextButton.Height / 2;
+                Require(Math.Abs(linkMiddle - nextMiddle) <= DpiMetrics.Px(welcome, 2) && ((Label)link).PreferredWidth <= link.Width, "the Help link is not on Next's line or is cut: middles " + linkMiddle + " / " + nextMiddle);
                 typeof(Control).GetMethod("OnClick", PrivateInstance).Invoke(link, new object[] { EventArgs.Empty }); Application.DoEvents();
                 Require(welcome.HelpRequested && (welcome.IsDisposed || !welcome.Visible), "the welcome's Help link did not close it and ask for Help: requested " + welcome.HelpRequested + ", visible " + (!welcome.IsDisposed && welcome.Visible));
             }

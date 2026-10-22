@@ -29,7 +29,7 @@ namespace SlotsInstaller
             new Topic { Tab = "As standalone", Title = "Use it on its own", Lead = "Let this Manager handle every mod, replacements included.", Highlight = 2, Badge = "Automatic fixes", Points = new[] {
                 "Uninstall everything in your external mod manager first. Replace original stays off until it's empty.",
                 "Replace original overwrites the game's files. When two mods change the same outfit, the one higher on the Installed page wins.",
-                "Every replacement gets a health check, and mods made for an older SF6 are fixed as they install: colour files, texture tables, old file names and select-screen colour swatches." } },
+                "Mods made for an older SF6 are fixed for you, as replacements and as extra outfits: colour files, texture tables, old file names and select-screen colour swatches. Every replacement also gets a health check first." } },
             new Topic { Tab = "Repair", Title = "When something breaks", Lead = "Start with the smallest fix.", Points = new[] {
                 "After an SF6 update, a \"Game files changed\" banner appears. Click Reapply to put your replacements back.",
                 "Game won't start? Gear → Restore → Remove this Manager's mods. You can undo it.",
@@ -78,7 +78,9 @@ namespace SlotsInstaller
             page.IndexChanged += delegate { UpdateButtons(); };
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(0, 16, 0, 0) };
             // 1.0.11 (the user): the footer links the in-app Help (gear → Help, F1); the welcome itself is in Settings → General.
-            var help = new Label { UseMnemonic = false, Dock = DockStyle.Left, AutoSize = true, ForeColor = Palette.Accent, Font = Palette.Small, TextAlign = ContentAlignment.MiddleLeft, Cursor = Cursors.Hand, Text = "Help and troubleshooting (F1)", Name = "welcomeHelp", AccessibleName = "Open Help and troubleshooting", AccessibleRole = AccessibleRole.Link };
+            // As tall as the footer (not AutoSize), so its text centres on Next's line; as wide as its text, so only the text is clickable.
+            var help = new Label { UseMnemonic = false, Dock = DockStyle.Left, AutoSize = false, ForeColor = Palette.Accent, Font = Palette.Small, TextAlign = ContentAlignment.MiddleLeft, Cursor = Cursors.Hand, Text = "Help and troubleshooting (F1)", Name = "welcomeHelp", AccessibleName = "Open Help and troubleshooting", AccessibleRole = AccessibleRole.Link };
+            help.Width = help.PreferredWidth + 4;
             help.MouseEnter += delegate { help.ForeColor = Palette.Text; }; help.MouseLeave += delegate { help.ForeColor = Palette.Accent; };
             help.Click += delegate { HelpRequested = true; Close(); };
             next = new FlatButton("Next", true) { Width = 88, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeNext" }; next.Click += delegate { if (page.Index == Topics.Length - 1) Close(); else page.Index++; };
