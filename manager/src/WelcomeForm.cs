@@ -38,7 +38,7 @@ namespace SlotsInstaller
 
         internal const double DimOpacity = 0.65;   // the user: the window behind faded well back
         internal const string Title = "Welcome to Slotsloader Manager (SLM)";
-        internal static string PointText(string text) { return LinuxPlatform.IsLinux ? text.Replace("→", ">") : text; }
+        internal static string PointText(string text) { return text; }
         private readonly WelcomePage page;
         private readonly PictureBox logo;
         private readonly FlatButton next;
@@ -72,8 +72,8 @@ namespace SlotsInstaller
             // The user: the app icon and a plain title (not a caps section label), ✕ on the same line.
             var header = new Panel { Dock = DockStyle.Top, Height = 32, Padding = new Padding(0, 3, 0, 3) };
             logo = new PictureBox { Dock = DockStyle.Left, Width = 20, SizeMode = PictureBoxSizeMode.CenterImage, Name = "welcomeIcon" };
-            var title = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11F, FontStyle.Bold), ForeColor = Palette.Text, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, Text = Title, Name = "welcomeTitle", Padding = new Padding(8, 0, 0, 0) };
-            var dismiss = new FlatButton(LinuxPlatform.IsLinux ? "x" : "✕", false) { Width = 26, Padding = Padding.Empty, Dock = DockStyle.Right, Font = Palette.Tiny, Name = "welcomeDismiss", AccessibleName = "Close the welcome" }; dismiss.Click += delegate { Close(); };
+            var title = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = new Font(UiFonts.Family, 11F, FontStyle.Bold), ForeColor = Palette.Text, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, Text = Title, Name = "welcomeTitle", Padding = new Padding(8, 0, 0, 0) };
+            var dismiss = new FlatButton(LinuxPlatform.IsLinux ? "×" : "✕", false) { Width = 26, Padding = Padding.Empty, Dock = DockStyle.Right, Font = Palette.Tiny, Name = "welcomeDismiss", AccessibleName = "Close the welcome" }; dismiss.Click += delegate { Close(); };
             header.Controls.Add(title); header.Controls.Add(logo); header.Controls.Add(dismiss);
             page = new WelcomePage { Dock = DockStyle.Fill, Name = "welcomePage" };
             page.IndexChanged += delegate { UpdateButtons(); };
@@ -138,7 +138,7 @@ namespace SlotsInstaller
     {
         private const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl;
         private const TextFormatFlags Line = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter;
-        private static readonly Font TitleFont = new Font("Segoe UI", 14.5F, FontStyle.Bold), BadgeFont = new Font("Segoe UI", 8F, FontStyle.Bold), Body = new Font("Segoe UI", 10.25F);
+        private static readonly Font TitleFont = new Font(UiFonts.Family, 14.5F, FontStyle.Bold), BadgeFont = new Font(UiFonts.Family, 8F, FontStyle.Bold), Body = new Font(UiFonts.Family, 10.25F);
         private int index, hover = -1;
         internal event EventHandler IndexChanged;
 

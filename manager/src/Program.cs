@@ -15,7 +15,14 @@ namespace SlotsInstaller
         private static int Main(string[] args)
         {
             int code = 1;
-            try { code = Run(args); Environment.ExitCode = code; return code; }
+            Headless = args.Length > 0 && args[0].StartsWith("--") && args[0] != "--open";
+            try
+            {
+                // The probe catches setup failures in its JSON report without creating Data.
+                if (!(args.Length == 2 && args[0] == "--linux-runtime-probe")) LinuxRendering.Initialize();
+                code = Run(args); Environment.ExitCode = code; return code;
+            }
+            catch (Exception error) { ShowError(error); return 1; }
             finally { LinuxPlatform.Shutdown(code); }
         }
 
@@ -25,7 +32,13 @@ namespace SlotsInstaller
             {
                 if (args.Length == 2 && args[0] == "--linux-runtime-probe") { Headless = true; return LinuxPlatform.RuntimeProbe(args[1]); }
                 if (args.Length == 2 && args[0] == "--linux-check") { Headless = true; return LinuxPlatformChecks.Run(args[1]); }
+                if (args.Length == 2 && args[0] == "--linux-ui-check")
+                {
+                    Headless = true; UiFonts.Initialize(); Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+                    return LinuxControlChecks.Run(args[1]);
+                }
                 LinuxPlatform.Initialize();
+                UiFonts.Initialize();
                 if (LinuxPlatform.IsLinux) RecycleBin.Current = new LinuxRecycleBin();
                 if (args.Length > 0 && CommandLine.Handles(args[0])) { Headless = true; Environment.ExitCode = CommandLine.Run(args); return Environment.ExitCode; }
                 Headless = args.Length > 0 && args[0].StartsWith("--") && args[0] != "--open";
@@ -46,6 +59,8 @@ namespace SlotsInstaller
                 Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
                 Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs e) { ShowError(e.Exception); };
                 AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs e) { Log(e.ExceptionObject as Exception); };
+                if ((args.Length == 2 || args.Length == 3) && args[0] == "--linux-visual-check")
+                    return LinuxVisualChecks.Run(args[1], args.Length == 3 && args[2] == "external");
                 if (args.Length > 0 && args[0] == "--self-test")
                 {
                     Headless = true;
@@ -273,7 +288,11 @@ namespace SlotsInstaller
         {
             Log(exception);
             Environment.ExitCode = 1;
-            if (!Headless) ThemedMessageBox.Show(exception.Message, "Slotsloader Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (!Headless)
+            {
+                if (LinuxPlatform.IsWine && !UiFonts.Ready) MessageBox.Show(exception.Message, "Slotsloader Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                else ThemedMessageBox.Show(exception.Message, "Slotsloader Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 }

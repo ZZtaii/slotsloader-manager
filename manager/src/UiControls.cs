@@ -30,10 +30,10 @@ namespace SlotsInstaller
         internal static readonly Color Selected = Color.FromArgb(43, 47, 55);
         internal static readonly Color Green = Color.FromArgb(134, 207, 166);
         internal static readonly Color Red = Color.FromArgb(244, 132, 133);
-        internal static readonly Font Normal = new Font("Segoe UI", 10F);
-        internal static readonly Font Small = new Font("Segoe UI", 9F);
-        internal static readonly Font Tiny = new Font("Segoe UI", 8F);
-        internal static readonly Font Strong = new Font("Segoe UI", 10F, FontStyle.Bold);
+        internal static readonly Font Normal = new Font(UiFonts.Family, 10F);
+        internal static readonly Font Small = new Font(UiFonts.Family, 9F);
+        internal static readonly Font Tiny = new Font(UiFonts.Family, 8F);
+        internal static readonly Font Strong = new Font(UiFonts.Family, 10F, FontStyle.Bold);
     }
 
     internal sealed class FlatButton : Button
@@ -150,9 +150,10 @@ namespace SlotsInstaller
     internal static class DarkTheme
     {
         [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr window, string app, string id);
-        internal static void ApplyWindow(IntPtr window) { if (window != IntPtr.Zero) SetWindowTheme(window, "DarkMode_Explorer", null); }
+        internal static void ApplyWindow(IntPtr window) { if (LinuxPlatform.IsLinux) LinuxControls.ApplyWindow(window); else if (window != IntPtr.Zero) SetWindowTheme(window, "DarkMode_Explorer", null); }
         internal static void Apply(Control control)
         {
+            if (LinuxPlatform.IsLinux) { LinuxControls.Apply(control); return; }
             control.HandleCreated += delegate { SetWindowTheme(control.Handle, "DarkMode_Explorer", null); };
             if (control.IsHandleCreated) SetWindowTheme(control.Handle, "DarkMode_Explorer", null);
             foreach (Control child in control.Controls) Apply(child);

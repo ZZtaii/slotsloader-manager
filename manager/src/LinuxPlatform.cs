@@ -30,6 +30,7 @@ namespace SlotsInstaller
             catch (DllNotFoundException) { return false; }
             catch (EntryPointNotFoundException) { return false; }
         }
+        internal static bool IsWine { get { return wine; } }
         internal static bool IsLinux { get { return TestLinux ?? (wine || String.Equals(Environment.GetEnvironmentVariable("SLOTSLOADER_PLATFORM"), "linux", StringComparison.Ordinal)); } }
 
         internal static void Initialize()
@@ -60,6 +61,7 @@ namespace SlotsInstaller
             var report = new Dictionary<string, object> { { "protocol", 1 }, { "ok", false }, { "framework_release", 0 }, { "mono", Type.GetType("Mono.Runtime") != null }, { "winforms", false } };
             try
             {
+                LinuxRendering.Initialize();
                 int release = 0;
                 foreach (RegistryView view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
                     using (RegistryKey hive = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
@@ -68,6 +70,11 @@ namespace SlotsInstaller
                 report["framework_release"] = release;
                 if ((bool)report["mono"]) throw new IOException("Wine Mono is present. The Manager needs Microsoft .NET Framework 4.8.");
                 if (release < 528040) throw new IOException("Microsoft .NET Framework 4.8 is not installed in the Manager environment.");
+                report["font_family"] = UiFonts.Verify();
+                report["font_monospace"] = UiFonts.Monospace.Name;
+                report["font_smoothing"] = UiFonts.SmoothingType;
+                report["font_smoothing_enabled"] = UiFonts.SmoothingEnabled;
+                LinuxRendering.Verify(report);
                 Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
                 using (var form = new Form())
                 using (var text = new TextBox())

@@ -11,3 +11,4 @@ Parameters:
   custom_dpi: 96
 Installed_Dependencies:
   - dotnet48
+  - gdiplus

@@ -16,6 +16,42 @@ The first Linux test release retains the Windows Forms application under Wine, w
 
 Independent plan review moved real runtime and game feasibility ahead of polishing, identified the cross-prefix game guard and update contract as release requirements, and ruled out a new native UI or private Wine distribution for this iteration.
 
+## Beta2 visual repair decisions
+
+The functional beta1 exposed two actual rendering failures: missing Segoe UI and
+Consolas silently substituted Tahoma, and Wine's built-in GDI+ produced hard
+edges even when the application requested antialiasing. Startup alone therefore
+cannot be the visual acceptance gate.
+
+- Bundle static Inter and Liberation Mono, with their original OFL licenses.
+  Register them privately with both GDI and GDI+ and use their actual private
+  FontFamily objects. Verify resolved families, symbol coverage and smoothing.
+  Windows keeps its existing system fonts.
+- Request `gdiplus` through Bottles' public dependency recipe. Bottles 67.4 can
+  leave the native file in a known nested extraction folder. Accept only the
+  pinned AMD64 DLL from that folder or the normal system32 location. Copy it
+  atomically beside Manager, never over a prefix system DLL. Never redistribute
+  the Microsoft DLL in the package.
+- Configure the override through the dedicated bottle's public CLI, then preload
+  the verified absolute app-local path before any drawing API. An inherited
+  environment variable or app-local file alone did not select the correct module
+  in the actual runtime. Verify loaded path/hash and blended antialiased pixels.
+- Repaint unsupported native dark chrome while preserving native controls,
+  scrolling, hit testing, focus, keyboard input and accessibility. Validate
+  painted arrow/thumb positions against native geometry and exercise input.
+- Treat recipe 2 migration as candidate creation followed by full verification
+  and atomic selection. Keep the old runtime selected on failure, retain Data,
+  guard private-drive storage, and resolve launch roots for the chosen prefix.
+  Ordinary retries reuse a created candidate; explicit Repair creates a fresh
+  one. Check disconnected storage before any lengthy provisioning work.
+- Compare actual Linux framebuffers with matched Windows layout references,
+  including populated pages, dark dialogs and a true 1280 × 800 display. The
+  final package must contain the exact visually tested binaries and fonts.
+
+The requested Astra xhigh review checked the renderer pinning, app-local loading,
+two-phase migration, stable-path guards and licensing plan. Actual runtime probes
+and screenshot review then resolved the loading and native scrollbar details.
+
 ## Implementation sequence
 
 1. Build and hash the unchanged baseline. In a dedicated resource-limited Linux container, establish Wine, .NET 4.8 and a graphical display, then run startup and fixture checks.

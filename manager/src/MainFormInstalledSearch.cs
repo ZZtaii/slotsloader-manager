@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -15,7 +15,7 @@ namespace SlotsInstaller
     {
         internal static Label Attach(PaddedTextField field, Action cleared)
         {
-            var clear = new Label { UseMnemonic = false, Text = "×", Font = new Font("Segoe UI", 12F, FontStyle.Bold), ForeColor = Palette.Muted, BackColor = Palette.Raised, Width = 26, Height = 24, TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand, AccessibleName = "Clear search", AccessibleRole = AccessibleRole.PushButton, Visible = false };
+            var clear = new Label { UseMnemonic = false, Text = "×", Font = new Font(UiFonts.Family, 12F, FontStyle.Bold), ForeColor = Palette.Muted, BackColor = Palette.Raised, Width = 26, Height = 24, TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand, AccessibleName = "Clear search", AccessibleRole = AccessibleRole.PushButton, Visible = false };
             clear.Parent = field; if (field.TrailingSpace < 27) field.TrailingSpace = 27;   // the text stops before the ×
             clear.Click += delegate { field.Clear(); if (cleared != null) cleared(); field.Focus(); };
             clear.MouseEnter += delegate { clear.ForeColor = Palette.Text; };

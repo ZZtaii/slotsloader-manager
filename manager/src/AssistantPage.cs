@@ -250,7 +250,7 @@ namespace SlotsInstaller
         }
 
         private static Font italicSmall;
-        private static Font ItalicSmall { get { return italicSmall ?? (italicSmall = new Font("Segoe UI", 9F, FontStyle.Italic)); } }
+        private static Font ItalicSmall { get { return italicSmall ?? (italicSmall = new Font(UiFonts.Family, 9F, FontStyle.Italic)); } }
 
         private void DrawMarker(Graphics g, TranscriptKind kind, Point center)
         {
@@ -266,7 +266,7 @@ namespace SlotsInstaller
         {
             int width = Math.Min(Px(620), Math.Max(Px(200), ClientSize.Width - Pad * 4));
             int x = (ClientSize.Width - width) / 2, y = Math.Max(Pad, ClientSize.Height / 2 - Px(130));
-            using (var title = new Font("Segoe UI", 15F, FontStyle.Bold))
+            using (var title = new Font(UiFonts.Family, 15F, FontStyle.Bold))
             {
                 int h = TextRenderer.MeasureText(g, EmptyTitle, title, new Size(width, 0), Wrap).Height;
                 TextRenderer.DrawText(g, EmptyTitle, title, new Rectangle(x, y, width, h), Palette.Text, Wrap | TextFormatFlags.HorizontalCenter);
@@ -493,7 +493,7 @@ namespace SlotsInstaller
 
             // Plan column, like the library inspector.
             planPanel = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(16, 12, 16, 12) };
-            PlanCaption = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 26, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Text = "PLAN" };
+            PlanCaption = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 26, Font = new Font(UiFonts.Family, 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Text = "PLAN" };
             var listFrame = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Background, Padding = new Padding(4) };
             ActionList = new ActionListBox { Dock = DockStyle.Fill };
             ActionList.SelectedIndexChanged += delegate { ShowActionDetail(); };

@@ -22,8 +22,9 @@ override; an additional AGS override has not been established as necessary.
    internal storage and mounted microSD game folders are supported by discovery.
 4. If prompted, install **Bottles** from Discover or your software centre and
    finish its welcome screen. Reopen the installer. It creates a dedicated
-   runtime and downloads .NET Framework 4.8. The first setup may take several
-   minutes and may show Microsoft installer windows.
+   runtime and downloads .NET Framework 4.8 and Microsoft's graphics runtime.
+   The graphics dependency alone downloads about 947 MB; allow several minutes
+   for first setup. Microsoft installer windows may appear.
 5. After the runtime check, setup offers the Steam game setup guide and Manager
    opens. Later, use **SlotsLoader Manager** in
    your application menu. The extracted download may then be removed.
@@ -32,6 +33,10 @@ No terminal commands are part of the normal setup. An internet connection is
 needed for initial runtime installation. Manager and its ordinary `Data` folder
 live in `~/.local/share/slotsloader-manager/app` (or your configured XDG data
 directory). The runtime is separate from SF6's Proton prefix.
+
+The package includes Inter and Liberation Mono fonts, so the interface does not
+depend on fonts installed on your desktop. Setup checks the actual loaded
+graphics renderer, smooth edges and font rendering before opening Manager.
 
 ## Use and update
 
@@ -45,6 +50,10 @@ To update, extract the next complete Linux package and open its installer.
 Manager must be closed. The update preserves `app/Data`, mod libraries and
 recovery records. An interrupted program-file update is rolled back on the next
 launch. Do not install a Windows-only portable update over this package.
+
+Updating from Linux beta1 also prepares the improved graphics runtime. Setup
+keeps the previous runtime selected until the new one passes its checks, and
+preserves your app Data. The old runtime remains available in Bottles afterward.
 
 The application's menu entry has additional actions (right-click it on KDE):
 
@@ -97,7 +106,11 @@ Gaming Mode are outside the initial supported workflow.
 
 An already provisioned system Wine prefix can be used with
 `python3 launcher.py --wine /path/to/wine --prefix /path/to/dedicated-prefix`.
-This option does not install Wine or .NET and must never point at SF6's prefix.
+This option does not install Wine or dependencies and must never point at SF6's
+prefix. It requires Microsoft .NET Framework 4.8 and the exact x64 GDI+ dependency
+identified by the included Bottles recipe. The launcher verifies and loads an
+application-local copy; it does not replace prefix system DLLs. Use graphical
+Bottles setup unless you already maintain a suitable dedicated prefix.
 The graphical path uses the public Bottles CLI and the included `bottle.yml`
 recipe. In a source checkout, run native checks with
 `python3 -m unittest discover -s manager/linux -p 'test_*.py'` from the repository

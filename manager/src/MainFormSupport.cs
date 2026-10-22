@@ -41,8 +41,8 @@ namespace SlotsInstaller
         {
             // Scrolls only when the window is too short for all three rows of cards.
             var panel = new FlowLayoutPanel { Dock = DockStyle.Fill, Visible = false, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(2, 10, 0, 8), Name = "settingsAboutPanel" };
-            panel.Controls.Add(new Label { UseMnemonic = false, Text = "Slotsloader Manager " + UpdateCheck.ShortVersion(SafeHttp.AppVersion()), AutoSize = true, Font = new Font("Segoe UI", 16F, FontStyle.Bold), ForeColor = Palette.Text, Margin = new Padding(0, 0, 0, 6), Name = "aboutTitle" });
-            panel.Controls.Add(new Label { UseMnemonic = false, AutoSize = false, Width = AboutWidth, Height = 56, Font = new Font("Segoe UI", 12F), ForeColor = Palette.Text, Margin = new Padding(0, 2, 0, 4), Name = "aboutIntro",
+            panel.Controls.Add(new Label { UseMnemonic = false, Text = "Slotsloader Manager " + UpdateCheck.ShortVersion(SafeHttp.AppVersion()), AutoSize = true, Font = new Font(UiFonts.Family, 16F, FontStyle.Bold), ForeColor = Palette.Text, Margin = new Padding(0, 0, 0, 6), Name = "aboutTitle" });
+            panel.Controls.Add(new Label { UseMnemonic = false, AutoSize = false, Width = AboutWidth, Height = 56, Font = new Font(UiFonts.Family, 12F), ForeColor = Palette.Text, Margin = new Padding(0, 2, 0, 4), Name = "aboutIntro",
                 Text = "A mod manager with lots of goodies, optimized for Street Fighter 6. Install mods as replacements or extra slots. Fast searches, safer installs and more." });
             AddAboutSection(panel, "Community & support",
                 Card("Discord", "Discuss modding and everything in between.", DiscordUrl, ButtonGlyph.Chat, DiscordBlue),
@@ -77,7 +77,7 @@ namespace SlotsInstaller
         private static readonly Color DiscordBlue = Color.FromArgb(0x58, 0x65, 0xF2), PatreonCoral = Color.FromArgb(0xFF, 0x42, 0x4D), NexusOrange = Color.FromArgb(0xDA, 0x8E, 0x35);
         private static void AddAboutSection(FlowLayoutPanel panel, string caption, params AboutCard[] cards)
         {
-            panel.Controls.Add(new Label { UseMnemonic = false, Text = caption, AutoSize = false, Width = AboutWidth, Height = 24, Font = new Font("Segoe UI", 9.5F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.BottomLeft, Margin = new Padding(0, 14, 0, 8) });
+            panel.Controls.Add(new Label { UseMnemonic = false, Text = caption, AutoSize = false, Width = AboutWidth, Height = 24, Font = new Font(UiFonts.Family, 9.5F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.BottomLeft, Margin = new Padding(0, 14, 0, 8) });
             var row = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoSize = false, Width = AboutWidth, Height = AboutCardHeight, Margin = Padding.Empty, Padding = Padding.Empty };
             foreach (AboutCard card in cards) row.Controls.Add(card);
             panel.Controls.Add(row);

@@ -711,7 +711,7 @@ namespace SlotsInstaller
         private Panel BuildDetail()
         {
             Panel detail = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(12) };
-            packageTitle = new Label { UseMnemonic=false, Text = "Choose a mod", Dock = DockStyle.Top, Height = 34, Font = new Font("Segoe UI", 15F, FontStyle.Bold), AutoEllipsis = true };
+            packageTitle = new Label { UseMnemonic=false, Text = "Choose a mod", Dock = DockStyle.Top, Height = 34, Font = new Font(UiFonts.Family, 15F, FontStyle.Bold), AutoEllipsis = true };
             detail.Controls.Add(packageTitle);
 
             Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 64, BackColor = Palette.Background, Padding = new Padding(10, 6, 8, 5) };
@@ -760,7 +760,7 @@ namespace SlotsInstaller
             selectedLabel = new Label { UseMnemonic=false, Dock = DockStyle.Fill, Text = "0 selected", TextAlign = ContentAlignment.MiddleRight, ForeColor = Palette.Muted, Font = Palette.Small, Padding = new Padding(0, 0, 9, 0) };
             choiceTabs.Controls.Add(selectedLabel); choiceTabs.Controls.Add(BuildResetOptions()); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); choiceTabs.Controls.Add(collapse); choiceTabs.Controls.Add(iconGap); choiceTabs.Controls.Add(expand); choiceTabs.Controls.Add(filesTab); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Left, Width = Rhythm.Related }); choiceTabs.Controls.Add(componentTab);   // 1.0.11: a gap between the two tabs (the user)
             componentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
-            componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font("Segoe UI", 10.5F) };
+            componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font(UiFonts.Family, 10.5F) };
             componentTree.EmptyText = "Choose a mod from the library, or drop an archive (ZIP, RAR, 7Z) or mod folder anywhere in this window.\n\nCtrl+O opens an archive · Ctrl+F searches the library";
             componentTree.DrawNode += DrawComponentNode;
             // OptionTree paints the background, indicator and text together;
@@ -824,7 +824,7 @@ namespace SlotsInstaller
             Panel info = new Panel { Dock = DockStyle.Fill, AutoScroll = false, Padding = new Padding(0) };
             Panel visual = new Panel { Dock = DockStyle.Top, Height = 154, BackColor = Palette.Background };
             preview = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Palette.Background };
-            noPreview = new Label { UseMnemonic=false, Text = "No preview", TextAlign = ContentAlignment.MiddleCenter, Dock = DockStyle.Fill, ForeColor = Palette.Border, Font = new Font("Segoe UI", 16F, FontStyle.Bold) };
+            noPreview = new Label { UseMnemonic=false, Text = "No preview", TextAlign = ContentAlignment.MiddleCenter, Dock = DockStyle.Fill, ForeColor = Palette.Border, Font = new Font(UiFonts.Family, 16F, FontStyle.Bold) };
             preview.Cursor = Cursors.Hand; preview.Click += delegate { EnlargePreview(); };  visual.Controls.Add(preview); visual.Controls.Add(noPreview);
             componentTitle = new Label { UseMnemonic=false, Text = "OPTION PREVIEW", Dock = DockStyle.Top, Height = 30, Font = Palette.Strong, AutoEllipsis = true, Padding = new Padding(0, 7, 0, 0) };
             // 1.0.5 (the user): the modinfo.ini version, right-aligned on the title row (SetVersion).
@@ -901,7 +901,7 @@ namespace SlotsInstaller
             // Detail hierarchy: wrapped title, chips, compact copyable path,
             // aligned actions, then the loader result/help card.
             Panel info = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(20, 18, 20, 12) };
-            installedTitle = new ClampedLabel { MaxLines = 2, Text = "Choose outfits", Font = new Font("Segoe UI", 14F, FontStyle.Bold), Dock = DockStyle.Top, Height = 34 };
+            installedTitle = new ClampedLabel { MaxLines = 2, Text = "Choose outfits", Font = new Font(UiFonts.Family, 14F, FontStyle.Bold), Dock = DockStyle.Top, Height = 34 };
             installedChips = new ChipStrip { Dock = DockStyle.Top, Height = 32, Padding = new Padding(0, 6, 0, 0) };
             // The "N shared files" chip opens the shared-files details in the card below.
             installedChips.Click += delegate { ShowSharedFilesDetails(); };
@@ -1241,7 +1241,7 @@ namespace SlotsInstaller
         }
 
         // 1.0.1: the gear menu and its Keyboard shortcuts submenu: 11 pt text, more room around each item.
-        internal static readonly Font MenuFont = new Font("Segoe UI", 11F);
+        internal static readonly Font MenuFont = new Font(UiFonts.Family, 11F);
         private static void RoomyMenu(ToolStripDropDownMenu menu)
         {
             menu.Font = MenuFont; menu.Padding = new Padding(2, 6, 2, 6);
@@ -1266,8 +1266,8 @@ namespace SlotsInstaller
             return button;
         }
 
-        private static Label Caption(string text) { return new Label { UseMnemonic=false, Text = text, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, AutoSize = false, Height = 24, TextAlign = ContentAlignment.MiddleLeft }; }
-        private static Label Heading(string text) { return new Label { UseMnemonic=false, Text = text, Font = new Font("Segoe UI", 22F, FontStyle.Bold), Height = 45, AutoSize = false }; }
+        private static Label Caption(string text) { return new Label { UseMnemonic=false, Text = text, Font = new Font(UiFonts.Family, 8F, FontStyle.Bold), ForeColor = Palette.Muted, AutoSize = false, Height = 24, TextAlign = ContentAlignment.MiddleLeft }; }
+        private static Label Heading(string text) { return new Label { UseMnemonic=false, Text = text, Font = new Font(UiFonts.Family, 22F, FontStyle.Bold), Height = 45, AutoSize = false }; }
         private static PaddedTextField TextField() { return new PaddedTextField(); }
         private static ComboBox Combo() { return new DarkCombo { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Palette.Raised, ForeColor = Palette.Text, Font = Palette.Small, IntegralHeight = false, DropDownHeight = 350 }; }
 

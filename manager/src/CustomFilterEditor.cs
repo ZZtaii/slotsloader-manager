@@ -49,7 +49,7 @@ namespace SlotsInstaller
 
         private static Label Caption(string text)
         {
-            return new Label { UseMnemonic = false, AutoSize = false, Text = text, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.BottomLeft };
+            return new Label { UseMnemonic = false, AutoSize = false, Text = text, Font = new Font(UiFonts.Family, 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.BottomLeft };
         }
         private static FlatButton MakeButton(string text, bool primary, Action click)
         {

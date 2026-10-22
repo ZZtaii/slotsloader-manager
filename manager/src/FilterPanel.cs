@@ -35,12 +35,12 @@ namespace SlotsInstaller
             body = new Panel { Location = Point.Empty, BackColor = Palette.Surface, Margin = Padding.Empty, Padding = Padding.Empty };
             header = new Panel { Dock = DockStyle.Top, Height = 22, BackColor = Palette.Surface };
             // 2.4.1: the FIGHTERS row is just the heading; Clear is next to Filters above the mod list.
-            Title = new Label { UseMnemonic = false, Text = "FIGHTERS", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft };
+            Title = new Label { UseMnemonic = false, Text = "FIGHTERS", Dock = DockStyle.Fill, Font = new Font(UiFonts.Family, 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft };
             header.Controls.Add(Title);
             Grid.Dock = DockStyle.Top; Grid.AutoScroll = false; Grid.AccessibleName = "Fighters";
             Grid.SelectionChanged += delegate { Raise(); };
             kindsHeader = new Panel { Dock = DockStyle.Top, Height = 22, BackColor = Palette.Surface };
-            KindsTitle = new Label { UseMnemonic = false, Text = "TOOL MODS, MISC, INSTALLED", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.BottomLeft };
+            KindsTitle = new Label { UseMnemonic = false, Text = "TOOL MODS, MISC, INSTALLED", Dock = DockStyle.Fill, Font = new Font(UiFonts.Family, 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.BottomLeft };
             kindsHeader.Controls.Add(KindsTitle);
             Kinds.Dock = DockStyle.Top; Kinds.AutoScroll = false; Kinds.AccessibleName = "Tool mods, misc and installed mods";
             Kinds.SetFighters(new[] { new KeyValuePair<string, string>(ToolsKind, "Tool mods"), new KeyValuePair<string, string>(MiscKind, "Misc"), new KeyValuePair<string, string>(InstalledKind, "Installed") });
@@ -52,7 +52,7 @@ namespace SlotsInstaller
             MiscChips = new FlowLayoutPanel { Dock = DockStyle.Top, WrapContents = true, Visible = false, BackColor = Palette.Surface, Padding = new Padding(4, 2, 0, 4), Margin = Padding.Empty, AccessibleName = "Misc kinds" };
             // The MY FILTERS caption starts the chip row (a line of its own made the panel scroll at 1460x920 with the
             // Misc chips showing); MainFormCustomFilters.FillCustomChips keeps it first and sizes it like a chip.
-            CustomTitle = new Label { UseMnemonic = false, Text = "MY FILTERS", AutoSize = false, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
+            CustomTitle = new Label { UseMnemonic = false, Text = "MY FILTERS", AutoSize = false, Font = new Font(UiFonts.Family, 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
             CustomChips = new FlowLayoutPanel { Dock = DockStyle.Top, WrapContents = true, BackColor = Palette.Surface, Padding = new Padding(4, 6, 0, 0), Margin = Padding.Empty, AccessibleName = "My filters" };
             CustomChips.Controls.Add(CustomTitle);
             Editor = new CustomFilterEditor { Dock = DockStyle.Top, Visible = false };
@@ -194,7 +194,7 @@ namespace SlotsInstaller
                 Color ink = Palette.Background;
                 if (kind == FilterPanel.ToolsKind)
                 {
-                    using (var font = new Font("Consolas", w * 0.16F, FontStyle.Bold, GraphicsUnit.Pixel))
+                    using (var font = new Font(UiFonts.Monospace, w * 0.16F, FontStyle.Bold, GraphicsUnit.Pixel))
                     using (var brush = new SolidBrush(ink))
                     using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                         g.DrawString("</>", font, brush, square, format);
@@ -646,7 +646,7 @@ namespace SlotsInstaller
                 else
                 {
                     // Name tile: until (or without) a portrait from the game.
-                    using (var font = new Font("Segoe UI", 11F, FontStyle.Bold))
+                    using (var font = new Font(UiFonts.Family, 11F, FontStyle.Bold))
                         TextRenderer.DrawText(g, card.Name, font, new Rectangle(box.Left + slant / 2 + Px(2), box.Top + Px(18), box.Width - slant - Px(4), box.Height - Px(22)), dim ? Palette.Muted : card.Selected ? Palette.Accent : Palette.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
                 }
                 if (dim) using (Brush veil = new SolidBrush(Color.FromArgb(150, Palette.Background))) g.FillRectangle(veil, box);

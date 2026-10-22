@@ -50,10 +50,20 @@ When no usable 7-Zip is installed, the Manager downloads `7z.exe`, `7z.dll` and 
 
 The unRAR code may be used only to extract RAR archives, not to re-create the RAR compression algorithm. The 7-Zip source code is available at [www.7-zip.org](https://www.7-zip.org). The version and SHA-256 of the bundled files are listed in each release's `VALIDATION.txt`.
 
+## Inter (SIL Open Font License 1.1)
+
+Linux packages bundle unmodified Inter 4.1 Regular, Bold, Italic and Bold Italic by the Inter Project Authors. The original license is in `assets/fonts/OFL-Inter.txt` in source and `app/Fonts/OFL-Inter.txt` in Linux packages. The fonts come from the [official Inter 4.1 release](https://github.com/rsms/inter/releases/tag/v4.1); Windows continues to use its system Segoe UI font.
+
+## Liberation Mono (SIL Open Font License 1.1)
+
+Linux packages bundle unmodified Liberation Mono 2.1.5 Regular, Bold, Italic and Bold Italic. Copyright Google Corporation and Red Hat, Inc. The original license is in `assets/fonts/OFL-Liberation.txt` in source and `app/Fonts/OFL-Liberation.txt` in Linux packages. Fonts come from the [official Liberation 2.1.5 release](https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5). Windows continues to use Consolas.
+
 ## Brand marks
 
 The Discord, Nexus Mods and Patreon logos on the About cards and in the status bar are trademarks of their owners. They are used only to link to those services. ColorSync's mark is ZZtai's own. The BrewedVFX logo on the Credits card (`assets/brewedvfx.png`) belongs to BrewedVFX and is shown only to credit their testing and link to their page.
 
 ## At run time
+
+The Linux installer uses Bottles to download Microsoft .NET Framework and GDI+ under their respective Microsoft licenses. GDI+ is verified and loaded privately by the installed application for smooth drawing. These Microsoft runtime files are not redistributed in the Manager package.
 
 Fighter portraits and stage names are read from your own installed game and cached in `Data\portraits`; they are not part of this app. The optional Assistant sends your requests to Anthropic's API with your own key.

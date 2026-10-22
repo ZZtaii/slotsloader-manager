@@ -20,6 +20,7 @@ New-Item -ItemType Directory -Path (Join-Path $OutputDirectory 'Data') -Force | 
 @{ GameRoot = (Join-Path $testFixtures 'game'); Libraries = @(); SevenZipPath = 'C:\Program Files\7-Zip\7z.exe' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory 'Data\settings.json') -Encoding UTF8
 $testCases = @(
     @{ Name='linux'; Arguments=@('--linux-check', ('"' + (Join-Path $OutputDirectory 'linux-check') + '"')) },
+    @{ Name='linux-ui'; Arguments=@('--linux-ui-check', ('"' + (Join-Path $OutputDirectory 'linux-ui-check') + '"')) },
     @{ Name='generated'; Arguments=@('--self-test-extra', ('"' + $testFixtures + '"')) },
     @{ Name='outfit-sets'; Arguments=@('--set-check', ('"' + $testFixtures + '"')) },
     @{ Name='outfit-set-ui'; Arguments=@('--set-ui-check', ('"' + $testFixtures + '"')) },

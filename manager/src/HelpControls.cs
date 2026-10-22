@@ -11,7 +11,7 @@ namespace SlotsInstaller
     // (the chosen row in the selection colour with an accent rail). Click, or Up/Down with the focus here, chooses.
     internal sealed class HelpTopicList : Control
     {
-        private static readonly Font GroupFont = new Font("Segoe UI", 8F, FontStyle.Bold), RowFont = new Font("Segoe UI", 10F);
+        private static readonly Font GroupFont = new Font(UiFonts.Family, 8F, FontStyle.Bold), RowFont = new Font(UiFonts.Family, 10F);
         private const TextFormatFlags Line = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter;
         private readonly List<object> rows = new List<object>();   // a group name (string) or a HelpTopic
         private HelpTopic selected;
@@ -98,8 +98,8 @@ namespace SlotsInstaller
     internal sealed class HelpArticleView : Control
     {
         // 1.0.11 (the user): the text a little larger (body 10.5 → 11 pt, code 10 → 10.5, headings 12 → 12.5).
-        private static readonly Font Body = new Font("Segoe UI", 11F), BodyBold = new Font("Segoe UI", 11F, FontStyle.Bold), CodeFont = new Font("Consolas", 10.5F),
-            TitleFont = new Font("Segoe UI", 17F, FontStyle.Bold), HeadingFont = new Font("Segoe UI", 12.5F, FontStyle.Bold), CaptionFont = new Font("Segoe UI", 8F, FontStyle.Bold);
+        private static readonly Font Body = new Font(UiFonts.Family, 11F), BodyBold = new Font(UiFonts.Family, 11F, FontStyle.Bold), CodeFont = new Font(UiFonts.Monospace, 10.5F),
+            TitleFont = new Font(UiFonts.Family, 17F, FontStyle.Bold), HeadingFont = new Font(UiFonts.Family, 12.5F, FontStyle.Bold), CaptionFont = new Font(UiFonts.Family, 8F, FontStyle.Bold);
         // No padding anywhere, so titles and headings line up with the paragraphs and the group caption.
         private const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPadding;
         private const TextFormatFlags Bare = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;

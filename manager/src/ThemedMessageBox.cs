@@ -35,7 +35,8 @@ namespace SlotsInstaller
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; return false; }
         }
-        internal static bool Dark { get { return ForcedDark ?? SystemUsesDarkApps(); } }
+        // Linux has no Windows app-theme preference; match the Manager's dark surface.
+        internal static bool Dark { get { return ForcedDark ?? (LinuxPlatform.IsLinux || SystemUsesDarkApps()); } }
 
         public static DialogResult Show(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon) { return Show(null, text, caption, buttons, icon, MessageBoxDefaultButton.Button1); }
         public static DialogResult Show(IWin32Window owner, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon) { return Show(owner, text, caption, buttons, icon, MessageBoxDefaultButton.Button1); }
@@ -219,6 +220,7 @@ namespace SlotsInstaller
             ResumeLayout(true); PerformAutoScale();
             // Device pixels for the DPI the form has now (tests: the forced DPI); laid out again on its monitor in OnLoad.
             ApplyLayout(forcedDpi ? dpi : DeviceDpi);
+            if (dark && LinuxPlatform.IsLinux) DarkTheme.Apply(this);
         }
 
         internal static DialogResult[] Results(MessageBoxButtons buttons)

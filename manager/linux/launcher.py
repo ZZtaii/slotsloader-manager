@@ -15,6 +15,8 @@ from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
+import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,15 @@ TITLE = "SlotsLoader Manager"
 BOTTLES = "com.usebottles.bottles"
 EXE = "Slotsloader Manager.exe"
 STATE_VERSION = 1
+RUNTIME_RECIPE = 2
+RENDERER_SHA256 = "980ea189929d95eb36e35980fff0c81f7b78de9422771fde8f4ac7a779f5bd89"
+RENDERER_SIZE = 2165248
+RENDERER_SOURCES = (
+    "drive_c/windows/system32/amd64_microsoft.windows.gdiplus_6595b64144ccf1df_1.1.7601.17514_none_2b24536c71ed437a/gdiplus.dll",
+    "drive_c/windows/system32/gdiplus.dll",
+)
+RENDERER_BACKUPS = 3
+RENDERER_BACKUP_LIMIT = 16 * 1024 * 1024
 START_TIMEOUT = 120
 HEARTBEAT_TIMEOUT = 45
 GAME_LAUNCH_OPTIONS = 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
@@ -125,6 +136,8 @@ def verify_package(source):
     if not required.issubset(manifest["files"]):
         raise SetupError("The Linux package is missing required application files.")
     for name, digest in manifest["files"].items():
+        if PurePosixPath(name).name.casefold() == "gdiplus.dll":
+            raise SetupError("A Linux package must not distribute the compatibility runtime's graphics DLL.")
         if not (name.startswith(("app/", "linux/")) or name in ("install.sh", "Install SlotsLoader Manager.desktop", "README.md", "VALIDATION.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "SLOTSLOADER-LICENSE.txt", "SLOTSLOADER-THIRD-PARTY.md", "THIRD-PARTY-NOTICES.txt")):
             raise SetupError("The package contains an unexpected file; setup has not changed your installation.")
         path = checked_target(source, name)
@@ -133,6 +146,84 @@ def verify_package(source):
         if hashlib.sha256(path.read_bytes()).hexdigest().lower() != digest.lower():
             raise SetupError("A package file failed its checksum. Download and extract it again.")
     return manifest
+
+
+def read_regular(path, limit):
+    """Bounded reads of an explicitly checked runtime file; never follow a leaf link."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise SetupError("A runtime file is not a regular file of the expected size; it has been kept untouched.")
+        content = stream.read(limit + 1)
+    if len(content) > limit:
+        raise SetupError("A runtime file grew unexpectedly; it has been kept untouched.")
+    return content
+
+
+def renderer_valid(content):
+    if len(content) != RENDERER_SIZE or hashlib.sha256(content).hexdigest() != RENDERER_SHA256:
+        return False
+    if len(content) < 64 or content[:2] != b"MZ":
+        return False
+    pe = struct.unpack_from("<I", content, 0x3c)[0]
+    return (pe <= len(content) - 26 and content[pe:pe + 4] == b"PE\0\0"
+            and struct.unpack_from("<H", content, pe + 4)[0] == 0x8664
+            and struct.unpack_from("<H", content, pe + 24)[0] == 0x20b)
+
+
+def atomic_bytes(path, content):
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with open(temporary, "xb") as stream:
+            os.chmod(temporary, 0o600)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.is_symlink():
+            raise SetupError("A runtime destination became a symbolic link; it has been kept untouched.")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def prepare_renderer(root, prefix):
+    """Use only the pinned native x64 DLL installed by Bottles in this prefix."""
+    root, prefix = Path(root), Path(prefix)
+    if prefix.is_symlink() or not prefix.is_dir():
+        raise SetupError("The selected compatibility runtime is unavailable or is a symbolic link.")
+    content = None
+    for name in RENDERER_SOURCES:
+        source = checked_target(prefix, name)
+        if source.exists():
+            try:
+                candidate = read_regular(source, RENDERER_SIZE)
+            except SetupError:
+                continue
+            if renderer_valid(candidate):
+                content = candidate
+                break
+    if content is None:
+        raise SetupError("The selected runtime does not contain the verified native graphics renderer. Use Repair compatibility runtime in the Linux setup. Advanced Wine users must install Bottles' gdiplus dependency into their dedicated prefix first; the app does not download DLLs directly.")
+    target = checked_target(root, "app/gdiplus.dll")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        previous = read_regular(target, RENDERER_BACKUP_LIMIT)
+        if renderer_valid(previous):
+            return target
+        backup_dir = checked_target(root, "runtime-backups")
+        backup_dir.mkdir(mode=0o700, exist_ok=True)
+        name = "gdiplus-" + hashlib.sha256(previous).hexdigest() + ".dll"
+        backup = checked_target(backup_dir, name)
+        if backup.exists():
+            if read_regular(backup, RENDERER_BACKUP_LIMIT) != previous:
+                raise SetupError("The saved graphics runtime backup differs from the original. Keep runtime-backups for recovery before trying again.")
+        else:
+            if len(list(backup_dir.iterdir())) >= RENDERER_BACKUPS:
+                raise SetupError("The graphics runtime backup folder is full. Keep its files somewhere safe, then empty runtime-backups and try again. The current DLL has been kept.")
+            atomic_bytes(backup, previous)
+    atomic_bytes(target, content)
+    return target
 
 
 def recover_update(root):
@@ -494,20 +585,35 @@ def additional_roots(root, libraries, prefix=None):
     return list(dict.fromkeys(extra))
 
 
-def require_stable_paths_for_repair(root):
+def checked_launch_roots(root, state, prefix=None):
+    game, libraries = configured_roots(root, state, prefix)
+    roots = list(dict.fromkeys(([game] if game else []) + libraries + additional_roots(root, libraries, prefix)))
+    for path in roots:
+        if not Path(path).is_dir():
+            raise SetupError("A selected game or mod folder is unavailable. Mount its drive or microSD card, or use Choose game and mod folders from the application menu.")
+    return game, libraries, roots
+
+
+def require_stable_paths_for_repair(root, state=None):
     """A new bottle changes C: and other private drives, never silently rebind them."""
     fields = (("settings.json", ("GameRoot", "Libraries")),
               ("replace-settings.json", ("StoreLocation", "FluffyRoots")),
               ("replace-state.json", ("StoreRoot", "PreviousStoreRoots")))
+    paths = []
     for filename, names in fields:
         settings = read_json(root / "app/Data" / filename, {})
         if not isinstance(settings, dict):
             raise SetupError("Manager storage settings are unreadable; keep app/Data intact for recovery.")
         for name in names:
             value = settings.get(name)
-            for path in value if isinstance(value, list) else [value]:
-                if isinstance(path, str) and re.match(r"^[A-Ya-y]:[\\/]", path):
-                    raise SetupError("A saved folder or replacement recovery store uses a private Wine drive such as C:. Before repairing the runtime, move active storage to a Linux folder through Z: in Manager Settings and finish recovery from any old private-drive stores. Your current runtime and data have been kept.")
+            paths.extend(value if isinstance(value, list) else [value])
+    fallback = state if state is not None else read_json(root / "linux-state.json", {})
+    if not isinstance(fallback, dict):
+        raise SetupError("Linux setup settings are unreadable; keep linux-state.json and app/Data intact.")
+    paths.extend(fallback.get(name) for name in ("game_root", "library_root", "GameRoot", "LibraryRoot"))
+    for path in paths:
+        if isinstance(path, str) and re.match(r"^[A-Ya-y]:[\\/]", path):
+            raise SetupError("A saved folder or replacement recovery store uses a private Wine drive such as C:. Before repairing the runtime, move active storage to a Linux folder through Z: in Manager Settings and finish recovery from any old private-drive stores. Your current runtime and data have been kept.")
 
 
 def hold_until_manager_stopped(dialog, status_reader=None):
@@ -533,7 +639,7 @@ def hold_until_manager_stopped(dialog, status_reader=None):
 
 def session_environment(bridge):
     return {"SLOTSLOADER_PLATFORM": "linux", "SLOTSLOADER_BRIDGE_URL": bridge.url,
-            "SLOTSLOADER_BRIDGE_TOKEN": bridge.token}
+            "SLOTSLOADER_BRIDGE_TOKEN": bridge.token, "WINEDLLOVERRIDES": "gdiplus=n,b"}
 
 
 def make_session_script(root, bridge, app_args):
@@ -608,23 +714,52 @@ def wait_session(process, bridge, script=None, start_timeout=START_TIMEOUT, hear
 
 def provision(root, state, dialog, repair=False):
     ensure_bottles(dialog)
-    if state.get("bottle") and not repair:
-        return
-    # Repair makes a fresh, uniquely owned runtime; old bottles and stable Data survive.
-    bottle = "SlotsLoader-Manager-" + uuid.uuid4().hex[:12]
-    run_checked(flatpak_base(root) + ["new", "--bottle-name", bottle, "--environment", "custom",
-                "--custom-environment", str(root / "linux/bottle.yml"), "--arch", "win64"],
-                dialog, "Preparing the compatibility runtime and .NET Framework 4.8. This can take several minutes")
-    previous = state.get("bottle")
-    if previous:
-        state.setdefault("previous_bottles", []).append(previous)
-    state["bottle"] = bottle
-    state["wine_prefix"] = bottle_prefix(root, bottle, dialog)
-    state["runtime_ready"] = False
+    if state.get("bottle") and state.get("runtime_recipe") == RUNTIME_RECIPE and not repair:
+        return dict(state)
+    require_stable_paths_for_repair(root, state)
+    # The selected runtime remains authoritative until the new one passes every probe.
+    pending = state.get("pending_runtime")
+    if repair or not (isinstance(pending, dict) and pending.get("runtime_recipe") == RUNTIME_RECIPE
+            and pending.get("created") is True
+            and re.fullmatch(r"SlotsLoader-Manager-[0-9a-f]{12}", str(pending.get("bottle", "")))):
+        pending = {"bottle": "SlotsLoader-Manager-" + uuid.uuid4().hex[:12], "runtime_recipe": RUNTIME_RECIPE, "created": False}
+        state["pending_runtime"] = pending
+        atomic_json(root / "linux-state.json", state)
+        run_checked(flatpak_base(root) + ["new", "--bottle-name", pending["bottle"], "--environment", "custom",
+                    "--custom-environment", str(root / "linux/bottle.yml"), "--arch", "win64"],
+                    dialog, "Preparing .NET Framework and the graphics runtime. This can take several minutes")
+        pending["created"] = True
+        atomic_json(root / "linux-state.json", state)
+    pending["wine_prefix"] = bottle_prefix(root, pending["bottle"], dialog)
     atomic_json(root / "linux-state.json", state)
+    selected = dict(state, bottle=pending["bottle"], wine_prefix=pending["wine_prefix"],
+                    runtime_recipe=RUNTIME_RECIPE, runtime_ready=False)
+    selected.pop("pending_runtime", None)
+    return selected
+
+
+def configure_renderer_override(root, state, dialog):
+    # Bottles filters its parent environment. Persist only this dedicated bottle's
+    # override through its public CLI; setting it inside cmd.exe is too late for Wine.
+    run_checked(flatpak_base(root) + ["edit", "-b", state["bottle"], "--env-var", "WINEDLLOVERRIDES=gdiplus=n,b"],
+                dialog, "Selecting the dedicated graphics renderer", timeout=120)
+
+
+def promote_runtime(root, state, selected):
+    if not selected.get("runtime_ready"):
+        raise SetupError("The new runtime has not passed its checks. The previous selection has been kept.")
+    updated = dict(selected)
+    updated.pop("pending_runtime", None)
+    previous = state.get("bottle")
+    if previous and previous != updated.get("bottle"):
+        updated["previous_bottles"] = list(dict.fromkeys(list(state.get("previous_bottles", [])) + [previous]))
+    atomic_json(root / "linux-state.json", updated)
+    state.clear()
+    state.update(updated)
 
 
 def runtime_probe(root, state, bridge, dialog, wine=None, prefix=None):
+    state["runtime_ready"] = False
     report_name = "linux-runtime-probe-" + uuid.uuid4().hex + ".json"
     report = root / "app" / report_name
     try:
@@ -644,11 +779,24 @@ def runtime_probe(root, state, bridge, dialog, wine=None, prefix=None):
                 time.sleep(0.2)
             # The probe writes its result after all checks and exits; it does not start an app session.
             code = 0
-        if code or result.get("protocol") != 1 or not result.get("ok"):
+        if not isinstance(result, dict) or code or result.get("protocol") != 1 or result.get("ok") is not True:
+            error = result.get("error") if isinstance(result, dict) else None
+            if isinstance(error, str) and error.strip():
+                error = " ".join(error.split())[:600]
+                if "font" in error.casefold() and "reinstall" not in error.casefold():
+                    error += " Reinstall the Linux application package to restore its Fonts folder."
+                raise SetupError("The runtime check did not pass: " + error)
             raise SetupError("The runtime check did not pass. Open Bottles, finish any pending setup, then choose Repair compatibility runtime.")
+        if (result.get("renderer_sha256") != RENDERER_SHA256 or result.get("renderer_antialias") is not True
+                or type(result.get("renderer_blended_pixels")) is not int or result["renderer_blended_pixels"] <= 0
+                or result.get("font_monospace") != "Liberation Mono" or result.get("font_family") != "Inter"
+                or result.get("font_smoothing_enabled") is not True or result.get("font_smoothing") != 2
+                or result.get("mono") is not False or result.get("winforms") is not True
+                or not isinstance(result.get("framework_release"), int) or result["framework_release"] < 528040):
+            raise SetupError("The runtime check did not confirm the required fonts and graphics renderer. Reinstall the current Linux application package, then use Repair compatibility runtime if needed.")
         state["runtime_ready"] = True
-        state["probe"] = {k: v for k, v in result.items() if k in ("ok", "framework_release", "mono", "winforms")}
-        atomic_json(root / "linux-state.json", state)
+        state["probe"] = {k: v for k, v in result.items() if k in ("ok", "framework_release", "mono", "winforms", "font_family", "font_smoothing", "font_smoothing_enabled", "renderer_sha256", "renderer_antialias", "renderer_blended_pixels", "font_monospace")}
+        return state["probe"]
     finally:
         report.unlink(missing_ok=True)
         if "script" in locals() and script:
@@ -715,28 +863,40 @@ def main(argv=None):
                 if args.headless:
                     raise SetupError("Complete graphical folder setup before using --headless.")
                 configure(root, state, dialog)
-            game, libraries = configured_roots(root, state, args.prefix or state.get("wine_prefix"))
-            roots = list(dict.fromkeys(([game] if game else []) + libraries + additional_roots(root, libraries, args.prefix or state.get("wine_prefix"))))
-            for path in roots:
-                if not Path(path).is_dir():
-                    raise SetupError("A selected game or mod folder is unavailable. Mount its drive or microSD card, or use Choose game and mod folders from the application menu.")
+            if not args.wine and (args.repair or not state.get("bottle") or state.get("runtime_recipe") != RUNTIME_RECIPE):
+                require_stable_paths_for_repair(root, state)
+            # A disconnected game, library or recovery disk should fail before downloads.
+            checked_launch_roots(root, state, args.prefix if args.wine else state.get("wine_prefix"))
+            selected = dict(state) if args.wine else provision(root, state, dialog, args.repair)
+            selected_prefix = args.prefix if args.wine else selected.get("wine_prefix")
+            if not selected_prefix:
+                raise SetupError("The selected runtime has no prefix. Advanced Wine needs an existing dedicated --prefix; otherwise use Repair compatibility runtime.")
+            selected_prefix = Path(selected_prefix)
+            # Resolve settings only after choosing the runtime whose private drives they use.
+            game, libraries, roots = checked_launch_roots(root, state, selected_prefix)
             if not args.wine:
-                if args.repair:
-                    require_stable_paths_for_repair(root)
-                provision(root, state, dialog, args.repair)
+                configure_renderer_override(root, selected, dialog)
+            prepare_renderer(root, selected_prefix)
             # Probe the selected runtime each time, including after an upgrade or prefix switch.
-            with HostBridge(root / "app", allowed_roots=roots, wine_prefix=args.prefix or state.get("wine_prefix"),
+            probe_state = dict(selected, granted_roots=roots)
+            with HostBridge(root / "app", allowed_roots=roots, wine_prefix=selected_prefix,
                             preferred_game=game, preferred_library=libraries[0] if libraries else None) as bridge:
-                runtime_probe(root, state, bridge, dialog, args.wine, args.prefix)
+                runtime_probe(root, probe_state, bridge, dialog, args.wine, selected_prefix)
+            selected.update(runtime_ready=probe_state["runtime_ready"], probe=probe_state["probe"])
+            if args.wine:
+                atomic_json(root / "linux-state.json", selected)
+                state = selected
+            else:
+                promote_runtime(root, state, selected)
             if not args.headless and not state.get("game_setup_shown"):
                 if dialog.confirm("Manager's compatibility runtime is ready. View the Steam game setup steps before opening Manager?"):
                     game_setup(dialog)
                 state["game_setup_shown"] = True
                 atomic_json(root / "linux-state.json", state)
             launch_state = dict(state, game_root=game, library_root=libraries[0] if libraries else None, granted_roots=roots)
-            with HostBridge(root / "app", allowed_roots=roots, wine_prefix=args.prefix or state.get("wine_prefix"),
+            with HostBridge(root / "app", allowed_roots=roots, wine_prefix=selected_prefix,
                             preferred_game=game, preferred_library=libraries[0] if libraries else None) as bridge:
-                process, script = start_app(root, launch_state, bridge, args.wine, args.prefix)
+                process, script = start_app(root, launch_state, bridge, args.wine, selected_prefix)
                 try:
                     return wait_session(process, bridge, script, dialog=dialog)
                 finally:

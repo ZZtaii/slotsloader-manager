@@ -126,7 +126,7 @@ namespace SlotsInstaller
             if (characterPopup != null) return;
             var panel = new Panel { BackColor = Palette.Surface, Padding = new Padding(Px(8)), Name = "characterPopupPanel" };
             var top = new Panel { Dock = DockStyle.Top, Height = Px(36) };
-            var caption = new Label { UseMnemonic = false, Text = "CHARACTERS", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft };
+            var caption = new Label { UseMnemonic = false, Text = "CHARACTERS", Dock = DockStyle.Fill, Font = new Font(UiFonts.Family, 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft };
             characterPopupClear = Button("Clear", false, 72, delegate { SetInstalledCharacters(new string[0]); installedFighters.SetSelected(new string[0], false); characterPopupClear.Enabled = false; });
             characterPopupClear.Dock = DockStyle.Right; characterPopupClear.Font = Palette.Small; characterPopupClear.Margin = Padding.Empty; characterPopupClear.Height = Px(28); characterPopupClear.Width = Px(72);
             top.Controls.Add(caption); top.Controls.Add(characterPopupClear);

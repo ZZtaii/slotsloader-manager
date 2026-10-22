@@ -277,6 +277,7 @@ namespace SlotsInstaller
             // 2.4.1: Refresh libraries without the keyboard, at the right end of the row: the same path as F5
             // (RunShortcut), disabled while any Work task (a scan included) runs.
             refreshLibraryButton = new FlatButton(RefreshGlyph, false) { AutoSize = false, Font = RefreshFont, Margin = Padding.Empty, Padding = Padding.Empty, Height = SortChipHeight, Name = "refreshLibraryButton", AccessibleName = "Refresh libraries", AccessibleDescription = "Shortcut: " + Shortcuts.Display(ShortcutAction.RefreshLibraries) };
+            if (LinuxPlatform.IsLinux) { refreshLibraryButton.Text = ""; refreshLibraryButton.Glyph = ButtonGlyph.Refresh; }
             refreshLibraryButton.Click += delegate { RunShortcut(ShortcutAction.RefreshLibraries); };
             strip.Controls.Add(refreshLibraryButton);
             sortStrip = strip;

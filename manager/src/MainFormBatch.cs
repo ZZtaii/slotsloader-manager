@@ -93,7 +93,7 @@ namespace SlotsInstaller
         private Panel BuildBatchPanel()
         {
             batchPanel = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(12), Visible = false, Name = "batchPanel" };
-            batchTitle = new Label { UseMnemonic = false, Text = "", Dock = DockStyle.Top, Height = 34, Font = new Font("Segoe UI", 15F, FontStyle.Bold), AutoEllipsis = true };
+            batchTitle = new Label { UseMnemonic = false, Text = "", Dock = DockStyle.Top, Height = 34, Font = new Font(UiFonts.Family, 15F, FontStyle.Bold), AutoEllipsis = true };
             batchNote = new Label { UseMnemonic = false, Text = "Each mod installs with its default options. Bundles get the main files and the first or default choice of each required group; optional variants stay off.", Dock = DockStyle.Top, Height = 42, ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true };
             var modeRow = new Panel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(0, 4, 0, 8) };
             Label modeCaption = Caption("INSTALL AS"); modeCaption.Dock = DockStyle.Left; modeCaption.Width = 92; modeCaption.Height = 32;

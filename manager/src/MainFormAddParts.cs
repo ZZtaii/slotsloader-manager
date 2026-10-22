@@ -85,10 +85,10 @@ namespace SlotsInstaller
             Text = "Add to an installed outfit"; StartPosition = FormStartPosition.CenterParent;
             BackColor = Palette.Surface; ForeColor = Palette.Text; ShowInTaskbar = false; Padding = new Padding(18, 14, 18, 14); MaximizeBox = false; MinimizeBox = false; FormBorderStyle = FormBorderStyle.FixedDialog;
             AppBranding.Apply(this);
-            var title = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 30, Font = new Font("Segoe UI", 12F, FontStyle.Bold), AutoEllipsis = true, Text = options };
+            var title = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 30, Font = new Font(UiFonts.Family, 12F, FontStyle.Bold), AutoEllipsis = true, Text = options };
             var source = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 22, ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true, Text = ReplacePlanner.N(fileCount, "file") + " from " + modName };
             var note = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 44, ForeColor = Palette.Muted, Font = Palette.Small, Padding = new Padding(0, 6, 0, 0), Text = "Copied into the outfit you pick; its files with the same names are replaced. Edit options and reinstalls of that outfit keep them." };
-            var caption = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 28, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, Text = character.ToUpperInvariant() + " OUTFITS", TextAlign = ContentAlignment.BottomLeft, Padding = new Padding(0, 0, 0, 4) };
+            var caption = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 28, Font = new Font(UiFonts.Family, 8F, FontStyle.Bold), ForeColor = Palette.Muted, Text = character.ToUpperInvariant() + " OUTFITS", TextAlign = ContentAlignment.BottomLeft, Padding = new Padding(0, 0, 0, 4) };
             rows = new OutfitRows(rowHeight) { Dock = DockStyle.Top, Name = "addPartsOutfits", AccessibleName = character + " outfits", Empty = "No " + character + " outfit installed by the Manager yet. Install one first." };
             foreach (InstalledOutfit o in outfits)
             {

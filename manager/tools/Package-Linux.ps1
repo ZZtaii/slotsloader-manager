@@ -7,7 +7,7 @@ param(
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [string]$TestReport = '',
     [string]$Python = 'python',
-    [string]$BetaLabel = 'linux-beta1'
+    [string]$BetaLabel = 'linux-beta2'
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
@@ -24,6 +24,11 @@ $sevenHash = [regex]::Match($sevenSource, 'Sha256 = "([A-Fa-f0-9]{64})"').Groups
 $sevenSize = [regex]::Match($sevenSource, 'Asset = "7-Zip-[^"]+", Size = (\d+)').Groups[1].Value
 if (-not $sevenHash -or -not $sevenSize -or (Get-Item -LiteralPath $SevenZipZip).Length -ne [long]$sevenSize -or (Get-FileHash -LiteralPath $SevenZipZip -Algorithm SHA256).Hash -ne $sevenHash) { throw '7-Zip archive does not match the source release pin.' }
 $version = ([version](Get-Item -LiteralPath (Join-Path $BuildDirectory 'Slotsloader Manager.exe')).VersionInfo.FileVersion).ToString(3)
+foreach ($name in @('Inter-Regular.ttf', 'Inter-Bold.ttf', 'Inter-Italic.ttf', 'Inter-BoldItalic.ttf', 'OFL-Inter.txt', 'LiberationMono-Regular.ttf', 'LiberationMono-Bold.ttf', 'LiberationMono-Italic.ttf', 'LiberationMono-BoldItalic.ttf', 'OFL-Liberation.txt')) {
+    $font = Join-Path (Join-Path $BuildDirectory 'Fonts') $name
+    $sourceFont = Join-Path (Join-Path $project 'assets\fonts') $name
+    if (-not (Test-Path -LiteralPath $font -PathType Leaf) -or (Get-FileHash -LiteralPath $font -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $sourceFont -Algorithm SHA256).Hash) { throw "Missing or unverified Linux font: $name" }
+}
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $stage = Join-Path $output "SlotsLoader-Manager-$version-$BetaLabel"
@@ -31,6 +36,11 @@ $app = Join-Path $stage 'app'
 $linux = Join-Path $stage 'linux'
 New-Item -ItemType Directory -Path $app, $linux, (Join-Path $app 'Slotsloader'), (Join-Path $app '7-Zip') -Force | Out-Null
 foreach ($name in @('Slotsloader Manager.exe', 'Slotsloader Manager.exe.config', 'Slotsloader CLI.exe', 'Slotsloader CLI.exe.config')) { Copy-Item -LiteralPath (Join-Path $BuildDirectory $name) -Destination $app }
+$packagedFonts = Join-Path $app 'Fonts'
+New-Item -ItemType Directory -Path $packagedFonts -Force | Out-Null
+foreach ($name in @('Inter-Regular.ttf', 'Inter-Bold.ttf', 'Inter-Italic.ttf', 'Inter-BoldItalic.ttf', 'OFL-Inter.txt', 'LiberationMono-Regular.ttf', 'LiberationMono-Bold.ttf', 'LiberationMono-Italic.ttf', 'LiberationMono-BoldItalic.ttf', 'OFL-Liberation.txt')) {
+    Copy-Item -LiteralPath (Join-Path (Join-Path $BuildDirectory 'Fonts') $name) -Destination $packagedFonts
+}
 Copy-Item -LiteralPath $LoaderZip -Destination (Join-Path (Join-Path $app 'Slotsloader') $pin.asset)
 foreach ($name in @('launcher.py', 'host.py', 'bottle.yml')) { Copy-Item -LiteralPath (Join-Path (Join-Path $project 'linux') $name) -Destination $linux }
 Copy-Item -LiteralPath (Join-Path $project 'assets\slotsloader.ico') -Destination $linux
@@ -42,6 +52,15 @@ Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $project) 'THIRD_PARTY.md'
 $utf8 = New-Object Text.UTF8Encoding($false)
 $notices = @'
 SlotsLoader Manager Linux compatibility package
+
+Inter 4.1: unmodified Regular, Bold, Italic and Bold Italic fonts by the Inter
+Project Authors, under the SIL Open Font License 1.1. See app/Fonts/OFL-Inter.txt.
+Official source and release: https://github.com/rsms/inter/releases/tag/v4.1
+
+Liberation Mono 2.1.5: unmodified Regular, Bold, Italic and Bold Italic fonts,
+copyright Google Corporation and Red Hat, Inc., under the SIL Open Font License
+1.1. See app/Fonts/OFL-Liberation.txt and the official source release:
+https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5
 
 Manager, including its Linux launcher and helper: see LICENSE (personal-use
 source-available terms) and THIRD_PARTY_NOTICES.md (embedded component notices).
@@ -55,7 +74,9 @@ Its original archive and notices are preserved byte for byte.
 See also SLOTSLOADER-LICENSE.txt and SLOTSLOADER-THIRD-PARTY.md; those files
 describe the loader component, not the Manager's own code.
 
-Bottles, Wine and Microsoft .NET Framework are NOT redistributed in this package.
+Bottles, Wine, Microsoft .NET Framework and Microsoft GDI+ are NOT redistributed
+in this package. GDI+ is downloaded by Bottles under Microsoft's EULA and copied
+privately into the installed app after verification; it is never in this archive.
 Bottles downloads its runner and dependencies during graphical setup under their
 own licences. This package invokes Bottles through its documented public CLI.
 Bottles: https://usebottles.com/  Wine: https://www.winehq.org/
@@ -86,6 +107,7 @@ files={}
 for p in sorted(stage.rglob('*')):
     if not p.is_file(): continue
     name=p.relative_to(stage).as_posix()
+    if p.name.casefold()=='gdiplus.dll': raise SystemExit('Microsoft GDI+ must be downloaded by Bottles, never packaged')
     if any(part.casefold()=='data' for part in p.relative_to(stage).parts): raise SystemExit('User Data must never be packaged')
     if not name.startswith('app/') and p.suffix in ('.py','.sh','.desktop','.yml','.md','.txt'):
         p.write_bytes(p.read_bytes().replace(b'\r\n',b'\n'))

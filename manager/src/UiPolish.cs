@@ -164,7 +164,7 @@ namespace SlotsInstaller
     // The whole card opens Url (click, Enter or Space); hover/focus draws the accent border and title.
     internal sealed class AboutCard : Control
     {
-        internal static readonly Font TitleFont = new Font("Segoe UI", 11F, FontStyle.Bold);
+        internal static readonly Font TitleFont = new Font(UiFonts.Family, 11F, FontStyle.Bold);
         internal string Title = "", Body = "", Url;
         internal ButtonGlyph Icon;          // drawn 1.5x at the left, in IconColor (brand colours); None = text only
         internal Color IconColor = Palette.Text;
@@ -393,7 +393,7 @@ namespace SlotsInstaller
             using (var pen = new Pen(accent, DpiMetrics.Px(this, 2)) { DashStyle = DashStyle.Dash })
                 e.Graphics.DrawPath(pen, path);
             e.Graphics.SmoothingMode = previous;
-            using (var title = new Font("Segoe UI", 18F, FontStyle.Bold))
+            using (var title = new Font(UiFonts.Family, 18F, FontStyle.Bold))
             {
                 int titleHeight = TextRenderer.MeasureText(e.Graphics, "Ag", title).Height;
                 int top = Height / 2 - titleHeight;

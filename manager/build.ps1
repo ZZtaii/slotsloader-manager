@@ -3,6 +3,12 @@ $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSCommandPath
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskRoot 'out\build' }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+# Linux uses the same app-local font in GDI and GDI+; Windows retains Segoe UI.
+$fontOutput = Join-Path $OutputDirectory 'Fonts'
+New-Item -ItemType Directory -Path $fontOutput -Force | Out-Null
+foreach ($name in @('Inter-Regular.ttf', 'Inter-Bold.ttf', 'Inter-Italic.ttf', 'Inter-BoldItalic.ttf', 'OFL-Inter.txt', 'LiberationMono-Regular.ttf', 'LiberationMono-Bold.ttf', 'LiberationMono-Italic.ttf', 'LiberationMono-BoldItalic.ttf', 'OFL-Liberation.txt')) {
+    Copy-Item -LiteralPath (Join-Path (Join-Path $taskRoot 'assets\fonts') $name) -Destination $fontOutput -Force
+}
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $target = Join-Path $OutputDirectory 'Slotsloader Manager.exe'
 $appIcon = Join-Path $taskRoot 'assets\slotsloader.ico'
