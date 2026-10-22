@@ -112,7 +112,7 @@ The Health report shows a warning instead, such as "Broken texture mip table…;
 ### Extra outfits
 Slotsloader repairs extra outfits itself, at every SF6 start where something changed, in the files it writes to its own PAK. The Manager also rebuilds outdated select-screen colour swatches in the copy it installs. The mod in your library is never changed.
 
-The Manager doesn't change mods your external mod manager installs; any fixes they get come from that manager.
+The Manager doesn't change mods your external mod manager installs; any fixes they get come from that manager. The colour swatch rebuild and the character-swap repair below are only in SLM.
 
 ### Character-swap repair (off by default)
 **Settings → Game files & replacements → Try to fix character-swap mods broken by game updates** applies known fixes to old character swaps: the scene signature the Alex update changed, and some Mai and Elena physics files, rebuilt from the current game. Only files that match a verified older version are changed. Replace original and Slotsloader both follow this setting. Turn it on, then install (or reinstall) the swap mod. While it is off, nothing is changed and no swap warnings show.
