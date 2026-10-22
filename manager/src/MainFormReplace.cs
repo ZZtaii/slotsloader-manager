@@ -11,15 +11,18 @@ namespace SlotsInstaller
     // installed by this app, or a mod Fluffy Mod Manager installed (2.2.0: uninstallable here, never written by this app).
     internal sealed class GameModRow
     {
-        internal string Kind = "";          // Replacement, Tool, Mixed, Fluffy
+        internal string Kind = "";          // Replacement, Tool, Mixed, Fluffy, Leftover
         internal ReplaceMod Mod;
         internal FluffyMod Fluffy;
+        internal PatchPak Leftover;         // 1.0.11: a patch PAK no mod manager lists (MainFormLeftoverPaks.cs)
+        internal bool LeftoverBelowAnother; // a higher patch PAK exists: removing it leaves the empty placeholder
         internal int Priority, Conflicts, Owned;
         internal List<RowShare> Shares = new List<RowShare>();      // other mods with the same files
         internal List<string> Stacks = new List<string>();          // "Cammy Outfit 2 · 2 mods · 'A' wins"
         internal bool HasConflicts { get { return Shares.Count > 0 || Stacks.Count > 0; } }
-        internal string Name { get { return Mod != null ? Mod.Name : Fluffy != null ? Fluffy.Name : ""; } }
-        internal string KindLabel { get { return Kind == "Fluffy" ? "External mod manager" : Kind == "Pak" ? "PAK mod" : Kind == "Tool" ? "Tool mod" : Kind == "Mixed" ? "Tool mod + replacement" : "Replacement"; } }
+        internal string Name { get { return Mod != null ? Mod.Name : Fluffy != null ? Fluffy.Name : Leftover != null ? ReplaceEngine.LeftoverTitle : ""; } }
+        internal string Key { get { return Mod != null ? Mod.Id : Fluffy != null ? Fluffy.Section : Leftover != null ? "leftover:" + Leftover.Name : ""; } }
+        internal string KindLabel { get { return Kind == "Fluffy" ? "External mod manager" : Kind == "Leftover" ? ReplaceEngine.LeftoverTitle : Kind == "Pak" ? "PAK mod" : Kind == "Tool" ? "Tool mod" : Kind == "Mixed" ? "Tool mod + replacement" : "Replacement"; } }
     }
 
     internal sealed class RowShare
@@ -556,6 +559,8 @@ namespace SlotsInstaller
                 catch (Exception ex) { Program.Log(ex); }
                 try { engine.DeleteRemovedExcept(ProtectedRemovedFolders()); }
                 catch (Exception ex) { Program.Log(ex); }
+                try { engine.DiscardLeftoverCopiesExcept(ProtectedRemovedFolders(), RecycleBin.Current); }   // 1.0.11: a removed leftover PAK no Undo needs
+                catch (Exception ex) { Program.Log(ex); }
                 SwapRepairFlag.Sync(engine.GameRoot, engine.Settings.SwapRepairs);   // 1.0.5: Slotsloader follows the setting
                 ManagerInstalls.Sync(engine);   // 1.0.9: the installs list other costume loaders read follows the state
                 // 1.0.1: a gap in the patch PAK row (any tool's) is filled at start-up and every refresh, with SF6 and
@@ -602,6 +607,12 @@ namespace SlotsInstaller
                 }
                 FluffyInstalls fluffyInstalls = engine.Fluffy();
                 foreach (FluffyMod f in fluffyInstalls.Mods) result.Rows.Add(new GameModRow { Kind = "Fluffy", Fluffy = f });
+                // 1.0.11: patch PAKs no mod manager lists, one row each (removed only on a click; ReplaceLeftoverPaks.cs).
+                if (!engine.JournalPending)
+                {
+                    List<PatchPak> paks = LoaderCostumePak.Scan(engine.GameRoot); int top = paks.Select(p => p.Number).DefaultIfEmpty(0).Max();
+                    foreach (PatchPak p in ReplaceEngine.LeftoverPaks(paks, state, fluffyInstalls)) result.Rows.Add(new GameModRow { Kind = "Leftover", Leftover = p, LeftoverBelowAnother = p.Number < top });
+                }
                 result.FluffyRoots = fluffyInstalls.Roots.ToList(); result.FluffyStamp = fluffyInstalls.Stamp ?? FluffyInstalls.StampOf(fluffyInstalls.Roots);
                 result.Status = engine.Status();
             }
@@ -682,7 +693,7 @@ namespace SlotsInstaller
             if (installedSearch != null && installedSearch.Text.Trim().Length > 0) { InstalledQuery searchQuery = ParseInstalledSearch(); rows = rows.Where(r => GameRowMatchesSearch(searchQuery, r)).ToList(); }
             if (installedCharacters.Count > 0) rows = rows.Where(r => r.Mod != null && installedCharacters.Any(who => (r.Mod.Affects ?? "").IndexOf(who, StringComparison.OrdinalIgnoreCase) >= 0));
             string state = installedState == null ? "" : Convert.ToString(installedState.SelectedItem);
-            rows = rows.Where(r => state == "Enabled" ? (r.Mod == null || r.Mod.Enabled) : state == "Disabled" ? (r.Mod != null && !r.Mod.Enabled) : state == "Managed" ? r.Mod != null : state == "Manual" ? r.Fluffy != null : true);
+            rows = rows.Where(r => state == "Enabled" ? (r.Mod == null || r.Mod.Enabled) : state == "Disabled" ? (r.Mod != null && !r.Mod.Enabled) : state == "Managed" ? r.Mod != null : state == "Manual" ? r.Mod == null : true);
             return rows;
         }
         private bool ShowOutfitRows { get { return InstalledKindFilter != "Installed"; } }
@@ -691,19 +702,21 @@ namespace SlotsInstaller
         {
             bool selected = e.Item.Selected; Rectangle r = e.Bounds;
             using (Brush bg = new SolidBrush(selected ? Palette.Selected : Palette.Surface)) e.Graphics.FillRectangle(bg, r);
-            Color rail = row.Fluffy != null ? Palette.Border : row.Mod.Enabled ? Palette.Accent : Palette.Border;
+            Color rail = row.Mod == null ? Palette.Border : row.Mod.Enabled ? Palette.Accent : Palette.Border;
             using (Brush b = new SolidBrush(rail)) e.Graphics.FillRectangle(b, r.Left + Px(1), r.Top + Px(12), Px(3), r.Height - Px(24));
             TextRenderer.DrawText(e.Graphics, row.Name, Palette.Strong, new Rectangle(r.Left + Px(14), r.Top + Px(10), r.Width - Px(25), Px(24)), Palette.Text, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            string sub = row.Fluffy != null ? "External mod manager   ·   " + ReplacePlanner.N(row.Fluffy.Files.Count, "file") + (row.Fluffy.CopiedFiles ? "" : "   ·   PAK install") + "   ·   uninstall it there"
+            string sub = row.Leftover != null ? LeftoverRowText(row)   // 1.0.11
+                : row.Fluffy != null ? "External mod manager   ·   " + ReplacePlanner.N(row.Fluffy.Files.Count, "file") + (row.Fluffy.CopiedFiles ? "" : "   ·   PAK install") + "   ·   uninstall it there"
                 : (SourceChanged(row.Mod.SourcePath) && !LoaderCostumePak.IsLoaderMod(row.Mod) ? "Source changed   ·   " : "") + row.KindLabel + "   ·   #" + row.Priority + "   ·   " + (row.Mod.Enabled ? "Enabled" : "Disabled") + (row.Conflicts > 0 ? "   ·   " + ReplacePlanner.N(row.Conflicts, "shared file") : "") + (row.Mod.Test ? "   ·   Test" : "") + (row.Stacks.Count > 0 ? "   ·   " + row.Stacks[0] : String.IsNullOrEmpty(row.Mod.Affects) || row.Kind == "Tool" ? "" : "   ·   " + row.Mod.Affects);
             Rectangle meta = DrawSourceGoneNote(e.Graphics, row.Mod != null && !LoaderCostumePak.IsLoaderMod(row.Mod) ? row.Mod.SourcePath : null, new Rectangle(r.Left + Px(14), r.Top + Px(36), r.Width - Px(25), Px(20)));   // 2.4.1 Delete: muted "Source deleted"
-            TextRenderer.DrawText(e.Graphics, sub, Palette.Small, meta, row.Fluffy != null ? Palette.Muted : row.Mod.Enabled ? Palette.Accent : Palette.Muted, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);   // 1.0.1: no "played …" (the user)
+            TextRenderer.DrawText(e.Graphics, sub, Palette.Small, meta, row.Mod == null ? Palette.Muted : row.Mod.Enabled ? Palette.Accent : Palette.Muted, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);   // 1.0.1: no "played …" (the user)
             DrawUsageAfter(e.Graphics, sub, InstalledAgo(row), Palette.Small, meta);   // 1.0.1: when it was installed, when it fits
         }
 
         private void ShowGameRow(GameModRow row)
         {
-            installedTitle.Text = row.Name; 
+            if (row.Leftover != null) { ShowLeftoverRow(row); return; }   // 1.0.11 (MainFormLeftoverPaks.cs)
+            installedTitle.Text = row.Name;
             var chips = new List<ChipStrip.Chip> { row.Fluffy != null ? ChipStrip.Quiet("External mod manager") : ChipStrip.Neutral(row.KindLabel) };
             if (row.Mod != null && !LoaderCostumePak.IsLoaderMod(row.Mod)) AddAuthorChip(chips, row.Mod.SourcePath);   // 2.5.9
             if (row.Mod != null && SourceChanged(row.Mod.SourcePath)) chips.Add(ChipStrip.Warn("Source changed"));   // 2.4.1: Reinstall applies the edit
@@ -820,6 +833,7 @@ namespace SlotsInstaller
         private void UninstallGameRow(GameModRow row)
         {
             if (row.Fluffy != null) { UninstallFluffyRow(row); return; }
+            if (row.Leftover != null) { RemoveLeftoverRow(row); return; }   // 1.0.11
             if (row.Mod == null) return;
             UninstallReplacementIds(new List<string> { row.Mod.Id }, "Uninstalled " + row.Name, "Uninstalling replacement");
         }

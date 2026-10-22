@@ -73,6 +73,7 @@ namespace SlotsInstaller
                         check("Launch SF6 uses the launcher; the running indicator disables replacement changes", delegate { Launch(form, probe, launcher); });
                         check("no Test in game in the window (removed in 2.3.0): three footer actions; a leftover test record is kept as a normal install at start-up and deleted", delegate { LeftoverTest(form, f); });
                         check("Uninstall from the Installed page restores the clean game folder", delegate { Uninstall(form, f, clean); });
+                        check("leftover PAK row (1.0.11): the fixture's unlisted patch PAK is a 'Leftover PAK' row ('not listed by any mod manager · size · name') with Remove PAK; SF6 running refuses inline; Remove PAK takes it out with no popup and offers Undo; Undo puts it back byte for byte; an Undo that ends unused sends its copy to the Recycle Bin", delegate { LeftoverPakRow(form, f, probe, clean); });
                         check("library uninstall (2.0.3): right-click and footer offer Uninstall replacement for a source installed as a replacement, disabled with the reason while Fluffy runs, uninstall for good (no copy kept, 1.0.1); extra-outfit entries unchanged", delegate { LibraryReplacementUninstall(form, f, probe, clean); });
                         check("Settings: Game files & replacements tab shows method, store, Fluffy and tool status without hiding General", delegate { SettingsTab(form, root); });
                         check("Extra outfit mode warns when Slotsloader is missing (1.0.8: after REFramework, which comes first)", delegate { SlotsLoaderNotice(form, f); });
@@ -485,7 +486,8 @@ namespace SlotsInstaller
             Require(!list.Items.Cast<ListViewItem>().Any(i => i.Tag is GameModRow), "Extra filter lists game-folder rows");
             Kind(form, "Installed");
             var shown = list.Items.Cast<ListViewItem>().ToList();
-            Require(shown.Count == 2 && shown.All(i => i.Tag is GameModRow) && shown.Any(i => ((GameModRow)i.Tag).Fluffy != null) && shown.Any(i => ((GameModRow)i.Tag).Mod != null), "Installed filter: " + String.Join(", ", shown.Select(i => i.Text)));
+            // 1.0.11: the fixture's unlisted patch PAK is a leftover row too.
+            Require(shown.Count == 3 && shown.All(i => i.Tag is GameModRow) && shown.Any(i => ((GameModRow)i.Tag).Fluffy != null) && shown.Any(i => ((GameModRow)i.Tag).Mod != null) && shown.Any(i => ((GameModRow)i.Tag).Leftover != null), "Installed filter: " + String.Join(", ", shown.Select(i => i.Text)));
             Func<Func<GameModRow, bool>, ListViewItem> pick = delegate(Func<GameModRow, bool> match)
             {
                 ListViewItem item = list.Items.Cast<ListViewItem>().First(i => i.Tag is GameModRow && match((GameModRow)i.Tag));

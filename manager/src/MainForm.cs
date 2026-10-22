@@ -2622,7 +2622,7 @@ namespace SlotsInstaller
         {
             var selectedPaths=new HashSet<string>(installedList.SelectedItems.Cast<ListViewItem>().Select(i=>i.Tag as InstalledOutfit).Where(o=>o!=null).Select(o=>o.Folder),StringComparer.OrdinalIgnoreCase);
             foreach (ListViewItem item in installedList.SelectedItems) { var grouped = item.Tag as OutfitGroup; if (grouped != null) selectedPaths.Add("group:" + grouped.Key); }   // 2.5.0
-            foreach (ListViewItem item in installedList.SelectedItems) { var g = item.Tag as GameModRow; if (g != null) selectedPaths.Add("game:" + (g.Mod != null ? g.Mod.Id : g.Fluffy.Section)); }
+            foreach (ListViewItem item in installedList.SelectedItems) { var g = item.Tag as GameModRow; if (g != null) selectedPaths.Add("game:" + g.Key); }
             IEnumerable<InstalledOutfit> matches = ShowOutfitRows ? installed : new List<InstalledOutfit>();
             InstalledQuery searchQuery = ParseInstalledSearch();   // 2.4.1: the library's matching (aliases, prefixes, terms)
             matches = matches.Where(o => OutfitMatchesSearch(searchQuery, o)).ToList();
@@ -2690,7 +2690,7 @@ namespace SlotsInstaller
         private static string InstalledRowKey(object tag)
         {
             OutfitGroup group = tag as OutfitGroup; if (group != null) return "group:" + group.Key;
-            GameModRow game = tag as GameModRow; if (game != null) return "game:" + (game.Mod != null ? game.Mod.Id : game.Fluffy.Section);
+            GameModRow game = tag as GameModRow; if (game != null) return "game:" + game.Key;
             InstalledOutfit outfit = tag as InstalledOutfit; return outfit == null ? "" : outfit.Folder;
         }
         private static string InstalledRowText(object tag)
@@ -2743,11 +2743,13 @@ namespace SlotsInstaller
                 bool own = gameRow.Mod != null;
                 editInstalledButton.Visible = toggleInstalledButton.Visible = own;
                 // 2.2.0: Fluffy's mods can be uninstalled here too (normal installs, with Fluffy closed).
-                removeInstalledButton.Visible = own || gameRow.Fluffy != null;
-                string fluffyBlocker = gameRow.Fluffy != null ? FluffyUninstallBlocker(gameRow.Fluffy) : null;
-                editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = idle && own; removeInstalledButton.Enabled = own ? idle : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
+                // 1.0.11: a leftover patch PAK has Remove PAK (refused inline while SF6 or the external manager runs).
+                bool leftover = gameRow.Leftover != null;
+                removeInstalledButton.Visible = own || gameRow.Fluffy != null || leftover;
+                string fluffyBlocker = gameRow.Fluffy != null ? FluffyUninstallBlocker(gameRow.Fluffy) : leftover ? LeftoverBlocker : null;
+                editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = idle && own; removeInstalledButton.Enabled = own ? idle : leftover ? !busy : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
                 moveUpButton.Enabled = idle && own && gameRow.Priority > 1; moveDownButton.Enabled = idle && own && gameRow.Priority < gameRows.Count(r => r.Mod != null); reapplyButton.Enabled = idle && own;
-                editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Disable" : "Enable"; removeInstalledButton.Text = "Uninstall";
+                editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Disable" : "Enable"; removeInstalledButton.Text = leftover ? LeftoverRemoveText : "Uninstall";
                 reinstallButton.Visible = own && SourceChanged(gameRow.Mod.SourcePath); reinstallButton.Enabled = idle && own;
                 LayoutInstalledActions(); ShowGameRow(gameRow);
                 return;
@@ -2843,7 +2845,7 @@ namespace SlotsInstaller
             if (button == openInstalledButton) return true;
             GameModRow gameRow = installedList == null ? null : GetGameRowSelection();
             if (button == reinstallButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && SourceChanged(gameRow.Mod.SourcePath) : outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath));
-            if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && gameRow.Fluffy != null);
+            if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && (gameRow.Fluffy != null || gameRow.Leftover != null));
             if (button == moveUpButton || button == moveDownButton || button == reapplyButton) return false;
             if (button == removeInstalledButton) return count > 0;
             return outfit != null && outfit.Managed;

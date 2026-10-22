@@ -290,6 +290,7 @@ namespace SlotsInstaller
         internal List<string> OrphanCostumePaks = new List<string>();   // 2.4.0: loader costume paks with no SlotsLoader installed
         internal int OrphanedRows;                                       // 2.4.2: zeroed PAK rows no installed mod owns (PakRepair.cs)
         internal List<string> OrphanedRowsWhere = new List<string>();    // "re_chunk_000.pak #11886"
+        internal List<string> LeftoverPaks = new List<string>();         // 1.0.11: patch PAKs no mod manager lists (ReplaceLeftoverPaks.cs)
         internal bool NeedsReapply { get { return PakChanged || RowsNotZero > 0 || FilesMissing > 0 || FilesChanged > 0; } }
         internal string Summary
         {
