@@ -35,11 +35,17 @@ namespace SlotsInstaller
         }
 
         // A pick while a mod is read: the newest waits, the read in flight stops (its 7-Zip is killed). Back on the mod
-        // still shown: the read stops and nothing reopens, so its ticked options stay.
+        // still shown: the read stops and nothing reopens, so its ticked options stay. Back on the mod being read: it
+        // goes on, or, already stopped for an earlier pick, it is read again once it ends (PR #16 review).
         private void QueueOpen(LibraryEntry entry)
         {
             if (entry == null) return;
-            if (String.Equals(entry.SourcePath, loadingPath, StringComparison.OrdinalIgnoreCase)) { nextOpen = null; keepShown = false; return; }
+            if (String.Equals(entry.SourcePath, loadingPath, StringComparison.OrdinalIgnoreCase))
+            {
+                bool stopped = openCancel != null && openCancel.IsCancellationRequested;
+                nextOpen = stopped ? entry : null; keepShown = false;
+                return;
+            }
             bool shown = package != null && String.Equals(entry.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase);
             nextOpen = shown ? null : entry; keepShown = shown;
             if (openCancel != null) try { openCancel.Cancel(); } catch (ObjectDisposedException) { }
@@ -70,6 +76,22 @@ namespace SlotsInstaller
                 if (IsDisposed) { if (result != null) result.Dispose(); return; }
                 SetBusy(false, "Ready");
                 LibraryEntry next = nextOpen; nextOpen = null; bool back = keepShown; keepShown = false;
+                if (selectionAfterOpen)
+                {
+                    // Ctrl/Shift changed the selection during the read: the list decides (one row opens, several open the
+                    // queue). This read shows only when its row is the one left selected (PR #16 review: a deselected
+                    // mod came back and opened the queue).
+                    selectionAfterOpen = false;
+                    List<LibraryEntry> picked = modList.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag as LibraryEntry).Where(x => x != null).ToList();
+                    if (result == null || picked.Count != 1 || !String.Equals(picked[0].SourcePath, path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (result != null) result.Dispose();
+                        BeginInvoke((Action)LibrarySelectionSettled);
+                        return;
+                    }
+                    next = null; back = false;
+                }
+                if (next != null && result != null && String.Equals(next.SourcePath, path, StringComparison.OrdinalIgnoreCase)) next = null;   // stopped too late: it is read
                 if (next != null) { if (result != null) result.Dispose(); LoadPackage(next); return; }   // passed over: never shown
                 if (back) { if (result != null) result.Dispose(); if (package != null) RequestReview(BrowseReviewDelay); }   // the shown mod again
                 else if (e.Error != null) Error(e.Error);
@@ -78,7 +100,6 @@ namespace SlotsInstaller
                     try { using (InstallMetrics.Measure("open: show")) show(result); } catch (Exception ex) { Error(ex); }
                     ReadAhead();
                 }
-                if (selectionAfterOpen) { selectionAfterOpen = false; BeginInvoke((Action)LibrarySelectionSettled); }
             };
             worker.RunWorkerCompleted += finished;
             worker.RunWorkerAsync();
