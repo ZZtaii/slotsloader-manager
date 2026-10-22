@@ -1,6 +1,6 @@
 # Builds the Assistant's knowledge pack (embedded in both executables as SlotsInstaller.AssistantKnowledge.md)
-# from the user-facing docs only: README (What changed limited to the three newest versions), the newest
-# sections of docs/UI-REFERENCE.md, docs/CLI.md, and the Slotsloader repository's README.md and
+# from the user-facing docs only: README (What changed limited to the two newest versions), docs/HELP.md, the two
+# newest sections of docs/UI-REFERENCE.md, docs/CLI.md, and the Slotsloader repository's README.md and
 # COMPATIBILITY.md. Developer docs (DEVELOPMENT, API, ARCHITECTURE, TESTING, handoffs) are never read.
 # Deterministic: the same input bytes give the same output bytes (no dates, LF line ends, UTF-8 without BOM).
 # Fails when text about the owned-outfit opt-out (or its Manager-side marker) would end up in the pack.
@@ -8,7 +8,7 @@ param([Parameter(Mandatory = $true)][string]$Project, [Parameter(Mandatory = $tr
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 function Read-Doc([string]$path) { if (-not (Test-Path -LiteralPath $path)) { return $null }; return ([IO.File]::ReadAllText($path, $utf8)).Replace("`r`n", "`n").Replace("`r", "`n") }
-$versionBullet = '^- (\d+\.\d+\.\d+)( |\()'
+$versionBullet = '^- (\d+\.\d+\.\d+)( |\(|:)'   # 1.0.11: the README writes "- 1.0.11:" (the colon wasn't matched, so no version was ever left out)
 
 function Limit-WhatChanged([string]$text, [int]$keep) {
     $out = New-Object System.Collections.Generic.List[string]; $inSection = $false; $seen = 0; $dropping = $false
@@ -59,9 +59,19 @@ $loaderRepo = if (Test-Path -LiteralPath (Join-Path $parentDir 'COMPATIBILITY.md
 $parts = New-Object System.Collections.Generic.List[string]
 $parts.Add("# Slotsloader Manager and Slotsloader: user guide`n`nThe documentation of the app (Slotsloader Manager) and of the Slotsloader loader, for answering how-to and troubleshooting questions. Live state (what is installed, versions, health) comes from the app's tools, not from this text.")
 $readme = Read-Doc (Join-Path $Project 'README.md')
-if ($readme) { $parts.Add("# Source: Slotsloader Manager README`n`n" + (Clean (Limit-WhatChanged $readme 3))) }
+# 1.0.11: What changed keeps the two newest versions (docs/HELP.md describes today's behaviour), within the 26k-token budget.
+if ($readme) { $parts.Add("# Source: Slotsloader Manager README`n`n" + (Clean (Limit-WhatChanged $readme 2))) }
+# 1.0.11: the in-app Help articles (docs/HELP.md, gear → Help); the format comment at its top is left out.
+$help = Read-Doc (Join-Path $Project 'docs\HELP.md')
+# Links read as their shown text, as on the page: [[Topic|text]] → text, [[Topic#Heading]] → Heading, [[Topic]] → Topic.
+if ($help) {
+    $help = [regex]::Replace($help, '(?s)<!--.*?-->', '')
+    $help = [regex]::Replace($help, '\[\[[^\]|]*\|([^\]]*)\]\]', '$1'); $help = [regex]::Replace($help, '\[\[[^\]#]*#([^\]]*)\]\]', '$1'); $help = [regex]::Replace($help, '\[\[([^\]]*)\]\]', '$1')
+    $parts.Add("# Source: Slotsloader Manager Help (the in-app Help page, gear → Help or F1)`n`n" + (Clean $help))
+}
 $ui = Read-Doc (Join-Path $Project 'docs\UI-REFERENCE.md')
-if ($ui) { $parts.Add("# Source: Slotsloader Manager screens (UI reference, newest versions)`n`n" + (Clean (Sections $ui @('^## Views and how to reach them') 3))) }
+# 1.0.11: two newest version sections (was three): docs/HELP.md now covers the user-facing behaviour, within the 26k-token budget.
+if ($ui) { $parts.Add("# Source: Slotsloader Manager screens (UI reference, newest versions)`n`n" + (Clean (Sections $ui @('^## Views and how to reach them') 2))) }
 $cli = Read-Doc (Join-Path $Project 'docs\CLI.md')
 if ($cli) { $parts.Add("# Source: Slotsloader CLI.exe`n`n" + (Clean $cli)) }
 $loaderReadme = Read-Doc (Join-Path $loaderRepo 'README.md')

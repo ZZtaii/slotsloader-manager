@@ -39,7 +39,7 @@ namespace SlotsInstaller
         internal sealed class Options
         {
             internal string Command, Source, JsonFile, SelectionFile, Character, Loader, GameRoot, Sandbox;
-            internal string SevenZip = @"C:\Program Files\7-Zip\7z.exe";
+            internal string SevenZip = "";   // 1.0.11: empty = SevenZipTool finds one
             internal List<string> Selected = new List<string>();
             internal bool HasSelection;
         }
@@ -184,7 +184,7 @@ namespace SlotsInstaller
         }
         private static void Help()
         {
-            Console.WriteLine("Slotsloader CLI (Slotsloader Manager) — no app window or game launch required.");
+            Console.WriteLine("Slotsloader CLI (Slotsloader Manager). Works without the app window and without starting the game.");
             Console.WriteLine("  list-options <mod.zip|folder> [--json <new-report.json|->]");
             Console.WriteLine("  test-mod <source> [--select <id> ... | --selection <selection.json>] [--character <name|esfNNN>] [--json <new-report.json|->]");
             Console.WriteLine("  test-loader <source> [selection options] --loader <costume_loader.exe> --game-root <SF6 folder> --sandbox <NEW folder> [--json <new-report.json|->]");

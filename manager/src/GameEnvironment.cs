@@ -414,21 +414,40 @@ namespace SlotsInstaller
         internal static void Write(string path, byte[] bytes)
         {
             string tmp = path + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";
+            bool complete = false;
             try
             {
                 using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
                 { fs.Write(bytes, 0, bytes.Length); fs.Flush(true); }
-                // 2.4.2: another program reading the target without Delete sharing (an older Manager, a scanner) makes
-                // the replace fail for a moment; the temporary file is intact then, so it is tried again briefly.
-                for (int attempt = 0; ; attempt++)
-                {
-                    try { if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path); break; }
-                    catch (IOException) { if (attempt >= ReplaceRetries || !File.Exists(tmp)) throw; }
-                    catch (UnauthorizedAccessException) { if (attempt >= ReplaceRetries || !File.Exists(tmp)) throw; }
-                    System.Threading.Thread.Sleep(15 + 15 * attempt);
-                }
+                complete = true;
+                Publish(tmp, path);
             }
-            finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
+            finally { Discard(tmp, path, complete); }
+        }
+        // Puts a fully written temporary file in place of `path`. 2.4.2: another program reading the target without
+        // Delete sharing (an older Manager, a scanner) makes the replace fail for a moment; the temporary file is intact
+        // then, so it is tried again briefly. Json.Write uses it too (1.0.11).
+        internal static void Publish(string tmp, string path)
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                try { if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path); return; }
+                catch (IOException) { if (attempt >= ReplaceRetries || !File.Exists(tmp)) throw; }
+                catch (UnauthorizedAccessException) { if (attempt >= ReplaceRetries || !File.Exists(tmp)) throw; }
+                System.Threading.Thread.Sleep(15 + 15 * attempt);
+            }
+        }
+        // After a write (failed or not): a temporary file left over is deleted, except when it was written in full and the
+        // target is gone. A replace can fail after removing the target (ERROR_UNABLE_TO_MOVE_REPLACEMENT); the new
+        // content then takes the target's place instead of being lost with it (1.0.11, PR #12 review).
+        internal static void Discard(string tmp, string path, bool complete)
+        {
+            try
+            {
+                if (!File.Exists(tmp)) return;
+                if (complete && !File.Exists(path)) File.Move(tmp, path); else File.Delete(tmp);
+            }
+            catch { }
         }
         internal static void WriteJson(string path, object value)
         {

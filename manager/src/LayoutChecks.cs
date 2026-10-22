@@ -857,15 +857,19 @@ namespace SlotsInstaller
             Require(OpenedFrom(menu, delegate { gear.PerformClick(); }) == gear, context + ": gear did not open its menu.");
             ToolStripMenuItem settingsItem = menu.Items.OfType<ToolStripMenuItem>().FirstOrDefault(i => i.Text.StartsWith("Settings", StringComparison.OrdinalIgnoreCase));
             Require(settingsItem != null && settingsItem.Enabled, context + ": Settings menu item is unavailable.");
-            // 2.5.9: gear menu without Open costume folder, Refresh libraries and Import external preset; About at the end opens Settings → About.
+            // 2.5.9: gear menu without Open costume folder, Refresh libraries and Import external preset.
+            // 1.0.11 (the user): Help (F1) at the end; no Welcome (Settings → General) and no About (the Settings → About tab).
             string[] gearItems = menu.Items.OfType<ToolStripMenuItem>().Select(i => i.Text).ToArray();
-            Require(gearItems.SequenceEqual(new[] { "Settings…", "History", "Restore", "Keyboard shortcuts", "About" }), context + ": gear menu items: " + String.Join(" | ", gearItems));
-            ToolStripMenuItem aboutItem = menu.Items.OfType<ToolStripMenuItem>().Last();
-            aboutItem.PerformClick(); menu.Close(); Application.DoEvents(); LayoutChildren(layoutHost);
+            Require(gearItems.SequenceEqual(new[] { "Settings…", "History", "Restore", "Keyboard shortcuts", "Help" }), context + ": gear menu items: " + String.Join(" | ", gearItems));
+            ToolStripMenuItem helpItem = menu.Items.OfType<ToolStripMenuItem>().Last();
+            helpItem.PerformClick(); menu.Close(); Application.DoEvents(); LayoutChildren(layoutHost);
+            Panel helpPage = ControlField<Panel>(form, "helpPage");
+            Require(helpItem.ShortcutKeyDisplayString == "F1" && helpPage != null && helpPage.Visible && !settingsPage.Visible && gear.Active, context + ": gear → Help did not open the Help page.");
+            settingsItem.PerformClick(); ControlField<FlatButton>(form, "settingsAboutTab").PerformClick(); Application.DoEvents(); LayoutChildren(layoutHost);
             Panel aboutPanel = ControlField<Panel>(form, "settingsAboutPanel");
             AboutCard[] aboutCards = AllControls(aboutPanel).OfType<AboutCard>().OrderBy(c => c.Parent.Top).ThenBy(c => c.Left).ToArray();   // reading order
-            Require(settingsPage.Visible && aboutPanel.Visible && ControlField<FlatButton>(form, "settingsAboutTab").Active && !ControlField<Panel>(form, "settingsUpdatesPanel").Visible, context + ": gear → About did not open Settings → About.");
-            Require(aboutCards.Select(c => c.Url).SequenceEqual(new[] { MainForm.DiscordUrl, MainForm.PatreonUrl, MainForm.RepoUrl, MainForm.AuthorUrl, MainForm.ColorSyncUrl, MainForm.NexusProfileUrl, MainForm.AuthorGitHubUrl, MainForm.Wael3rdUrl }), context + ": About cards: " + String.Join(", ", aboutCards.Select(c => c.Title)));
+            Require(settingsPage.Visible && aboutPanel.Visible && ControlField<FlatButton>(form, "settingsAboutTab").Active && !ControlField<Panel>(form, "settingsUpdatesPanel").Visible, context + ": the About tab did not open Settings → About.");
+            Require(aboutCards.Select(c => c.Url).SequenceEqual(new[] { MainForm.DiscordUrl, MainForm.PatreonUrl, MainForm.RepoUrl, MainForm.AuthorUrl, MainForm.ColorSyncUrl, MainForm.NexusProfileUrl, MainForm.AuthorGitHubUrl, MainForm.Wael3rdUrl, MainForm.BrewedVfxUrl }), context + ": About cards: " + String.Join(", ", aboutCards.Select(c => c.Title)));
             // Cards keep their size and stay side by side inside the panel's width (it scrolls vertically when short, never sideways).
             Require(aboutCards.All(c => c.Visible && c.Width > 0 && c.Height > 0 && c.Right <= c.Parent.Width) && !aboutPanel.HorizontalScroll.Visible && aboutCards.First().Parent.Right <= aboutPanel.ClientSize.Width, context + ": About cards are clipped or scroll sideways.");
             Require(OpenedFrom(menu, delegate { gear.PerformClick(); }) == gear, context + ": gear did not open its menu again.");

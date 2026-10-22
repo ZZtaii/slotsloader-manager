@@ -73,6 +73,7 @@ namespace SlotsInstaller
                         check("Launch SF6 uses the launcher; the running indicator disables replacement changes", delegate { Launch(form, probe, launcher); });
                         check("no Test in game in the window (removed in 2.3.0): three footer actions; a leftover test record is kept as a normal install at start-up and deleted", delegate { LeftoverTest(form, f); });
                         check("Uninstall from the Installed page restores the clean game folder", delegate { Uninstall(form, f, clean); });
+                        check("leftover PAK row (1.0.11): the fixture's unlisted patch PAK is a 'Leftover PAK' row ('not listed by any mod manager · size · name') with Remove PAK; SF6 running refuses inline; Remove PAK takes it out with no popup and offers Undo; Undo puts it back byte for byte; an Undo that ends unused sends its copy to the Recycle Bin", delegate { LeftoverPakRow(form, f, probe, clean); });
                         check("library uninstall (2.0.3): right-click and footer offer Uninstall replacement for a source installed as a replacement, disabled with the reason while Fluffy runs, uninstall for good (no copy kept, 1.0.1); extra-outfit entries unchanged", delegate { LibraryReplacementUninstall(form, f, probe, clean); });
                         check("Settings: Game files & replacements tab shows method, store, Fluffy and tool status without hiding General", delegate { SettingsTab(form, root); });
                         check("Extra outfit mode warns when Slotsloader is missing (1.0.8: after REFramework, which comes first)", delegate { SlotsLoaderNotice(form, f); });
@@ -85,7 +86,7 @@ namespace SlotsInstaller
                         check("conflicts (2.0.1): footer and inspector name the installed mod with counts; inline Uninstall link (disabled while Fluffy runs) uninstalls without a dialog, for good (no copy, no Undo line; 1.0.1); reinstalling from the library restores byte for byte", delegate { ConflictLink(form, f, probe, root); });
                         check("installs never remove other mods; opening another mod changes nothing; no dialog opens", delegate { NoAutomaticRemoval(form, f, probe, launcher); });
                         check("Installed page (2.0.1): shared-files chip opens the details naming who wins; same-outfit stacking on rows (the Has conflicts filter was removed in 1.0.1)", delegate { InstalledConflicts(form, root); });
-                        check("external mods (1.0.1 lockout): Cannot install in the footer gives the reason", delegate { FluffyFooter(form, f, fluffy); });
+                        check("external mods (1.0.1 lockout): the footer gives the reason (1.0.11: 'Replace original is off' and a short line; Extra outfit mode names it above the toggle)", delegate { FluffyFooter(form, f, fluffy); });
                         check("Fluffy link (2.2.0): a Fluffy install shows on the Installed page by itself within 2 s (watcher); its Uninstall (and the library right-click item for its Mods entry) is disabled with the reason while Fluffy runs, enabled when closed, and removes its file and installed.ini entry; a PAK install says to use Fluffy", delegate { FluffyLink(form, f, fluffy, probe); });
                         check("other tools' files (2.2.0): the banner names the Fluffy mod that replaced a tool-mod file; Uninstall asks Restore original / Keep current file / Cancel; Cancel changes nothing; Keep current file uninstalls and keeps the file with the original restorable", delegate { DriftDialog(form, f, fluffy, probe); });
                         check("Extra outfit mode reviews automatically and notes a duplicate install (same source and options)", delegate { DuplicateExtra(form, f); });
@@ -485,7 +486,8 @@ namespace SlotsInstaller
             Require(!list.Items.Cast<ListViewItem>().Any(i => i.Tag is GameModRow), "Extra filter lists game-folder rows");
             Kind(form, "Installed");
             var shown = list.Items.Cast<ListViewItem>().ToList();
-            Require(shown.Count == 2 && shown.All(i => i.Tag is GameModRow) && shown.Any(i => ((GameModRow)i.Tag).Fluffy != null) && shown.Any(i => ((GameModRow)i.Tag).Mod != null), "Installed filter: " + String.Join(", ", shown.Select(i => i.Text)));
+            // 1.0.11: the fixture's unlisted patch PAK is a leftover row too.
+            Require(shown.Count == 3 && shown.All(i => i.Tag is GameModRow) && shown.Any(i => ((GameModRow)i.Tag).Fluffy != null) && shown.Any(i => ((GameModRow)i.Tag).Mod != null) && shown.Any(i => ((GameModRow)i.Tag).Leftover != null), "Installed filter: " + String.Join(", ", shown.Select(i => i.Text)));
             Func<Func<GameModRow, bool>, ListViewItem> pick = delegate(Func<GameModRow, bool> match)
             {
                 ListViewItem item = list.Items.Cast<ListViewItem>().First(i => i.Tag is GameModRow && match((GameModRow)i.Tag));
@@ -763,7 +765,7 @@ namespace SlotsInstaller
                 string extraId = picked().First(id => id.IndexOf("Extra", StringComparison.OrdinalIgnoreCase) >= 0);
                 Require(Get<FlatButton>(form, "installButton").Enabled, "fixture: Install not enabled: " + problems());
                 // 1. F5: the list is rescanned and the open mod reloads with its selection.
-                WriteEditZip(zip, "main v2 — longer content", "Extra", "Extra", "extra v2"); File.SetLastWriteTimeUtc(zip, DateTime.UtcNow.AddMinutes(1));
+                WriteEditZip(zip, "main v2, longer content", "Extra", "Extra", "extra v2"); File.SetLastWriteTimeUtc(zip, DateTime.UtcNow.AddMinutes(1));
                 int before = form.SourceReloads;
                 // The rescan also re-checks portraits once Filters was opened; this suite's fixture game must not leave a
                 // portrait cache in the shared Data (filter-real requires none).
@@ -792,7 +794,7 @@ namespace SlotsInstaller
                 Call(form, "InstallCurrent"); WaitIdle(form);
                 ReplaceMod mod = engine.LoadState().Mods.Single(m => String.Equals(m.SourcePath, zip, StringComparison.OrdinalIgnoreCase));
                 DateTime installedAt = LibraryUsage.ParseUtc(mod.InstalledUtc), edited = installedAt.AddSeconds(5);
-                WriteEditZip(zip, "main v5 — edited after install", "Extra v2", "Extra", "extra v5"); File.SetLastWriteTimeUtc(zip, edited);
+                WriteEditZip(zip, "main v5, edited after install", "Extra v2", "Extra", "extra v5"); File.SetLastWriteTimeUtc(zip, edited);
                 while (DateTime.UtcNow < edited.AddSeconds(1)) { Application.DoEvents(); Thread.Sleep(50); }
                 Call(form, "ShowPage", Get<Panel>(form, "installedPage")); Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
                 Require(form.SourceChanged(zip), "the installed copy is not marked Source changed");
@@ -1131,7 +1133,15 @@ namespace SlotsInstaller
             {
                 File.WriteAllText(ini, saved + "[Fluffy Cammy]\r\nModName=Fluffy Cammy\r\ninstalltype=invalidate\r\nfile=natives/stm/product/model/esf/esf009/002/esf009_002_cmd_001.user.2\r\n");
                 Load(form, f, "modC"); WaitReview(form);
-                Require(Summary(form) == "Cannot install" && Details(form).Contains("only Extra outfit, Slotsloader and REFramework install here") && !Get<FlatButton>(form, "installButton").Enabled, "Fluffy footer: " + Summary(form) + " / " + Details(form));
+                // 1.0.11 (the user): its own heading and a short line; Extra outfit mode says it above the toggle before switching.
+                Label lockHint = Get<Label>(form, "modeLockHint");
+                Require(Summary(form) == "Replace original is off" && Details(form) == "The external mod manager has 1 mod installed · uninstall them there or use Extra outfit · View report" && !Get<FlatButton>(form, "installButton").Enabled, "Fluffy footer: " + Summary(form) + " / " + Details(form));
+                Require(Get<Label>(form, "modeNotice").Text == "Off while the external mod manager has mods installed · use Extra outfit" && lockHint.Text == "", "Replace original strip: " + Get<Label>(form, "modeNotice").Text + " / hint " + lockHint.Text);
+                Render(form, Path.Combine(Path.GetDirectoryName(f.Mods), "library-external-lock-replace-" + form.DeviceDpi + ".png"));
+                Call(form, "SetInstallMode", InstallModes.Slot, true); WaitReview(form);
+                Require(lockHint.Text == "· Replace off: the external mod manager has 1 mod" && lockHint.ForeColor == Palette.Accent && lockHint.PreferredWidth <= lockHint.Width, "Extra outfit hint: '" + lockHint.Text + "' " + lockHint.PreferredWidth + "/" + lockHint.Width);
+                Render(form, Path.Combine(Path.GetDirectoryName(f.Mods), "library-external-lock-extra-" + form.DeviceDpi + ".png"));
+                Call(form, "SetInstallMode", InstallModes.Replace, true); WaitReview(form);
                 // 1.0.10: REFramework the external manager installed is updated there, so the notice offers no click.
                 string dll = Path.Combine(f.Game, "dinput8.dll"), dir = Path.Combine(f.Game, "reframework"); bool hadDir = Directory.Exists(dir);
                 byte[] oldDll = File.Exists(dll) ? File.ReadAllBytes(dll) : null;

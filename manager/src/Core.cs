@@ -19,7 +19,7 @@ namespace SlotsInstaller
         // libraries; an empty game folder means Settings asks for it. Saved settings always store both explicitly.
         public string GameRoot = "";
         public List<string> Libraries = new List<string>();
-        public string SevenZipPath = @"C:\Program Files\7-Zip\7z.exe";
+        public string SevenZipPath = "";   // 1.0.11: empty = SevenZipTool finds one (installed, then the bundled copy)
         public string CostumeRoot { get { return String.IsNullOrWhiteSpace(GameRoot) ? "" : Path.Combine(GameRoot, "reframework", "costume_mods"); } }
         public static string DataDir { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data"); } }
         public static AppConfig Load()
@@ -30,8 +30,12 @@ namespace SlotsInstaller
             if (c == null) throw new IOException("Settings are unreadable. Move Data/settings.json aside to reset them.");
             if (c.Libraries == null) c.Libraries = new List<string>();
             if (c.GameRoot == null) c.GameRoot = "";
+            // 1.0.11 (PR #12 review): up to 1.0.10 this path was the default saved in every settings.json, never a choice
+            // of the user's. Read as Automatic, so an installed 7-Zip older than the bundled copy gives way to it (RAR5).
+            if (String.Equals((c.SevenZipPath ?? "").Trim(), OldDefaultSevenZip, StringComparison.OrdinalIgnoreCase)) c.SevenZipPath = "";
             return c;
         }
+        internal const string OldDefaultSevenZip = @"C:\Program Files\7-Zip\7z.exe";
         // Set by test.ps1 (SLOTSLOADER_NO_DETECT) so a check never picks up the real machine's folders.
         internal static bool DetectionOff { get { return Environment.GetEnvironmentVariable("SLOTSLOADER_NO_DETECT") == "1"; } }
         internal static AppConfig Detected()
@@ -51,8 +55,17 @@ namespace SlotsInstaller
         internal static void Write(string p, object o)
         {
             string tmp = p + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(tmp, Serializer().Serialize(o), new UTF8Encoding(false));
-            if (File.Exists(p)) File.Replace(tmp, p, null); else File.Move(tmp, p);
+            bool complete = false;
+            try
+            {
+                File.WriteAllText(tmp, Serializer().Serialize(o), new UTF8Encoding(false));
+                complete = true;
+                // 1.0.11: as DurableFile.Write: a scanner or another reader holding the target without Delete sharing makes the
+                // replace fail for a moment ("Unable to remove the file to be replaced"), so it is tried again briefly; a
+                // temporary file is no longer left behind (DurableFile.Discard).
+                DurableFile.Publish(tmp, p);
+            }
+            finally { DurableFile.Discard(tmp, p, complete); }
         }
         internal static void WriteNew(string p, object o)
         {
@@ -76,19 +89,26 @@ namespace SlotsInstaller
             {"034","Arjun"}
         };
         public static List<string> Names { get { return ByCode.Values.Distinct().OrderBy(x => x).ToList(); } }
+        // 1.0.11: the patterns are built once. Built per call (32 fighters, more than the 15 patterns .NET keeps), every
+        // regex was parsed again for every library file name: 0.1 ms a name, 300 ms of a 2,700-mod start-up listing.
+        // Same order and matches as before: longest name first, whole words; the plain text check only skips regexes
+        // that cannot match.
+        private static readonly Regex NonAlphanumeric = new Regex("[^a-z0-9]+");
+        private static readonly Tuple<string, string, Regex>[] GuessOrder = Names.OrderByDescending(n => n.Length).Select(n =>
+        {
+            string normalized = NonAlphanumeric.Replace(n.ToLowerInvariant(), " ").Trim();
+            return Tuple.Create(n, normalized, new Regex(@"\b" + Regex.Escape(normalized) + @"\b"));
+        }).ToArray();
+        private static readonly Regex ViperWord = new Regex(@"\b(viper|cviper)\b"), ChunLiWord = new Regex(@"\b(chunli|chun li)\b"), AkiWord = new Regex(@"\b(aki|a k i)\b"), HondaWord = new Regex(@"\bhonda\b"), BisonWord = new Regex(@"\bbison\b");
         public static string Guess(string text)
         {
-            string t = Regex.Replace(text.ToLowerInvariant(), "[^a-z0-9]+", " ");
-            foreach (string n in Names.OrderByDescending(n => n.Length))
-            {
-                string normalized = Regex.Replace(n.ToLowerInvariant(), "[^a-z0-9]+", " ").Trim();
-                if (Regex.IsMatch(t, @"\b" + Regex.Escape(normalized) + @"\b")) return n;
-            }
-            if (Regex.IsMatch(t, @"\b(viper|cviper)\b")) return "C. Viper";
-            if (Regex.IsMatch(t, @"\b(chunli|chun li)\b")) return "Chun-Li";
-            if (Regex.IsMatch(t, @"\b(aki|a k i)\b")) return "A.K.I";
-            if (Regex.IsMatch(t, @"\bhonda\b")) return "E. Honda";
-            if (Regex.IsMatch(t, @"\bbison\b")) return "M. Bison";
+            string t = NonAlphanumeric.Replace(text.ToLowerInvariant(), " ");
+            foreach (var n in GuessOrder) if (t.Contains(n.Item2) && n.Item3.IsMatch(t)) return n.Item1;
+            if (ViperWord.IsMatch(t)) return "C. Viper";
+            if (ChunLiWord.IsMatch(t)) return "Chun-Li";
+            if (AkiWord.IsMatch(t)) return "A.K.I";
+            if (HondaWord.IsMatch(t)) return "E. Honda";
+            if (BisonWord.IsMatch(t)) return "M. Bison";
             return "";
         }
         // 1.0.2: a folder name that is only a fighter ("Cammy", "chun-li mods", "Viper outfits"): Library.IsGroupFolder.
@@ -352,22 +372,27 @@ namespace SlotsInstaller
             List<LibraryEntry> result = ListEntries(libraries);
             pending = new List<LibraryEntry>(); namesPending = new List<LibraryEntry>();
             OperationContext.Report("Reading the library index",0,result.Count);
+            // 1.0.11: the 7-Zip part of the stamps once per listing (per archive it was most of the index check's time).
+            string tool = null;
+            try { tool = ToolStamp(sevenZipPath); }
+            catch (Exception ex) { if (!IsSourceError(ex)) throw; }
             foreach (LibraryEntry entry in result)
             {
                 OperationContext.ThrowIfCancellationRequested();
                 if (entry.Detection == "Error") continue;
-                if (!ApplyCached(entry, sevenZipPath)) { MarkPending(entry); pending.Add(entry); }
+                if (!ApplyCached(entry, tool)) { MarkPending(entry); pending.Add(entry); }
                 else if (entry.NamesPending) namesPending.Add(entry);
             }
             SaveIdentityCache();   // Added times filled in from this listing
             return result.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
         // The index's record of an archive, when it is still valid for the file on disk. Folders are never cached.
-        private static bool ApplyCached(LibraryEntry entry, string sevenZipPath)
+        // toolStamp: ToolStamp's result (null = it failed, nothing is usable).
+        private static bool ApplyCached(LibraryEntry entry, string toolStamp)
         {
-            if (entry.Kind == "Folder") return false;
+            if (entry.Kind == "Folder" || toolStamp == null) return false;
             string stamp;
-            try { stamp = ArchiveStamp(entry.SourcePath, sevenZipPath); }
+            try { stamp = ArchiveStampWith(entry.SourcePath, toolStamp); }
             catch (Exception ex) { if (!IsSourceError(ex)) throw; return false; }
             LibraryIdentityRecord cached = null;
             lock (CacheLock)
@@ -448,26 +473,31 @@ namespace SlotsInstaller
             var seenLibraries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             CancellationToken token = OperationContext.Token;
             token.ThrowIfCancellationRequested();
-            EnsureCacheLoaded();
-            foreach (string lib in libraries)
+            // 1.0.11: the index (about 1.5 MB of JSON for 2,600 mods) is read while the folders are listed.
+            Task indexRead = Task.Run(() => EnsureCacheLoaded());
+            try
             {
-                token.ThrowIfCancellationRequested();
-                string library = lib;
-                try
+                foreach (string lib in libraries)
                 {
-                    library = Path.GetFullPath(lib);
-                    if (!seenLibraries.Add(library)) continue;
-                    OperationContext.Report("Listing mod libraries",result.Count,0);
-                    string root = library.Length > 3 ? library.TrimEnd(Path.DirectorySeparatorChar) : library;   // "F:\" stays as GetDirectoryName gives it
-                    foreach (string path in Directory.EnumerateFileSystemEntries(library)) AddListed(path, root, 0, result, seen, token);
-                }
-                catch (Exception ex)
-                {
-                    if (!IsSourceError(ex)) throw;
-                    // Keep already discovered entries and every other configured library.
-                    result.Add(ErrorEntry(library,"Library",ex));
+                    token.ThrowIfCancellationRequested();
+                    string library = lib;
+                    try
+                    {
+                        library = Path.GetFullPath(lib);
+                        if (!seenLibraries.Add(library)) continue;
+                        OperationContext.Report("Listing mod libraries",result.Count,0);
+                        string root = library.Length > 3 ? library.TrimEnd(Path.DirectorySeparatorChar) : library;   // "F:\" stays as GetDirectoryName gives it
+                        foreach (string path in Directory.EnumerateFileSystemEntries(library)) AddListed(path, root, 0, result, seen, token);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (!IsSourceError(ex)) throw;
+                        // Keep already discovered entries and every other configured library.
+                        result.Add(ErrorEntry(library,"Library",ex));
+                    }
                 }
             }
+            finally { indexRead.GetAwaiter().GetResult(); }
             return result;
         }
         // 1.0.2: a group folder's mods are listed one by one (two group levels at most), each still in its library.
@@ -756,17 +786,24 @@ namespace SlotsInstaller
             var selected = new HashSet<string>(active.Where(o => o.SelectedIds != null).SelectMany(o => o.SelectedIds), StringComparer.OrdinalIgnoreCase);
             return entry.OptionIds.Count > 0 && entry.OptionIds.All(selected.Contains) ? LibraryInstallState.Full : LibraryInstallState.Partial;
         }
-        private static string ArchiveStamp(string source, string sevenZipPath)
+        private static string ArchiveStamp(string source, string sevenZipPath) { return ArchiveStampWith(source, ToolStamp(sevenZipPath)); }
+        private static string ArchiveStampWith(string source, string toolStamp)
         {
             FileInfo archive = new FileInfo(source);
-            string tool = String.IsNullOrWhiteSpace(sevenZipPath) ? "" : Path.GetFullPath(sevenZipPath);
+            return archive.Length.ToString() + ":" + archive.LastWriteTimeUtc.Ticks.ToString() + ":" + toolStamp;
+        }
+        // The 7-Zip that reads RAR/7Z: its path and file stamp (a different 7-Zip may list an archive differently).
+        private static string ToolStamp(string sevenZipPath)
+        {
+            string resolved = SevenZipTool.Resolve(sevenZipPath);   // 1.0.11: the 7z.exe that actually runs
+            string tool = String.IsNullOrWhiteSpace(resolved) ? "" : Path.GetFullPath(resolved);
             string toolStamp = "missing";
             if (File.Exists(tool))
             {
                 var info = new FileInfo(tool);
                 toolStamp = info.Length.ToString() + ":" + info.LastWriteTimeUtc.Ticks.ToString();
             }
-            return archive.Length.ToString() + ":" + archive.LastWriteTimeUtc.Ticks.ToString() + ":" + tool.ToUpperInvariant() + ":" + toolStamp;
+            return tool.ToUpperInvariant() + ":" + toolStamp;
         }
         private static void EnsureCacheLoaded()
         {

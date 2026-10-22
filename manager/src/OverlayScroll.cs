@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
@@ -77,6 +78,7 @@ namespace SlotsInstaller
                     int width = Math.Max(1, ClientSize.Width), view = Math.Max(1, ClientSize.Height);
                     contentHeight = Math.Max(view, naturalHeight == null ? view : naturalHeight(width));
                     offset = Math.Max(0, Math.Min(offset, MaxOffset));
+                    glideTarget = Math.Min(glideTarget, MaxOffset);
                     var bounds = new Rectangle(0, -offset, width, contentHeight);
                     if (content.Bounds != bounds) content.Bounds = bounds;
                     if (!again) break;
@@ -91,14 +93,47 @@ namespace SlotsInstaller
 
         internal bool ScrollTo(int value, bool show)
         {
+            StopGlide();
             int next = Math.Max(0, Math.Min(value, MaxOffset));
             if (show && CanScroll) Flash();
+            return MoveTo(next);
+        }
+        private bool MoveTo(int next)
+        {
+            next = Math.Max(0, Math.Min(next, MaxOffset));   // a glide under way when the window shrinks (PR #12 review)
             if (next == offset || content == null) return false;
             offset = next;
             content.Top = -offset;
             PlaceThumb();
             return true;
         }
+
+        // 1.0.11 (the user: Help's text felt odd while scrolling): with Smooth on, a wheel notch glides to its target
+        // instead of jumping the whole step at once (60 logical px, 180 px at 300%). More notches move the target on;
+        // the offset eases toward it (about 0.2 s). Dragging the thumb and every other scroll stay immediate.
+        internal bool Smooth;
+        private Timer glide;
+        private readonly Stopwatch glideClock = new Stopwatch();
+        private double glidePosition;
+        private int glideTarget;
+        internal bool Gliding { get { return glide != null && glide.Enabled; } }
+        private void GlideBy(int delta)
+        {
+            if (!Gliding) { glidePosition = offset; glideTarget = offset; }
+            glideTarget = Math.Max(0, Math.Min(glideTarget + delta, MaxOffset));
+            Flash();
+            if (glideTarget == offset) { StopGlide(); return; }
+            if (glide == null) { glide = new Timer { Interval = 10 }; glide.Tick += delegate { GlideStep(); }; }
+            if (!glide.Enabled) { glideClock.Restart(); glide.Start(); }
+        }
+        private void GlideStep()
+        {
+            double ms = Math.Max(1, glideClock.Elapsed.TotalMilliseconds); glideClock.Restart();
+            glidePosition += (glideTarget - glidePosition) * (1 - Math.Exp(-ms / 45.0));
+            if (Math.Abs(glideTarget - glidePosition) < 0.5) { glidePosition = glideTarget; StopGlide(); }
+            MoveTo((int)Math.Round(glidePosition));
+        }
+        private void StopGlide() { if (glide != null) glide.Stop(); }
         internal bool ScrollBy(int delta) { return ScrollTo(offset + delta, true); }
         internal void ScrollIntoView(Control c)
         {
@@ -152,12 +187,13 @@ namespace SlotsInstaller
         {
             if (delta < 0 && offset >= MaxOffset && Expand != null && Expand()) { Relayout(); if (!CanScroll) return true; }
             if (!CanScroll) return false;
-            ScrollBy(-(int)Math.Round(delta / 120.0 * DpiMetrics.Px(this, WheelStep)));
+            int step = -(int)Math.Round(delta / 120.0 * DpiMetrics.Px(this, WheelStep));
+            if (Smooth) GlideBy(step); else ScrollBy(step);
             return true;
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { if (filtering) { Application.RemoveMessageFilter(this); filtering = false; } hideTimer.Dispose(); }
+            if (disposing) { if (filtering) { Application.RemoveMessageFilter(this); filtering = false; } hideTimer.Dispose(); if (glide != null) glide.Dispose(); }
             base.Dispose(disposing);
         }
 

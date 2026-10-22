@@ -37,6 +37,11 @@ namespace SlotsInstaller
         public bool DeepSearch;
         // 1.0.8: MY FILTERS chips showing only their matches / hiding them, by filter id (LibraryFilters.cs).
         public List<string> FiltersOnly = new List<string>(), FiltersHidden = new List<string>();
+        // 1.0.11: the welcome (WelcomeForm) was shown; missing in older files, so updating users see it once too.
+        public bool WelcomeSeen;
+        // 1.0.11: where Help resumes: the topic's title and the article's scroll offset (logical pixels).
+        public string HelpTopic = "";
+        public int HelpOffset;
         internal static ViewPreferences Load(string file)
         {
             try
@@ -129,6 +134,7 @@ namespace SlotsInstaller
         private FlatButton navLibrary, navInstalled, navSettings;
         private ListView modList, installedList, fileList;
         private PaddedTextField search, outfitName, settingsGame, settingsSevenZip;
+        private Action showSevenZipNote;   // 1.0.11
         private TextBox installedHelp;
         private Label installedSelectionCount;
         private FlatButton selectAllInstalledButton, clearInstalledSelectionButton, presetsButton;
@@ -216,6 +222,7 @@ namespace SlotsInstaller
             ApplyDpiMetrics();
             DpiChanged += delegate { BeginInvoke((MethodInvoker)delegate { pagesLaidOut.Clear(); ApplyDpiMetrics(); }); };
             UpdateLocation();
+            CloakUntilPainted();   // 1.0.11 (MainFormStartPaint.cs): its Shown hook must come before the welcome's
             WireViewPersistence();
             WireDropTarget();
             WireUninstallKeys();   // 2.5.2 (MainFormKeys.cs)
@@ -225,6 +232,9 @@ namespace SlotsInstaller
             {
                 if (!Program.Headless && screenshotFile==null) { RestoreSplitters(); rememberView=true; }
                 if (firstLoad) { firstLoad = false; if (screenshotFile != null && !screenshotAvailableSize) ClientSize = new Size(Px(1460), Px(920)); RefreshLibrary(); }
+                // 1.0.11: the welcome once, over the opened window (marked seen first, so a crash doesn't bring it back).
+                if (rememberView && viewPreferences != null && !viewPreferences.WelcomeSeen)
+                    BeginInvoke((MethodInvoker)delegate { viewPreferences.WelcomeSeen = true; SaveView(); WelcomeForm.ShowWelcome(this, ShowHelp); });
             };
             FormClosing += delegate { SaveView(); if (assistantPage != null) assistantPage.Shutdown(); };
             FormClosed += delegate { if (filterMatchCancel != null) filterMatchCancel.Cancel(); ClearPreviewCache(); if (previewImage != null) previewImage.Dispose(); if (hoverTimer != null) hoverTimer.Dispose(); if (portraitLoad != null) portraitLoad.Cancel(); };
@@ -354,7 +364,9 @@ namespace SlotsInstaller
                 Fighters=filterPanel.Grid.Selected.OrderBy(c=>c,StringComparer.Ordinal).ToList(),
                 Kinds=new[]{FilterPanel.ToolsKind,FilterPanel.MiscKind}.Where(k=>filterPanel.Kinds.Selected.Contains(k)).ToList(),SelectedLibraries=filterPanel.LibrariesSelected.OrderBy(k=>k,StringComparer.OrdinalIgnoreCase).ToList(),MiscAreas=MiscKindsSelectedOrPending().ToList(),
                 LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,
-                FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide)
+                FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide),
+                WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen,
+                HelpTopic=HelpResumeTopic ?? "",HelpOffset=HelpResumeOffset
             };
         }
         // Older builds read one character name; keep it meaningful when exactly one fighter is selected.
@@ -502,7 +514,8 @@ namespace SlotsInstaller
                 if (item.Action == ShortcutAction.AssistantPage) assistantShortcutItem = entry;
             }
             toolsMenu.Items.Add(shortcutsItem);
-            toolsMenu.Items.Add("About", null, delegate { ShowPage(settingsPage); LoadSettingsFields(); ShowAboutTab(); });   // 2.5.9: Settings → About
+            // 1.0.11 (the user): Help here (F1); no Welcome (Settings → General → Show welcome) and no About (Settings → About tab).
+            toolsMenu.Items.Add(new ToolStripMenuItem("Help", null, delegate { RunShortcut(ShortcutAction.HelpPage); }) { ShortcutKeyDisplayString = Shortcuts.Display(ShortcutAction.HelpPage) });
             RoomyMenu(toolsMenu); RoomyMenu(shortcutsMenu); RoomyMenu(restoreMenu);   // 1.0.1: larger text and taller rows (the user)
             toolsMenu.Opening+=delegate {if (assistantShortcutItem != null) assistantShortcutItem.Visible = assistantTabShown;};
             navSettings = Button("", false, 42, delegate { toolsMenu.Show(navSettings, new Point(0, navSettings.Height)); });
@@ -547,18 +560,19 @@ namespace SlotsInstaller
             librarySplit=split;
             Panel browser = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(10) };
             // 2.4.1: row 2 is the sort strip (LibrarySort.cs): 20 px chips and the Rhythm.Related gap to the list.
-            TableLayoutPanel filters = new TableLayoutPanel { Dock = DockStyle.Top, Height = 63 + SearchOptionsHeight + SortChipHeight + Rhythm.Related, ColumnCount = 2, RowCount = 4, Padding = new Padding(0), Margin = new Padding(0) };
+            // 1.0.11 (the user): a Rhythm.Related gap under the count / Filters row, so Filters doesn't sit on the search box.
+            TableLayoutPanel filters = new TableLayoutPanel { Dock = DockStyle.Top, Height = 63 + Rhythm.Related + SearchOptionsHeight + SortChipHeight + Rhythm.Related, ColumnCount = 2, RowCount = 4, Padding = new Padding(0), Margin = new Padding(0) };
             // 2.4.1: the right cell holds Filters and, while a filter is active, Clear. Its width is fixed, so neither
             // the Filters button nor the count moves when Clear appears.
             filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 142));
-            filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 37)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SearchOptionsHeight)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SortChipHeight + Rhythm.Related));
+            filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 26 + Rhythm.Related)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, 37)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SearchOptionsHeight)); filters.RowStyles.Add(new RowStyle(SizeType.Absolute, SortChipHeight + Rhythm.Related));
             // The caption carries the live count that previously used its own row.
-            libraryCount = Caption("MOD LIBRARY"); libraryCount.Dock = DockStyle.Fill; libraryCount.AutoEllipsis = true; filters.Controls.Add(libraryCount, 0, 0);
+            libraryCount = Caption("MOD LIBRARY"); libraryCount.Dock = DockStyle.Fill; libraryCount.AutoEllipsis = true; libraryCount.Margin = new Padding(libraryCount.Margin.Left, 0, libraryCount.Margin.Right, Rhythm.Related); filters.Controls.Add(libraryCount, 0, 0);
             filterButton = Button("Filters", false, 84, delegate { ShowFilters(!filterPanel.Visible, false); });
             filterButton.Dock = DockStyle.Right; filterButton.Height = 25; filterButton.Margin = new Padding(0, 0, 0, 1); filterButton.Font = Palette.Small; filterButton.AccessibleName = "Show library filters"; filterButton.TabIndex = 0;
             filterClearButton = Button("Clear", false, 54, delegate { bool hadFocus = filterClearButton.Focused; ClearLibraryFilters(); if (hadFocus && filterButton.CanFocus) filterButton.Focus(); });
             filterClearButton.Dock = DockStyle.Right; filterClearButton.Height = 25; filterClearButton.Font = Palette.Small; filterClearButton.AccessibleName = "Clear filters"; filterClearButton.Visible = false; filterClearButton.TabIndex = 1;
-            var filterActions = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 1), Padding = Padding.Empty };
+            var filterActions = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 1 + Rhythm.Related), Padding = Padding.Empty };
             filterActions.Controls.Add(filterClearButton); filterActions.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); filterActions.Controls.Add(filterButton);
             filterButton.SendToBack();   // docked first: the rightmost
             filters.Controls.Add(filterActions, 1, 0);
@@ -739,7 +753,7 @@ namespace SlotsInstaller
             // A small gap between the two icon buttons.
             Panel iconGap = new Panel { Dock = DockStyle.Right, Width = 4 };
             selectedLabel = new Label { UseMnemonic=false, Dock = DockStyle.Fill, Text = "0 selected", TextAlign = ContentAlignment.MiddleRight, ForeColor = Palette.Muted, Font = Palette.Small, Padding = new Padding(0, 0, 9, 0) };
-            choiceTabs.Controls.Add(selectedLabel); choiceTabs.Controls.Add(BuildResetOptions()); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); choiceTabs.Controls.Add(collapse); choiceTabs.Controls.Add(iconGap); choiceTabs.Controls.Add(expand); choiceTabs.Controls.Add(filesTab); choiceTabs.Controls.Add(componentTab);
+            choiceTabs.Controls.Add(selectedLabel); choiceTabs.Controls.Add(BuildResetOptions()); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); choiceTabs.Controls.Add(collapse); choiceTabs.Controls.Add(iconGap); choiceTabs.Controls.Add(expand); choiceTabs.Controls.Add(filesTab); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Left, Width = Rhythm.Related }); choiceTabs.Controls.Add(componentTab);   // 1.0.11: a gap between the two tabs (the user)
             componentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
             componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font("Segoe UI", 10.5F) };
             componentTree.EmptyText = "Choose a mod from the library, or drop an archive (ZIP, RAR, 7Z) or mod folder anywhere in this window.\n\nCtrl+O opens an archive · Ctrl+F searches the library";
@@ -923,32 +937,39 @@ namespace SlotsInstaller
             // The gear tab already names the page; one short muted line on the General tab only.
             Label subtitle = new Label { UseMnemonic=false, Text = "Uses your mod libraries; settings and records stay separate.", Dock = DockStyle.Top, Height = 26, ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true };
             Panel fields = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) };
-            TableLayoutPanel layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 12, Margin = new Padding(0) };
+            TableLayoutPanel layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 13, Margin = new Padding(0) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
             // Rhythm: caption, field, its note (Related gap above the text), then a group gap before the next caption.
-            int[] heights = { 24, 32, 20 + Rhythm.Related + 4, Rhythm.Group - 6, 24, 32, 20 + Rhythm.Related + 4, Rhythm.Group - 6, 24, 0, Rhythm.AfterAction, 26 };
-            foreach (int h in heights) layout.RowStyles.Add(h == 0 ? new RowStyle(SizeType.Percent, 100) : new RowStyle(SizeType.Absolute, h));
+            // Mod libraries explain themselves under the caption instead (1.0.11; -1 = that line's row, sized by it).
+            int[] heights = { 24, 32, 20 + Rhythm.Related + 4, Rhythm.Group - 6, 24, 32, 20 + Rhythm.Related + 4, Rhythm.Group - 6, 24, -1, 0, Rhythm.AfterAction, 26 };
+            foreach (int h in heights) layout.RowStyles.Add(h < 0 ? new RowStyle(SizeType.AutoSize) : h == 0 ? new RowStyle(SizeType.Percent, 100) : new RowStyle(SizeType.Absolute, h));
             Label gameCaption = Caption("Game folder"); gameCaption.Dock = DockStyle.Fill; layout.Controls.Add(gameCaption, 0, 0); layout.SetColumnSpan(gameCaption, 2);
             settingsGame = TextField(); settingsGame.AccessibleName="Game folder"; settingsGame.Dock = DockStyle.Fill; settingsGame.Margin = new Padding(0, 0, 10, 0); layout.Controls.Add(settingsGame, 0, 1);
             FlatButton browseGame=Button("Browse…", false, 108, delegate { ChooseSettingFolder(settingsGame); }); browseGame.Dock=DockStyle.Fill; browseGame.Margin=Padding.Empty; layout.Controls.Add(browseGame, 1, 1);
             Label dest = new Label { UseMnemonic=false, Name = "settingsGameNote", Text = "", ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, Padding = new Padding(0, Rhythm.Related, 0, 0), Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(dest, 0, 2); layout.SetColumnSpan(dest, 2);
             Label sevenCaption = Caption("7-Zip (RAR and 7Z)"); sevenCaption.Dock = DockStyle.Fill; layout.Controls.Add(sevenCaption, 0, 4); layout.SetColumnSpan(sevenCaption, 2);
-            settingsSevenZip = TextField(); settingsSevenZip.AccessibleName="7-Zip executable"; settingsSevenZip.Dock = DockStyle.Fill; settingsSevenZip.Margin = new Padding(0, 0, 10, 0); layout.Controls.Add(settingsSevenZip, 0, 5);
+            settingsSevenZip = TextField(); settingsSevenZip.AccessibleName="7-Zip executable"; settingsSevenZip.PlaceholderText = "Automatic"; settingsSevenZip.Dock = DockStyle.Fill; settingsSevenZip.Margin = new Padding(0, 0, 10, 0); layout.Controls.Add(settingsSevenZip, 0, 5);
             FlatButton browseSevenZip=Button("Browse…", false, 108, delegate { using (OpenFileDialog d = new OpenFileDialog { Filter = "7-Zip executable|7z.exe|Executable|*.exe", FileName = settingsSevenZip.Text }) { if (d.ShowDialog(this) == DialogResult.OK) settingsSevenZip.Text = d.FileName; } }); browseSevenZip.Dock=DockStyle.Fill; browseSevenZip.Margin=Padding.Empty; layout.Controls.Add(browseSevenZip, 1, 5);
             Label sevenHint = new Label { UseMnemonic=false, Name = "settingsSevenZipNote", Text = "ZIP and folders work without 7-Zip.", ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, Padding = new Padding(0, Rhythm.Related, 0, 0), Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(sevenHint, 0, 6); layout.SetColumnSpan(sevenHint, 2);
             settingsGame.TextChanged += delegate { dest.Text = Directory.Exists(settingsGame.Text) ? "Found · extra outfits install to reframework\\costume_mods" : "Folder not found"; dest.ForeColor = Directory.Exists(settingsGame.Text) ? Palette.Green : Palette.Red; };
-            settingsSevenZip.TextChanged += delegate { sevenHint.Text = File.Exists(settingsSevenZip.Text) ? "Found" : "Not found · ZIP and folders still work"; };
-            Label libCaption = Caption("Libraries"); libCaption.Dock = DockStyle.Fill; layout.Controls.Add(libCaption, 0, 8); layout.SetColumnSpan(libCaption, 2);
+            // 1.0.11: empty = automatic (installed 7-Zip, else the copy beside the Manager); the note says which one runs.
+            showSevenZipNote = delegate { string typed = settingsSevenZip.Text.Trim(); sevenHint.Text = typed.Length > 0 && !File.Exists(typed) ? "Not found at that path · clear the field to find 7-Zip automatically" : SevenZipTool.Describe(typed); };
+            settingsSevenZip.TextChanged += delegate { showSevenZipNote(); };
+            Label libCaption = Caption("Mod libraries"); libCaption.Dock = DockStyle.Fill; layout.Controls.Add(libCaption, 0, 8); layout.SetColumnSpan(libCaption, 2);
+            // The line gives way on short windows, so the list keeps at least two rows (100 px).
+            int hintHeight = 20 + Rhythm.Related, roomy = heights.Where(h => h > 0).Sum() + hintHeight + 104;
+            Label libHint = new Label { UseMnemonic=false, Name = "settingsLibrariesNote", Text = "Folders where you keep downloaded mods. Everything in them shows in the Mod library tab.", ForeColor = Palette.Muted, Font = Palette.Small, AutoSize = false, Height = hintHeight, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(libHint, 0, 9); layout.SetColumnSpan(libHint, 2);
+            layout.Resize += delegate { libHint.Visible = layout.Height >= Px(roomy); };
             // Padded, owner-drawn library rows with a found/missing state and
             // the mod count from the last scan, framed like the other fields.
             Panel librariesFrame = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Border, Padding = new Padding(1), Margin = new Padding(0, 0, 10, 0) };
-            settingsLibraries = new ListBox { Dock = DockStyle.Fill, BackColor = Palette.Background, ForeColor = Palette.Text, BorderStyle = BorderStyle.None, Font = Palette.Normal, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 50, AccessibleName = "Source libraries" };
+            settingsLibraries = new ListBox { Dock = DockStyle.Fill, BackColor = Palette.Background, ForeColor = Palette.Text, BorderStyle = BorderStyle.None, Font = Palette.Normal, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 50, AccessibleName = "Mod libraries" };
             NativeDpiFont.Attach(settingsLibraries);
             settingsLibraries.DrawItem += DrawLibraryFolder;
             settingsLibraries.HandleCreated += delegate { if (settingsLibraries.ItemHeight != Px(50)) settingsLibraries.ItemHeight = Px(50); };
             settingsLibraries.SelectedIndexChanged += delegate { if (removeLibraryButton != null) removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0; };
             librariesFrame.Controls.Add(settingsLibraries);
-            layout.Controls.Add(librariesFrame, 0, 9);
+            layout.Controls.Add(librariesFrame, 0, 10);
             Panel libActions = new Panel { Dock = DockStyle.Fill, Margin=Padding.Empty };
             FlatButton addLibrary = Button("Add…", false, 118, delegate { using (FolderBrowserDialog d = new FolderBrowserDialog { Description = "Choose a library folder, such as your mod manager's Mods folder" }) { if (d.ShowDialog(this) == DialogResult.OK && !settingsLibraries.Items.Cast<string>().Contains(d.SelectedPath, StringComparer.OrdinalIgnoreCase)) { libraryFolderStatus.Remove(d.SelectedPath); settingsLibraries.Items.Add(d.SelectedPath); settingsLibraries.SelectedIndex = settingsLibraries.Items.Count - 1; } } });
             removeLibraryButton = Button("Remove", false, 118, delegate { if (settingsLibraries.SelectedIndex >= 0) { int index = settingsLibraries.SelectedIndex; settingsLibraries.Items.RemoveAt(index); if (settingsLibraries.Items.Count > 0) settingsLibraries.SelectedIndex = Math.Min(index, settingsLibraries.Items.Count - 1); } removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0; });
@@ -957,11 +978,12 @@ namespace SlotsInstaller
             addLibrary.Dock = DockStyle.Top; removeLibraryButton.Dock = DockStyle.Top;
             addLibrary.Height = 32; removeLibraryButton.Height = 32;
             libActions.Controls.Add(removeLibraryButton); libActions.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 }); libActions.Controls.Add(addLibrary);
-            layout.Controls.Add(libActions, 1, 9);
-            settingsStatus = new Label { UseMnemonic=false, ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, AutoEllipsis = true }; layout.Controls.Add(settingsStatus, 0, 11); layout.SetColumnSpan(settingsStatus, 2);
+            layout.Controls.Add(libActions, 1, 10);
+            settingsStatus = new Label { UseMnemonic=false, ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, AutoEllipsis = true }; layout.Controls.Add(settingsStatus, 0, 12); layout.SetColumnSpan(settingsStatus, 2);
             FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 0) };
             actions.Controls.Add(Button("Save settings", true, 154, delegate { SaveSettings(); }));
             actions.Controls.Add(Button("Open Data folder", false, 168, delegate { OpenPath(AppConfig.DataDir); }));
+            actions.Controls.Add(Button("Show welcome", false, 150, delegate { WelcomeForm.ShowWelcome(this, ShowHelp); }));   // 1.0.11 (the user): here, not in the gear menu
             fields.Controls.Add(actions); fields.Controls.Add(layout);
             layout.BringToFront();
             Panel settingsGap = new Panel { Dock = DockStyle.Right, Width = 24 }; Panel claudeCard = BuildClaudeSettings();
@@ -1372,7 +1394,7 @@ namespace SlotsInstaller
                 {
                     // 1.0.1: the new page is shown on top first, then the others are hidden: no empty frame in between.
                     page.Visible = true; page.BringToFront();
-                    libraryPage.Visible = page == libraryPage; installedPage.Visible = page == installedPage; settingsPage.Visible = page == settingsPage; if (assistantPage != null) assistantPage.Visible = page == assistantPage; if (historyPage != null) historyPage.Visible = page == historyPage; navLibrary.SetActive(page == libraryPage); navInstalled.SetActive(page == installedPage || (historyPage != null && page == historyPage)); navAssistant.SetActive(assistantPage != null && page == assistantPage); navSettings.SetActive(page == settingsPage);
+                    libraryPage.Visible = page == libraryPage; installedPage.Visible = page == installedPage; settingsPage.Visible = page == settingsPage; if (assistantPage != null) assistantPage.Visible = page == assistantPage; if (historyPage != null) historyPage.Visible = page == historyPage; if (helpPage != null) helpPage.Visible = page == helpPage; navLibrary.SetActive(page == libraryPage); navInstalled.SetActive(page == installedPage || (historyPage != null && page == historyPage)); navAssistant.SetActive(assistantPage != null && page == assistantPage); navSettings.SetActive(page == settingsPage);
                     if (headerTools != null) headerTools.Visible = page == libraryPage;
                     currentPage = page;
                 }
@@ -1576,7 +1598,15 @@ namespace SlotsInstaller
             bool countCustom = FiltersOpen;
             var required = custom.Where((f, i) => countCustom || customState[i] != CustomFilterState.Off).ToList();
             if (draft != null) required.Add(draft);
-            if (!EnsureCustomMatches(required)) { UpdateCustomDraftStatus(); UpdateLibraryCaption(); return; }
+            listAwaitsMatches = false;
+            if (!EnsureCustomMatches(required))
+            {
+                // 1.0.11: with every chip Off and no draft the matches only count the chips. List the mods now; the
+                // chip counts follow when matching ends (it runs ApplyFilters again, and the same rows stay put).
+                listAwaitsMatches = draft != null || customState.Any(s => s != CustomFilterState.Off);
+                if (listAwaitsMatches) { UpdateCustomDraftStatus(); UpdateLibraryCaption(); return; }
+                countCustom = false;
+            }
             var customHit = new bool[customCount]; var customTotals = new int[customCount];
             libraryRanks.Clear();
             var ranked = new List<KeyValuePair<LibraryEntry, int>>();
@@ -2614,7 +2644,7 @@ namespace SlotsInstaller
         {
             var selectedPaths=new HashSet<string>(installedList.SelectedItems.Cast<ListViewItem>().Select(i=>i.Tag as InstalledOutfit).Where(o=>o!=null).Select(o=>o.Folder),StringComparer.OrdinalIgnoreCase);
             foreach (ListViewItem item in installedList.SelectedItems) { var grouped = item.Tag as OutfitGroup; if (grouped != null) selectedPaths.Add("group:" + grouped.Key); }   // 2.5.0
-            foreach (ListViewItem item in installedList.SelectedItems) { var g = item.Tag as GameModRow; if (g != null) selectedPaths.Add("game:" + (g.Mod != null ? g.Mod.Id : g.Fluffy.Section)); }
+            foreach (ListViewItem item in installedList.SelectedItems) { var g = item.Tag as GameModRow; if (g != null) selectedPaths.Add("game:" + g.Key); }
             IEnumerable<InstalledOutfit> matches = ShowOutfitRows ? installed : new List<InstalledOutfit>();
             InstalledQuery searchQuery = ParseInstalledSearch();   // 2.4.1: the library's matching (aliases, prefixes, terms)
             matches = matches.Where(o => OutfitMatchesSearch(searchQuery, o)).ToList();
@@ -2682,7 +2712,7 @@ namespace SlotsInstaller
         private static string InstalledRowKey(object tag)
         {
             OutfitGroup group = tag as OutfitGroup; if (group != null) return "group:" + group.Key;
-            GameModRow game = tag as GameModRow; if (game != null) return "game:" + (game.Mod != null ? game.Mod.Id : game.Fluffy.Section);
+            GameModRow game = tag as GameModRow; if (game != null) return "game:" + game.Key;
             InstalledOutfit outfit = tag as InstalledOutfit; return outfit == null ? "" : outfit.Folder;
         }
         private static string InstalledRowText(object tag)
@@ -2735,11 +2765,13 @@ namespace SlotsInstaller
                 bool own = gameRow.Mod != null;
                 editInstalledButton.Visible = toggleInstalledButton.Visible = own;
                 // 2.2.0: Fluffy's mods can be uninstalled here too (normal installs, with Fluffy closed).
-                removeInstalledButton.Visible = own || gameRow.Fluffy != null;
-                string fluffyBlocker = gameRow.Fluffy != null ? FluffyUninstallBlocker(gameRow.Fluffy) : null;
-                editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = idle && own; removeInstalledButton.Enabled = own ? idle : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
+                // 1.0.11: a leftover patch PAK has Remove PAK (refused inline while SF6 or the external manager runs).
+                bool leftover = gameRow.Leftover != null;
+                removeInstalledButton.Visible = own || gameRow.Fluffy != null || leftover;
+                string fluffyBlocker = gameRow.Fluffy != null ? FluffyUninstallBlocker(gameRow.Fluffy) : leftover ? LeftoverBlocker : null;
+                editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = idle && own; removeInstalledButton.Enabled = own ? idle : leftover ? !busy : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
                 moveUpButton.Enabled = idle && own && gameRow.Priority > 1; moveDownButton.Enabled = idle && own && gameRow.Priority < gameRows.Count(r => r.Mod != null); reapplyButton.Enabled = idle && own;
-                editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Disable" : "Enable"; removeInstalledButton.Text = "Uninstall";
+                editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Disable" : "Enable"; removeInstalledButton.Text = leftover ? LeftoverRemoveText : "Uninstall";
                 reinstallButton.Visible = own && SourceChanged(gameRow.Mod.SourcePath); reinstallButton.Enabled = idle && own;
                 LayoutInstalledActions(); ShowGameRow(gameRow);
                 return;
@@ -2835,7 +2867,7 @@ namespace SlotsInstaller
             if (button == openInstalledButton) return true;
             GameModRow gameRow = installedList == null ? null : GetGameRowSelection();
             if (button == reinstallButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && SourceChanged(gameRow.Mod.SourcePath) : outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath));
-            if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && gameRow.Fluffy != null);
+            if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && (gameRow.Fluffy != null || gameRow.Leftover != null));
             if (button == moveUpButton || button == moveDownButton || button == reapplyButton) return false;
             if (button == removeInstalledButton) return count > 0;
             return outfit != null && outfit.Managed;
@@ -2975,7 +3007,7 @@ namespace SlotsInstaller
         private void LoadSettingsFields()
         {
             RefreshLibraryFolderStatus();
-            settingsGame.Text = config.GameRoot; settingsSevenZip.Text = config.SevenZipPath; settingsLibraries.Items.Clear(); settingsLibraries.Items.AddRange(config.Libraries.Cast<object>().ToArray()); settingsStatus.Text = "Settings folder: " + AppConfig.DataDir;
+            settingsGame.Text = config.GameRoot; settingsSevenZip.Text = File.Exists(config.SevenZipPath ?? "") ? config.SevenZipPath : ""; showSevenZipNote(); settingsLibraries.Items.Clear(); settingsLibraries.Items.AddRange(config.Libraries.Cast<object>().ToArray()); settingsStatus.Text = "Settings folder: " + AppConfig.DataDir;
             settingsStatus.ForeColor = Palette.Muted;
             if (removeLibraryButton != null) removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0;
             LoadClaudeSettings();
@@ -3031,7 +3063,7 @@ namespace SlotsInstaller
                 List<string> paths = settingsLibraries.Items.Cast<string>().Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 string missing = paths.FirstOrDefault(p => !Directory.Exists(p));
                 if (missing != null) throw new InvalidOperationException("Library folder not found: " + missing);
-                config.GameRoot = Path.GetFullPath(game); config.SevenZipPath = seven; config.Libraries = paths; config.Save();
+                config.GameRoot = Path.GetFullPath(game); config.SevenZipPath = seven; config.Libraries = paths; config.Save(); SevenZipTool.ClearCache();
                 UpdateLocation(); UpdateDestination(); settingsStatus.Text = "Saved · " + paths.Count + (paths.Count == 1 ? " library" : " libraries"); settingsStatus.ForeColor = Palette.Green;
                 RefreshLibrary();
             }
@@ -3181,6 +3213,7 @@ namespace SlotsInstaller
                 case ShortcutAction.InstalledPage: if (currentPage != installedPage) { ShowPage(installedPage); RefreshInstalled(); } return true;
                 case ShortcutAction.AssistantPage: if (!assistantTabShown) return false; ShowAssistant(); return true;   // 2.4.1: inert while the tab is off
                 case ShortcutAction.SettingsPage: ShowPage(settingsPage); LoadSettingsFields(); if (settingsAboutPanel != null && settingsAboutPanel.Visible) ShowSettingsTab(false); return true;   // 2.5.9: Settings… after About = General
+                case ShortcutAction.HelpPage: ShowHelp(); return true;   // 1.0.11
                 case ShortcutAction.RefreshLibraries: if (!busy) RefreshLibrary(true); return true;
                 case ShortcutAction.OpenArchive: if (!busy) ChoosePackageFile(); return true;
                 case ShortcutAction.OpenFolder: if (!busy) ChoosePackageFolder(); return true;
@@ -3309,6 +3342,7 @@ namespace SlotsInstaller
                     else if (String.Equals(screenshotPage, "merged", StringComparison.OrdinalIgnoreCase)) { ShowDetailTab(true); }
                     else if (screenshotPage != null && screenshotPage.StartsWith("search=", StringComparison.OrdinalIgnoreCase)) { search.Text = screenshotPage.Substring(7); FlushLibraryFilter(); ApplyFilters(); if (modList.Items.Count > 0) modList.EnsureVisible(0); }
                     else if (String.Equals(screenshotPage, "settings", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); if (settingsLibraries.Items.Count > 0) settingsLibraries.SelectedIndex = 0; }
+                    else if (String.Equals(screenshotPage, "about", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); ShowAboutTab(); }   // 1.0.11
                     else if (String.Equals(screenshotPage, "settings-key", StringComparison.OrdinalIgnoreCase))
                     {
                         // Renders the Claude section with a fake saved key: only its last four characters appear.

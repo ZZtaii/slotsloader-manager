@@ -157,7 +157,8 @@ namespace SlotsInstaller
                 Require(pack.IndexOf(banned, StringComparison.OrdinalIgnoreCase) < 0, "excluded text in the pack: " + banned);
             Require(!System.Text.RegularExpressions.Regex.IsMatch(pack, "[0-9A-Fa-f]{64}") && !pack.Contains("\r") && !System.Text.RegularExpressions.Regex.IsMatch(pack, @"\b20\d\d-\d\d-\d\dT\d\d:"), "hashes, CR or a time stamp in the pack");
             int whatChanged = pack.IndexOf("## What changed"), next = pack.IndexOf("\n## ", whatChanged + 5);
-            Require(new[] { 1, 2, 3 }.Contains(System.Text.RegularExpressions.Regex.Matches(pack.Substring(whatChanged, next - whatChanged), @"(?m)^- \d+\.\d+\.\d+ \(").Count), "What changed must keep the newest one to three versions");
+            // 1.0.11: the README writes "- 1.0.11:" (older entries "- 2.5.9 (…"); both count.
+            Require(new[] { 1, 2, 3 }.Contains(System.Text.RegularExpressions.Regex.Matches(pack.Substring(whatChanged, next - whatChanged), @"(?m)^- \d+\.\d+\.\d+( \(|:)").Count), "What changed must keep the newest one to three versions");
             Require(!System.Text.RegularExpressions.Regex.IsMatch(pack, @"\b[A-Za-z]:\\"), "an absolute local path in the pack");
             // Deterministic: build it again from the same docs into a temp file and compare bytes.
             string project = Environment.GetEnvironmentVariable("SLOTSLOADER_PROJECT") ?? "";   // set by test.ps1
@@ -455,7 +456,7 @@ namespace SlotsInstaller
                 Require(h.Conv.Send("install black barefoot for cammy and update boots", CancellationToken.None).Status == AssistantTurnStatus.Completed, "turn failed");
                 MockRequest req = h.Requests[1];
                 var q1 = ToolResult(req, "toolu_q1", false);
-                Require((string)q1["message"] == "Queued as action #1 for the user's approval — it has NOT run yet." && (string)q1["status"] == "queued", "Queued message wrong: " + q1["message"]);
+                Require((string)q1["message"] == "Queued as action #1 for the user's approval. It has NOT run yet." && (string)q1["status"] == "queued", "Queued message wrong: " + q1["message"]);
                 Require(((string)ToolResult(req, "toolu_q2", true)["error"]).Contains("Queued action #1 already installs"), "Queued duplicate name not detected.");
                 Require(((string)ToolResult(req, "toolu_q3", true)["error"]).Contains("Name collision"), "Existing name collision not detected.");
                 Require(((string)ToolResult(req, "toolu_q4", true)["error"]).Contains("installed manually"), "Manual replacement not refused.");

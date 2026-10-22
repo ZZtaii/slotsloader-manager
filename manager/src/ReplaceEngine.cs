@@ -1021,6 +1021,7 @@ namespace SlotsInstaller
         // Permanently deletes a removed replacement's retained copy.
         internal void DeleteRemoved(string folder)
         {
+            if (IsLeftoverCopy(folder)) { DiscardLeftoverCopy(folder, null); return; }   // 1.0.11: a leftover PAK's Undo copy goes to the Recycle Bin
             RemovedReplacement removed = ReadRemoved(folder);
             if (removed == null && !Directory.Exists(folder)) return;
             Directory.Delete(Path.GetFullPath(folder), true);
@@ -1141,8 +1142,12 @@ namespace SlotsInstaller
         internal static string ExternalLockReason(FluffyInstalls fluffy)
         {
             int n = fluffy == null ? 0 : fluffy.Mods.Count;
-            return n == 0 ? null : "The external mod manager has " + ReplacePlanner.N(n, "mod") + " installed, so only Extra outfit, Slotsloader and REFramework install here. Uninstall them there to use Replace original.";
+            return n == 0 ? null : "The external mod manager has " + ReplacePlanner.N(n, "mod") + ExternalLockTail;
         }
+        private const string ExternalLockTail = " installed, so only Extra outfit, Slotsloader and REFramework install here. Uninstall them there to use Replace original.";
+        // 1.0.11: the lockout among a health check's errors, and its short form ("The external mod manager has N mods").
+        internal static bool IsExternalLock(string reason) { return reason != null && reason.EndsWith(ExternalLockTail, StringComparison.Ordinal); }
+        internal static string ExternalLockShort(string reason) { return IsExternalLock(reason) ? reason.Substring(0, reason.Length - ExternalLockTail.Length) : reason; }
         internal string ExternalLockReason() { return ExternalLockReason(Fluffy()); }
         // 1.0.10 (the user): plain REFramework installs and updates past the lockout like Slotsloader (one dinput8.dll in
         // the game folder, no PAK or natives edits), unless the external manager installed dinput8.dll: then it is updated there.
@@ -1195,6 +1200,15 @@ namespace SlotsInstaller
 
         // ---- Status
         internal GameFilesStatus Status()
+        {
+            GameFilesStatus status = GameStatus();
+            // 1.0.11: leftover patch PAKs (ReplaceLeftoverPaks.cs), last among the details (the summary quotes the first).
+            try { status.LeftoverPaks = LeftoverPaks().Select(p => p.Name).ToList(); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            if (status.LeftoverPaks.Count > 0) status.Details.Add(LeftoverStatusText(status.LeftoverPaks));
+            return status;
+        }
+        private GameFilesStatus GameStatus()
         {
             var status = new GameFilesStatus { JournalPending = JournalPending };
             try { status.OrphanCostumePaks = LoaderCostumePak.Orphaned(GameRoot).Select(p => p.Name).ToList(); }

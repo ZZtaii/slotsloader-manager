@@ -411,7 +411,7 @@ namespace SlotsInstaller
             Panel settingsPage = Get<Panel>(form, "settingsPage");
             Require(!BoundsIn(card, settingsPage).IntersectsWith(BoundsIn(layout, settingsPage)), "Claude section overlaps the folder settings.");
             Require(Get<ListBox>(form, "settingsLibraries").Height >= DpiMetrics.Px(form, 100), "Library list became too short.");
-            foreach (string caption in new[] { "Game folder", "7-Zip (RAR and 7Z)", "Libraries", "Assistant", "API key", "Default model", "Default effort" })
+            foreach (string caption in new[] { "Game folder", "7-Zip (RAR and 7Z)", "Mod libraries", "Assistant", "API key", "Default model", "Default effort" })
             {
                 Label label = All(settingsPage).OfType<Label>().FirstOrDefault(l => l.Text == caption);
                 Require(label != null, "Caption missing: " + caption);

@@ -168,6 +168,7 @@ namespace SlotsInstaller
         internal string Title = "", Body = "", Url;
         internal ButtonGlyph Icon;          // drawn 1.5x at the left, in IconColor (brand colours); None = text only
         internal Color IconColor = Palette.Text;
+        internal Image Picture;             // 1.0.11: a logo drawn in the icon tile instead of Icon (BrewedVFX)
         private bool hot;
         internal AboutCard()
         {
@@ -190,13 +191,22 @@ namespace SlotsInstaller
             Glyphs.FillRounded(e.Graphics, lit ? Palette.Selected : Palette.Background, card, 8 * s);
             Glyphs.DrawRounded(e.Graphics, lit ? Palette.Accent : Palette.Border, Math.Max(1F, s), card, 8 * s);
             int pad = (int)(16 * s), top = (int)(12 * s), titleHeight = (int)(26 * s);
-            if (Icon != ButtonGlyph.None)
+            if (Icon != ButtonGlyph.None || Picture != null)
             {
                 // A 40 px tile at the left, vertically centred; the text starts after it.
                 int tile = (int)(40 * s);
                 var tileRect = new RectangleF(pad, (Height - tile) / 2F, tile, tile);
                 Glyphs.FillRounded(e.Graphics, Palette.Raised, tileRect, 8 * s);
-                Glyphs.Draw(e.Graphics, Icon, Rectangle.Round(tileRect), IconColor, (int)(DeviceDpi * 1.5F));
+                if (Picture != null)
+                {
+                    var previous = e.Graphics.InterpolationMode; e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    // Fitted inside the tile with its own proportions (a wide logo is centred vertically).
+                    float inset = 2 * s, box = tile - 2 * inset, fit = Math.Min(box / Picture.Width, box / Picture.Height);
+                    float w = Picture.Width * fit, h = Picture.Height * fit;
+                    e.Graphics.DrawImage(Picture, new RectangleF(tileRect.X + (tile - w) / 2F, tileRect.Y + (tile - h) / 2F, w, h));
+                    e.Graphics.InterpolationMode = previous;
+                }
+                else Glyphs.Draw(e.Graphics, Icon, Rectangle.Round(tileRect), IconColor, (int)(DeviceDpi * 1.5F));
                 pad += tile + (int)(14 * s);
             }
             int right = (int)(16 * s);
@@ -405,8 +415,8 @@ namespace SlotsInstaller
         internal static int ColorRef(Color color) { return color.R | (color.G << 8) | (color.B << 16); }
         internal static void Apply(Form form)
         {
-            form.HandleCreated += delegate { ApplyTo(form.Handle); };
-            if (form.IsHandleCreated) ApplyTo(form.Handle);
+            form.HandleCreated += delegate { ApplyTo(form.Handle); FirstEraseFill.Attach(form); };
+            if (form.IsHandleCreated) { ApplyTo(form.Handle); FirstEraseFill.Attach(form); }
         }
         internal static void ApplyTo(IntPtr window)
         {
@@ -425,11 +435,51 @@ namespace SlotsInstaller
             catch (DllNotFoundException) { }
             catch (EntryPointNotFoundException) { }
         }
+        // 1.0.11: rounded corners for a borderless card window (Windows 11; older systems ignore it).
+        internal const int CornerAttribute = 33, RoundCorners = 2;
+        internal static void Round(Form form)
+        {
+            form.HandleCreated += delegate { try { int round = RoundCorners; DwmSetWindowAttribute(form.Handle, CornerAttribute, ref round, 4); } catch (DllNotFoundException) { } catch (EntryPointNotFoundException) { } };
+        }
+    }
+
+    // 1.0.11: never a white frame. When a window is shown, Windows erases each control with its own colour, except the
+    // custom-drawn ones (they skip the erase and wait for their first paint), whose area stayed the bare white surface
+    // until then. The window's first visible erase now fills its whole client area, under its controls too, with its
+    // background colour, so a control that has not painted yet shows the app's dark background instead.
+    internal sealed class FirstEraseFill : NativeWindow
+    {
+        [DllImport("user32.dll")] private static extern IntPtr GetDCEx(IntPtr window, IntPtr clip, int flags);
+        [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+        private readonly Form form;
+        private bool done;
+        private FirstEraseFill(Form form) { this.form = form; AssignHandle(form.Handle); }
+        internal static void Attach(Form form)
+        {
+            var fill = new FirstEraseFill(form);
+            form.HandleDestroyed += delegate { GC.KeepAlive(fill); };   // the handle table holds subclasses weakly
+        }
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_ERASEBKGND = 0x14, DCX_CACHE = 0x2, DCX_CLIPSIBLINGS = 0x10;
+            if (m.Msg == WM_ERASEBKGND && !done && IsWindowVisible(Handle))
+            {
+                done = true;
+                IntPtr dc = GetDCEx(Handle, IntPtr.Zero, DCX_CACHE | DCX_CLIPSIBLINGS);   // no DCX_CLIPCHILDREN: under the controls too
+                if (dc != IntPtr.Zero)
+                {
+                    try { using (Graphics g = Graphics.FromHdc(dc)) using (var brush = new SolidBrush(form.BackColor)) g.FillRectangle(brush, form.ClientRectangle); }
+                    finally { ReleaseDC(Handle, dc); }
+                }
+            }
+            base.WndProc(ref m);
+        }
     }
 
     // One table drives key handling, the gear menu and tooltips. None of
     // these shortcuts installs, uninstalls or removes anything.
-    internal enum ShortcutAction { FocusSearch, ClearSearch, LibraryPage, InstalledPage, AssistantPage, SettingsPage, RefreshLibraries, OpenArchive, OpenFolder, ToggleFilters, SwitchMode, ToggleNames }
+    internal enum ShortcutAction { FocusSearch, ClearSearch, LibraryPage, InstalledPage, AssistantPage, SettingsPage, RefreshLibraries, OpenArchive, OpenFolder, ToggleFilters, SwitchMode, ToggleNames, HelpPage }
     internal sealed class ShortcutInfo
     {
         internal readonly Keys Keys; internal readonly ShortcutAction Action; internal readonly string Display, Description;
@@ -445,6 +495,7 @@ namespace SlotsInstaller
             new ShortcutInfo(Keys.Control | Keys.D2, ShortcutAction.InstalledPage, "Ctrl+2", "Installed page"),
             new ShortcutInfo(Keys.Control | Keys.D3, ShortcutAction.AssistantPage, "Ctrl+3", "Assistant"),
             new ShortcutInfo(Keys.Control | Keys.Oemcomma, ShortcutAction.SettingsPage, "Ctrl+,", "Settings"),
+            new ShortcutInfo(Keys.F1, ShortcutAction.HelpPage, "F1", "Help"),   // 1.0.11
             new ShortcutInfo(Keys.F5, ShortcutAction.RefreshLibraries, "F5", "Refresh libraries"),
             new ShortcutInfo(Keys.Control | Keys.O, ShortcutAction.OpenArchive, "Ctrl+O", "Open archive"),
             new ShortcutInfo(Keys.Control | Keys.Shift | Keys.O, ShortcutAction.OpenFolder, "Ctrl+Shift+O", "Open folder"),

@@ -111,7 +111,7 @@ Slotloader Manager was developed privately before its first public release, 1.0.
   - Extra outfit mode works the same way: the merged files are composed automatically and **Review files** just shows them.
 - **Conflicts are shown before you install** (Replace original):
   - Another installed mod for the **same outfit** with shared files: an orange line names it, with its state, install date and file counts, for example "Cammy Outfit 1 already has 'Cammy Black Widow C1' installed (enabled, installed 13 Oct 18:42, 48 files) · this install overrides 41 of its 48 files; its other 7 stay active (the outfit may mix both mods)". A small **Uninstall 'Cammy Black Widow C1'** link under it removes that mod right away (recoverably, no dialog); the status then offers **Undo**, which puts it back exactly (files, enabled or disabled, and its place in the list). The link is off while the game or the mod manager runs.
-  - A mod for the same outfit **without** shared files: "Also on Cammy Outfit 1: 'Cammy Hair' — both stay installed".
+  - A mod for the same outfit **without** shared files: "Also on Cammy Outfit 1: 'Cammy Hair' (enabled, no shared files), so both stay installed".
   - Shared files in another area (for example the character's shared parts): "Overrides 3 files from 'X' (this install wins)".
   - Disabled older mods are mentioned too, and so are files already in the game folder that this app did not install (they are backed up and put back on uninstall).
   - Files owned by an external manager mod: **Cannot install**, naming the mod to disable.

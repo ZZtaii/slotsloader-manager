@@ -5,11 +5,14 @@
 #  2. Downloads that zip, checks its size and SHA-256 against the digest, and rewrites assets\loader-pin.json.
 #  3. Builds (build.ps1 embeds the pin) and packs Slotsloader-Manager-<version>-portable.zip: the 7 release files at
 #     the root plus Slotsloader\<loader zip>, then SHA256SUMS.txt beside it.
+#  4. 1.0.11: 7-Zip for RAR/7Z goes in as 7-Zip\7z.exe, 7z.dll and License.txt (x64, unmodified, taken from
+#     -SevenZipDir, default: the installed 7-Zip). Its version and hashes go in VALIDATION.txt. -NoSevenZip leaves it
+#     out: a Manager 1.0.10 or older refuses an update zip with the 7-Zip folder ("unexpected files").
 # Nothing is published: the commands to do that are printed at the end.
 # -LoaderZip <path>: use this local zip instead of downloading (it must match the pin, or the newest release's
 #  digest when fetching). -NoLoaderFetch: keep assets\loader-pin.json as it is (offline); needs -LoaderZip or a
 #  cached copy in <output>\loader-cache.
-param([string]$OutputDirectory = '', [switch]$NoLoaderFetch, [switch]$AllowOlderLoader, [string]$LoaderZip = '', [string]$TestReport = '')
+param([string]$OutputDirectory = '', [switch]$NoLoaderFetch, [switch]$AllowOlderLoader, [string]$LoaderZip = '', [string]$TestReport = '', [string]$SevenZipDir = '', [switch]$NoSevenZip)
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $repo = 'ZZtaii/slotsloader-manager'
@@ -29,6 +32,23 @@ function Get-Sha256([string]$path) { return (Get-FileHash -LiteralPath $path -Al
 function Write-Pin($pin) {
     $text = "{`n  ""tag"": ""$($pin.tag)"",`n  ""version"": ""$($pin.version)"",`n  ""asset"": ""$($pin.asset)"",`n  ""size"": $($pin.size),`n  ""sha256"": ""$($pin.sha256)""`n}`n"
     [IO.File]::WriteAllText($pinFile, $text, (New-Object Text.UTF8Encoding($false)))
+}
+
+# 4 (checked first, so a missing 7-Zip stops before anything is downloaded or rewritten).
+$sevenFiles = @('7z.exe', '7z.dll', 'License.txt'); $sevenVersion = ''
+if (-not $NoSevenZip) {
+    if (-not $SevenZipDir) {
+        $key = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\7-Zip' -ErrorAction SilentlyContinue
+        $SevenZipDir = if ($key -and $key.Path64) { $key.Path64 } elseif ($key -and $key.Path) { $key.Path } else { Join-Path $env:ProgramW6432 '7-Zip' }
+    }
+    foreach ($f in $sevenFiles) { if (-not (Test-Path -LiteralPath (Join-Path $SevenZipDir $f))) { throw "7-Zip: $f is missing in $SevenZipDir (pass -SevenZipDir, or -NoSevenZip)." } }
+    $sevenInfo = (Get-Item -LiteralPath (Join-Path $SevenZipDir '7z.exe')).VersionInfo
+    if ($sevenInfo.CompanyName -ne 'Igor Pavlov') { throw "7-Zip: $SevenZipDir\7z.exe is not an official 7-Zip build (company '$($sevenInfo.CompanyName)')." }
+    $machine = [IO.File]::ReadAllBytes((Join-Path $SevenZipDir '7z.exe')); $pe = [BitConverter]::ToInt32($machine, 0x3C)
+    if ([BitConverter]::ToUInt16($machine, $pe + 4) -ne 0x8664) { throw "7-Zip: $SevenZipDir\7z.exe is not the x64 build." }
+    $sevenVersion = $sevenInfo.ProductVersion
+    if ((Get-Item -LiteralPath (Join-Path $SevenZipDir '7z.dll')).VersionInfo.ProductVersion -ne $sevenVersion) { throw "7-Zip: 7z.exe and 7z.dll in $SevenZipDir are different versions." }
+    Write-Output "7-Zip $sevenVersion from $SevenZipDir"
 }
 
 $current = Get-Content -LiteralPath $pinFile -Raw | ConvertFrom-Json
@@ -82,10 +102,18 @@ Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $project 'docs\CLI.md') -Destination $stage
 Copy-Item -LiteralPath $zipPath -Destination (Join-Path $stage 'Slotsloader')
 $validation = @("Slotsloader Manager $version", "Built $(Get-Date -Format 'yyyy-MM-dd HH:mm') by tools\Package-Release.ps1.", "Bundled Slotsloader: $($pin.tag), Slotsloader\$($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256)")
+if (-not $NoSevenZip) {
+    New-Item -ItemType Directory -Path (Join-Path $stage '7-Zip') -Force | Out-Null
+    $validation += "Bundled 7-Zip $sevenVersion (x64, unmodified, GNU LGPL + unRAR restriction; see 7-Zip\License.txt; source at https://www.7-zip.org):"
+    foreach ($f in $sevenFiles) {
+        $to = Join-Path (Join-Path $stage '7-Zip') $f; Copy-Item -LiteralPath (Join-Path $SevenZipDir $f) -Destination $to
+        $validation += ("  7-Zip\{0}, {1} bytes, SHA-256 {2}" -f $f, (Get-Item -LiteralPath $to).Length, (Get-Sha256 $to))
+    }
+}
 if ($TestReport) { $validation += ''; $validation += 'Tests:'; $validation += Get-Content -LiteralPath $TestReport } else { $validation += 'Tests: none attached (run test.ps1 -RealArchives and pass -TestReport before publishing).' }
 [IO.File]::WriteAllText((Join-Path $stage 'VALIDATION.txt'), (($validation -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
 
-# Entries with forward slashes, the 7 files at the root and the loader under Slotsloader/.
+# Entries with forward slashes, the 7 files at the root, the loader under Slotsloader/ and 7-Zip under 7-Zip/.
 $portable = Join-Path $OutputDirectory ("Slotsloader-Manager-$version-portable.zip")
 $archive = [IO.Compression.ZipFile]::Open($portable, [IO.Compression.ZipArchiveMode]::Create)
 try {

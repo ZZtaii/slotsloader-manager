@@ -54,7 +54,7 @@ All types in this section are internal unless noted.
 - `FluffyInstalls.DetectRoots(libraries,extra)` and `Load(roots)` read `installed.ini`; `Owner(path)` and `Parse(text, root)` resolve ownership.
 - `ToolStatus.Detect(gameRoot)` reports REFramework, Slotsloader and the crash reporter; (`SlotsloaderPackages` was removed in 2.3.1; see `LoaderRelease`).
 - `LooseLoader`: `State(gameRoot, out detail)`, `Read(key)`, `Write(gameRoot, key, value, backupDir) → previous`, `LoggedPaths(gameRoot, sinceUtc)`, `ParseLogLine`, `Matched`.
-- `DurableFile.Write` / `WriteJson` write a temporary file, call `Flush(true)` and replace the target.
+- `DurableFile.Write` / `WriteJson` write a temporary file, call `Flush(true)` and replace the target. `Json.Write` (settings and records in `Data`) retries its replacement the same way (1.0.11).
 - `TestSession` (2.3.0: only for a record left by an older version): `FilePath`, `Load`, `Save`, `Clear`, `FinishLeftover(engine, record) → message` (keeps a Replace test via `ReplaceEngine.KeepTest`, restores `RestoreConfig` keys, deletes the record). `Tick`, `EnableLoadLogging`, `RestoreLogging`, `Finish`, `LoadedFilesReport` and `LoaderLog` were removed with Test in game.
 
 **External presets: `FluffyPresets.cs`**
@@ -104,6 +104,7 @@ All types in this section are internal unless noted.
 - `AppUpdater`: `ReleaseFiles`, `Stage(zip, version, dataDir)`, `Apply(appDir, source, previous, from, to, dataDir)`, `CleanupAfterUpdate(appDir, dataDir)`, `Rollback(appDir, dataDir)`, `UpdatesDir`, `PreviousDir`, `FailAfterCopies` (tests).
 - `MainForm`: `RunUpdateCheck(manual)`, `ShowUpdateToasts()`, `UpdateToast(product)`, `UpdateSummary(result)`, `AppDir`/`AppDirOverride`, `NoRelaunch`, `OpenUrlHook`, `LastUpdateMessage`, `LastUpdateResult`, `UpdateChecksRun` (tests); `UninstallQuestion(mod, name)`.
 - `LoaderCostumePak`: `Scan`, `Classify`, `Generated`, `Orphaned`, `LoaderPresent`, `Remove`, `WritePlaceholder`, `ClearFingerprint`, `IsLoaderMod`, `OrphanText`; `PatchPak`, `PatchPakKind`. `ReplaceEngine.AfterLoaderRemoved()`, `RemoveOrphanedCostumePak()`; `GameFilesStatus.OrphanCostumePaks`. `UnownedSlotsFlag.Ensure(gameRoot)` (technical; see DEVELOPMENT.md).
+- 1.0.11 leftover patch PAKs ([ReplaceLeftoverPaks.cs](ReplaceLeftoverPaks.cs)): `ReplaceEngine.LeftoverPaks() → List<PatchPak>` (empty while a journal is pending) and the pure `LeftoverPaks(paks, state, installs)`: `PatchPakKind.Mod`, not `IsFluffyDummy`, no `ReplaceState.Mods[].Files[].Path` (enabled or not), no `FluffyInstalls.OwnersOf` in any root; none when `FluffyInstalls.Warnings` is not empty. `RemoveLeftoverPak(name, out copyFolder) → message` (`GameProcesses.RequireIdle`, the game lock; the PAK moves to `LeftoverCopyDir` = `Data\leftover-paks\<name>-<time>-<rand>\` with `record.json` (`LeftoverPakRecord`, format `sf6-leftover-pak-v1`); `FluffyDummyPak` takes its number when `HigherPatchPakExists`, never a renumbering). `RestoreLeftoverPak(folder) → message` (same refusals; only over the placeholder or a free number, then `FillPatchGaps`). `DiscardLeftoverCopy(folder, IRecycleBin)` (Recycle Bin, else deleted), `DiscardLeftoverCopiesExcept(keep, bin)` (refresh; skipped while the lock is held), `IsLeftoverCopy`; `DeleteRemoved(folder)` hands a leftover copy to `DiscardLeftoverCopy`. `GameFilesStatus.LeftoverPaks` (names; one line last in `Details`, never the `Summary`), `LeftoverStatusText`, `LeftoverTitle`, `LeftoverReason`. Window: `GameModRow.Leftover`/`LeftoverBelowAnother`/`Key`, `MainForm.RemoveLeftoverRow` ([MainFormLeftoverPaks.cs](MainFormLeftoverPaks.cs)).
 - `UiAudit.ToolTipFindings(control)`, `UiAudit.ToolTipCode(out scanned)`.
 - `Rhythm.Related` / `Rhythm.AfterAction` / `Rhythm.Group` / `Rhythm.Gap(height)`; `NoteLabel` (`MinLines`, `LineCount`). `UpdateCheck.ShortVersion(text)`. `MainForm.UpdateSummary(result)` (one line) and `MainForm.SkippedSummary(result)`.
 - Assistant: `AssistantPrompt.Knowledge`, `AssistantPrompt.SystemJson()`; tool `get_app_status`.
@@ -162,7 +163,7 @@ All types in this section are internal unless noted.
 - Library uninstall: `MainForm.LinkedReplacements(source)`, `PopulateReplacementUninstall(item, source)`, `UninstallLibraryReplacement(row)` (the Installed page's `UninstallGameRow` flow), `ReplacementUninstallBlocker()`.
 - `ThemedMessageBox.Show([owner,] text, caption, buttons, icon[, defaultButton]) → DialogResult` replaces every `MessageBox.Show`; `ThemedMessageBox.Dark` (registry `AppsUseLightTheme`, `ForcedDark` for tests), `ThemedMessageForm` (layout for a given DPI, `CopyText`).
 
-## Settings and library — Core.cs
+## Settings and library (Core.cs)
 
 - `AppConfig`: `GameRoot`, `Libraries`, `SevenZipPath`; `CostumeRoot` derives `GameRoot/reframework/costume_mods`. `Load()` / `Save()` use `Data/settings.json`; `DataDir` is beside the executable. GUI view preferences are separate.
 - `Characters`: `ByCode` maps explicit ESF codes to canonical folder names; `Names` returns the roster; `Guess(string)` returns a filename fallback. Native identity takes precedence; preserve intentional code gaps and `A.K.I` spelling.
@@ -170,7 +171,7 @@ All types in this section are internal unless noted.
 - `Library.Scan(IEnumerable<string>[, string sevenZipPath]) → List<LibraryEntry>` scans direct ZIP/RAR/7Z/folder children, deduplicates paths and detects native IDs. Per-source/per-library failures produce diagnostic rows while retaining healthy results; whole-library rows have `Kind == "Library"`. Four workers inherit cancellation and report ordered progress. Failures are uncached. `IdentityCacheDirectory` redirects the optional cache; `ClearIdentityCache()` invalidates it. Archive stamps use path/size/mtime/tool metadata; folders rescan.
 - `Library.InstallState(entry, outfits) → LibraryInstallState` returns `None`, `Partial`, `Full` or `Disabled` from exact saved source paths and option-ID coverage. This is saved selection state, not a loader/game compatibility result.
 
-## Archive I/O — ArchiveSource.cs / ZipIntegrity.cs
+## Archive I/O (ArchiveSource.cs / ZipIntegrity.cs)
 
 Internal APIs:
 
@@ -183,7 +184,7 @@ Internal APIs:
 
 Readers reject unsafe paths, case-insensitive duplicates and links. Password entry, recursive inner archives and PAK composition are unsupported.
 
-## Packages and composition — PackageModels.cs / PackageReader.cs / Composition.cs
+## Packages and composition (PackageModels.cs / PackageReader.cs / Composition.cs)
 
 - `NativeAsset`: `EntryPath`, `DestinationPath` (one `natives/` prefix), `Size`.
 - `ModComponent`: `Id`, `Name`, `Description`, `Author`, `Version`, `AddonFor`, `ParentId`, `PreviewEntry`, `IsDummy`, `Metadata`, `Assets`; `IsChoiceGroup` recognizes an explicit choose-one description. Empty string is a valid root ID. `ParentId == null` means no component parent; `ParentId == ""` points to the root component.
@@ -198,7 +199,7 @@ Any nonempty selection activates implicit-root main/required groups, including n
 
 `CanInstall` validates composition/routes and mesh presence, not binary game compatibility. Missing local MDF may be a warning because the loader can supply vanilla materials.
 
-## Installation and results — Core.cs / LoaderResults.cs
+## Installation and results (Core.cs / LoaderResults.cs)
 
 - `InstallManifest`: format `sf6-slotsloader-installer-v1`, `Id`, `Name`, `Character`, `SourcePath`, `CreatedUtc`, `SelectedIds`, destination-path `Sha256`. Replacement retains the managed ID.
 - `Installer.Install(plan, costumeRoot, character, outfitName, sevenZipPath, replaceManaged) → InstallResult`: reinspects/recomposes, validates target identity and reviewed winning paths/sizes, stages verified bytes, then publishes. Existing destinations require explicit replacement and unchanged managed ownership. `InstallResult` contains `Folder`, `Message`, `FileCount`, `Bytes`.
@@ -209,7 +210,7 @@ Any nonempty selection activates implicit-root main/required groups, including n
 
 Source reinspection compares paths/sizes rather than a review-time hash; ZIP CRC establishes archive consistency and manifest SHA-256 describes staged bytes. Mutations share a named costume-root mutex across app instances in the current Windows session. `Installer.Uninstall`, `SetEnabled`, replacement and library uninstall retain their managed-only guards. Explicit Installed-page batch removal uses the separate `OutfitSetStore` scope below and may include manual entries. Original source mods, unselected entries and installed app Data remain protected. `Safety` enforces path/link rules. `Json.Write` atomically replaces application state; `Json.WriteNew` publishes reports without replacing existing files.
 
-## Named presets and selected removal — OutfitSetStore.cs
+## Named presets and selected removal (OutfitSetStore.cs)
 
 All types and entry points in this section are internal to the app:
 
@@ -244,7 +245,7 @@ Duplicate comparison is case-insensitive for relative paths and requires matchin
 
 All writes use the shared root mutex. Preparation is cancellable and reports file-byte progress through `OperationContext`; final publication/moves and reverse-order rollback are non-cancellable. Brief scanner/share locks receive bounded retries. Ordinary commit failures roll earlier moves back; if rollback is blocked, an error identifies retained staging payloads and they are not deleted by cleanup. There is no durable crash journal or automatic recovery guarantee for a killed process.
 
-## Assistant — Assistant*.cs / ClaudeClient.cs (internal, 1.6)
+## Assistant (Assistant*.cs / ClaudeClient.cs; internal, 1.6)
 
 - ClaudeClient(apiKey[, baseUrl]): Send(body, serverFallback, token) → ClaudeResponse (Status, RequestId, RawBody, exact RawContent, parsed Data).
   - MaxAttempts 3. A 429 waits for etry-after; 5xx/529 and network errors use jittered exponential backoff (BackoffBaseSeconds).

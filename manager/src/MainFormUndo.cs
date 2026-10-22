@@ -150,7 +150,7 @@ namespace SlotsInstaller
             ReplaceEngine engine = Engine();
             Work("Restoring the game to vanilla…", delegate { return engine.RestoreVanilla(); }, delegate(string message) { RefreshInstalled("✓ " + message); });
         }
-        internal const string VanillaQuestion = "Restore SF6 to vanilla?\n\nThis removes everything this Manager installed and every mod the external mod manager installed (its list is cleared), deletes all patch PAKs and the natives folder, and puts back the game entries mods invalidated. REFramework and your extra outfits stay.\n\nThere is no Undo. Your mods stay in your libraries to reinstall.";
+        internal const string VanillaQuestion = "Restore SF6 to vanilla?\n\nThis removes everything this Manager installed except REFramework and Slotsloader, and every mod the external mod manager installed (its list is cleared), deletes all patch PAKs and the natives folder, and puts back the game entries mods invalidated. Your extra outfits stay.\n\nThere is no Undo. Your mods stay in your libraries to reinstall.";
         private bool ConfirmVanilla()
         {
             if (Program.Headless && ThemedMessageBox.TestResponder == null) return false;
