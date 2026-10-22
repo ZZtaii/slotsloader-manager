@@ -84,7 +84,7 @@ namespace SlotsInstaller
                 if (File.Exists(target) && !IsFluffyDummy(target)) throw new IOException(r.Name + " is now another PAK, so the leftover PAK can't go back in its place. Nothing was changed; the removed copy goes to the Recycle Bin.");
                 string tmp = target + ".slotsinstaller-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";
                 File.Move(copy, tmp);
-                try { if (File.Exists(target)) File.Replace(tmp, target, null); else File.Move(tmp, target); }
+                try { DurableFile.Publish(tmp, target); }
                 catch { try { if (File.Exists(tmp) && !File.Exists(copy)) File.Move(tmp, copy); } catch { } throw; }
                 List<int> gaps = FillPatchGaps();   // a lower PAK another tool removed meanwhile
                 try { Directory.Delete(full, true); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }

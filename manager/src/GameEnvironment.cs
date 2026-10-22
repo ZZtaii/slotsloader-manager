@@ -426,7 +426,8 @@ namespace SlotsInstaller
         }
         // Puts a fully written temporary file in place of `path`. 2.4.2: another program reading the target without
         // Delete sharing (an older Manager, a scanner) makes the replace fail for a moment; the temporary file is intact
-        // then, so it is tried again briefly. Json.Write uses it too (1.0.11).
+        // then, so it is tried again briefly. 1.0.11: every replace of the app goes through it (Json.Write, game files,
+        // presets, history, settings, caches).
         internal static void Publish(string tmp, string path)
         {
             for (int attempt = 0; ; attempt++)

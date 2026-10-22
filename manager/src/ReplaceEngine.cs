@@ -380,7 +380,7 @@ namespace SlotsInstaller
                 // as an unbroken row from patch_001, so a gap would hide every PAK after it.
                 if (IsPatchPakPath(relative) && HigherPatchPakExists(relative))
                 {
-                    if (!IsFluffyDummy(full)) { string dummy = full + ".slotsinstaller-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp"; File.WriteAllBytes(dummy, FluffyDummyPak); File.Replace(dummy, full, null); }
+                    if (!IsFluffyDummy(full)) { string dummy = full + ".slotsinstaller-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp"; File.WriteAllBytes(dummy, FluffyDummyPak); try { DurableFile.Publish(dummy, full); } finally { DurableFile.Discard(dummy, full, true); } }
                     return;
                 }
                 File.Delete(full);
@@ -390,15 +390,20 @@ namespace SlotsInstaller
             if (String.IsNullOrEmpty(toSource) || !File.Exists(toSource)) throw new IOException("The copy needed for " + relative + " is missing: " + toSource);
             Directory.CreateDirectory(Path.GetDirectoryName(full));
             string tmp = full + ".slotsinstaller-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";
+            bool complete = false;
             try
             {
                 using (var input = new FileStream(toSource, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var output = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16))
                 { input.CopyTo(output, 1 << 16); output.Flush(true); }
                 if (Sha(tmp) != toSha) throw new IOException("The stored copy of " + relative + " does not match its recorded hash.");
-                if (File.Exists(full)) File.Replace(tmp, full, null); else File.Move(tmp, full);
+                complete = true;
+                // 1.0.11: a scanner holding the game file for a moment failed Enable/Disable ("Unable to remove the file to
+                // be replaced"); it is retried (DurableFile.Publish). A replace that already removed the target leaves
+                // the new copy in its place, which the journal's rollback recognises.
+                DurableFile.Publish(tmp, full);
             }
-            finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
+            finally { DurableFile.Discard(tmp, full, complete); }
         }
 
         // natives folders are always cleaned up when empty; other folders only when this app created them.
@@ -1117,7 +1122,7 @@ namespace SlotsInstaller
                         if (!fixes.Any(x => x.Changed)) continue;
                         string fresh = stored + ".refix-" + Guid.NewGuid().ToString("N").Substring(0, 6);
                         DurableFile.Write(fresh, data);
-                        File.Replace(fresh, stored, null);
+                        DurableFile.Publish(fresh, stored);
                         f.Sha256 = Sha(data); f.Size = data.Length; changed++;
                     }
                 if (changed == 0) return "";

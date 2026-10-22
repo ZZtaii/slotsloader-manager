@@ -85,7 +85,7 @@ namespace SlotsInstaller
             data["show_tab"] = show;
             string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(tmp, AssistantJson.Write(data), new UTF8Encoding(false));
-            if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+            DurableFile.Publish(tmp, path);
         }
 
         internal static AssistantSettings Load(string dataDir)
@@ -118,7 +118,7 @@ namespace SlotsInstaller
             string text = AssistantJson.Write(members);
             string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(tmp, text, new UTF8Encoding(false));
-            if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+            DurableFile.Publish(tmp, path);
         }
     }
 
@@ -144,7 +144,7 @@ namespace SlotsInstaller
             byte[] protectedBytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(key), Entropy, DataProtectionScope.CurrentUser);
             string tmp = KeyPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllBytes(tmp, protectedBytes);
-            if (File.Exists(KeyPath)) File.Replace(tmp, KeyPath, null); else File.Move(tmp, KeyPath);
+            DurableFile.Publish(tmp, KeyPath);
         }
 
         internal bool HasSavedKey { get { return File.Exists(KeyPath); } }

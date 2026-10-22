@@ -552,7 +552,7 @@ namespace SlotsInstaller
             try
             {
                 File.WriteAllText(tmp, text.ToString(), new UTF8Encoding(false));
-                File.Replace(tmp, FilePath, null);
+                DurableFile.Publish(tmp, FilePath);
             }
             finally { if (File.Exists(tmp)) File.Delete(tmp); }
             events = all;

@@ -193,7 +193,7 @@ namespace SlotsInstaller
                     OperationContext.ThrowIfCancellationRequested();
                     using (OperationContext.NonCancellable())
                     {
-                        if (previous != null) { VerifyCopy(previous, dest); File.Replace(temp, dest, null); }
+                        if (previous != null) { VerifyCopy(previous, dest); DurableFile.Publish(temp, dest); }
                         else File.Move(temp, dest);
                     }
                 }

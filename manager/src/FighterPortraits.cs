@@ -252,7 +252,7 @@ namespace SlotsInstaller
             try
             {
                 File.WriteAllBytes(tmp, bytes);
-                if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+                DurableFile.Publish(tmp, path);
             }
             finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
         }
