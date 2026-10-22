@@ -15,6 +15,7 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
   - **Credits:** Settings → About thanks BrewedVFX for testing and recommendations, with a link to their page.
   - **Mod libraries:** in Settings, "Libraries" is now "Mod libraries", with a short line under it saying what they are.
   - **Welcome:** at the first start (and once after updating), a short welcome covers what matters most: using the Manager beside your external mod manager, using it on its own, and what to do when something breaks. Open it again from gear → Welcome.
+  - **Leftover PAKs show up and can be removed.** A patch PAK (`re_chunk_000.pak.patch_NNN.pak`) that no mod manager lists, for example one the external mod manager left after you uninstalled everything there, still loads in game. The Installed page now lists each one as **Leftover PAK** ("not listed by any mod manager · 48.0 MB"). Select it and click **Remove PAK** to take it out; **Undo** puts it back. Where a higher patch PAK exists, an empty placeholder keeps its number so the PAKs after it still load. Nothing is removed without your click (a PAK you added by hand looks the same), and the removed PAK goes to the Recycle Bin once the Undo is gone.
   - **Why Replace original is off:** while the external mod manager has mods installed, Extra outfit mode now says above the toggle that Replace is off and how many mods it has. In Replace original, the footer reads "Replace original is off" with a short line on what to do, instead of a cut-off "Cannot install" message.
 
 - 1.0.10:

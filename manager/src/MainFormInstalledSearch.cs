@@ -96,6 +96,7 @@ namespace SlotsInstaller
         {
             if (r.Mod != null) return InstalledRowMatches(q, r.Name, null, r.Mod.SourcePath, r.Mod.Files.Select(f => f.Path), r.Kind == "Tool");
             if (r.Fluffy != null) return InstalledRowMatches(q, r.Name, null, null, r.Fluffy.Files, false);
+            if (r.Leftover != null) return InstalledRowMatches(q, r.Name, null, null, new[] { r.Leftover.Name }, false);   // 1.0.11
             return InstalledRowMatches(q, r.Name, null, null, null, false);
         }
     }

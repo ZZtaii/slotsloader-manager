@@ -1021,6 +1021,7 @@ namespace SlotsInstaller
         // Permanently deletes a removed replacement's retained copy.
         internal void DeleteRemoved(string folder)
         {
+            if (IsLeftoverCopy(folder)) { DiscardLeftoverCopy(folder, null); return; }   // 1.0.11: a leftover PAK's Undo copy goes to the Recycle Bin
             RemovedReplacement removed = ReadRemoved(folder);
             if (removed == null && !Directory.Exists(folder)) return;
             Directory.Delete(Path.GetFullPath(folder), true);
@@ -1199,6 +1200,15 @@ namespace SlotsInstaller
 
         // ---- Status
         internal GameFilesStatus Status()
+        {
+            GameFilesStatus status = GameStatus();
+            // 1.0.11: leftover patch PAKs (ReplaceLeftoverPaks.cs), last among the details (the summary quotes the first).
+            try { status.LeftoverPaks = LeftoverPaks().Select(p => p.Name).ToList(); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            if (status.LeftoverPaks.Count > 0) status.Details.Add(LeftoverStatusText(status.LeftoverPaks));
+            return status;
+        }
+        private GameFilesStatus GameStatus()
         {
             var status = new GameFilesStatus { JournalPending = JournalPending };
             try { status.OrphanCostumePaks = LoaderCostumePak.Orphaned(GameRoot).Select(p => p.Name).ToList(); }
