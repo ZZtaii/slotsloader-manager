@@ -2065,8 +2065,9 @@ namespace SlotsInstaller
 
         // 1.0.3 (the user): a mod opened from the library shows the options it is installed with. The newest record from
         // this source (enabled first) in the shown mode is used (a replacement in Replace original, a Manager extra outfit
-        // in Extra outfit), else one of the other mode. Keep missing IDs for the review gate;
-        // no saved selection (or Install all variants) = null, the defaults.
+        // in Extra outfit), else one of the other mode. IDs the mod no longer has are kept for the review gate
+        // (missingRestoredOptions); options without files in the shown mode (a replacement's root-only option opened
+        // in Extra outfit) are dropped. No saved selection (or Install all variants) = null, the defaults.
         private List<string> InstalledSelection(ModPackage pkg)
         {
             if (pkg == null || String.IsNullOrEmpty(pkg.SourcePath)) return null;
@@ -2077,7 +2078,7 @@ namespace SlotsInstaller
                 .OrderByDescending(o => o.Enabled).ThenByDescending(o => o.InstalledUtc).Select(o => o.SelectedIds).FirstOrDefault();
             bool replaceMode = IsReplaceMode;
             List<string> ids = (replaceMode ? replaced ?? extra : extra ?? replaced) ?? new List<string>();
-            ids = ids.Distinct(StringComparer.OrdinalIgnoreCase).ToList(); // keep missing IDs for the existing review gate
+            ids = ids.Where(id => { ModComponent c = pkg.Find(id); return c == null || (!c.IsDummy && c.HasFiles(replaceMode)); }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             return ids.Count > 0 ? ids : null;
         }
 
