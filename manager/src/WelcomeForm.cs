@@ -36,7 +36,9 @@ namespace SlotsInstaller
         };
 
         internal const double DimOpacity = 0.65;   // the user: the window behind faded well back
+        internal const string Title = "Welcome to Slotsloader Manager (SLM)";
         private readonly WelcomePage page;
+        private readonly PictureBox logo;
         private readonly FlatButton next;
         internal int Index { get { return page.Index; } }
 
@@ -56,14 +58,16 @@ namespace SlotsInstaller
         {
             SuspendLayout();
             AutoScaleDimensions = new SizeF(96F, 96F); AutoScaleMode = AutoScaleMode.Dpi;
-            Text = "Welcome to Slotsloader Manager"; StartPosition = FormStartPosition.CenterParent;
+            Text = Title; StartPosition = FormStartPosition.CenterParent;
             BackColor = Palette.Surface; ForeColor = Palette.Text; ShowInTaskbar = false; Padding = new Padding(28, 14, 28, 19); FormBorderStyle = FormBorderStyle.None;
             AppBranding.Apply(this); WindowChrome.Round(this);
             // 1.0.11 (the user): ✕ is the only close and the tabs move back, so the footer has just Next / Done; both buttons compact.
-            var header = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(0, 3, 0, 3) };
-            var caption = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Text = "WELCOME TO SLOTSLOADER MANAGER" };
+            // The user: the app icon and a plain title (not a caps section label), ✕ on the same line.
+            var header = new Panel { Dock = DockStyle.Top, Height = 32, Padding = new Padding(0, 3, 0, 3) };
+            logo = new PictureBox { Dock = DockStyle.Left, Width = 20, SizeMode = PictureBoxSizeMode.CenterImage, Name = "welcomeIcon" };
+            var title = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11F, FontStyle.Bold), ForeColor = Palette.Text, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, Text = Title, Name = "welcomeTitle", Padding = new Padding(8, 0, 0, 0) };
             var dismiss = new FlatButton("✕", false) { Width = 26, Padding = Padding.Empty, Dock = DockStyle.Right, Font = Palette.Tiny, Name = "welcomeDismiss", AccessibleName = "Close the welcome" }; dismiss.Click += delegate { Close(); };
-            header.Controls.Add(caption); header.Controls.Add(dismiss);
+            header.Controls.Add(title); header.Controls.Add(logo); header.Controls.Add(dismiss);
             page = new WelcomePage { Dock = DockStyle.Fill, Name = "welcomePage" };
             page.IndexChanged += delegate { UpdateButtons(); };
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(0, 16, 0, 0) };
@@ -88,6 +92,17 @@ namespace SlotsInstaller
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+            // The app icon at 20 px for this screen's DPI, from the size in the .ico closest to it.
+            if (Icon != null)
+            {
+                int px = DpiMetrics.Px(this, 20);
+                using (var sized = new Icon(Icon, px, px)) using (Bitmap source = sized.ToBitmap())
+                {
+                    var image = new Bitmap(px, px);
+                    using (Graphics g = Graphics.FromImage(image)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(source, 0, 0, px, px); }
+                    logo.Image = image; Disposed += delegate { image.Dispose(); };
+                }
+            }
             int extra = page.TallestHeight() - page.Height;
             if (extra != 0) { ClientSize = new Size(ClientSize.Width, ClientSize.Height + extra); if (Owner != null) CenterToParent(); }
         }

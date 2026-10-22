@@ -447,6 +447,9 @@ namespace SlotsInstaller
                 Func<string, FlatButton> button = delegate(string name) { return (FlatButton)welcome.Controls.Find(name, true).Single(); };
                 Require(page.Height >= page.TallestHeight(), "welcome cut short: " + page.Height + " < " + page.TallestHeight());
                 Require(welcome.FormBorderStyle == FormBorderStyle.None && welcome.Controls.Find("welcomeDismiss", true).Length == 1, "the welcome has window chrome or no ✕");
+                // The user's header: the app icon and a plain title with "(SLM)", not cut off.
+                Label title = (Label)welcome.Controls.Find("welcomeTitle", true).Single(); PictureBox icon = (PictureBox)welcome.Controls.Find("welcomeIcon", true).Single();
+                Require(title.Text == "Welcome to Slotsloader Manager (SLM)" && title.PreferredWidth <= title.Width && icon.Image != null && icon.Image.Width == DpiMetrics.Px(welcome, 20), "welcome header: '" + title.Text + "' " + title.PreferredWidth + "/" + title.Width + ", icon " + (icon.Image == null ? "none" : icon.Image.Width.ToString()));
                 // How it looks over the app: the main window under ShowWelcome's black layer (DimOpacity), the card centred.
                 using (var shot = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                 using (var card = new Bitmap(welcome.Width, welcome.Height))
