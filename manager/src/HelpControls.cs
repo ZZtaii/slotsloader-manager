@@ -97,8 +97,9 @@ namespace SlotsInstaller
     // topic, or scrolls to its heading), wrapped word by word. Previous / Next at the end; "← Back to …" at the top after a link.
     internal sealed class HelpArticleView : Control
     {
-        private static readonly Font Body = new Font("Segoe UI", 10.5F), BodyBold = new Font("Segoe UI", 10.5F, FontStyle.Bold), CodeFont = new Font("Consolas", 10F),
-            TitleFont = new Font("Segoe UI", 17F, FontStyle.Bold), HeadingFont = new Font("Segoe UI", 12F, FontStyle.Bold), CaptionFont = new Font("Segoe UI", 8F, FontStyle.Bold);
+        // 1.0.11 (the user): the text a little larger (body 10.5 → 11 pt, code 10 → 10.5, headings 12 → 12.5).
+        private static readonly Font Body = new Font("Segoe UI", 11F), BodyBold = new Font("Segoe UI", 11F, FontStyle.Bold), CodeFont = new Font("Consolas", 10.5F),
+            TitleFont = new Font("Segoe UI", 17F, FontStyle.Bold), HeadingFont = new Font("Segoe UI", 12.5F, FontStyle.Bold), CaptionFont = new Font("Segoe UI", 8F, FontStyle.Bold);
         // No padding anywhere, so titles and headings line up with the paragraphs and the group caption.
         private const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPadding;
         private const TextFormatFlags Bare = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
@@ -138,7 +139,25 @@ namespace SlotsInstaller
         {
             Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
             using (var b = new SolidBrush(BackColor)) g.FillRectangle(b, ClientRectangle);
-            Lay(g, ClientSize.Width, true);
+            clip = e.ClipRectangle;
+            try { Lay(g, ClientSize.Width, true); } finally { clip = Rectangle.Empty; }
+        }
+
+        // 1.0.11 smooth scrolling: a scroll frame repaints only the strip it uncovers, and every pass used to measure each
+        // word again (about 30 ms for a long article, too slow for a glide). Word sizes are now measured once per font and
+        // DPI, and drawing skips what lies outside the strip being painted. Links are still recorded everywhere.
+        private Rectangle clip;
+        private bool InClip(Rectangle r) { return clip.IsEmpty || clip.IntersectsWith(r); }
+        private readonly Dictionary<Font, Dictionary<string, Size>> measured = new Dictionary<Font, Dictionary<string, Size>>();
+        private int measuredDpi;
+        private Size Measure(Graphics g, string text, Font font)
+        {
+            if (measuredDpi != DeviceDpi) { measured.Clear(); measuredDpi = DeviceDpi; }
+            Dictionary<string, Size> sizes;
+            if (!measured.TryGetValue(font, out sizes)) measured[font] = sizes = new Dictionary<string, Size>(StringComparer.Ordinal);
+            Size size;
+            if (!sizes.TryGetValue(text, out size)) sizes[text] = size = TextRenderer.MeasureText(g, text, font, Size.Empty, Bare);
+            return size;
         }
 
         // Walks the article top to bottom at this width: draws it when asked and returns the height it needs.
@@ -148,18 +167,18 @@ namespace SlotsInstaller
             if (draw) links.Clear();
             headingTops.Clear(); linkSeq = 0;
             int pad = Px(28), x = pad, w = Math.Max(Px(120), width - 2 * pad), y = Px(22);
-            if (draw) TextRenderer.DrawText(g, topic.Group.ToUpperInvariant(), CaptionFont, new Point(x, y), Palette.Muted, Bare);
+            if (draw && InClip(new Rectangle(x, y, w, Px(20)))) TextRenderer.DrawText(g, topic.Group.ToUpperInvariant(), CaptionFont, new Point(x, y), Palette.Muted, Bare);
             backLink = Rectangle.Empty;
             if (backTo != null)
             {
-                string text = "← Back to " + backTo.Title; Size s = TextRenderer.MeasureText(g, text, Palette.Small, Size.Empty, Bare);
+                string text = "← Back to " + backTo.Title; Size s = Measure(g, text, Palette.Small);
                 int bw = Math.Min(s.Width, w / 2);
                 backLink = new Rectangle(x + w - bw, y - Px(3), bw, s.Height + Px(6));
-                if (draw) TextRenderer.DrawText(g, text, Palette.Small, backLink, hoverLink == 2 ? Palette.Text : Palette.Accent, Bare | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
+                if (draw && InClip(backLink)) TextRenderer.DrawText(g, text, Palette.Small, backLink, hoverLink == 2 ? Palette.Text : Palette.Accent, Bare | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
             }
             y += Px(22);
-            int h = TextRenderer.MeasureText(g, topic.Title, TitleFont, new Size(w, Int32.MaxValue), Wrap).Height;
-            if (draw) TextRenderer.DrawText(g, topic.Title, TitleFont, new Rectangle(x, y, w, h), Palette.Text, Wrap);
+            int h = MeasureWrapped(g, topic.Title, TitleFont, w);
+            if (draw && InClip(new Rectangle(x, y, w, h))) TextRenderer.DrawText(g, topic.Title, TitleFont, new Rectangle(x, y, w, h), Palette.Text, Wrap);
             y += h + Px(2);
             if (topic.Lead.Length > 0) y += Inline(g, topic.Lead, Palette.Muted, x, y, w, draw) + Px(10);
             for (int i = 0; i < topic.Blocks.Count; i++)
@@ -170,13 +189,13 @@ namespace SlotsInstaller
                     case HelpBlockKind.Heading:
                         y += Px(12);
                         if (!headingTops.ContainsKey(b.Text)) headingTops[b.Text] = y;
-                        h = TextRenderer.MeasureText(g, b.Text, HeadingFont, new Size(w, Int32.MaxValue), Wrap).Height;
-                        if (draw) TextRenderer.DrawText(g, b.Text, HeadingFont, new Rectangle(x, y, w, h), Palette.Text, Wrap);
+                        h = MeasureWrapped(g, b.Text, HeadingFont, w);
+                        if (draw && InClip(new Rectangle(x, y, w, h))) TextRenderer.DrawText(g, b.Text, HeadingFont, new Rectangle(x, y, w, h), Palette.Text, Wrap);
                         y += h + Px(6);
                         break;
                     case HelpBlockKind.Item:
-                        int indent = Px(20), dot = Px(6);
-                        if (draw) using (var accent = new SolidBrush(Palette.Accent)) g.FillEllipse(accent, x + Px(4), y + LineHeight(g) / 2 - dot / 2 - Px(1), dot, dot);
+                        int indent = Px(20), dot = Px(6), dotTop = y + LineHeight(g) / 2 - dot / 2 - Px(1);
+                        if (draw && InClip(new Rectangle(x + Px(4), dotTop, dot, dot))) using (var accent = new SolidBrush(Palette.Accent)) g.FillEllipse(accent, x + Px(4), dotTop, dot, dot);
                         y += Inline(g, b.Text, Palette.Text, x + indent, y, w - indent, draw) + Px(4);
                         if (i + 1 >= topic.Blocks.Count || topic.Blocks[i + 1].Kind != HelpBlockKind.Item) y += Px(8);
                         break;
@@ -185,7 +204,7 @@ namespace SlotsInstaller
                         int textHeight = Inline(g, b.Text, Palette.Text, x + inner, 0, w - 2 * inner, false);
                         linkSeq = seq;   // the measuring pass numbered this card's links; the drawing pass numbers them again
                         var card = new Rectangle(x, y + Px(4), w, inner * 2 + badge + textHeight);
-                        if (draw)
+                        if (draw && InClip(Rectangle.Inflate(card, Px(2), Px(2))))
                         {
                             Glyphs.FillRounded(g, Palette.Raised, card, Px(8));
                             Glyphs.DrawRounded(g, Palette.Accent, Math.Max(1F, Px(1)), card, Px(8));
@@ -201,35 +220,45 @@ namespace SlotsInstaller
             }
             // Previous / Next: a line, then the two links.
             y += Px(10);
-            if (draw) using (var line = new SolidBrush(Palette.Border)) g.FillRectangle(line, x, y, w, Math.Max(1, Px(1)));
+            if (draw && InClip(new Rectangle(x, y, w, Math.Max(1, Px(1))))) using (var line = new SolidBrush(Palette.Border)) g.FillRectangle(line, x, y, w, Math.Max(1, Px(1)));
             y += Px(14);
             int linkHeight = Px(26);
             previousLink = nextLink = Rectangle.Empty;
             if (previous != null)
             {
-                string text = "← " + previous.Title; Size s = TextRenderer.MeasureText(g, text, Body, Size.Empty, Bare);
+                string text = "← " + previous.Title; Size s = Measure(g, text, Body);
                 previousLink = new Rectangle(x, y, Math.Min(s.Width, w / 2 - Px(8)), linkHeight);
-                if (draw) TextRenderer.DrawText(g, text, Body, previousLink, hoverLink == -1 ? Palette.Text : Palette.Accent, Bare | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter);
+                if (draw && InClip(previousLink)) TextRenderer.DrawText(g, text, Body, previousLink, hoverLink == -1 ? Palette.Text : Palette.Accent, Bare | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter);
             }
             if (next != null)
             {
-                string text = next.Title + " →"; Size s = TextRenderer.MeasureText(g, text, Body, Size.Empty, Bare);
+                string text = next.Title + " →"; Size s = Measure(g, text, Body);
                 int lw = Math.Min(s.Width, w / 2 - Px(8));
                 nextLink = new Rectangle(x + w - lw, y, lw, linkHeight);
-                if (draw) TextRenderer.DrawText(g, text, Body, nextLink, hoverLink == 1 ? Palette.Text : Palette.Accent, Bare | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
+                if (draw && InClip(nextLink)) TextRenderer.DrawText(g, text, Body, nextLink, hoverLink == 1 ? Palette.Text : Palette.Accent, Bare | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
             }
             return y + linkHeight + Px(24);
         }
 
-        private int LineHeight(Graphics g) { return TextRenderer.MeasureText(g, "Ag", Body, Size.Empty, Bare).Height + Px(7); }
+        private int LineHeight(Graphics g) { return Measure(g, "Ag", Body).Height + Px(7); }
+        // A title or heading wrapped at `width` (cached with the width in the key).
+        private int MeasureWrapped(Graphics g, string text, Font font, int width)
+        {
+            if (measuredDpi != DeviceDpi) { measured.Clear(); measuredDpi = DeviceDpi; }
+            Dictionary<string, Size> sizes;
+            if (!measured.TryGetValue(font, out sizes)) measured[font] = sizes = new Dictionary<string, Size>(StringComparer.Ordinal);
+            string key = width + "\u0001" + text; Size size;
+            if (!sizes.TryGetValue(key, out size)) sizes[key] = size = TextRenderer.MeasureText(g, text, font, new Size(width, Int32.MaxValue), Wrap);
+            return size.Height;
+        }
 
         // Inline text wrapped word by word in [x, x + width): plain words in `color`, **bold** and `code` in the text colour,
         // links in the accent (the text colour under the pointer); a code span is a raised chip (one chip per span and line).
         // Returns the height used. Drawing records each link word's bounds for the pointer.
         private int Inline(Graphics g, string text, Color color, int x, int y, int width, bool draw)
         {
-            int lineHeight = LineHeight(g), baseHeight = TextRenderer.MeasureText(g, "Ag", Body, Size.Empty, Bare).Height;
-            int space = TextRenderer.MeasureText(g, "a a", Body, Size.Empty, Bare).Width - TextRenderer.MeasureText(g, "aa", Body, Size.Empty, Bare).Width;
+            int lineHeight = LineHeight(g), baseHeight = Measure(g, "Ag", Body).Height;
+            int space = Measure(g, "a a", Body).Width - Measure(g, "aa", Body).Width;
             int chipPad = Px(4), cx = x, cy = y;
             bool pendingSpace = false;
             foreach (HelpRun run in HelpDocument.Runs(text))
@@ -237,7 +266,7 @@ namespace SlotsInstaller
                 int seq = run.Link != null ? linkSeq++ : -1;
                 Font f = run.Code ? CodeFont : run.Bold ? BodyBold : Body;
                 Color c = run.Link != null ? (seq == hoverSeq ? Palette.Text : Palette.Accent) : run.Code || run.Bold ? Palette.Text : color;
-                int fontHeight = TextRenderer.MeasureText(g, "Ag", f, Size.Empty, Bare).Height;
+                int fontHeight = Measure(g, "Ag", f).Height;
                 int chipRight = -1;   // the right edge of this code span's chip on the current line
                 string[] words = run.Text.Split(' ');
                 for (int k = 0; k < words.Length; k++)
@@ -245,20 +274,24 @@ namespace SlotsInstaller
                     if (k > 0) pendingSpace = true;
                     string word = words[k];
                     if (word.Length == 0) { if (k == 0 && run.Text.Length > 0) pendingSpace = true; continue; }
-                    int ww = TextRenderer.MeasureText(g, word, f, Size.Empty, Bare).Width + (run.Code ? 2 * chipPad : 0);
+                    int ww = Measure(g, word, f).Width + (run.Code ? 2 * chipPad : 0);
                     int gap = pendingSpace && cx > x ? space : 0;
                     if (cx > x && cx + gap + ww > x + width) { cx = x; cy += lineHeight; gap = 0; chipRight = -1; }
                     int left = cx + gap;
                     if (draw)
                     {
+                        bool shown = InClip(new Rectangle(left - gap - Px(4), cy - Px(4), ww + gap + Px(8), lineHeight + Px(4)));
                         if (run.Code)
                         {
                             var chip = new Rectangle(left, cy + (baseHeight - fontHeight) / 2 - Px(2), ww, fontHeight + Px(4));
-                            Glyphs.FillRounded(g, Palette.Raised, chip, Px(4));
-                            if (chipRight >= 0) using (var b = new SolidBrush(Palette.Raised)) g.FillRectangle(b, chipRight - Px(4), chip.Y, left - chipRight + Px(8), chip.Height);   // one chip across the span
+                            if (shown)
+                            {
+                                Glyphs.FillRounded(g, Palette.Raised, chip, Px(4));
+                                if (chipRight >= 0) using (var b = new SolidBrush(Palette.Raised)) g.FillRectangle(b, chipRight - Px(4), chip.Y, left - chipRight + Px(8), chip.Height);   // one chip across the span
+                            }
                             chipRight = chip.Right;
                         }
-                        TextRenderer.DrawText(g, word, f, new Point(left + (run.Code ? chipPad : 0), cy + (baseHeight - fontHeight) / 2), c, Bare);
+                        if (shown) TextRenderer.DrawText(g, word, f, new Point(left + (run.Code ? chipPad : 0), cy + (baseHeight - fontHeight) / 2), c, Bare);
                         if (run.Link != null) links.Add(new LinkSpot { Bounds = new Rectangle(left - (gap > 0 ? gap : 0), cy, ww + (gap > 0 ? gap : 0), lineHeight - Px(4)), Seq = seq, Target = run.Link });
                     }
                     else if (run.Code) chipRight = left + ww;

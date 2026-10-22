@@ -1105,6 +1105,10 @@ namespace SlotsInstaller
             add(right, gameRow);
             add(right, Rhythm.Gap(Rhythm.Group));
             add(right, Caption("Replacement store"));
+            // 1.0.11 (the user): what the store is, under its caption like Mod libraries; gives way on short windows.
+            var storeHint = new Label { UseMnemonic = false, Name = "settingsStoreNote", Text = "A ready copy of each installed replacement, used by Enable, Reapply and presets.", ForeColor = Palette.Muted, Font = Palette.Small, Height = 20 + Rhythm.Related, Margin = Padding.Empty, AutoEllipsis = true };
+            add(right, storeHint);
+            right.Resize += delegate { storeHint.Visible = right.Height >= right.Controls.Cast<Control>().Where(c => c != storeHint).Sum(c => c.Height) + storeHint.Height; };
             var storeRow = new TableLayoutPanel { Height = 32, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
             storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92)); storeRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             settingsStore = TextField(); settingsStore.Dock = DockStyle.Fill; settingsStore.Margin = new Padding(0, 0, 8, 0); settingsStore.AccessibleName = "Replacement store folder"; settingsStore.PlaceholderText = "Default: Data\\replace-store";

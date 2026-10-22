@@ -56,13 +56,13 @@ namespace SlotsInstaller
             helpTopics = new HelpTopicList { Name = "helpTopics" };
             helpTopics.SetTopics(HelpDocument.Topics);
             helpTopics.Chosen = ShowHelpTopic;
-            helpTopicScroll = new OverlayScroller { Dock = DockStyle.Fill };
+            helpTopicScroll = new OverlayScroller { Dock = DockStyle.Fill, Smooth = true };
             helpTopicScroll.SetContent(helpTopics, delegate(int w) { return helpTopics.NaturalHeight(w); });
             rail.Controls.Add(helpTopicScroll); rail.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 10 }); rail.Controls.Add(helpSearch);
             var reader = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface };
             helpArticle = new HelpArticleView { Name = "helpArticle" };
             helpArticle.Navigate = FollowHelpLink; helpArticle.Page = ShowHelpTopic; helpArticle.Back = HelpBack;
-            helpArticleScroll = new OverlayScroller { Dock = DockStyle.Fill };
+            helpArticleScroll = new OverlayScroller { Dock = DockStyle.Fill, Smooth = true };   // 1.0.11: the wheel glides
             helpArticleScroll.SetContent(helpArticle, delegate(int w) { return helpArticle.NaturalHeight(w); });
             reader.Controls.Add(helpArticleScroll);
             page.Controls.Add(reader); page.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 14 }); page.Controls.Add(rail);
