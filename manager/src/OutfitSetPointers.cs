@@ -491,7 +491,7 @@ namespace SlotsInstaller
                     if (!changed) continue;
                     string file = System.IO.Path.Combine(folder, RecordName), temp = file + ".tmp";
                     Json.Write(temp, record);
-                    File.Replace(temp, file, null);
+                    DurableFile.Publish(temp, file);
                 }
                 catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
             }

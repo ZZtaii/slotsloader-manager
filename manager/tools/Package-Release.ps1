@@ -5,14 +5,16 @@
 #  2. Downloads that zip, checks its size and SHA-256 against the digest, and rewrites assets\loader-pin.json.
 #  3. Builds (build.ps1 embeds the pin) and packs Slotsloader-Manager-<version>-portable.zip: the 7 release files at
 #     the root plus Slotsloader\<loader zip>, then SHA256SUMS.txt beside it.
-#  4. 1.0.11: 7-Zip for RAR/7Z goes in as 7-Zip\7z.exe, 7z.dll and License.txt (x64, unmodified, taken from
-#     -SevenZipDir, default: the installed 7-Zip). Its version and hashes go in VALIDATION.txt. -NoSevenZip leaves it
-#     out: a Manager 1.0.10 or older refuses an update zip with the 7-Zip folder ("unexpected files").
+#  4. 1.0.11: 7-Zip is NOT in the zip: a Manager 1.0.10 or older refuses an update zip with a 7-Zip folder ("unexpected
+#     files"), and someone can update from any older version. The Manager fetches its pinned 7-Zip release
+#     (SevenZipTool.Supported, tag tool-7zip-26.00) when no usable 7-Zip is installed. -BundleSevenZip still puts
+#     7-Zip\7z.exe, 7z.dll and License.txt in (x64, unmodified, from -SevenZipDir, default: the installed 7-Zip), for
+#     a zip that is never offered as an update.
 # Nothing is published: the commands to do that are printed at the end.
 # -LoaderZip <path>: use this local zip instead of downloading (it must match the pin, or the newest release's
 #  digest when fetching). -NoLoaderFetch: keep assets\loader-pin.json as it is (offline); needs -LoaderZip or a
 #  cached copy in <output>\loader-cache.
-param([string]$OutputDirectory = '', [switch]$NoLoaderFetch, [switch]$AllowOlderLoader, [string]$LoaderZip = '', [string]$TestReport = '', [string]$SevenZipDir = '', [switch]$NoSevenZip)
+param([string]$OutputDirectory = '', [switch]$NoLoaderFetch, [switch]$AllowOlderLoader, [string]$LoaderZip = '', [string]$TestReport = '', [string]$SevenZipDir = '', [switch]$BundleSevenZip)
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $repo = 'ZZtaii/slotsloader-manager'
@@ -36,12 +38,12 @@ function Write-Pin($pin) {
 
 # 4 (checked first, so a missing 7-Zip stops before anything is downloaded or rewritten).
 $sevenFiles = @('7z.exe', '7z.dll', 'License.txt'); $sevenVersion = ''
-if (-not $NoSevenZip) {
+if ($BundleSevenZip) {
     if (-not $SevenZipDir) {
         $key = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\7-Zip' -ErrorAction SilentlyContinue
         $SevenZipDir = if ($key -and $key.Path64) { $key.Path64 } elseif ($key -and $key.Path) { $key.Path } else { Join-Path $env:ProgramW6432 '7-Zip' }
     }
-    foreach ($f in $sevenFiles) { if (-not (Test-Path -LiteralPath (Join-Path $SevenZipDir $f))) { throw "7-Zip: $f is missing in $SevenZipDir (pass -SevenZipDir, or -NoSevenZip)." } }
+    foreach ($f in $sevenFiles) { if (-not (Test-Path -LiteralPath (Join-Path $SevenZipDir $f))) { throw "7-Zip: $f is missing in $SevenZipDir (pass -SevenZipDir, or leave out -BundleSevenZip)." } }
     $sevenInfo = (Get-Item -LiteralPath (Join-Path $SevenZipDir '7z.exe')).VersionInfo
     if ($sevenInfo.CompanyName -ne 'Igor Pavlov') { throw "7-Zip: $SevenZipDir\7z.exe is not an official 7-Zip build (company '$($sevenInfo.CompanyName)')." }
     $machine = [IO.File]::ReadAllBytes((Join-Path $SevenZipDir '7z.exe')); $pe = [BitConverter]::ToInt32($machine, 0x3C)
@@ -102,7 +104,8 @@ Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $project 'docs\CLI.md') -Destination $stage
 Copy-Item -LiteralPath $zipPath -Destination (Join-Path $stage 'Slotsloader')
 $validation = @("Slotsloader Manager $version", "Built $(Get-Date -Format 'yyyy-MM-dd HH:mm') by tools\Package-Release.ps1.", "Bundled Slotsloader: $($pin.tag), Slotsloader\$($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256)")
-if (-not $NoSevenZip) {
+if (-not $BundleSevenZip) { $validation += "7-Zip: not in this zip (any older Manager can update to it); the Manager downloads its pinned 7-Zip release tool-7zip-26.00 when no usable 7-Zip is installed." }
+else {
     New-Item -ItemType Directory -Path (Join-Path $stage '7-Zip') -Force | Out-Null
     $validation += "Bundled 7-Zip $sevenVersion (x64, unmodified, GNU LGPL + unRAR restriction; see 7-Zip\License.txt; source at https://www.7-zip.org):"
     foreach ($f in $sevenFiles) {

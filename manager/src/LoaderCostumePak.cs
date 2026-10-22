@@ -116,7 +116,7 @@ namespace SlotsInstaller
             string tmp = path + ".tmp";
             if (File.Exists(tmp)) File.Delete(tmp);
             PakWriter.WriteFixture(tmp, new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>(CostumeMarker, MarkerBytes) }, 0, 0);
-            if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+            DurableFile.Publish(tmp, path);
         }
 
         // The loader rebuilds when the fingerprint in registry.json differs (slot numbers and possession stay).

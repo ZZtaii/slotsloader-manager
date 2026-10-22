@@ -52,7 +52,7 @@ namespace SlotsInstaller
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
             string tmp = FilePath + ".tmp";
             File.WriteAllText(tmp, new JavaScriptSerializer().Serialize(this));
-            if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null); else File.Move(tmp, FilePath);
+            DurableFile.Publish(tmp, FilePath);
         }
         internal bool Due(DateTime nowUtc)
         {

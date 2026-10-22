@@ -222,7 +222,7 @@ namespace SlotsInstaller
             try
             {
                 using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16, FileOptions.WriteThrough)) { fs.Write(data, 0, data.Length); fs.Flush(true); }
-                if (File.Exists(full)) File.Replace(tmp, full, null); else File.Move(tmp, full);
+                DurableFile.Publish(tmp, full);
             }
             finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
         }
