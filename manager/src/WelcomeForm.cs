@@ -25,10 +25,10 @@ namespace SlotsInstaller
                 "Extra outfit adds a mod as a new costume slot. The original outfit stays in the game.",
                 "Extra outfits need REFramework and Slotsloader. If one is missing, click the line under INSTALL AS to get it.",
                 "While your mod manager has mods installed, Replace original is off here. Its mods stay its own, so manage them there." } },
-            new Topic { Tab = "As standalone", Title = "Use it on its own", Lead = "Let this Manager handle every mod, replacements included.", Highlight = 1, Badge = "Automatic fixes", Points = new[] {
+            new Topic { Tab = "As standalone", Title = "Use it on its own", Lead = "Let this Manager handle every mod, replacements included.", Highlight = 2, Badge = "Automatic fixes", Points = new[] {
                 "Uninstall everything in your external mod manager first. Replace original stays off until it's empty.",
-                "Every replacement gets a health check, and mods made for an older SF6 are fixed as they install: colour files, texture tables and old file names. Mods installed by other managers don't get these fixes.",
-                "Replace original overwrites the game's files. When two mods change the same outfit, the one higher on the Installed page wins." } },
+                "Replace original overwrites the game's files. When two mods change the same outfit, the one higher on the Installed page wins.",
+                "Every replacement gets a health check, and mods made for an older SF6 are fixed as they install: colour files, texture tables and old file names. Mods installed by other managers don't get these fixes." } },
             new Topic { Tab = "Repair", Title = "When something breaks", Lead = "Start with the smallest fix.", Points = new[] {
                 "After an SF6 update, a \"Game files changed\" banner appears. Click Reapply to put your replacements back.",
                 "Game won't start? Gear → Restore → Remove this Manager's mods. You can undo it.",
