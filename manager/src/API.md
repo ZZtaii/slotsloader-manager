@@ -54,7 +54,7 @@ All types in this section are internal unless noted.
 - `FluffyInstalls.DetectRoots(libraries,extra)` and `Load(roots)` read `installed.ini`; `Owner(path)` and `Parse(text, root)` resolve ownership.
 - `ToolStatus.Detect(gameRoot)` reports REFramework, Slotsloader and the crash reporter; (`SlotsloaderPackages` was removed in 2.3.1; see `LoaderRelease`).
 - `LooseLoader`: `State(gameRoot, out detail)`, `Read(key)`, `Write(gameRoot, key, value, backupDir) → previous`, `LoggedPaths(gameRoot, sinceUtc)`, `ParseLogLine`, `Matched`.
-- `DurableFile.Write` / `WriteJson` write a temporary file, call `Flush(true)` and replace the target.
+- `DurableFile.Write` / `WriteJson` write a temporary file, call `Flush(true)` and replace the target. `Json.Write` (settings and records in `Data`) retries its replacement the same way (1.0.11).
 - `TestSession` (2.3.0: only for a record left by an older version): `FilePath`, `Load`, `Save`, `Clear`, `FinishLeftover(engine, record) → message` (keeps a Replace test via `ReplaceEngine.KeepTest`, restores `RestoreConfig` keys, deletes the record). `Tick`, `EnableLoadLogging`, `RestoreLogging`, `Finish`, `LoadedFilesReport` and `LoaderLog` were removed with Test in game.
 
 **External presets: `FluffyPresets.cs`**

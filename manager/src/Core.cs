@@ -51,8 +51,21 @@ namespace SlotsInstaller
         internal static void Write(string p, object o)
         {
             string tmp = p + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(tmp, Serializer().Serialize(o), new UTF8Encoding(false));
-            if (File.Exists(p)) File.Replace(tmp, p, null); else File.Move(tmp, p);
+            try
+            {
+                File.WriteAllText(tmp, Serializer().Serialize(o), new UTF8Encoding(false));
+                // 1.0.11: as DurableFile.Write (2.4.2): a scanner or another reader holding the target without Delete sharing
+                // makes the replace fail for a moment ("Unable to remove the file to be replaced"); the temporary file is
+                // intact then, so it is tried again briefly. The temporary file no longer stays behind after a failure.
+                for (int attempt = 0; ; attempt++)
+                {
+                    try { if (File.Exists(p)) File.Replace(tmp, p, null); else File.Move(tmp, p); break; }
+                    catch (IOException) { if (attempt >= DurableFile.ReplaceRetries || !File.Exists(tmp)) throw; }
+                    catch (UnauthorizedAccessException) { if (attempt >= DurableFile.ReplaceRetries || !File.Exists(tmp)) throw; }
+                    Thread.Sleep(15 + 15 * attempt);
+                }
+            }
+            finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
         }
         internal static void WriteNew(string p, object o)
         {
