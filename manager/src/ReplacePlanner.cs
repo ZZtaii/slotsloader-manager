@@ -43,6 +43,10 @@ namespace SlotsInstaller
         // same files never extracts again. updateId: the replacement being updated in place (keeps its priority).
         internal static ReplacePlan Prepare(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId)
         {
+            using (InstallMetrics.Measure("prepare extraction and fixes")) return PrepareCore(composition, sevenZip, engine, staging, cache, updateId);
+        }
+        private static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId)
+        {
             var clock = System.Diagnostics.Stopwatch.StartNew();
             if (composition == null) throw new ArgumentNullException("composition");
             var plan = new ReplacePlan { ModName = composition.Package.Name, SourcePath = composition.Package.SourcePath, SelectedIds = composition.Layers.Select(c => c.Id).ToList(), StagingFolder = staging };

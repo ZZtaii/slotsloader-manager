@@ -163,7 +163,7 @@ namespace SlotsInstaller
                     ids = MainForm.MapSelection(package, want.SelectedIds.Select(id => new KeyValuePair<string, string>(id, "")).ToList(), out dropped);
                     if (dropped.Count > 0) return false;
                 }
-                CompositionPlan plan = Composer.Plan(package, ids, want.Replace);
+                CompositionPlan plan = Composer.SavedPlan(package, ids, want.Replace);
                 if (!plan.CanInstall) return false;
                 var byPath = new Dictionary<string, PlannedFile>(StringComparer.OrdinalIgnoreCase);
                 var byStem = new Dictionary<string, List<PlannedFile>>(StringComparer.OrdinalIgnoreCase);

@@ -241,6 +241,7 @@ namespace SlotsInstaller
             worker.DoWork += delegate(object s, DoWorkEventArgs e)
             {
                 var clock = Stopwatch.StartNew();
+                using (InstallMetrics.Measure("automatic review to ready"))
                 using (OperationContext.Begin(cancel.Token, delegate(OperationProgress p) { worker.ReportProgress(0, p); }))
                 {
                     if (ReviewTestDelay > 0) Thread.Sleep(ReviewTestDelay);   // checks: keep a run in flight
@@ -467,7 +468,7 @@ namespace SlotsInstaller
         {
             if (package == null || IsReplaceMode || installed == null) return null;
             var selection = new HashSet<string>(selectedOrder, StringComparer.OrdinalIgnoreCase);
-            return installed.FirstOrDefault(o => o.Managed && String.Equals(o.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase) && o.SelectedIds != null && selection.SetEquals(o.SelectedIds));
+            return installed.FirstOrDefault(o => o.Managed && String.Equals(o.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase) && o.SelectedIds != null && Composer.MatchesSavedSelection(package, selection, o.SelectedIds));
         }
         internal static string DuplicateText(InstalledOutfit o)
         {

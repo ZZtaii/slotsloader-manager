@@ -67,7 +67,7 @@ namespace SlotsInstaller
             List<InstalledOutfit> slots = ModSlots(character);
             if (slots.Count == 0) return plain;
             var selection = new HashSet<string>(selectedOrder, StringComparer.OrdinalIgnoreCase);
-            InstalledOutfit same = slots.FirstOrDefault(o => o.Enabled && o.SelectedIds != null && selection.SetEquals(o.SelectedIds));
+            InstalledOutfit same = slots.FirstOrDefault(o => o.Enabled && o.SelectedIds != null && Composer.MatchesSavedSelection(package, selection, o.SelectedIds));
             if (same != null) return same.Name;
             List<string> options = VariantOptionNames();
             string name = CleanName(options.Count == 0 ? plain : plain + " · " + String.Join(" + ", options));

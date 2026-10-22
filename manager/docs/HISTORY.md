@@ -1,5 +1,13 @@
 # Development history
 
+## Unreleased: installation, options and search
+
+- Replacement operations reuse each PAK layout hash within one reconciliation. Live file verification, path checks, ownership, journaling and recovery still run. See [measurements and validation](INSTALL-IMPROVEMENTS.md); the measured improvement is from generated fixtures, not an in-game install.
+- Root alternatives with the same bundle metadata and complete file destinations now appear in a choose-one group, with no guessed default. Queue installation skips an unresolved choice instead of selecting the first option. Independent components and partial overlays keep their existing behavior.
+- Older saved selections containing several equivalent alternatives restore the last effective choice when the composed winning files remain identical, with an explanatory note. Opening a mod does not rewrite its installed record.
+- Searching `pak` or `pak mods` finds recorded PAK payloads on Installed and eligible payloads in library archives, including mixed packages. A loose replacement using PAK-entry invalidation is not a PAK payload. Other search terms still narrow the results.
+- Fighter portrait filters show confirmed single-character mods first, then multi-character mods, preserving the chosen sort within each group.
+
 Slotloader Manager was developed privately before its first public release, 1.0.0. These are the internal versions, newest first. They were called SlotsLoader Manager from 2.1.0 to 2.5.8, and SF6 SlotsLoader Installer before that.
 
 

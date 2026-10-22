@@ -287,7 +287,7 @@ namespace SlotsInstaller
             else if (unresolvedChoices.Count > 0)
             {
                 planSummary.Text = RequiredChoiceSummary(); planSummary.ForeColor = Palette.Accent;
-                planDetails.Text = "Required before Install · click to jump to the first choice";
+                planDetails.Text = unresolvedChoices.All(g => g.InferredChoice) ? "Select an option to install · click to choose" : "Required before Install · click to jump to the first choice";
             }
             else if (ReviewPending)
             {
@@ -341,7 +341,11 @@ namespace SlotsInstaller
         {
             if (package == null || editingReplacement != null) return null;
             var selection = new HashSet<string>(selectedOrder, StringComparer.OrdinalIgnoreCase);
-            return gameRows.Where(r => r.Mod != null).Select(r => r.Mod).FirstOrDefault(m => String.Equals(m.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase) && selection.SetEquals(m.SelectedIds ?? new List<string>()));
+            return gameRows.Where(r => r.Mod != null).Select(r => r.Mod).FirstOrDefault(m =>
+            {
+                if (!String.Equals(m.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)) return false;
+                return Composer.MatchesSavedSelection(package, selection, m.SelectedIds);
+            });
         }
 
         private void UpdateReplaceButtons()

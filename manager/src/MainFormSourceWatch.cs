@@ -244,13 +244,20 @@ namespace SlotsInstaller
             {
                 ModPackage source2 = PackageReader.Load(source, sevenZip, false);
                 List<string> dropped; List<string> ids = MapSelection(source2, selection.Select(s => new KeyValuePair<string, string>(s, "")).ToList(), out dropped);
-                if (ids.Count == 0) ids = Composer.DefaultSelection(source2, true);
-                CompositionPlan composition = Composer.Plan(source2, ids, true);
+                if (dropped.Count > 0) throw new IOException("Saved options are missing: " + String.Join(", ", dropped) + ". Edit options before reinstalling.");
+                if (selection.Count == 0) ids = Composer.DefaultSelection(source2, true);
+                CompositionPlan composition = Composer.SavedPlan(source2, ids, true);
                 if (!composition.CanInstall) throw new IOException("Couldn't reinstall " + name + ": " + String.Join(" ", composition.Errors));
                 ReplacePlan prepared;
                 ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, id, out prepared);
-                return dropped.Count > 0 ? " Options no longer in the mod: " + String.Join(", ", dropped) + "." : "";
+                return SavedChoiceNote(composition);
             }, delegate(string note) { RefreshInstalled("✓ Reinstalled " + name + " from the edited source." + note + " Restart SF6 to see changes."); });
+        }
+        // " Saved selection resolves to …" (Composer.SavedPlan), or "" when the saved options were used as they are.
+        private static string SavedChoiceNote(CompositionPlan composition)
+        {
+            string note = String.Join(" ", composition.Warnings.Where(w => w.StartsWith("Saved selection resolves to", StringComparison.Ordinal)));
+            return note.Length == 0 ? "" : " " + note;
         }
         private void ReinstallOutfit(InstalledOutfit outfit)
         {
@@ -260,11 +267,12 @@ namespace SlotsInstaller
             {
                 ModPackage source2 = PackageReader.Load(source, sevenZip, false);
                 List<string> dropped; List<string> ids = MapSelection(source2, selection.Select(s => new KeyValuePair<string, string>(s, "")).ToList(), out dropped);
-                if (ids.Count == 0) ids = Composer.DefaultSelection(source2, false);
-                CompositionPlan composition = Composer.Plan(source2, ids, false);
+                if (dropped.Count > 0) throw new IOException("Saved options are missing: " + String.Join(", ", dropped) + ". Edit options before reinstalling.");
+                if (selection.Count == 0) ids = Composer.DefaultSelection(source2, false);
+                CompositionPlan composition = Composer.SavedPlan(source2, ids, false);
                 if (!composition.CanInstall) throw new IOException("Couldn't reinstall " + name + ": " + String.Join(" ", composition.Errors));
                 Installer.Install(composition, root, character, name, sevenZip, true);   // the same name: a switch (1.0.1: the earlier copy is not kept)
-                return dropped.Count > 0 ? " Options no longer in the mod: " + String.Join(", ", dropped) + "." : "";
+                return SavedChoiceNote(composition);
             }, delegate(string note) { RefreshInstalled("✓ Reinstalled " + name + " from the edited source." + note + " Restart SF6 to see changes."); });
         }
     }

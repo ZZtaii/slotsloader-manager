@@ -457,9 +457,9 @@ namespace SlotsInstaller
                         Do(op); step++;
                     }
                     if (CrashAfterStep == step) throw new SimulatedCrashException();
-                    StampPaks(next);
+                    using (InstallMetrics.Measure("post-commit PAK stamps")) StampPaks(next);
                     next.CreatedDirs = next.CreatedDirs.Concat(journal.CreatedDirs).Distinct(StringComparer.OrdinalIgnoreCase).Where(d => Directory.Exists(GamePath(d))).ToList();
-                    DurableFile.WriteJson(StatePath, next);
+                    using (InstallMetrics.Measure("durable state commit")) DurableFile.WriteJson(StatePath, next);
                     if (CrashAfterStep == step + 1) throw new SimulatedCrashException();
                 }
                 catch (SimulatedCrashException) { throw; }
@@ -474,7 +474,7 @@ namespace SlotsInstaller
                 trashWarning = FinishTrash(journal.TrashAfterCommit) ?? trashWarning;
                 File.Delete(JournalPath);
             }
-            ManagerInstalls.Write(GameRoot, next);   // 1.0.9: the list other costume loaders read (never throws)
+            using (InstallMetrics.Measure("manager installs")) ManagerInstalls.Write(GameRoot, next);   // never throws
         }
 
         // Recoverable uninstall: the removed mod's stored files and its record move to <store>\.removed.
@@ -543,6 +543,7 @@ namespace SlotsInstaller
         // Pre-existing files we overwrite are backed up now (and recorded in next.Originals).
         // 2.2.0: files another tool changed after this app installed them follow options.Choice (see DriftChoice);
         // the changer (a Fluffy mod, a known SlotsLoader/AGS build or "another tool") is named in every message.
+        internal bool BenchmarkUncachedLayouts; // fixture comparison only; never set by application callers
         private ReplaceJournal Reconcile(ReplaceState current, ReplaceState next, string method, GamePaks paks, FluffyInstalls fluffy, ChangeOptions options, string description, List<string> messages)
         {
             var journal = new ReplaceJournal { OperationId = Guid.NewGuid().ToString("N"), Description = description, StartedUtc = DateTime.UtcNow.ToString("o") };
@@ -566,12 +567,23 @@ namespace SlotsInstaller
             var foreignCopies = current.ForeignCopies.Select(c => c).ToList();
             var drift = new List<DriftItem>();
             int staleDropped = 0;
+            // Each PakIndex owns an immutable header/table snapshot. Keep this memo
+            // local to the reconcile: no pathname, timestamp or cross-operation trust.
+            var layouts = new Dictionary<PakIndex, string>();
+            Func<PakIndex, string> layout = delegate(PakIndex p)
+            {
+                string hash;
+                if (!BenchmarkUncachedLayouts && layouts.TryGetValue(p, out hash)) return hash;
+                using (InstallMetrics.Measure("reconcile layout hash")) hash = p.LayoutSha256();
+                layouts[p] = hash;
+                return hash;
+            };
             Func<string, PakIndex> pakByName = delegate(string name) { string full = GamePath(name); return paks.Writable.FirstOrDefault(p => String.Equals(p.Path, full, StringComparison.OrdinalIgnoreCase)); };
             Func<ZeroedRow, bool> rowValid = delegate(ZeroedRow z)
             {
                 PakIndex p = pakByName(z.Pak);
                 PakStamp stamp = current.Paks.FirstOrDefault(s => String.Equals(s.Pak, z.Pak, StringComparison.OrdinalIgnoreCase));
-                return p != null && stamp != null && p.Length == stamp.Length && p.Fingerprint == stamp.Fingerprint && p.LayoutSha256() == stamp.LayoutSha && z.Index < p.Count;
+                return p != null && stamp != null && p.Length == stamp.Length && p.Fingerprint == stamp.Fingerprint && layout(p) == stamp.LayoutSha && z.Index < p.Count;
             };
             Action<Dictionary<PakIndex, List<JournalRow>>, PakIndex, JournalRow> addRow = delegate(Dictionary<PakIndex, List<JournalRow>> map, PakIndex p, JournalRow r)
             {
@@ -586,8 +598,9 @@ namespace SlotsInstaller
                 DeployedFile was = current.Deployment(path);
                 KeyValuePair<ReplaceMod, ModFile> want; bool wanted = desired.TryGetValue(path, out want);
                 string full = GamePath(path);
-                Safety.NoReparseChain(full);
-                string actual = CurrentSha(path, full);   // 2.5.6: an empty placeholder patch PAK counts as no file
+                using (InstallMetrics.Measure("reconcile path safety")) Safety.NoReparseChain(full);
+                string actual;
+                using (InstallMetrics.Measure("reconcile current SHA", InstallMetrics.Enabled && File.Exists(full) ? new FileInfo(full).Length : 0)) actual = CurrentSha(path, full); // empty placeholder counts as no file
                 OriginalBackup original = originals.FirstOrDefault(o => String.Equals(o.Path, path, StringComparison.OrdinalIgnoreCase));
                 DriftChoice choice = options.Choice;
                 string beforeSource = null;
@@ -823,13 +836,14 @@ namespace SlotsInstaller
                 FluffyInstalls external = Fluffy();
                 string locked = ExternalLockReason(external);   // 1.0.1: nothing the mutation staged is kept (each caller cleans up on a throw)
                 if (locked != null && AddsGameFiles(current, next, options, methodOverride, CurrentMethod(current), external)) throw new IOException(locked);
-                GamePaks paks = GamePaks.Load(GameRoot);
+                GamePaks paks;
+                using (InstallMetrics.Measure("game PAK load")) paks = GamePaks.Load(GameRoot);
                 if (method == ReplaceMethods.Pak && paks.Base == null && next.Mods.Any(m => m.Enabled && m.Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))))
                     throw new IOException("re_chunk_000.pak is missing from the game folder, so the PAK method can't be used.");
                 var messages = new List<string>();
                 deferRenames = gameRunning || fluffyRunning;   // the crash reporter is Fluffy's too: renamed at the next change with both closed
                 ReplaceJournal journal;
-                try { journal = Reconcile(current, next, method, paks, Fluffy(), options, description, messages); }
+                try { using (InstallMetrics.Measure("reconcile")) journal = Reconcile(current, next, method, paks, Fluffy(), options, description, messages); }
                 finally { deferRenames = false; }
                 deferRenames = false;
                 if (fluffyRunning && journal.Ops.Any(o => o.Kind == "pak"))
@@ -862,13 +876,13 @@ namespace SlotsInstaller
                     else journal.CleanupAfterCommit.Add(storeDir);
                 }
                 foreach (ReplaceMod added in next.Mods.Where(m => current.Find(m.Id) == null)) journal.CreatedPaths.Insert(0, Safety.Under(StoreRoot(next), added.Id));
-                Execute(current, next, journal, paks);
+                using (InstallMetrics.Measure("execute")) Execute(current, next, journal, paks);
                 PurgeForeignCopies();   // 1.0.1: another tool's file is kept only as this change's rollback (ReplaceEngineUninstall.cs)
                 // 1.0.1: the patch row stays unbroken whatever left a gap (this change or another tool).
                 if (!gameRunning && !fluffyRunning)
-                    try { string gaps = GapText(FillPatchGaps()); if (gaps.Length > 0) messages.Add(gaps); }
+                    try { string gaps; using (InstallMetrics.Measure("fill patch gaps")) gaps = GapText(FillPatchGaps()); if (gaps.Length > 0) messages.Add(gaps); }
                     catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); messages.Add("A patch PAK is missing and couldn't be filled (" + ex.Message.TrimEnd('.') + "); the PAKs after it may not load."); }
-                RecordStateChange(description, current, next);   // 2.4.1 history (HistoryHooks.cs; never throws)
+                using (InstallMetrics.Measure("history")) RecordStateChange(description, current, next); // never throws
                 if (trashWarning != null) messages.Add(trashWarning);   // 2.4.2: never "kept" when the copy wasn't saved
                 return messages.Count == 0 ? "" : String.Join(" ", messages);
             }

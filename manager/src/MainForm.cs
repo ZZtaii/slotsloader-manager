@@ -1354,10 +1354,10 @@ namespace SlotsInstaller
                 { Rectangle inner = Rectangle.Inflate(mark, -Px(3), -Px(3)); if (radio) using (Brush fill = new SolidBrush(Palette.Accent)) e.Graphics.FillEllipse(fill, inner); else Glyphs.FillRounded(e.Graphics, Palette.Accent, inner, Px(1)); }
             }
             bool choice = component.IsDummy && IsChoiceGroup(component);
-            string name = component.Name + (choice && !required ? "  ·  Choose one" : "");
+            string name = component.Name + (choice && !required && !component.InferredChoice ? "  ·  Choose one" : "");
             Font nameFont = component.IsDummy ? Palette.Strong : componentTree.Font;
             int available = Math.Max(1, row.Width - x - Px(8));
-            int pillWidth = 0; string pill = "Required · choose one";
+            int pillWidth = 0; string pill = component.InferredChoice ? "Choose an option" : "Required · choose one";
             if (required) pillWidth = MeasuredWidth(pill, Palette.Tiny) + Px(20);
             int nameWidth = required ? Math.Min(MeasuredWidth(name, nameFont), Math.Max(Px(40), available - pillWidth - Px(10))) : available;
             const string defaultTag = "  ·  Default";   // 1.0.4: what the mod installs when nothing in the group is picked (OptionOrder)
@@ -2065,8 +2065,9 @@ namespace SlotsInstaller
 
         // 1.0.3 (the user): a mod opened from the library shows the options it is installed with. The newest record from
         // this source (enabled first) in the shown mode is used (a replacement in Replace original, a Manager extra outfit
-        // in Extra outfit), else one of the other mode. Options the archive no longer has are dropped; none left (or
-        // nothing installed, or Install all variants) = null, the defaults.
+        // in Extra outfit), else one of the other mode. IDs the mod no longer has are kept for the review gate
+        // (missingRestoredOptions); options without files in the shown mode (a replacement's root-only option opened
+        // in Extra outfit) are dropped. No saved selection (or Install all variants) = null, the defaults.
         private List<string> InstalledSelection(ModPackage pkg)
         {
             if (pkg == null || String.IsNullOrEmpty(pkg.SourcePath)) return null;
@@ -2077,7 +2078,7 @@ namespace SlotsInstaller
                 .OrderByDescending(o => o.Enabled).ThenByDescending(o => o.InstalledUtc).Select(o => o.SelectedIds).FirstOrDefault();
             bool replaceMode = IsReplaceMode;
             List<string> ids = (replaceMode ? replaced ?? extra : extra ?? replaced) ?? new List<string>();
-            ids = ids.Where(id => { ModComponent c = pkg.Find(id); return c != null && !c.IsDummy && c.HasFiles(replaceMode); }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            ids = ids.Where(id => { ModComponent c = pkg.Find(id); return c == null || (!c.IsDummy && c.HasFiles(replaceMode)); }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             return ids.Count > 0 ? ids : null;
         }
 
@@ -2155,8 +2156,15 @@ namespace SlotsInstaller
                 outfitNameTyped = false; outfitNameLocked = restore != null;   // 2.5.0: Edit options keeps the outfit's name; otherwise the name is suggested (ApplySuggestedName)
                 SetOutfitName(restore == null ? CleanName(package.Name) : restore.Name);
                 targetCharacter.SelectedIndex = targetCharacter.Items.IndexOf(restore == null ? package.Character : restore.Character);
-                FillComponents(restoreReplace != null ? restoreReplace.SelectedIds : restore != null ? restore.SelectedIds : reload == null ? InstalledSelection(package) ?? result.Defaults : result.Defaults); ResetPlan(); ShowDetailTab(false); UpdateDestination(); UpdateModeUi();
-                previewButton.Enabled = true; UpdateLibraryUninstall(); SetPageStatus(libraryPage, "Ready to compose " + package.Name);
+                var savedSelection = restoreReplace != null ? restoreReplace.SelectedIds : restore != null ? restore.SelectedIds : reload == null ? InstalledSelection(package) : null;
+                string savedNote = "";
+                if (savedSelection != null)
+                {
+                    try { savedSelection = Composer.RestoreSelection(package, savedSelection, out savedNote); }
+                    catch (IOException ex) { savedNote = ex.Message; } // retain original IDs: missing/multi-pick validation blocks installation
+                }
+                FillComponents(savedSelection ?? result.Defaults); ResetPlan(); ShowDetailTab(false); UpdateDestination(); UpdateModeUi();
+                previewButton.Enabled = true; UpdateLibraryUninstall(); SetPageStatus(libraryPage, savedNote.Length > 0 ? savedNote : "Ready to compose " + package.Name);
                 if (reload == null) ShowPage(libraryPage);   // 2.4.1: a reload in the background keeps the page you are on
                 if (reload != null) ApplyReload(reload);
                 componentTree.BeginInvoke((MethodInvoker)delegate { if (package.Components.Count <= 40) componentTree.ExpandAll(); else { foreach (OptionNode root in componentTree.Nodes) root.Expand(); foreach (string id in selectedOrder) foreach (OptionNode ancestor in Ancestors(componentNodes[id])) ancestor.Expand(); } if (componentTree.Nodes.Count > 0) componentTree.TopNode = componentTree.Nodes[0]; });
@@ -2450,6 +2458,7 @@ namespace SlotsInstaller
         // Short label for a group in the footer, e.g. "Goth Juri skin options" -> "skin".
         internal static string ShortGroupName(ModComponent group, ModPackage owner)
         {
+            if (group.InferredChoice) return group.Name.StartsWith("Choose one: ", StringComparison.Ordinal) ? group.Name.Substring(12) : group.Name;
             string name = Regex.Replace(group.Name ?? "", @"^\s*\d+\s*[\).:\-]\s*", "").Trim();
             var generic = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "options", "option", "choices", "choice", "variants", "variant", "select", "choose", "one", "the", "a", "-", "·" };
             var noise = new HashSet<string>(generic, StringComparer.OrdinalIgnoreCase);
@@ -2490,8 +2499,8 @@ namespace SlotsInstaller
             else if (unresolvedChoices.Count > 0)
             {
                 planSummary.Text = RequiredChoiceSummary(); planSummary.ForeColor = Palette.Accent;
-                planDetails.Text = "Required before Install · click to jump to the first choice" + (plan != null && plan.Errors.Count > 0 ? " · " + plan.Errors.Count + " required changes" : "");
-                tip = "Unresolved required choices:" + Environment.NewLine + String.Join(Environment.NewLine, unresolvedChoices.Select(g => g.Name));
+                planDetails.Text = unresolvedChoices.All(g => g.InferredChoice) ? "Select an option to install · click to choose" : "Required before Install · click to jump to the first choice" + (plan != null && plan.Errors.Count > 0 ? " · " + plan.Errors.Count + " required changes" : "");
+                tip = "Unresolved choices:" + Environment.NewLine + String.Join(Environment.NewLine, unresolvedChoices.Select(g => g.Name));
             }
             else if (ReviewPending)
             {
@@ -2626,7 +2635,7 @@ namespace SlotsInstaller
         {
             string root = config.CostumeRoot;
             keepUndo = true;   // the refresh reports a result; it is not a new change
-            try { Work("Reading installed outfits…", delegate { return WithChangedSources(new ScanResult { Installed = Installer.ListInstalled(root), Game = LoadGameRows(true), Removed = ReadRemovedUsage(root) }); }, RefreshInstalledDone(completionStatus)); }
+            try { Work("Reading installed outfits…", delegate { using (InstallMetrics.Measure("installed refresh")) return WithChangedSources(new ScanResult { Installed = Installer.ListInstalled(root), Game = LoadGameRows(true), Removed = ReadRemovedUsage(root) }); }, RefreshInstalledDone(completionStatus)); }
             finally { keepUndo = false; }
         }
         private Action<ScanResult> RefreshInstalledDone(string completionStatus)

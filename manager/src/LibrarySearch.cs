@@ -25,6 +25,11 @@ namespace SlotsInstaller
     {
         internal const int Direct = 0, SharedParts = 1, TitleOnly = 2;
         internal const string AnyTool = "tool";
+        internal static bool PakKeyword(string term) { return Regex.IsMatch((term ?? "").Trim(), @"^pak(?:\s+mods?)?$", RegexOptions.IgnoreCase); }
+        internal static bool MatchesPak(LibraryEntry e, string term)
+        {
+            return PakKeyword(term) && (e.HasPakPayload ?? (e.MiscAreas != null && e.MiscAreas.Contains(ModCategories.LabelPak)));
+        }
         // 2.5.9: by:name / by:"two words" keeps mods whose modinfo.ini author contains the name.
         private static readonly Regex Tokens = new Regex(@"(^|[\s,])(?:(?:is|type):(bundle|normal|standalone|unreadable|tool|stage|misc|character)|format:(zip|rar|7z|folder)|costume:0*(\d{1,2})|by:(?:""([^""]+)""|([^\s,""]+)))(?=\s|,|$)", RegexOptions.IgnoreCase);
         private static readonly Regex CostumeWord = new Regex(@"^(?:c|o|costume|outfit)\s*0*(\d{1,2})$", RegexOptions.IgnoreCase);
@@ -225,6 +230,8 @@ namespace SlotsInstaller
                     if (who != null && Compact(joined).Length >= Compact(who).Length) { character = who; taken = span; }
                 }
                 string word = String.Join(" ", raw.Skip(i).Take(taken));
+                if (taken == 1 && PakKeyword(word) && i + 1 < raw.Count && Regex.IsMatch(raw[i + 1], @"^mods?$", RegexOptions.IgnoreCase))
+                { taken = 2; word += " " + raw[i + 1]; }
                 if (character == null) character = characterTerm(word);
                 words.Add(new Word { Text = word, Character = character, Tool = ToolKeyword(word), Category = ModCategories.Keyword(word) });
                 i += taken;
@@ -364,7 +371,7 @@ namespace SlotsInstaller
             // One or two letters/digits: the start of a word only ("a manual" = A Manual, not Barefoot Manual; "v2").
             if (compact.Length <= 2)
                 return (w.Character != null && matchesCharacter(e, w.Character)) || ShortWordIn(NameTokens(e), compact) || (deep && ShortWordIn(OptionTokens(e), compact));
-            return (w.Character != null && matchesCharacter(e, w.Character)) || (w.Tool != null && MatchesTool(e, w.Tool)) || (w.Category != null && ModCategories.InCategory(e, w.Category))
+            return MatchesPak(e, w.Text) || (w.Character != null && matchesCharacter(e, w.Character)) || (w.Tool != null && MatchesTool(e, w.Tool)) || (w.Category != null && ModCategories.InCategory(e, w.Category))
                 || MatchesAuthor(e, w.Text) || matchesName(e, w.Text) || Has(e.Character, w.Text) || (e.CharacterCodes ?? new List<string>()).Any(code => ("esf" + code).IndexOf(w.Text, StringComparison.OrdinalIgnoreCase) >= 0)
                 || (deep && OptionMatches(e, w.Text));
         }
@@ -416,10 +423,11 @@ namespace SlotsInstaller
                 string tool, category; List<Word> words;
                 // 1.0.6: a term of several words also matches word by word ("goth juri, barefoot"), and deep search
                 // looks into the option folders and names.
-                return characterOk && q.Names.All(term => matchesName(e, term) || MatchesAuthor(e, term) || (q.NameTools.TryGetValue(term, out tool) && MatchesTool(e, tool)) || (q.NameCategories.TryGetValue(term, out category) && ModCategories.InCategory(e, category))
+                return characterOk && q.Names.All(term => MatchesPak(e, term) || matchesName(e, term) || MatchesAuthor(e, term) || (q.NameTools.TryGetValue(term, out tool) && MatchesTool(e, tool)) || (q.NameCategories.TryGetValue(term, out category) && ModCategories.InCategory(e, category))
                     || (q.Deep && OptionMatches(e, term)) || (q.NameWords.TryGetValue(term, out words) && words.All(w => WordMatches(e, w, q.Deep, matchesCharacter, matchesName))));
             }
             string query = q.Plain;
+            if (MatchesPak(e, query)) return true;
             if (query.Length == 0 || (q.PlainCharacter != null && matchesCharacter(e, q.PlainCharacter)) || (q.PlainTool != null && MatchesTool(e, q.PlainTool)) || (q.PlainCategory != null && ModCategories.InCategory(e, q.PlainCategory)) || MatchesAuthor(e, query) || matchesName(e, query) || Has(e.SourcePath, query) || Has(e.Character, query) || (e.CharacterCodes ?? new List<string>()).Any(code => ("esf" + code).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)) return true;
             // 1.0.6: several words match one by one, in any order ("juri barefoot" = a Juri mod named …Barefoot…).
             if (q.Deep && OptionMatches(e, query)) return true;

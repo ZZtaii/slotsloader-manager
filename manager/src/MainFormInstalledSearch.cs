@@ -40,8 +40,8 @@ namespace SlotsInstaller
 
         // 2.4.1: the Installed page's search uses the Mod library's matching (LibrarySearch): character names and
         // aliases ("aki" = A.K.I, "viper"), a unique start of a name ("cam"), "name, word" terms, costume terms
-        // ("cammy, c1") and is:tool. Each row is matched as its library entry (when the source is still in a
-        // library) and as itself (row name, character and the costume folders its files touch).
+        // ("cammy, c1") and is:tool. A detached view combines library text with the row's
+        // name, character, costume folders and authoritative recorded PAK payload.
         private sealed class InstalledQuery
         {
             internal LibrarySearch.Query Query; internal HashSet<string> Codes; internal bool Empty;
@@ -68,9 +68,11 @@ namespace SlotsInstaller
         internal static LibraryEntry InstalledRowEntry(string name, string character, string sourcePath, IEnumerable<string> files, bool tool)
         {
             var e = new LibraryEntry { Name = name ?? "", Character = character ?? "", SourcePath = sourcePath ?? "", Kind = "Normal" };
+            e.HasPakPayload = false; // installed payload is authoritative, even if its source changed or vanished
             foreach (string file in files ?? new string[0])
             {
-                Match m = CostumeFolder.Match(file ?? "");
+                if (ReplaceEngine.IsModPak(file)) e.HasPakPayload = true;
+                Match m = CostumeFolder.Match(PakHash.Normalize(file ?? ""));
                 if (!m.Success) continue;
                 string key = m.Groups[1].Value + "/" + m.Groups[2].Value;
                 if (!e.CostumeKeys.Contains(key)) e.CostumeKeys.Add(key);
@@ -85,8 +87,22 @@ namespace SlotsInstaller
         {
             if (q.Empty) return true;
             LibraryEntry own;
-            if (!String.IsNullOrEmpty(sourcePath) && q.Library.TryGetValue(sourcePath, out own) && InstalledEntryMatches(own, q)) return true;
-            return InstalledEntryMatches(InstalledRowEntry(name, character, sourcePath, files, tool), q);
+            q.Library.TryGetValue(sourcePath ?? "", out own);
+            return InstalledEntryMatches(InstalledSearchEntry(InstalledRowEntry(name, character, sourcePath, files, tool), own), q);
+        }
+        internal static LibraryEntry InstalledSearchEntry(LibraryEntry row, LibraryEntry source)
+        {
+            if (source == null) return row;
+            // row is detached; never modify the shared library entry or its lists.
+            row.DisplayName = String.Join(" ", new[] { source.Name, source.DisplayName }.Where(s => !String.IsNullOrEmpty(s)));
+            row.CustomName = source.CustomName; row.Kind = source.Kind; row.OptionCount = source.OptionCount;
+            row.Authors = source.Authors.ToList(); row.OptionNames = source.OptionNames.ToList(); row.OptionIds = source.OptionIds.ToList();
+            row.CharacterCodes = row.CharacterCodes.Union(source.CharacterCodes, StringComparer.OrdinalIgnoreCase).ToList();
+            row.CostumeKeys = row.CostumeKeys.Union(source.CostumeKeys, StringComparer.OrdinalIgnoreCase).ToList();
+            row.ToolKinds = row.ToolKinds.Union(source.ToolKinds, StringComparer.OrdinalIgnoreCase).ToList();
+            row.StageIds = source.StageIds.ToList(); row.MiscAreas = source.MiscAreas.ToList();
+            if (String.IsNullOrEmpty(row.Character)) row.Character = source.Character;
+            return row;
         }
         private bool OutfitMatchesSearch(InstalledQuery q, InstalledOutfit o)
         {
