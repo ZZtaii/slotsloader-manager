@@ -39,6 +39,9 @@ namespace SlotsInstaller
         public List<string> FiltersOnly = new List<string>(), FiltersHidden = new List<string>();
         // 1.0.11: the welcome (WelcomeForm) was shown; missing in older files, so updating users see it once too.
         public bool WelcomeSeen;
+        // 1.0.11: where Help resumes: the topic's title and the article's scroll offset (logical pixels).
+        public string HelpTopic = "";
+        public int HelpOffset;
         internal static ViewPreferences Load(string file)
         {
             try
@@ -230,7 +233,7 @@ namespace SlotsInstaller
                 if (firstLoad) { firstLoad = false; if (screenshotFile != null && !screenshotAvailableSize) ClientSize = new Size(Px(1460), Px(920)); RefreshLibrary(); }
                 // 1.0.11: the welcome once, over the opened window (marked seen first, so a crash doesn't bring it back).
                 if (rememberView && viewPreferences != null && !viewPreferences.WelcomeSeen)
-                    BeginInvoke((MethodInvoker)delegate { viewPreferences.WelcomeSeen = true; SaveView(); WelcomeForm.ShowWelcome(this); });
+                    BeginInvoke((MethodInvoker)delegate { viewPreferences.WelcomeSeen = true; SaveView(); WelcomeForm.ShowWelcome(this, ShowHelp); });
             };
             FormClosing += delegate { SaveView(); if (assistantPage != null) assistantPage.Shutdown(); };
             FormClosed += delegate { if (filterMatchCancel != null) filterMatchCancel.Cancel(); ClearPreviewCache(); if (previewImage != null) previewImage.Dispose(); if (hoverTimer != null) hoverTimer.Dispose(); if (portraitLoad != null) portraitLoad.Cancel(); };
@@ -361,7 +364,8 @@ namespace SlotsInstaller
                 Kinds=new[]{FilterPanel.ToolsKind,FilterPanel.MiscKind}.Where(k=>filterPanel.Kinds.Selected.Contains(k)).ToList(),SelectedLibraries=filterPanel.LibrariesSelected.OrderBy(k=>k,StringComparer.OrdinalIgnoreCase).ToList(),MiscAreas=MiscKindsSelectedOrPending().ToList(),
                 LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,
                 FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide),
-                WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen
+                WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen,
+                HelpTopic=HelpResumeTopic ?? "",HelpOffset=HelpResumeOffset
             };
         }
         // Older builds read one character name; keep it meaningful when exactly one fighter is selected.
@@ -509,8 +513,8 @@ namespace SlotsInstaller
                 if (item.Action == ShortcutAction.AssistantPage) assistantShortcutItem = entry;
             }
             toolsMenu.Items.Add(shortcutsItem);
-            toolsMenu.Items.Add("Welcome", null, delegate { WelcomeForm.ShowWelcome(this); });   // 1.0.11: the start-up welcome again
-            toolsMenu.Items.Add("About", null, delegate { ShowPage(settingsPage); LoadSettingsFields(); ShowAboutTab(); });   // 2.5.9: Settings → About
+            // 1.0.11 (the user): Help here (F1); no Welcome (Settings → General → Show welcome) and no About (Settings → About tab).
+            toolsMenu.Items.Add(new ToolStripMenuItem("Help", null, delegate { RunShortcut(ShortcutAction.HelpPage); }) { ShortcutKeyDisplayString = Shortcuts.Display(ShortcutAction.HelpPage) });
             RoomyMenu(toolsMenu); RoomyMenu(shortcutsMenu); RoomyMenu(restoreMenu);   // 1.0.1: larger text and taller rows (the user)
             toolsMenu.Opening+=delegate {if (assistantShortcutItem != null) assistantShortcutItem.Visible = assistantTabShown;};
             navSettings = Button("", false, 42, delegate { toolsMenu.Show(navSettings, new Point(0, navSettings.Height)); });
@@ -978,6 +982,7 @@ namespace SlotsInstaller
             FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 0) };
             actions.Controls.Add(Button("Save settings", true, 154, delegate { SaveSettings(); }));
             actions.Controls.Add(Button("Open Data folder", false, 168, delegate { OpenPath(AppConfig.DataDir); }));
+            actions.Controls.Add(Button("Show welcome", false, 150, delegate { WelcomeForm.ShowWelcome(this, ShowHelp); }));   // 1.0.11 (the user): here, not in the gear menu
             fields.Controls.Add(actions); fields.Controls.Add(layout);
             layout.BringToFront();
             Panel settingsGap = new Panel { Dock = DockStyle.Right, Width = 24 }; Panel claudeCard = BuildClaudeSettings();
@@ -1388,7 +1393,7 @@ namespace SlotsInstaller
                 {
                     // 1.0.1: the new page is shown on top first, then the others are hidden: no empty frame in between.
                     page.Visible = true; page.BringToFront();
-                    libraryPage.Visible = page == libraryPage; installedPage.Visible = page == installedPage; settingsPage.Visible = page == settingsPage; if (assistantPage != null) assistantPage.Visible = page == assistantPage; if (historyPage != null) historyPage.Visible = page == historyPage; navLibrary.SetActive(page == libraryPage); navInstalled.SetActive(page == installedPage || (historyPage != null && page == historyPage)); navAssistant.SetActive(assistantPage != null && page == assistantPage); navSettings.SetActive(page == settingsPage);
+                    libraryPage.Visible = page == libraryPage; installedPage.Visible = page == installedPage; settingsPage.Visible = page == settingsPage; if (assistantPage != null) assistantPage.Visible = page == assistantPage; if (historyPage != null) historyPage.Visible = page == historyPage; if (helpPage != null) helpPage.Visible = page == helpPage; navLibrary.SetActive(page == libraryPage); navInstalled.SetActive(page == installedPage || (historyPage != null && page == historyPage)); navAssistant.SetActive(assistantPage != null && page == assistantPage); navSettings.SetActive(page == settingsPage);
                     if (headerTools != null) headerTools.Visible = page == libraryPage;
                     currentPage = page;
                 }
@@ -3199,6 +3204,7 @@ namespace SlotsInstaller
                 case ShortcutAction.InstalledPage: if (currentPage != installedPage) { ShowPage(installedPage); RefreshInstalled(); } return true;
                 case ShortcutAction.AssistantPage: if (!assistantTabShown) return false; ShowAssistant(); return true;   // 2.4.1: inert while the tab is off
                 case ShortcutAction.SettingsPage: ShowPage(settingsPage); LoadSettingsFields(); if (settingsAboutPanel != null && settingsAboutPanel.Visible) ShowSettingsTab(false); return true;   // 2.5.9: Settings… after About = General
+                case ShortcutAction.HelpPage: ShowHelp(); return true;   // 1.0.11
                 case ShortcutAction.RefreshLibraries: if (!busy) RefreshLibrary(true); return true;
                 case ShortcutAction.OpenArchive: if (!busy) ChoosePackageFile(); return true;
                 case ShortcutAction.OpenFolder: if (!busy) ChoosePackageFolder(); return true;

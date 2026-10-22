@@ -445,7 +445,7 @@ namespace SlotsInstaller
 
     // One table drives key handling, the gear menu and tooltips. None of
     // these shortcuts installs, uninstalls or removes anything.
-    internal enum ShortcutAction { FocusSearch, ClearSearch, LibraryPage, InstalledPage, AssistantPage, SettingsPage, RefreshLibraries, OpenArchive, OpenFolder, ToggleFilters, SwitchMode, ToggleNames }
+    internal enum ShortcutAction { FocusSearch, ClearSearch, LibraryPage, InstalledPage, AssistantPage, SettingsPage, RefreshLibraries, OpenArchive, OpenFolder, ToggleFilters, SwitchMode, ToggleNames, HelpPage }
     internal sealed class ShortcutInfo
     {
         internal readonly Keys Keys; internal readonly ShortcutAction Action; internal readonly string Display, Description;
@@ -461,6 +461,7 @@ namespace SlotsInstaller
             new ShortcutInfo(Keys.Control | Keys.D2, ShortcutAction.InstalledPage, "Ctrl+2", "Installed page"),
             new ShortcutInfo(Keys.Control | Keys.D3, ShortcutAction.AssistantPage, "Ctrl+3", "Assistant"),
             new ShortcutInfo(Keys.Control | Keys.Oemcomma, ShortcutAction.SettingsPage, "Ctrl+,", "Settings"),
+            new ShortcutInfo(Keys.F1, ShortcutAction.HelpPage, "F1", "Help"),   // 1.0.11
             new ShortcutInfo(Keys.F5, ShortcutAction.RefreshLibraries, "F5", "Refresh libraries"),
             new ShortcutInfo(Keys.Control | Keys.O, ShortcutAction.OpenArchive, "Ctrl+O", "Open archive"),
             new ShortcutInfo(Keys.Control | Keys.Shift | Keys.O, ShortcutAction.OpenFolder, "Ctrl+Shift+O", "Open folder"),

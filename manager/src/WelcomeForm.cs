@@ -8,7 +8,8 @@ namespace SlotsInstaller
 {
     // 1.0.11 (the user): only what a new user must know, as three topics: using the Manager beside an external mod
     // manager, on its own, and what to do when something breaks. Shown once at the first start (ViewPreferences
-    // .WelcomeSeen, so also once after updating from 1.0.10) and from gear → Welcome. Esc, ✕ or Done close it.
+    // .WelcomeSeen, so also once after updating from 1.0.10) and from Settings → General → Show welcome. Esc, ✕ or Done
+    // close it; the footer's Help link closes it and opens the Help page.
     // A borderless card over the dimmed main window (the user: no title bar, no window chrome).
     internal sealed class WelcomeForm : Form
     {
@@ -41,17 +42,22 @@ namespace SlotsInstaller
         private readonly PictureBox logo;
         private readonly FlatButton next;
         internal int Index { get { return page.Index; } }
+        internal bool HelpRequested { get; private set; }   // the footer's Help link closed it
 
-        internal static void ShowWelcome(Form owner)
+        // `openHelp` runs after the card closed through its Help link (the main window's Help page).
+        internal static void ShowWelcome(Form owner, Action openHelp)
         {
             if (Program.Headless) return;
+            bool help;
             // The main window dims behind the card: a black layer (DimOpacity) over its client area, owning the card.
             using (var dim = new Form { FormBorderStyle = FormBorderStyle.None, BackColor = Color.Black, Opacity = DimOpacity, ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Bounds = owner.RectangleToScreen(owner.ClientRectangle) })
             using (var form = new WelcomeForm())
             {
                 dim.Show(owner);
                 form.ShowDialog(dim);
+                help = form.HelpRequested;
             }
+            if (help && openHelp != null) openHelp();
         }
 
         internal WelcomeForm()
@@ -71,9 +77,12 @@ namespace SlotsInstaller
             page = new WelcomePage { Dock = DockStyle.Fill, Name = "welcomePage" };
             page.IndexChanged += delegate { UpdateButtons(); };
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(0, 16, 0, 0) };
-            var hint = new Label { UseMnemonic = false, Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Small, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, Text = "Open this again from gear → Welcome" };
+            // 1.0.11 (the user): the footer links the in-app Help (gear → Help, F1); the welcome itself is in Settings → General.
+            var help = new Label { UseMnemonic = false, Dock = DockStyle.Left, AutoSize = true, ForeColor = Palette.Accent, Font = Palette.Small, TextAlign = ContentAlignment.MiddleLeft, Cursor = Cursors.Hand, Text = "Help and troubleshooting (F1)", Name = "welcomeHelp", AccessibleName = "Open Help and troubleshooting", AccessibleRole = AccessibleRole.Link };
+            help.MouseEnter += delegate { help.ForeColor = Palette.Text; }; help.MouseLeave += delegate { help.ForeColor = Palette.Accent; };
+            help.Click += delegate { HelpRequested = true; Close(); };
             next = new FlatButton("Next", true) { Width = 88, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeNext" }; next.Click += delegate { if (page.Index == Topics.Length - 1) Close(); else page.Index++; };
-            footer.Controls.Add(hint); footer.Controls.Add(next);
+            footer.Controls.Add(help); footer.Controls.Add(next);
             Controls.Add(page); Controls.Add(header); Controls.Add(footer);
             ClientSize = new Size(662, 500);   // 1.0.11 (the user): the card's size; the height follows the tallest topic (OnLoad)
             AcceptButton = next;

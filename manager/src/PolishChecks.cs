@@ -62,6 +62,7 @@ namespace SlotsInstaller
                         CheckPopupAllowList(report);
                         CheckOldErrors(form, report);
                         CheckWelcome(form, root, report);
+                        CheckHelp(form, root, report);
                         form.Close();
                     }
                     if (!String.IsNullOrWhiteSpace(realArchive) && File.Exists(realArchive)) CheckRealRequired(realArchive, report);
@@ -231,7 +232,8 @@ namespace SlotsInstaller
                 { Keys.Control | Keys.Oemcomma, ShortcutAction.SettingsPage }, { Keys.F5, ShortcutAction.RefreshLibraries },
                 { Keys.Control | Keys.O, ShortcutAction.OpenArchive }, { Keys.Control | Keys.Shift | Keys.O, ShortcutAction.OpenFolder },
                 { Keys.Control | Keys.Shift | Keys.F, ShortcutAction.ToggleFilters }, { Keys.Tab, ShortcutAction.SwitchMode },   // 1.0.1: Tab flips INSTALL AS in the Mod library
-                { Keys.Control | Keys.Shift | Keys.N, ShortcutAction.ToggleNames } };   // 1.0.6: mod names / file names in the Mod library
+                { Keys.Control | Keys.Shift | Keys.N, ShortcutAction.ToggleNames },   // 1.0.6: mod names / file names in the Mod library
+                { Keys.F1, ShortcutAction.HelpPage } };   // 1.0.11: Help
             Require(Shortcuts.All.Length == expected.Count && Shortcuts.All.All(s => expected.ContainsKey(s.Keys) && expected[s.Keys] == s.Action), "Shortcut table differs from the documented mapping.");
             Require(Enum.GetNames(typeof(ShortcutAction)).All(n => n.Replace("InstalledPage", "").IndexOf("Install", StringComparison.OrdinalIgnoreCase) < 0 &&n.IndexOf("Remove", StringComparison.OrdinalIgnoreCase) < 0 && n.IndexOf("Delete", StringComparison.OrdinalIgnoreCase) < 0), "A shortcut can install, uninstall or remove.");
             // 1.0.1: Tab flips INSTALL AS in the Mod library (unless a PAK/tool mod locks it) and flips it back.
@@ -479,6 +481,79 @@ namespace SlotsInstaller
                 Require(welcome.IsDisposed || !welcome.Visible, "Done did not close the welcome");
             }
             report.Add("PASS: welcome (1.0.11): a borderless card with ✕, three topics with tabs, Next / Done (no Back or Close); sized to the tallest topic; never opens by itself in a check window; renders welcome-1..3.png and welcome-overlay.png.");
+        }
+
+        // 1.0.11 Help (gear → Help, F1): every topic of docs/HELP.md in the list and readable in the article (rendered for
+        // review), Previous / Next in order, search narrows the list, the welcome's Help link, Show welcome in Settings.
+        private static void CheckHelp(MainForm form, string root, List<string> report)
+        {
+            List<HelpTopic> topics = HelpDocument.Topics;
+            Require(topics.Count > 0 && topics.All(t => t.Group.Length > 0 && t.Title.Length > 0 && t.Lead.Length > 0 && t.Blocks.Count > 0), "help topics: " + topics.Count + " (each needs a group, title, lead and text)");
+            Require(Shortcuts.All.Any(s => s.Keys == Keys.F1 && s.Action == ShortcutAction.HelpPage), "F1 is not the Help shortcut");
+            Call(form, "RunShortcut", ShortcutAction.HelpPage); Application.DoEvents();
+            Panel page = Get<Panel>(form, "helpPage"); var list = Get<HelpTopicList>(form, "helpTopics"); var article = Get<HelpArticleView>(form, "helpArticle"); var search = Get<PaddedTextField>(form, "helpSearch");
+            Require(page.Visible && list.Topics.SequenceEqual(topics) && article.Topic == topics[0] && list.Selected == topics[0], "F1 did not open Help on the first topic");
+            string folder = Path.Combine(root, "help"); Directory.CreateDirectory(folder);
+            for (int i = 0; i < topics.Count; i++)
+            {
+                Call(form, "ShowHelpTopic", topics[i]); Application.DoEvents();
+                Require(article.Topic == topics[i] && list.Selected == topics[i] && article.Height >= article.NaturalHeight(article.Width), "help topic " + topics[i].Title + " is cut short");
+                using (var b = new Bitmap(article.Width, Math.Min(article.Height, DpiMetrics.Px(form, 2400)))) { article.DrawToBitmap(b, new Rectangle(0, 0, b.Width, b.Height)); b.Save(Path.Combine(folder, (i + 1).ToString("00") + ".png"), ImageFormat.Png); }
+            }
+            using (var b = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { Call(form, "ShowHelpTopic", topics[0]); Application.DoEvents(); form.DrawToBitmap(b, new Rectangle(Point.Empty, b.Size)); b.Save(Path.Combine(folder, "page.png"), ImageFormat.Png); }
+            // Search: every word must appear; no match empties the list and leaves the article alone.
+            string word = topics.Last().Title.Split(' ').OrderByDescending(w => w.Length).First();
+            search.Text = word; Application.DoEvents();
+            Require(list.Topics.Any() && list.Topics.All(t => t.Matches(word)) && list.Topics.Contains(article.Topic), "help search for '" + word + "': " + String.Join(", ", list.Topics.Select(t => t.Title)));
+            HelpTopic shown = article.Topic;
+            search.Text = "zzqx nothing matches"; Application.DoEvents();
+            Require(!list.Topics.Any() && article.Topic == shown, "a search with no match");
+            search.Text = ""; Application.DoEvents();
+            Require(list.Topics.Count() == topics.Count, "clearing the help search");
+            // [[links]]: every one names a topic (and a heading of it when it says #Heading).
+            var broken = new List<string>();
+            foreach (HelpTopic t in topics)
+                foreach (string text in new[] { t.Lead }.Concat(t.Blocks.Select(b => b.Text)))
+                    foreach (HelpRun run in HelpDocument.Runs(text).Where(r => r.Link != null))
+                    {
+                        string heading; HelpTopic target = HelpDocument.Find(run.Link, out heading);
+                        if (target == null || (heading != null && !target.Blocks.Any(b => b.Kind == HelpBlockKind.Heading && String.Equals(b.Text, heading, StringComparison.OrdinalIgnoreCase)))) broken.Add(t.Title + " → " + run.Link);
+                    }
+            Require(broken.Count == 0, "help links to no topic or heading: " + String.Join("; ", broken));
+            // Following a link opens its topic (at its heading) with "← Back to …"; Back returns to the same place.
+            var scroll = Get<OverlayScroller>(form, "helpArticleScroll");
+            HelpTopic from = topics.FirstOrDefault(t => t.Blocks.Any(b => HelpDocument.Runs(b.Text).Any(r => r.Link != null)));
+            if (from != null)
+            {
+                HelpRun link = from.Blocks.SelectMany(b => HelpDocument.Runs(b.Text)).First(r => r.Link != null);
+                string heading; HelpTopic target = HelpDocument.Find(link.Link, out heading);
+                Call(form, "ShowHelpTopic", from); Application.DoEvents();
+                scroll.ScrollTo(scroll.MaxOffset / 2, false); int fromOffset = scroll.Offset;
+                Call(form, "FollowHelpLink", target, heading); Application.DoEvents();
+                Require(article.Topic == target && article.BackTo == from && list.Selected == target && (heading == null || scroll.Offset > 0 || scroll.MaxOffset == 0), "following " + link.Link + " from " + from.Title + ": " + article.Topic.Title + ", back to " + (article.BackTo == null ? "none" : article.BackTo.Title) + ", offset " + scroll.Offset);
+                Call(form, "HelpBack"); Application.DoEvents();
+                Require(article.Topic == from && article.BackTo == null && scroll.Offset == fromOffset, "Back after a link: " + article.Topic.Title + " at " + scroll.Offset + " (was " + fromOffset + ")");
+                report.Add("PASS: Help links: " + topics.Sum(t => t.Blocks.Sum(b => HelpDocument.Runs(b.Text).Count(r => r.Link != null))) + " links all resolve; following " + from.Title + " → " + link.Link + " and Back.");
+            }
+            // Leaving Help and opening it again resumes the topic and scroll position.
+            Call(form, "ShowHelpTopic", topics[topics.Count / 2]); Application.DoEvents();
+            scroll.ScrollTo(scroll.MaxOffset, false); int resumeOffset = scroll.Offset;
+            Call(form, "ShowPage", Get<Panel>(form, "libraryPage")); Application.DoEvents();
+            Call(form, "RunShortcut", ShortcutAction.HelpPage); Application.DoEvents();
+            Require(article.Topic == topics[topics.Count / 2] && scroll.Offset == resumeOffset, "reopening Help: " + article.Topic.Title + " at " + scroll.Offset + " (was " + resumeOffset + ")");
+            Require((string)typeof(MainForm).GetProperty("HelpResumeTopic", PrivateInstance).GetValue(form, null) == article.Topic.Title, "the view settings would not resume this topic");
+            // The welcome's footer link closes it and asks for Help; Settings → General has Show welcome.
+            using (var welcome = new WelcomeForm())
+            {
+                welcome.ShowInTaskbar = false; welcome.Opacity = 0; welcome.Show(form); Application.DoEvents();
+                Control link = welcome.Controls.Find("welcomeHelp", true).Single();
+                Require(link.Text == "Help and troubleshooting (F1)" && link.Visible, "the welcome's Help link: '" + link.Text + "'");
+                typeof(Control).GetMethod("OnClick", PrivateInstance).Invoke(link, new object[] { EventArgs.Empty }); Application.DoEvents();
+                Require(welcome.HelpRequested && (welcome.IsDisposed || !welcome.Visible), "the welcome's Help link did not close it and ask for Help: requested " + welcome.HelpRequested + ", visible " + (!welcome.IsDisposed && welcome.Visible));
+            }
+            Require(AllControls(Get<Panel>(form, "settingsPage")).OfType<FlatButton>().Any(b => b.Text == "Show welcome"), "Settings → General has no Show welcome");
+            Call(form, "ShowPage", Get<Panel>(form, "libraryPage")); Application.DoEvents();
+            report.Add("PASS: Help (1.0.11): F1 / gear → Help opens " + topics.Count + " topics in " + topics.Select(t => t.Group).Distinct().Count() + " groups (rendered in help\\), each article whole, search narrows the list, the welcome's Help link, Settings → General → Show welcome.");
         }
 
         private static void CheckNoTooltips(MainForm form, List<string> report)
