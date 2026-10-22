@@ -168,6 +168,7 @@ namespace SlotsInstaller
         internal string Title = "", Body = "", Url;
         internal ButtonGlyph Icon;          // drawn 1.5x at the left, in IconColor (brand colours); None = text only
         internal Color IconColor = Palette.Text;
+        internal Image Picture;             // 1.0.11: a logo drawn in the icon tile instead of Icon (BrewedVFX)
         private bool hot;
         internal AboutCard()
         {
@@ -190,13 +191,22 @@ namespace SlotsInstaller
             Glyphs.FillRounded(e.Graphics, lit ? Palette.Selected : Palette.Background, card, 8 * s);
             Glyphs.DrawRounded(e.Graphics, lit ? Palette.Accent : Palette.Border, Math.Max(1F, s), card, 8 * s);
             int pad = (int)(16 * s), top = (int)(12 * s), titleHeight = (int)(26 * s);
-            if (Icon != ButtonGlyph.None)
+            if (Icon != ButtonGlyph.None || Picture != null)
             {
                 // A 40 px tile at the left, vertically centred; the text starts after it.
                 int tile = (int)(40 * s);
                 var tileRect = new RectangleF(pad, (Height - tile) / 2F, tile, tile);
                 Glyphs.FillRounded(e.Graphics, Palette.Raised, tileRect, 8 * s);
-                Glyphs.Draw(e.Graphics, Icon, Rectangle.Round(tileRect), IconColor, (int)(DeviceDpi * 1.5F));
+                if (Picture != null)
+                {
+                    var previous = e.Graphics.InterpolationMode; e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    // Fitted inside the tile with its own proportions (a wide logo is centred vertically).
+                    float inset = 2 * s, box = tile - 2 * inset, fit = Math.Min(box / Picture.Width, box / Picture.Height);
+                    float w = Picture.Width * fit, h = Picture.Height * fit;
+                    e.Graphics.DrawImage(Picture, new RectangleF(tileRect.X + (tile - w) / 2F, tileRect.Y + (tile - h) / 2F, w, h));
+                    e.Graphics.InterpolationMode = previous;
+                }
+                else Glyphs.Draw(e.Graphics, Icon, Rectangle.Round(tileRect), IconColor, (int)(DeviceDpi * 1.5F));
                 pad += tile + (int)(14 * s);
             }
             int right = (int)(16 * s);

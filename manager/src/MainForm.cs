@@ -3312,6 +3312,7 @@ namespace SlotsInstaller
                     else if (String.Equals(screenshotPage, "merged", StringComparison.OrdinalIgnoreCase)) { ShowDetailTab(true); }
                     else if (screenshotPage != null && screenshotPage.StartsWith("search=", StringComparison.OrdinalIgnoreCase)) { search.Text = screenshotPage.Substring(7); FlushLibraryFilter(); ApplyFilters(); if (modList.Items.Count > 0) modList.EnsureVisible(0); }
                     else if (String.Equals(screenshotPage, "settings", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); if (settingsLibraries.Items.Count > 0) settingsLibraries.SelectedIndex = 0; }
+                    else if (String.Equals(screenshotPage, "about", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); ShowAboutTab(); }   // 1.0.11
                     else if (String.Equals(screenshotPage, "settings-key", StringComparison.OrdinalIgnoreCase))
                     {
                         // Renders the Claude section with a fake saved key: only its last four characters appear.

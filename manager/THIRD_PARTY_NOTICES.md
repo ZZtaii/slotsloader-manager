@@ -52,7 +52,7 @@ The unRAR code may be used only to extract RAR archives, not to re-create the RA
 
 ## Brand marks
 
-The Discord, Nexus Mods and Patreon logos on the About cards and in the status bar are trademarks of their owners. They are used only to link to those services. ColorSync's mark is ZZtai's own.
+The Discord, Nexus Mods and Patreon logos on the About cards and in the status bar are trademarks of their owners. They are used only to link to those services. ColorSync's mark is ZZtai's own. The BrewedVFX logo on the Credits card (`assets/brewedvfx.png`) belongs to BrewedVFX and is shown only to credit their testing and link to their page.
 
 ## At run time
 

@@ -33,7 +33,8 @@ namespace SlotsInstaller
         }
         // ---- Settings → About (2.5.9; gear → About opens it)
         internal const string RepoUrl = "https://github.com/ZZtaii/slotsloader-manager", ColorSyncUrl = "https://colorsync-sf6.pages.dev/", NexusProfileUrl = "https://www.nexusmods.com/profile/ZZtaii",
-            AuthorUrl = "https://www.patreon.com/cw/ZZtai", AuthorGitHubUrl = "https://github.com/ZZtaii", Wael3rdUrl = "https://github.com/Wael3rd/";
+            AuthorUrl = "https://www.patreon.com/cw/ZZtai", AuthorGitHubUrl = "https://github.com/ZZtaii", Wael3rdUrl = "https://github.com/Wael3rd/",
+            BrewedVfxUrl = "https://linktr.ee/brewedvfx";
         private FlatButton settingsAboutTab;
         private Panel settingsAboutPanel;
         private Panel BuildAboutSettings()
@@ -53,7 +54,8 @@ namespace SlotsInstaller
                 Card("Nexus Mods", "All my published mods on Nexus.", NexusProfileUrl, ButtonGlyph.Nexus, NexusOrange));
             AddAboutSection(panel, "Credits",
                 Card("ZZtaii", "Creator of Slotsloader Manager.", AuthorGitHubUrl, ButtonGlyph.GitHub, Palette.Text),
-                Card("Wael3rd", "Creator of the Slotsloader backend.", Wael3rdUrl, ButtonGlyph.GitHub, Palette.Text));
+                Card("Wael3rd", "Creator of the Slotsloader backend.", Wael3rdUrl, ButtonGlyph.GitHub, Palette.Text),
+                Card("BrewedVFX", "Testing and recommendations.", BrewedVfxUrl, LogoResource("SlotsInstaller.BrewedVfx.png")));   // 1.0.11
             // Three cards per row at up to 330 px each; narrower windows shrink them (never a sideways scroll).
             Action fit = delegate
             {
@@ -85,6 +87,22 @@ namespace SlotsInstaller
             var card = new AboutCard { Title = title, Body = body, Url = url, Icon = icon, IconColor = iconColor, Width = AboutCardWidth, Height = AboutCardHeight, Margin = new Padding(0, 0, 18, 0), AccessibleName = title + ": " + body };
             card.Click += delegate { OpenReleasePage(url); };
             return card;
+        }
+        // 1.0.11: a card with a logo image in the tile (no logo resource: a text-only card).
+        private AboutCard Card(string title, string body, string url, Image logo)
+        {
+            AboutCard card = Card(title, body, url, ButtonGlyph.None, Palette.Text);
+            card.Picture = logo;
+            if (logo != null) card.Disposed += delegate { logo.Dispose(); };
+            return card;
+        }
+        private static Image LogoResource(string name)
+        {
+            using (var stream = typeof(MainForm).Assembly.GetManifestResourceStream(name))
+            {
+                if (stream == null) return null;   // source-test harnesses may build without the resource
+                using (var decoded = Image.FromStream(stream)) return new Bitmap(decoded);
+            }
         }
         internal void ShowAboutTab()
         {
