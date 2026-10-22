@@ -41,7 +41,7 @@ The GitHub icon on the About cards (`src/BrandGlyphs.cs`) is the `mark-github` p
 
 ## 7-Zip (GNU LGPL, unRAR license restriction, BSD)
 
-Release packages include `7-Zip\7z.exe` and `7-Zip\7z.dll` from [7-Zip](https://www.7-zip.org) by Igor Pavlov, unmodified, so RAR and 7Z archives can be read on a PC without 7-Zip installed. The Manager runs `7z.exe` as a separate program and does not link to it. 7-Zip's own license file, `7-Zip\License.txt`, ships beside them and applies to those files:
+When no usable 7-Zip is installed, the Manager downloads `7z.exe`, `7z.dll` and `License.txt` from [7-Zip](https://www.7-zip.org) by Igor Pavlov, unmodified, from this project's `tool-7zip-26.00` release (size and SHA-256 checked) into its `7-Zip` folder, so RAR and 7Z archives can be read on a PC without 7-Zip installed. The Manager runs `7z.exe` as a separate program and does not link to it. 7-Zip's own license file, `7-Zip\License.txt`, ships beside them and applies to those files:
 
 > 7-Zip Copyright (C) 1999-2026 Igor Pavlov.
 >

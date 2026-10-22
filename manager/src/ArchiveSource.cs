@@ -31,7 +31,7 @@ namespace SlotsInstaller
         internal SourceReader(string source, string sevenZip, Dictionary<string,SourceEntry> knownEntries, string stamp)
         {
             Source = Path.GetFullPath(source); folder = Directory.Exists(Source);
-            SevenZip = folder || Path.GetExtension(Source).Equals(".zip",StringComparison.OrdinalIgnoreCase) ? sevenZip : SevenZipTool.Resolve(sevenZip);   // 1.0.11
+            SevenZip = folder || Path.GetExtension(Source).Equals(".zip",StringComparison.OrdinalIgnoreCase) ? sevenZip : SevenZipTool.ResolveOrFetch(sevenZip);   // 1.0.11: fetched when none is usable
             try {
                 OperationContext.ThrowIfCancellationRequested();
                 if (folder) { Safety.NoReparse(Source); EnumerateFolder(Source); }
@@ -53,7 +53,7 @@ namespace SlotsInstaller
                 }
                 else
                 {
-                    if (!File.Exists(SevenZip)) throw new IOException("RAR and 7Z archives need 7-Zip, and none was found (the copy in the Manager's 7-Zip folder is missing too). Install 7-Zip or choose 7z.exe in Settings.");
+                    if (!File.Exists(SevenZip)) throw new IOException("RAR and 7Z archives need 7-Zip, and none is installed. " + (SevenZipTool.FetchFailure != null ? SevenZipTool.FetchFailure.TrimEnd('.') + " (the Manager tries again in a few minutes). " : "") + "Install 7-Zip or choose 7z.exe in Settings.");
                     ListingStamp = Stamp(Source);
                     if (knownEntries != null && stamp == ListingStamp)
                     {

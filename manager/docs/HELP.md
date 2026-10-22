@@ -282,7 +282,7 @@ Leftover PAKs are only looked for when the Manager finds your external mod manag
 ## RAR or 7Z mods won't open
 > How the Manager finds 7-Zip, and what to do when an archive won't read.
 
-ZIP files and folders work without 7-Zip. RAR and 7Z archives are read with 7-Zip, and the Manager comes with its own copy in the `7-Zip` folder beside its executables.
+ZIP files and folders work without 7-Zip. RAR and 7Z archives are read with 7-Zip; without one, the Manager downloads its own into its `7-Zip` folder the first time it needs it.
 
 ### Which 7-Zip is used
 **Settings → General → 7-Zip (RAR and 7Z)** can stay empty ("Automatic"). The line under it says which 7-Zip runs:
@@ -290,10 +290,10 @@ ZIP files and folders work without 7-Zip. RAR and 7Z archives are read with 7-Zi
 - A path you chose yourself always comes first.
 - Then 7-Zip installed with its installer, found through its registry entry or `Program Files\7-Zip` ("Using your installed 7-Zip"). Choose a portable copy in Settings.
 - An installed 7-Zip older than the Manager's copy gives way to it, because 7-Zip before 15.06 can't open RAR5 archives.
-- Otherwise the copy that comes with the Manager ("Using the 7-Zip that comes with the Manager").
+- Otherwise the Manager's own copy ("Using the Manager's own 7-Zip").
 
 ### Error messages
-- "RAR and 7Z archives need 7-Zip, and none was found…": the `7-Zip` folder is missing. Extract the release zip again and keep `7-Zip` (with `7z.exe`, `7z.dll` and `License.txt`) beside the executables, or choose `7z.exe` in Settings.
+- "RAR and 7Z archives need 7-Zip, and none is installed…": the Manager couldn't download its copy (the message says why; it tries again a few minutes later). Check your connection, or install 7-Zip.
 - "Not found at that path · clear the field to find 7-Zip automatically": the path in Settings is wrong. Clear the field.
 - "Compressed ZIP data is corrupt…" or a size mismatch: the download is damaged. Download the mod again.
 

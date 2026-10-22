@@ -149,7 +149,7 @@ namespace SlotsInstaller
                 });
                 check("Manager self-update on a temporary copy of the app folder: stage (7 files, FileVersion = tag), apply (previous kept, running exes renamed to .old, new files in), .old cleanup and log at the next start, update-rollback, a failure mid-copy restores every file, a missing folder is refused; nothing else in Data changes", delegate { SelfUpdate(root); });
                 check("1.0.11 bundled 7-Zip in a self-update: the 7-Zip folder is accepted only complete (7z.exe, 7z.dll, License.txt); apply replaces the app's copy (old files as .old, kept in previous); a failure after it puts the old copy back; .old removed at the next start; rollback restores it; a release without 7-Zip leaves the app's copy alone", delegate { SelfUpdateSevenZip(root); });
-                check("1.0.11 which 7-Zip runs: an existing Settings path first, else an installed 7-Zip (with its 7z.dll), else the bundled copy beside the exe, else none (RAR/7Z then say how to fix it); a real 7Z archive is listed through the bundled copy alone; an installed 7-Zip older than the bundled one gives way to it (same, newer or unknown version keeps its place)", delegate { SevenZipChoice(root); });
+                check("1.0.11 which 7-Zip runs: an existing Settings path first, else an installed 7-Zip (with its 7z.dll), else the Manager's own copy beside the exe; with none usable (or only one too old for RAR5) the first RAR/7Z read fetches the pinned 7-Zip (a failed fetch says why in RAR/7Z errors and Settings and waits before trying again; a good one replaces a broken 7-Zip folder and a real 7Z archive is listed through it); an installed 7-Zip older than the Manager's copy gives way to it (same, newer or unknown version keeps its place)", delegate { SevenZipChoice(root, server); });
                 check("window: toasts for both products (bottom-right above the status strip, stacked), keyboard reachable with accessible names, no tooltips; Skip this version is remembered; ✕ comes back at the next check; a 404 background check is silent and logged; Settings → Updates reports up to date and the 404 reason", delegate { Window(root, server, catalogue, l197, l198); });
                 check("CLI update-check prints both products with source, asset, size and digest", delegate
                 {
@@ -162,6 +162,7 @@ namespace SlotsInstaller
             {
                 UpdateCheck.ApiUrl = previousApi; SafeHttp.AllowLoopbackHttp = previousHttp; UpdateCheck.PinOverride = null; MainForm.AppDirOverride = null; MainForm.NoRelaunch = false; AppUpdater.FailAfterCopies = -1;
                 AppUpdater.FailAfterSevenZip = false; SevenZipTool.AppDirOverride = null; SevenZipTool.InstalledOverride = null; SevenZipTool.ClearCache();
+                SevenZipTool.Pin = SevenZipTool.Supported; SevenZipTool.DownloadDirOverride = null; SevenZipTool.ResetFetch();
                 if (savedSettings != null) File.WriteAllBytes(settingsFile, savedSettings); else if (File.Exists(settingsFile)) File.Delete(settingsFile);
             }
             File.WriteAllLines(Path.Combine(root, "update-check.txt"), report.Concat(new[] { failures == 0 ? "ALL PASS" : failures + " FAILED" }));
@@ -307,34 +308,51 @@ namespace SlotsInstaller
             Require(SevenZipTool.BundleFiles.All(f => File.ReadAllText(Path.Combine(seven, f)) == "old " + f) && File.ReadAllText(Path.Combine(app, "README.md")) == "new README.md", "a release without 7-Zip changed the app's copy");
         }
 
-        private static void SevenZipChoice(string root)
+        private static void SevenZipChoice(string root, LoaderChecks.LoopbackServer server)
         {
             string real = SevenZipTool.Resolve("");   // the PC's own 7-Zip, before the overrides
-            string dir = Path.Combine(root, "7z-choice"), installed = Path.Combine(dir, "installed"), broken = Path.Combine(dir, "broken"), app = Path.Combine(dir, "app");
+            if (String.IsNullOrEmpty(real)) throw new InvalidOperationException("this PC has no 7-Zip to test the Manager's copy with");
+            string dir = Path.Combine(root, "7z-choice"), installed = Path.Combine(dir, "installed"), broken = Path.Combine(dir, "broken"), app = Path.Combine(dir, "app"), downloads = Path.Combine(dir, "downloads");
             foreach (string d in new[] { installed, broken, Path.Combine(app, SevenZipTool.BundleFolder) }) Directory.CreateDirectory(d);
             File.WriteAllText(Path.Combine(installed, "7z.exe"), "x"); File.WriteAllText(Path.Combine(installed, "7z.dll"), "x");
             File.WriteAllText(Path.Combine(broken, "7z.exe"), "x");   // no 7z.dll: not usable
             string chosen = Path.Combine(dir, "chosen.exe"); File.WriteAllText(chosen, "x");
             var candidates = new List<string> { Path.Combine(broken, "7z.exe"), Path.Combine(installed, "7z.exe") };
-            SevenZipTool.InstalledOverride = delegate { return candidates; }; SevenZipTool.AppDirOverride = app; SevenZipTool.ClearCache();
+            SevenZipTool.InstalledOverride = delegate { return candidates; }; SevenZipTool.AppDirOverride = app; SevenZipTool.DownloadDirOverride = downloads; SevenZipTool.ResetFetch(); SevenZipTool.ClearCache();
             string source;
             Require(SevenZipTool.Resolve(chosen, out source) == chosen && source == "settings" && SevenZipTool.Describe(chosen) == "Found", "a Settings path that exists comes first: " + source);
             Require(SevenZipTool.Resolve(Path.Combine(dir, "gone.exe"), out source) == Path.Combine(installed, "7z.exe") && source == "installed", "a missing Settings path falls back to the installed 7-Zip (the one without 7z.dll skipped): " + source);
-            Require(SevenZipTool.Describe("").StartsWith("Using your installed 7-Zip · ") , "Settings note for an installed 7-Zip: " + SevenZipTool.Describe(""));
+            Require(SevenZipTool.Describe("").StartsWith("Using your installed 7-Zip · ") && !SevenZipTool.NeedsFetch(""), "Settings note for an installed 7-Zip: " + SevenZipTool.Describe(""));
             candidates.Clear(); SevenZipTool.ClearCache();
-            Require(SevenZipTool.Resolve("", out source) == "" && source == "none" && SevenZipTool.Describe("") == "Not found · ZIP and folders still work", "nothing installed or bundled: " + source);
+            Require(SevenZipTool.Resolve("", out source) == "" && source == "none" && SevenZipTool.NeedsFetch("") && SevenZipTool.Describe("") == "Not found · the Manager gets it the first time a RAR or 7Z needs it", "nothing installed or the Manager's own: " + source + " · " + SevenZipTool.Describe(""));
+            // The pinned 7-Zip (a fixture zip with this PC's 7z.exe and 7z.dll) is served here; first from a missing address.
+            string zipFile = Path.Combine(dir, "7-Zip-fixture.zip");
+            using (ZipArchive zip = ZipFile.Open(zipFile, ZipArchiveMode.Create))
+                foreach (string f in SevenZipTool.BundleFiles)
+                    using (Stream s = zip.CreateEntry(f).Open()) { byte[] bytes = f == "License.txt" ? Encoding.UTF8.GetBytes("7-Zip licence (fixture)") : File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(real), f)); s.Write(bytes, 0, bytes.Length); }
+            byte[] zipBytes = File.ReadAllBytes(zipFile);
+            server.Routes["/tool/7z.zip"] = new LoaderChecks.LoopbackServer.Route { Body = zipBytes };
+            var pin = new SevenZipTool.Release { Version = "26.00", Asset = "7-Zip-fixture.zip", Size = zipBytes.Length, Sha256 = SafeHttp.HashFile(zipFile), Url = server.Base + "/tool/gone.zip" };
+            SevenZipTool.Pin = pin;
             string rar = Path.Combine(dir, "mod.rar"); File.WriteAllText(rar, "not really a rar");
             Exception none = null; try { using (new SourceReader(rar, "")) { } } catch (IOException ex) { none = ex; }
-            Require(none != null && none.Message.Contains("Install 7-Zip or choose 7z.exe in Settings"), "no 7-Zip: " + (none == null ? "read" : none.Message));
-            if (String.IsNullOrEmpty(real)) throw new InvalidOperationException("this PC has no 7-Zip to test the bundled copy with");
-            foreach (string f in new[] { "7z.exe", "7z.dll" }) File.Copy(Path.Combine(Path.GetDirectoryName(real), f), Path.Combine(app, SevenZipTool.BundleFolder, f));
-            SevenZipTool.ClearCache();
-            Require(SevenZipTool.Resolve("", out source) == SevenZipTool.BundledExe && source == "bundled" && SevenZipTool.Describe("") == "Using the 7-Zip that comes with the Manager", "the bundled copy: " + source);
+            Require(none != null && none.Message.Contains("Couldn't download 7-Zip 26.00: HTTP 404") && none.Message.Contains("tries again in a few minutes") && none.Message.Contains("Install 7-Zip or choose 7z.exe in Settings") && SevenZipTool.Fetches == 1, "a failed fetch: " + (none == null ? "read" : none.Message));
+            Require(SevenZipTool.Describe("").StartsWith("Not found · Couldn't download 7-Zip 26.00: HTTP 404") && !File.Exists(Path.Combine(app, SevenZipTool.BundleFolder, "7z.dll")), "Settings after a failed fetch: " + SevenZipTool.Describe(""));
+            try { using (new SourceReader(rar, "")) { } } catch (IOException) { }
+            Require(SevenZipTool.Fetches == 1, "a failed fetch was tried again at once: " + SevenZipTool.Fetches);
+            // Then from the right address: a broken 7-Zip folder (7z.exe alone) is replaced and a real 7Z is listed.
+            File.WriteAllText(Path.Combine(app, SevenZipTool.BundleFolder, "7z.exe"), "broken");
+            pin.Url = server.Base + "/tool/7z.zip"; SevenZipTool.ResetFetch();
             string payload = Path.Combine(dir, "payload", "natives", "stm"); Directory.CreateDirectory(payload); File.WriteAllText(Path.Combine(payload, "a.txt"), "hello");
             string archive = Path.Combine(dir, "mod.7z");
-            ProcessUtil.RunText(SevenZipTool.BundledExe, "a -t7z -y " + ProcessUtil.Quote(archive) + " " + ProcessUtil.Quote(Path.Combine(dir, "payload", "*")));
+            ProcessUtil.RunText(real, "a -t7z -y " + ProcessUtil.Quote(archive) + " " + ProcessUtil.Quote(Path.Combine(dir, "payload", "*")));
             using (var reader = new SourceReader(archive, ""))
-                Require(reader.SevenZip == SevenZipTool.BundledExe && reader.Entries.Keys.Any(k => k.Replace('\\', '/').EndsWith("natives/stm/a.txt", StringComparison.OrdinalIgnoreCase)), "listed through the bundled 7-Zip: " + String.Join(", ", reader.Entries.Keys));
+                Require(reader.SevenZip == SevenZipTool.BundledExe && reader.Entries.Keys.Any(k => k.Replace('\\', '/').EndsWith("natives/stm/a.txt", StringComparison.OrdinalIgnoreCase)), "listed through the fetched 7-Zip: " + String.Join(", ", reader.Entries.Keys));
+            Require(SevenZipTool.Fetches == 1 && SevenZipTool.BundleFiles.All(f => File.Exists(Path.Combine(app, SevenZipTool.BundleFolder, f))) && File.ReadAllBytes(SevenZipTool.BundledExe).SequenceEqual(File.ReadAllBytes(real))
+                && File.Exists(Path.Combine(downloads, pin.Asset)) && !Directory.GetDirectories(app).Any(d => Path.GetFileName(d).StartsWith(SevenZipTool.BundleFolder + ".")), "the fetched copy: " + SevenZipTool.Fetches + " fetch(es)");
+            Require(SevenZipTool.Resolve("", out source) == SevenZipTool.BundledExe && source == "bundled" && SevenZipTool.Describe("") == "Using the Manager's own 7-Zip" && !SevenZipTool.NeedsFetch(""), "the Manager's own copy: " + source);
+            using (new SourceReader(archive, "")) { }
+            Require(SevenZipTool.Fetches == 1, "a usable copy was fetched again");
             // An installed 7-Zip older than the bundled copy gives way to it; the same or a newer version, or none readable, keeps its place.
             Version realVersion = SevenZipTool.VersionOf(real);
             Require(realVersion != null && SevenZipTool.VersionOf(SevenZipTool.BundledExe) == realVersion, "the 7z.dll version was not read: " + realVersion);
@@ -342,7 +360,11 @@ namespace SlotsInstaller
             VersionedDll(Path.Combine(old, "7z.dll"), "9.20.0.0"); VersionedDll(Path.Combine(newer, "7z.dll"), "99.0.0.0");
             foreach (string d in new[] { old, newer }) File.WriteAllText(Path.Combine(d, "7z.exe"), "x");
             candidates.Add(Path.Combine(old, "7z.exe")); SevenZipTool.ClearCache();
-            Require(SevenZipTool.Resolve("", out source) == SevenZipTool.BundledExe && source == "bundled" && SevenZipTool.Describe("") == "Using the 7-Zip that comes with the Manager · newer than your installed 7-Zip 9.20", "an installed 9.20 gives way to the bundled copy: " + source + " · " + SevenZipTool.Describe(""));
+            Require(SevenZipTool.Resolve("", out source) == SevenZipTool.BundledExe && source == "bundled" && SevenZipTool.Describe("") == "Using the Manager's own 7-Zip · newer than your installed 7-Zip 9.20", "an installed 9.20 gives way to the Manager's copy: " + source + " · " + SevenZipTool.Describe(""));
+            // Without the Manager's copy, an installed 7-Zip too old for RAR5 (before 15.06) makes the first RAR/7Z fetch it.
+            SevenZipTool.AppDirOverride = Path.Combine(dir, "app-without-copy"); SevenZipTool.ClearCache();
+            Require(SevenZipTool.Resolve("", out source) == candidates[0] && source == "installed" && SevenZipTool.NeedsFetch(""), "an installed 9.20 alone needs the Manager's copy: " + source);
+            SevenZipTool.AppDirOverride = app; SevenZipTool.ClearCache();
             candidates[0] = Path.Combine(newer, "7z.exe"); SevenZipTool.ClearCache();
             Require(SevenZipTool.Resolve("", out source) == candidates[0] && source == "installed", "a newer installed 7-Zip comes first: " + source);
             candidates[0] = real; SevenZipTool.ClearCache();
