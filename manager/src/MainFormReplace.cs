@@ -208,7 +208,14 @@ namespace SlotsInstaller
             modeToggle.SelectedIndex = IsReplaceMode ? 1 : 0;
             bool forced = IsReplaceMode && forcedReplaceReason != null;
             modeToggle.Locked = forced;
-            modeLockHint.Text = forced ? "· locked for this mod" : "";
+            // 1.0.1: the external-manager lockout (ReplaceEngine.ExternalLockReason); the health check gives the full reason.
+            // 1.0.10: Slotsloader and plain REFramework install past it (ReplaceEngine.ExternalLockReason(fluffy, files)).
+            FluffyInstalls external = null; string locked = null;
+            try { external = Engine().Fluffy(); locked = ReplaceEngine.ExternalLockReason(external, PackagePaths(package)); } catch (Exception ex) { Program.Log(ex); }
+            // 1.0.11 (the user): Extra outfit mode says up front that Replace original is off and why, so it isn't a surprise after switching.
+            bool replaceOff = ReplaceEngine.IsExternalLock(locked);
+            modeLockHint.Text = forced ? "· locked for this mod" : !IsReplaceMode && replaceOff ? "· Replace off: the external mod manager has " + ReplacePlanner.N(external.Mods.Count, "mod") : "";
+            modeLockHint.ForeColor = forced ? Palette.Muted : Palette.Accent;
             if (targetPanel != null) targetPanel.Visible = !IsReplaceMode;
             replacesPanel.Visible = IsReplaceMode;
             if (IsReplaceMode)
@@ -220,11 +227,8 @@ namespace SlotsInstaller
                 modeNotice.Text = (forced ? forcedReplaceReason + " · " : "Overwrites game files · ") + ReplaceMethods.Label(method) + (method == ReplaceMethods.Loose ? (loader == LooseLoaderState.Enabled ? " (on)" : " (off)") : "");
                 if (forcedReplaceReason == PakModReason) modeNotice.Text = PakModReason;   // 2.5.6: the replace method plays no part
                 modeNotice.ForeColor = Palette.Muted; modeNotice.Cursor = Cursors.Default;
-                // 1.0.1: the external-manager lockout (ReplaceEngine.ExternalLockReason); the health check gives the full reason.
-                string locked = null;
-                // 1.0.10: Slotsloader and plain REFramework install past it (ReplaceEngine.ExternalLockReason(fluffy, files)).
-                try { if (engine != null) locked = ReplaceEngine.ExternalLockReason(engine.Fluffy(), PackagePaths(package)); } catch (Exception ex) { Program.Log(ex); }
-                if (locked != null) { modeNotice.Text = locked == ReplaceEngine.ReFrameworkFluffyReason ? "REFramework came from the external mod manager · update it there" : "Off while the external mod manager has mods installed · use Extra outfit"; modeNotice.ForeColor = Palette.Accent; }
+                // A mod that only installs as a replacement (tool mod, edit of an installed one) can't use Extra outfit instead.
+                if (locked != null) { modeNotice.Text = locked == ReplaceEngine.ReFrameworkFluffyReason ? "REFramework came from the external mod manager · update it there" : "Off while the external mod manager has mods installed · " + (forced ? "uninstall them there first" : "use Extra outfit"); modeNotice.ForeColor = Palette.Accent; }
                 // 2.4.1: INSTALL AS already names the mode; "Health" opens the health-check report.
                 installButton.Text = editingReplacement != null ? "Update" : "Install";
                 previewButton.Text = "Health"; previewButton.AccessibleName = "Health check report";
@@ -233,8 +237,6 @@ namespace SlotsInstaller
             else
             {
                 toolStamp = ToolStampNow();   // 1.0.10 (CheckToolStamp)
-                FluffyInstalls external = null;
-                try { external = Engine().Fluffy(); } catch (Exception ex) { Program.Log(ex); }
                 toolStatus = ToolStatus.Detect(config.GameRoot, external);
                 // 1.0.8 (the user): REFramework comes first; Slotsloader is its plugin.
                 string notice = ReFrameworkNotice(toolStatus); bool clickable = toolStatus.ReFrameworkOffer;
@@ -299,8 +301,11 @@ namespace SlotsInstaller
             }
             else if (!replacePlan.CanInstall)
             {
-                planSummary.Text = "Cannot install"; planSummary.ForeColor = Palette.Red;
-                planDetails.Text = replacePlan.Errors.First() + " · View report"; tip = String.Join(Environment.NewLine, replacePlan.Errors);
+                // 1.0.11 (the user): the external-manager lockout gets its own heading and a line short enough to read whole.
+                string external = replacePlan.Errors.FirstOrDefault(ReplaceEngine.IsExternalLock);
+                planSummary.Text = external != null ? "Replace original is off" : "Cannot install"; planSummary.ForeColor = Palette.Red;
+                planDetails.Text = (external != null ? ReplaceEngine.ExternalLockShort(external) + " installed · uninstall them there" + (forcedReplaceReason != null ? " first" : " or use Extra outfit") : replacePlan.Errors.First()) + " · View report";
+                tip = String.Join(Environment.NewLine, replacePlan.Errors);
             }
             else
             {

@@ -85,7 +85,7 @@ namespace SlotsInstaller
                         check("conflicts (2.0.1): footer and inspector name the installed mod with counts; inline Uninstall link (disabled while Fluffy runs) uninstalls without a dialog, for good (no copy, no Undo line; 1.0.1); reinstalling from the library restores byte for byte", delegate { ConflictLink(form, f, probe, root); });
                         check("installs never remove other mods; opening another mod changes nothing; no dialog opens", delegate { NoAutomaticRemoval(form, f, probe, launcher); });
                         check("Installed page (2.0.1): shared-files chip opens the details naming who wins; same-outfit stacking on rows (the Has conflicts filter was removed in 1.0.1)", delegate { InstalledConflicts(form, root); });
-                        check("external mods (1.0.1 lockout): Cannot install in the footer gives the reason", delegate { FluffyFooter(form, f, fluffy); });
+                        check("external mods (1.0.1 lockout): the footer gives the reason (1.0.11: 'Replace original is off' and a short line; Extra outfit mode names it above the toggle)", delegate { FluffyFooter(form, f, fluffy); });
                         check("Fluffy link (2.2.0): a Fluffy install shows on the Installed page by itself within 2 s (watcher); its Uninstall (and the library right-click item for its Mods entry) is disabled with the reason while Fluffy runs, enabled when closed, and removes its file and installed.ini entry; a PAK install says to use Fluffy", delegate { FluffyLink(form, f, fluffy, probe); });
                         check("other tools' files (2.2.0): the banner names the Fluffy mod that replaced a tool-mod file; Uninstall asks Restore original / Keep current file / Cancel; Cancel changes nothing; Keep current file uninstalls and keeps the file with the original restorable", delegate { DriftDialog(form, f, fluffy, probe); });
                         check("Extra outfit mode reviews automatically and notes a duplicate install (same source and options)", delegate { DuplicateExtra(form, f); });
@@ -1131,7 +1131,15 @@ namespace SlotsInstaller
             {
                 File.WriteAllText(ini, saved + "[Fluffy Cammy]\r\nModName=Fluffy Cammy\r\ninstalltype=invalidate\r\nfile=natives/stm/product/model/esf/esf009/002/esf009_002_cmd_001.user.2\r\n");
                 Load(form, f, "modC"); WaitReview(form);
-                Require(Summary(form) == "Cannot install" && Details(form).Contains("only Extra outfit, Slotsloader and REFramework install here") && !Get<FlatButton>(form, "installButton").Enabled, "Fluffy footer: " + Summary(form) + " / " + Details(form));
+                // 1.0.11 (the user): its own heading and a short line; Extra outfit mode says it above the toggle before switching.
+                Label lockHint = Get<Label>(form, "modeLockHint");
+                Require(Summary(form) == "Replace original is off" && Details(form) == "The external mod manager has 1 mod installed · uninstall them there or use Extra outfit · View report" && !Get<FlatButton>(form, "installButton").Enabled, "Fluffy footer: " + Summary(form) + " / " + Details(form));
+                Require(Get<Label>(form, "modeNotice").Text == "Off while the external mod manager has mods installed · use Extra outfit" && lockHint.Text == "", "Replace original strip: " + Get<Label>(form, "modeNotice").Text + " / hint " + lockHint.Text);
+                Render(form, Path.Combine(Path.GetDirectoryName(f.Mods), "library-external-lock-replace-" + form.DeviceDpi + ".png"));
+                Call(form, "SetInstallMode", InstallModes.Slot, true); WaitReview(form);
+                Require(lockHint.Text == "· Replace off: the external mod manager has 1 mod" && lockHint.ForeColor == Palette.Accent && lockHint.PreferredWidth <= lockHint.Width, "Extra outfit hint: '" + lockHint.Text + "' " + lockHint.PreferredWidth + "/" + lockHint.Width);
+                Render(form, Path.Combine(Path.GetDirectoryName(f.Mods), "library-external-lock-extra-" + form.DeviceDpi + ".png"));
+                Call(form, "SetInstallMode", InstallModes.Replace, true); WaitReview(form);
                 // 1.0.10: REFramework the external manager installed is updated there, so the notice offers no click.
                 string dll = Path.Combine(f.Game, "dinput8.dll"), dir = Path.Combine(f.Game, "reframework"); bool hadDir = Directory.Exists(dir);
                 byte[] oldDll = File.Exists(dll) ? File.ReadAllBytes(dll) : null;

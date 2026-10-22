@@ -924,11 +924,12 @@ namespace SlotsInstaller
             // The gear tab already names the page; one short muted line on the General tab only.
             Label subtitle = new Label { UseMnemonic=false, Text = "Uses your mod libraries; settings and records stay separate.", Dock = DockStyle.Top, Height = 26, ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true };
             Panel fields = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) };
-            TableLayoutPanel layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 12, Margin = new Padding(0) };
+            TableLayoutPanel layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 13, Margin = new Padding(0) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
             // Rhythm: caption, field, its note (Related gap above the text), then a group gap before the next caption.
-            int[] heights = { 24, 32, 20 + Rhythm.Related + 4, Rhythm.Group - 6, 24, 32, 20 + Rhythm.Related + 4, Rhythm.Group - 6, 24, 0, Rhythm.AfterAction, 26 };
-            foreach (int h in heights) layout.RowStyles.Add(h == 0 ? new RowStyle(SizeType.Percent, 100) : new RowStyle(SizeType.Absolute, h));
+            // Mod libraries explain themselves under the caption instead (1.0.11; -1 = that line's row, sized by it).
+            int[] heights = { 24, 32, 20 + Rhythm.Related + 4, Rhythm.Group - 6, 24, 32, 20 + Rhythm.Related + 4, Rhythm.Group - 6, 24, -1, 0, Rhythm.AfterAction, 26 };
+            foreach (int h in heights) layout.RowStyles.Add(h < 0 ? new RowStyle(SizeType.AutoSize) : h == 0 ? new RowStyle(SizeType.Percent, 100) : new RowStyle(SizeType.Absolute, h));
             Label gameCaption = Caption("Game folder"); gameCaption.Dock = DockStyle.Fill; layout.Controls.Add(gameCaption, 0, 0); layout.SetColumnSpan(gameCaption, 2);
             settingsGame = TextField(); settingsGame.AccessibleName="Game folder"; settingsGame.Dock = DockStyle.Fill; settingsGame.Margin = new Padding(0, 0, 10, 0); layout.Controls.Add(settingsGame, 0, 1);
             FlatButton browseGame=Button("Browse…", false, 108, delegate { ChooseSettingFolder(settingsGame); }); browseGame.Dock=DockStyle.Fill; browseGame.Margin=Padding.Empty; layout.Controls.Add(browseGame, 1, 1);
@@ -941,17 +942,21 @@ namespace SlotsInstaller
             // 1.0.11: empty = automatic (installed 7-Zip, else the copy beside the Manager); the note says which one runs.
             showSevenZipNote = delegate { string typed = settingsSevenZip.Text.Trim(); sevenHint.Text = typed.Length > 0 && !File.Exists(typed) ? "Not found at that path · clear the field to find 7-Zip automatically" : SevenZipTool.Describe(typed); };
             settingsSevenZip.TextChanged += delegate { showSevenZipNote(); };
-            Label libCaption = Caption("Libraries"); libCaption.Dock = DockStyle.Fill; layout.Controls.Add(libCaption, 0, 8); layout.SetColumnSpan(libCaption, 2);
+            Label libCaption = Caption("Mod libraries"); libCaption.Dock = DockStyle.Fill; layout.Controls.Add(libCaption, 0, 8); layout.SetColumnSpan(libCaption, 2);
+            // The line gives way on short windows, so the list keeps at least two rows (100 px).
+            int hintHeight = 20 + Rhythm.Related, roomy = heights.Where(h => h > 0).Sum() + hintHeight + 104;
+            Label libHint = new Label { UseMnemonic=false, Name = "settingsLibrariesNote", Text = "Folders where you keep downloaded mods. Everything in them shows in the Mod library tab.", ForeColor = Palette.Muted, Font = Palette.Small, AutoSize = false, Height = hintHeight, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(libHint, 0, 9); layout.SetColumnSpan(libHint, 2);
+            layout.Resize += delegate { libHint.Visible = layout.Height >= Px(roomy); };
             // Padded, owner-drawn library rows with a found/missing state and
             // the mod count from the last scan, framed like the other fields.
             Panel librariesFrame = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Border, Padding = new Padding(1), Margin = new Padding(0, 0, 10, 0) };
-            settingsLibraries = new ListBox { Dock = DockStyle.Fill, BackColor = Palette.Background, ForeColor = Palette.Text, BorderStyle = BorderStyle.None, Font = Palette.Normal, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 50, AccessibleName = "Source libraries" };
+            settingsLibraries = new ListBox { Dock = DockStyle.Fill, BackColor = Palette.Background, ForeColor = Palette.Text, BorderStyle = BorderStyle.None, Font = Palette.Normal, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 50, AccessibleName = "Mod libraries" };
             NativeDpiFont.Attach(settingsLibraries);
             settingsLibraries.DrawItem += DrawLibraryFolder;
             settingsLibraries.HandleCreated += delegate { if (settingsLibraries.ItemHeight != Px(50)) settingsLibraries.ItemHeight = Px(50); };
             settingsLibraries.SelectedIndexChanged += delegate { if (removeLibraryButton != null) removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0; };
             librariesFrame.Controls.Add(settingsLibraries);
-            layout.Controls.Add(librariesFrame, 0, 9);
+            layout.Controls.Add(librariesFrame, 0, 10);
             Panel libActions = new Panel { Dock = DockStyle.Fill, Margin=Padding.Empty };
             FlatButton addLibrary = Button("Add…", false, 118, delegate { using (FolderBrowserDialog d = new FolderBrowserDialog { Description = "Choose a library folder, such as your mod manager's Mods folder" }) { if (d.ShowDialog(this) == DialogResult.OK && !settingsLibraries.Items.Cast<string>().Contains(d.SelectedPath, StringComparer.OrdinalIgnoreCase)) { libraryFolderStatus.Remove(d.SelectedPath); settingsLibraries.Items.Add(d.SelectedPath); settingsLibraries.SelectedIndex = settingsLibraries.Items.Count - 1; } } });
             removeLibraryButton = Button("Remove", false, 118, delegate { if (settingsLibraries.SelectedIndex >= 0) { int index = settingsLibraries.SelectedIndex; settingsLibraries.Items.RemoveAt(index); if (settingsLibraries.Items.Count > 0) settingsLibraries.SelectedIndex = Math.Min(index, settingsLibraries.Items.Count - 1); } removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0; });
@@ -960,8 +965,8 @@ namespace SlotsInstaller
             addLibrary.Dock = DockStyle.Top; removeLibraryButton.Dock = DockStyle.Top;
             addLibrary.Height = 32; removeLibraryButton.Height = 32;
             libActions.Controls.Add(removeLibraryButton); libActions.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 }); libActions.Controls.Add(addLibrary);
-            layout.Controls.Add(libActions, 1, 9);
-            settingsStatus = new Label { UseMnemonic=false, ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, AutoEllipsis = true }; layout.Controls.Add(settingsStatus, 0, 11); layout.SetColumnSpan(settingsStatus, 2);
+            layout.Controls.Add(libActions, 1, 10);
+            settingsStatus = new Label { UseMnemonic=false, ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, AutoEllipsis = true }; layout.Controls.Add(settingsStatus, 0, 12); layout.SetColumnSpan(settingsStatus, 2);
             FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 0) };
             actions.Controls.Add(Button("Save settings", true, 154, delegate { SaveSettings(); }));
             actions.Controls.Add(Button("Open Data folder", false, 168, delegate { OpenPath(AppConfig.DataDir); }));

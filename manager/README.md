@@ -11,8 +11,10 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
 ## What changed
 
 - 1.0.11:
-  - **RAR and 7Z mods work without installing 7-Zip.** The Manager now comes with 7-Zip in its `7-Zip` folder and uses it when 7-Zip isn't installed. An installed 7-Zip is still used first, also when it isn't in `C:\Program Files\7-Zip`. In Settings, the 7-Zip field can stay empty ("Automatic"); the line under it says which 7-Zip is used. A path you chose yourself still comes first.
+  - **RAR and 7Z mods work without installing 7-Zip.** The Manager now comes with 7-Zip in its `7-Zip` folder and uses it when 7-Zip isn't installed. An installed 7-Zip is still used first, also when it isn't in `C:\Program Files\7-Zip`, unless it is older than the Manager's copy (7-Zip before 15.06 can't open RAR5 archives). In Settings, the 7-Zip field can stay empty ("Automatic"); the line under it says which 7-Zip is used. A path you chose yourself still comes first.
   - **Credits:** Settings → About thanks BrewedVFX for testing and recommendations, with a link to their page.
+  - **Mod libraries:** in Settings, "Libraries" is now "Mod libraries", with a short line under it saying what they are.
+  - **Why Replace original is off:** while the external mod manager has mods installed, Extra outfit mode now says above the toggle that Replace is off and how many mods it has. In Replace original, the footer reads "Replace original is off" with a short line on what to do, instead of a cut-off "Cannot install" message.
 
 - 1.0.10:
   - **Presets copy less.** An archive you dropped into costume_mods yourself that is identical to an archive in your libraries is now saved as that library mod instead of being copied. Only archives of the same size are compared, so saving stays quick. Restore puts it back from the library under its own file name, and skips it while it is still installed.
