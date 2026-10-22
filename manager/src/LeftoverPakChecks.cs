@@ -71,6 +71,12 @@ namespace SlotsInstaller
             try { cli = ReplaceChecks.Cli("replace-status", "--game", f.Game); }
             finally { replaceSettings.FluffyRoots = savedRoots; replaceSettings.Save(); }
             Require(cli.Contains("re_chunk_000.pak.patch_001.pak (leftover: no mod manager lists it, ") && cli.Contains("re_chunk_000.pak.patch_005.pak (empty placeholder)") && cli.Contains("leftover PAK") && cli.Contains("(remove: select it on the Installed page, then Remove PAK)"), "replace-status: " + cli);
+            // Every other patch PAK is named after its owner (the user: the Manager's own PAK mod read "another mod's, left alone").
+            Require(cli.Contains("re_chunk_000.pak.patch_003.pak (the external mod manager's mod 'Pak A')") && cli.Contains("re_chunk_000.pak.patch_004.pak (the external mod manager's mod 'Pak B')") && !cli.Contains("another mod's"), "replace-status owners: " + cli);
+            // The CLI reads the app's own Data, not this fixture's records, so the Manager's PAK mod is checked on its label.
+            PatchPak two = LoaderCostumePak.Scan(f.Game).Single(p => p.Number == 2);
+            string label = ReplaceCommandLine.PatchPakLabel(two, new HashSet<string>(), ReplaceCommandLine.PakOwners(f.Engine.LoadState()), f.Engine.Fluffy());
+            Require(label == "this Manager's mod '" + owned.Name + "', disabled, empty placeholder", "the Manager's PAK mod in replace-status: " + label);
 
             // Refused while SF6 or the external manager runs, and for a PAK that isn't a leftover; nothing changes.
             var before = ReplaceChecks.Snapshot(f.Game); string folder;
