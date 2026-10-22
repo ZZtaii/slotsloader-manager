@@ -8,7 +8,8 @@ namespace SlotsInstaller
 {
     // 1.0.11 (the user): only what a new user must know, as three topics: using the Manager beside an external mod
     // manager, on its own, and what to do when something breaks. Shown once at the first start (ViewPreferences
-    // .WelcomeSeen, so also once after updating from 1.0.10) and from gear → Welcome. Esc, Close or Done close it.
+    // .WelcomeSeen, so also once after updating from 1.0.10) and from gear → Welcome. Esc, ✕, Close or Done close it.
+    // A borderless card over the dimmed main window (the user: no title bar, no window chrome).
     internal sealed class WelcomeForm : Form
     {
         internal sealed class Topic
@@ -38,10 +39,16 @@ namespace SlotsInstaller
         private readonly FlatButton close, back, next;
         internal int Index { get { return page.Index; } }
 
-        internal static void ShowWelcome(IWin32Window owner)
+        internal static void ShowWelcome(Form owner)
         {
             if (Program.Headless) return;
-            using (var form = new WelcomeForm()) form.ShowDialog(owner);
+            // The main window dims behind the card: a black layer at half opacity over its client area, owning the card.
+            using (var dim = new Form { FormBorderStyle = FormBorderStyle.None, BackColor = Color.Black, Opacity = 0.5, ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Bounds = owner.RectangleToScreen(owner.ClientRectangle) })
+            using (var form = new WelcomeForm())
+            {
+                dim.Show(owner);
+                form.ShowDialog(dim);
+            }
         }
 
         internal WelcomeForm()
@@ -49,8 +56,12 @@ namespace SlotsInstaller
             SuspendLayout();
             AutoScaleDimensions = new SizeF(96F, 96F); AutoScaleMode = AutoScaleMode.Dpi;
             Text = "Welcome to Slotsloader Manager"; StartPosition = FormStartPosition.CenterParent;
-            BackColor = Palette.Surface; ForeColor = Palette.Text; ShowInTaskbar = false; Padding = new Padding(24, 16, 24, 16); MaximizeBox = false; MinimizeBox = false; FormBorderStyle = FormBorderStyle.FixedDialog;
-            AppBranding.Apply(this);
+            BackColor = Palette.Surface; ForeColor = Palette.Text; ShowInTaskbar = false; Padding = new Padding(25, 12, 25, 17); FormBorderStyle = FormBorderStyle.None;
+            AppBranding.Apply(this); WindowChrome.Round(this);
+            var header = new Panel { Dock = DockStyle.Top, Height = 30 };
+            var caption = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Text = "WELCOME TO SLOTSLOADER MANAGER" };
+            var dismiss = new FlatButton("✕", false) { Width = 36, Padding = Padding.Empty, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeDismiss", AccessibleName = "Close the welcome" }; dismiss.Click += delegate { Close(); };
+            header.Controls.Add(caption); header.Controls.Add(dismiss);
             page = new WelcomePage { Dock = DockStyle.Fill, Name = "welcomePage" };
             page.IndexChanged += delegate { UpdateButtons(); };
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 54, Padding = new Padding(0, 14, 0, 0) };
@@ -59,8 +70,8 @@ namespace SlotsInstaller
             back = new FlatButton("Back", false) { Width = 88, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeBack" }; back.Click += delegate { page.Index--; };
             close = new FlatButton("Close", false) { Width = 88, Dock = DockStyle.Right, Font = Palette.Small, Name = "welcomeClose" }; close.Click += delegate { Close(); };
             footer.Controls.Add(hint); footer.Controls.Add(close); footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); footer.Controls.Add(back); footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); footer.Controls.Add(next);
-            Controls.Add(page); Controls.Add(footer);
-            ClientSize = new Size(600, 460);
+            Controls.Add(page); Controls.Add(header); Controls.Add(footer);
+            ClientSize = new Size(602, 490);
             AcceptButton = next;
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
@@ -79,6 +90,13 @@ namespace SlotsInstaller
             base.OnLoad(e);
             int extra = page.TallestHeight() - page.Height;
             if (extra != 0) { ClientSize = new Size(ClientSize.Width, ClientSize.Height + extra); if (Owner != null) CenterToParent(); }
+        }
+
+        // A 1 px frame in the border colour (the window has no chrome of its own).
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            using (var pen = new Pen(Palette.Border, Math.Max(1, DpiMetrics.Px(this, 1)))) e.Graphics.DrawRectangle(pen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
         }
 
         private void UpdateButtons()

@@ -435,6 +435,12 @@ namespace SlotsInstaller
             catch (DllNotFoundException) { }
             catch (EntryPointNotFoundException) { }
         }
+        // 1.0.11: rounded corners for a borderless card window (Windows 11; older systems ignore it).
+        internal const int CornerAttribute = 33, RoundCorners = 2;
+        internal static void Round(Form form)
+        {
+            form.HandleCreated += delegate { try { int round = RoundCorners; DwmSetWindowAttribute(form.Handle, CornerAttribute, ref round, 4); } catch (DllNotFoundException) { } catch (EntryPointNotFoundException) { } };
+        }
     }
 
     // One table drives key handling, the gear menu and tooltips. None of

@@ -446,6 +446,19 @@ namespace SlotsInstaller
                 var page = (WelcomePage)welcome.Controls.Find("welcomePage", true).Single();
                 Func<string, FlatButton> button = delegate(string name) { return (FlatButton)welcome.Controls.Find(name, true).Single(); };
                 Require(page.Height >= page.TallestHeight(), "welcome cut short: " + page.Height + " < " + page.TallestHeight());
+                Require(welcome.FormBorderStyle == FormBorderStyle.None && welcome.Controls.Find("welcomeDismiss", true).Length == 1, "the welcome has window chrome or no ✕");
+                // How it looks over the app: the main window under ShowWelcome's half-opacity black layer, the card centred.
+                using (var shot = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
+                using (var card = new Bitmap(welcome.Width, welcome.Height))
+                {
+                    form.DrawToBitmap(shot, new Rectangle(Point.Empty, shot.Size)); welcome.DrawToBitmap(card, new Rectangle(Point.Empty, card.Size));
+                    using (Graphics g = Graphics.FromImage(shot))
+                    {
+                        using (var dim = new SolidBrush(Color.FromArgb(128, Color.Black))) g.FillRectangle(dim, 0, 0, shot.Width, shot.Height);
+                        g.DrawImage(card, (shot.Width - card.Width) / 2, (shot.Height - card.Height) / 2);
+                    }
+                    shot.Save(Path.Combine(root, "welcome-overlay-" + welcome.DeviceDpi + ".png"), ImageFormat.Png);
+                }
                 for (int i = 0; i < WelcomeForm.Topics.Length; i++)
                 {
                     bool last = i == WelcomeForm.Topics.Length - 1;
@@ -459,7 +472,7 @@ namespace SlotsInstaller
                 button("welcomeNext").PerformClick(); button("welcomeNext").PerformClick(); button("welcomeNext").PerformClick(); Application.DoEvents();
                 Require(welcome.IsDisposed || !welcome.Visible, "Done did not close the welcome");
             }
-            report.Add("PASS: welcome (1.0.11): three topics with tabs, Back / Next / Done and Close; sized to the tallest topic; never opens by itself in a check window; renders welcome-1..3.png.");
+            report.Add("PASS: welcome (1.0.11): a borderless card with ✕, three topics with tabs, Back / Next / Done and Close; sized to the tallest topic; never opens by itself in a check window; renders welcome-1..3.png and welcome-overlay.png.");
         }
 
         private static void CheckNoTooltips(MainForm form, List<string> report)
