@@ -141,6 +141,28 @@ namespace SlotsInstaller
             Require(f.Engine.LoadState().Find(again.Id) != null, "a replacement after the lockout");
         }
 
+        // 1.0.11 (the user): Restore game to vanilla removes the replacements here and the external manager's mods, every
+        // patch PAK and natives, but keeps this Manager's REFramework and Slotsloader (records and files).
+        internal static void VanillaKeepsTools(string root)
+        {
+            ReplaceChecks.Fixture f = ReplaceChecks.Create(Path.Combine(root, "game"), false, ReplaceMethods.Pak);
+            FakeFluffy fluffy = Attach(f, root);
+            ReplaceChecks.Put(f.Mods, "refw/dinput8.dll", B("REFramework 12.10.2026"));
+            ReplaceChecks.Put(f.Mods, "refw/reframework_revision.txt", B("fixture revision"));
+            ReplaceMod refw = ReplaceChecks.Install(f, "refw", "REFramework");
+            ReplaceMod loader = ReplaceChecks.Install(f, "tool", "Slotsloader");
+            ReplaceChecks.Install(f, "modB", "Cammy Alt");
+            fluffy.Install("Other Script", "Other Script", "normal", new Dictionary<string, byte[]> { { "reframework/autorun/other.lua", B("-- other") } }, false, null);
+            Require(ReplaceEngine.KeptByVanilla(refw) && ReplaceEngine.KeptByVanilla(loader) && Directory.GetFiles(f.Game, "re_chunk_000.pak.patch_*.pak").Any(), "fixture before the restore");
+            string result = f.Engine.RestoreVanilla();
+            ReplaceState s = f.Engine.LoadState();
+            Require(s.Mods.Select(m => m.Id).OrderBy(x => x, StringComparer.Ordinal).SequenceEqual(new[] { refw.Id, loader.Id }.OrderBy(x => x, StringComparer.Ordinal)), "kept records: " + String.Join(", ", s.Mods.Select(m => m.Name)));
+            Require(Text(G(f, "dinput8.dll")) == "REFramework 12.10.2026" && Text(G(f, "amd_ags_x64.dll")) == "slotsloader proxy" && File.Exists(G(f, "reframework/plugins/SF6_CostumeSlotsNative.dll")), "REFramework or Slotsloader files were removed");
+            Require(!File.Exists(G(f, "reframework/autorun/other.lua")) && fluffy.Load().Mods.Count == 0, "the external manager's mod stayed");
+            Require(!Directory.Exists(G(f, "natives")) && !Directory.GetFiles(f.Game, "re_chunk_000.pak.patch_*.pak").Any(), "natives or a patch PAK is left");
+            Require(result.Contains("The game is vanilla (REFramework, Slotsloader and your extra outfits stay).") && result.Contains("Removed this Manager's 1 mod."), "result: " + result);
+        }
+
         // ---- installed.ini parsing and the watcher
         internal static void ParseAndWatch(string root)
         {

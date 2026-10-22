@@ -32,7 +32,7 @@ namespace SlotsInstaller
             new Topic { Tab = "Repair", Title = "When something breaks", Lead = "Start with the smallest fix.", Points = new[] {
                 "After an SF6 update, a \"Game files changed\" banner appears. Click Reapply to put your replacements back.",
                 "Game won't start? Gear → Restore → Remove this Manager's mods. You can undo it.",
-                "Still broken? Gear → Restore → Restore game to vanilla removes every mod, your mod manager's too. Your libraries keep every mod to reinstall." } },
+                "Still broken? Gear → Restore → Restore game to vanilla removes your mods and your mod manager's. REFramework and Slotsloader installed with SLM stay." } },
         };
 
         private readonly WelcomePage page;
