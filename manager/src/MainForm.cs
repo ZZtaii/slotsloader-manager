@@ -101,6 +101,7 @@ namespace SlotsInstaller
         private void MoveLibrarySelection(int delta)
         {
             if (modList.Items.Count == 0) return;
+            libraryDirection = delta < 0 ? -1 : 1;   // 1.0.12: the row read ahead (MainFormOpen.cs)
             int index = modList.SelectedIndices.Count > 0 ? modList.SelectedIndices[0] : modList.FocusedItem != null ? modList.FocusedItem.Index : -1;
             int next = index < 0 ? 0 : Math.Max(0, Math.Min(modList.Items.Count - 1, index + delta));
             if (next == index) return;
@@ -237,7 +238,7 @@ namespace SlotsInstaller
                     BeginInvoke((MethodInvoker)delegate { viewPreferences.WelcomeSeen = true; SaveView(); WelcomeForm.ShowWelcome(this, ShowHelp); });
             };
             FormClosing += delegate { SaveView(); if (assistantPage != null) assistantPage.Shutdown(); };
-            FormClosed += delegate { if (filterMatchCancel != null) filterMatchCancel.Cancel(); ClearPreviewCache(); if (previewImage != null) previewImage.Dispose(); if (hoverTimer != null) hoverTimer.Dispose(); if (portraitLoad != null) portraitLoad.Cancel(); };
+            FormClosed += delegate { if (filterMatchCancel != null) filterMatchCancel.Cancel(); StopReadAhead(false); ClearPreviewCache(); if (previewImage != null) previewImage.Dispose(); if (hoverTimer != null) hoverTimer.Dispose(); if (portraitLoad != null) portraitLoad.Cancel(); };
             Disposed += delegate { if (hoverTimer != null) hoverTimer.Dispose(); viewSaveTimer.Dispose(); searchTimer.Dispose(); };
         }
 
@@ -616,7 +617,7 @@ namespace SlotsInstaller
             modList.SelectedIndexChanged += delegate { LibrarySelectionEvent(); };
             modList.MouseClick += delegate(object sender, MouseEventArgs e)
             {
-                if (e.Button != MouseButtons.Left || busy) return;
+                if (e.Button != MouseButtons.Left || (busy && !packageLoading)) return;   // 1.0.12: a pick during a mod's read waits as the next
                 if ((Control.ModifierKeys & (Keys.Control | Keys.Shift)) != 0 || modList.SelectedItems.Count > 1) return;   // 1.0.6: building a selection
                 ListViewItem row = modList.GetItemAt(e.X, e.Y);
                 LibraryEntry entry = row == null ? null : row.Tag as LibraryEntry;
@@ -636,6 +637,8 @@ namespace SlotsInstaller
                     if (k == Keys.W || k == Keys.S) MoveLibrarySelection(k == Keys.W ? -1 : 1);
                     return;
                 }
+                if (k == Keys.Up || k == Keys.PageUp || k == Keys.Home) libraryDirection = -1;   // 1.0.12: the row read ahead (MainFormOpen.cs)
+                else if (k == Keys.Down || k == Keys.PageDown || k == Keys.End) libraryDirection = 1;
                 if (k == Keys.Up || k == Keys.Down || k == Keys.PageUp || k == Keys.PageDown || k == Keys.Home || k == Keys.End || k == Keys.Left || k == Keys.Right) { userPickingMod = true; BeginInvoke((Action)delegate { userPickingMod = false; }); }
                 else if (k == Keys.A && e.Modifiers == Keys.Control) { e.Handled = e.SuppressKeyPress = true; SelectAllLibraryRows(); }   // 1.0.6
                 else if (k == Keys.Enter && e.Modifiers == Keys.None && modList.SelectedItems.Count == 1)
@@ -643,7 +646,7 @@ namespace SlotsInstaller
                     e.Handled = e.SuppressKeyPress = true;
                     ClosePanelForPickedMod();
                     LibraryEntry entry = (LibraryEntry)modList.SelectedItems[0].Tag;
-                    if (!busy && (package == null || !String.Equals(package.SourcePath, entry.SourcePath, StringComparison.OrdinalIgnoreCase))) LoadPackage(entry);
+                    if ((!busy || packageLoading) && (package == null || !String.Equals(package.SourcePath, entry.SourcePath, StringComparison.OrdinalIgnoreCase))) LoadPackage(entry);
                 }
             };
             modList.KeyUp += delegate { userPickingMod = false; };
@@ -714,12 +717,14 @@ namespace SlotsInstaller
             Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 64, BackColor = Palette.Background, Padding = new Padding(10, 6, 8, 5) };
             FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 444, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 7, 0, 0) };
             installButton = Button("Install", true, 136, delegate { InstallCurrent(); }); installButton.Enabled = false;
+            installButton.MouseEnter += delegate { StartReviewNow(); };   // 1.0.12: heading for Install, the check need not wait
             installButton.KeyHint = "Space"; installButton.AccessibleDescription = "Shortcut: Space";   // 2.4.1
             previewButton = Button("Review files", false, 116, delegate { BuildPlan(true); }); previewButton.Enabled = false;
             libraryUninstallButton = Button("Uninstall outfit", false, 172, delegate { UninstallLibraryOutfit(); }); libraryUninstallButton.Enabled = false; libraryUninstallButton.Danger = true;
             libraryUninstallButton.KeyHint = "Ctrl"; libraryUninstallButton.AccessibleDescription = "Shortcut: tap Ctrl";   // 2.5.2 (MainFormKeys.cs)
             foreach (FlatButton button in new[] { installButton, previewButton, libraryUninstallButton }) { button.Height = 38; button.Margin = new Padding(5, 0, 0, 0); button.Font = Palette.Small; }
             actions.Controls.Add(installButton); actions.Controls.Add(previewButton); actions.Controls.Add(libraryUninstallButton);
+            actions.MouseMove += delegate(object sender, MouseEventArgs e) { if (installButton.Bounds.Contains(e.Location)) StartReviewNow(); };   // a disabled Install gets no mouse events; its container does
             Panel summary = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 1, 8, 0) };
             planSummary = new Label { UseMnemonic=false, Text = "Review your selection", Dock = DockStyle.Top, Height = 23, Font = Palette.Strong, ForeColor = Palette.Text, AutoEllipsis = true };
             planDetails = new Label { UseMnemonic=false, Text = "Select your main files and options.", Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true };
@@ -1456,6 +1461,7 @@ namespace SlotsInstaller
         private void SetBusy(bool value, string message)
         {
             if (value && hoverTimer != null) { hoverTimer.Stop(); hoverNode = null; }
+            if (value) StopReadAhead(true);   // 1.0.12: the archive read ahead may be the one this work renames, deletes or installs
             busy = value; statusProgress.Visible = value;
             // While busy the strip shows the operation; afterwards it returns to the page's own status.
             if (value) { statusText.Text = message; statusText.ForeColor = Palette.Muted; } else ShowPageStatus();
@@ -1732,7 +1738,7 @@ namespace SlotsInstaller
         internal void OpenTopLibraryMatch()
         {
             FlushLibraryFilter();
-            if (busy || modList.Items.Count == 0) return;
+            if ((busy && !packageLoading) || modList.Items.Count == 0) return;
             ListViewItem first = modList.Items[0];
             LibraryEntry entry = first.Tag as LibraryEntry;
             if (entry == null) return;
@@ -2087,7 +2093,13 @@ namespace SlotsInstaller
         private void LoadPackage(LibraryEntry entry, InstalledOutfit restore) { LoadPackage(entry, restore, null); }
         private void LoadPackage(LibraryEntry entry, InstalledOutfit restore, ReplaceMod restoreReplace)
         {
-            if (busy) return;
+            if (busy)
+            {
+                // 1.0.12: a library pick while a mod is read waits as the next one (MainFormOpen.cs).
+                if (packageLoading && restore == null && restoreReplace == null && pendingReload == null) QueueOpen(entry);
+                return;
+            }
+            StopReadAhead(false, entry.SourcePath);   // 7-Zip for this mod, unless it is the one being read ahead
             // A review of the old package must become obsolete as soon as another load starts, even while
             // that load is still reading and the package field has not been replaced yet.
             if (package != null) RequestReview(1);
@@ -2098,18 +2110,18 @@ namespace SlotsInstaller
             try { remembered = ReplaceSettings.Load().StartMode(); } catch (Exception ex) { Program.Log(ex); }
             bool replaceLoad = restoreReplace != null || remembered == InstallModes.Replace;
             PackageReload reload = pendingReload; pendingReload = null;   // 2.4.1: a reload after the source changed on disk
-            if (reload == null) CollapseInspectorDetails();   // 1.0.8: another mod opens with compact details
             if (reload != null) replaceLoad = reload.Mode == InstallModes.Replace || restoreReplace != null;
-            Work((reload != null ? "Reloading " : "Reading ") + entry.Name + "…", delegate
+            OpenWork(entry.SourcePath, delegate
             {
                 string stamp = SourceStamp(entry.SourcePath);   // before reading: a change while reading is seen next time
-                ModPackage loaded = PackageReader.Load(entry.SourcePath, sevenZip, true);
+                ModPackage loaded = ReadOpenPackage(entry.SourcePath, stamp, sevenZip);
                 List<string> defaults = Composer.DefaultSelection(loaded, replaceLoad || IsToolPackage(loaded));
                 byte[] image = null;
                 try { image = loaded.PreviewBytes(defaults.FirstOrDefault(), sevenZip); } catch { }
                 return new PackageResult { Package = loaded, Preview = PreviewImageResult.Decode(image), Defaults = defaults, Stamp = stamp };
             }, delegate(PackageResult result)
             {
+                if (reload == null) CollapseInspectorDetails();   // 1.0.8: another mod opens with compact details (1.0.12: when it shows)
                 package = result.Package; plan = null; replacePlan = null; packageStamp = result.Stamp;
                 // 1.0.1 (the user): INSTALL AS is what you last clicked. A PAK-only or tool mod shows Replace original with
                 // Extra outfit faded, only while it is open (never remembered); Edit options opens in the edited outfit's
@@ -2122,16 +2134,19 @@ namespace SlotsInstaller
                 pendingPreviewPackage = null; pendingPreviewId = null;
                 ClearPreviewCache();
                 selectingMod = true;
+                bool relist = false;
                 foreach (LibraryEntry listed in library.Where(e => String.Equals(e.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)))
                 {
+                    string known = ListedIdentity(listed);
                     listed.CharacterCodes = package.CharacterCodes.ToList(); listed.DetectionError = null;
                     listed.Character = ModCategories.NameGuessAllowed(listed) ? package.Character : "";   // 2.3.1: no name guess for Misc/Code tools
                     listed.OptionCount = package.Components.Count(c => c.Assets.Count > 0);
                     listed.OptionIds = package.Components.Where(c => c.Assets.Count > 0).Select(c => c.Id).ToList();
                     installStates.Remove(listed);
                     listed.Detection = listed.CharacterCodes.Count > 1 ? "Ambiguous" : listed.CharacterCodes.Count == 1 ? (Characters.ByCode.ContainsKey(listed.CharacterCodes[0]) ? "Native" : "UnknownNative") : String.IsNullOrEmpty(listed.Character) ? "Unknown" : "Filename";
+                    if (ListedIdentity(listed) != known) relist = true;
                 }
-                ApplyFilters();
+                if (relist) ApplyFilters();   // 1.0.12: only when the read changed what the list filters and sorts on
                 foreach (ListViewItem row in modList.Items)
                 {
                     LibraryEntry listed = row.Tag as LibraryEntry;
@@ -2164,6 +2179,9 @@ namespace SlotsInstaller
                     catch (IOException ex) { savedNote = ex.Message; } // retain original IDs: missing/multi-pick validation blocks installation
                 }
                 FillComponents(savedSelection ?? result.Defaults); ResetPlan(); ShowDetailTab(false); UpdateDestination(); UpdateModeUi();
+                // 1.0.12: the health check (extraction, fixes) waits until browsing settles on this mod; the merged-files
+                // review of Extra outfit is only a composition and keeps the short delay.
+                if (IsReplaceMode) RequestReview(BrowseReviewDelay);
                 previewButton.Enabled = true; UpdateLibraryUninstall(); SetPageStatus(libraryPage, savedNote.Length > 0 ? savedNote : "Ready to compose " + package.Name);
                 if (reload == null) ShowPage(libraryPage);   // 2.4.1: a reload in the background keeps the page you are on
                 if (reload != null) ApplyReload(reload);
@@ -2297,6 +2315,7 @@ namespace SlotsInstaller
                 SetPreview(cachedImage); previewComponentId = component.Id; return;
             }
             SetPreview(null); noPreview.Text = "Loading preview…";
+            PostponeReview(BrowseReviewDelay);   // 1.0.12: the preview first; the health check waits for browsing to settle
             if (previewLoading) { pendingPreviewPackage = package; pendingPreviewId = component.Id; pendingPreviewGeneration = generation; }
             else ReadComponentPreview(package, component.Id, generation);
         }
@@ -2504,8 +2523,9 @@ namespace SlotsInstaller
             }
             else if (ReviewPending)
             {
-                planSummary.Text = "Checking " + package.Name + "…"; planSummary.ForeColor = Palette.Text;
-                planDetails.Text = selectedOrder.Count == 0 ? "Select main files and any options to compose an outfit." : (reviewStage.Length > 0 ? reviewStage : "Merging files · Install enables when done");
+                // 1.0.12 (the user): only the result is shown; a check still running after ReviewSlowHint says "Checking…".
+                planSummary.Text = reviewSlow ? "Checking…" : ""; planSummary.ForeColor = Palette.Muted;
+                planDetails.Text = "";
             }
             else if (plan == null)
             {
@@ -3185,6 +3205,7 @@ namespace SlotsInstaller
         // A disabled or hidden Install does nothing, like a click on it; never while a task runs.
         private void PressInstall()
         {
+            if (installButton != null && !installButton.Enabled && !BatchVisible) StartReviewNow();   // 1.0.12: Space before the check ran starts it
             if (busy || installButton == null || !installButton.Enabled || !installButton.Visible || BatchVisible) return;   // 1.0.6: never under the queue
             SpaceInstalls++;
             installButton.PerformClick();

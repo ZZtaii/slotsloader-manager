@@ -393,7 +393,9 @@ namespace SlotsInstaller
                         if (watch.Elapsed > timeout) throw new IOException(tool+" timed out. Check the files and drive, then try again.");
                         if (output.IsFaulted) throw output.Exception.GetBaseException();
                         if (error.IsFaulted) throw error.Exception.GetBaseException();
-                        Thread.Sleep(20);
+                        // 1.0.12: wake as soon as 7-Zip exits or its output ends (a fixed 20 ms sleep added up to 20 ms per run)
+                        if (!p.HasExited) p.WaitForExit(20);
+                        else try { Task.WaitAll(new Task[] { output, error }, 20); } catch (AggregateException) { }
                     }
                     if (output.IsFaulted) throw output.Exception.GetBaseException();
                     if (error.IsFaulted) throw error.Exception.GetBaseException();

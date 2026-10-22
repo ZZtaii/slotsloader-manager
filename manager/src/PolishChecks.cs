@@ -177,7 +177,7 @@ namespace SlotsInstaller
             nodes[package.Components.First(c => c.Name == "Dress").Id].Checked = true;
             Require(unresolved != Get<List<ModComponent>>(form, "unresolvedChoices") && Get<List<ModComponent>>(form, "unresolvedChoices").Count == 1 && summary.Text == "Choose: Skin", "Resolving one group did not update the marker list: " + summary.Text);
             nodes[package.Components.First(c => c.Name == "Tan skin").Id].Checked = true;
-            Require(Get<List<ModComponent>>(form, "unresolvedChoices").Count == 0 && summary.Text.StartsWith("Checking "), "Resolving every group did not start the automatic review: " + summary.Text);
+            Require(Get<List<ModComponent>>(form, "unresolvedChoices").Count == 0 && form.ReviewPending && summary.Text == "", "Resolving every group did not start the automatic review (1.0.12: the footer waits for the result): " + summary.Text);
             Require(!Get<FlatButton>(form, "previewButton").Emphasis, "Review files is emphasised although the review runs automatically.");
             WaitIdle(form);
             Require(summary.Text.StartsWith("Ready to install"), "The automatic review did not finish with Ready to install: " + summary.Text);

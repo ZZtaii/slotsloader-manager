@@ -178,7 +178,7 @@ namespace SlotsInstaller
             expandHint.MouseEnter += delegate { expandHint.ForeColor = Palette.Text; }; expandHint.MouseLeave += delegate { expandHint.ForeColor = Palette.Muted; };
             var captionRow = new Panel { Dock = DockStyle.Top, Height = 20 };
             captionRow.Controls.Add(caption); captionRow.Controls.Add(expandHint);
-            replacesLabel = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 24, Font = Palette.Strong, ForeColor = Palette.Text, AutoEllipsis = true, Text = "Checking…" };
+            replacesLabel = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 24, Font = Palette.Strong, ForeColor = Palette.Text, AutoEllipsis = true, Text = "" };
             replacesDetail = new Label { UseMnemonic = false, Dock = DockStyle.Top, Height = 20, Font = Palette.Tiny, ForeColor = Palette.Muted, AutoEllipsis = true };
             conflictView = new ConflictView { Dock = DockStyle.Fill }; conflictView.ShowReason = delegate(string why) { SetPageStatus(libraryPage, why, Palette.Accent); };
             replacesPanel.Controls.Add(conflictView); replacesPanel.Controls.Add(replacesDetail); replacesPanel.Controls.Add(replacesLabel); replacesPanel.Controls.Add(captionRow);
@@ -225,9 +225,9 @@ namespace SlotsInstaller
             replacesPanel.Visible = IsReplaceMode;
             if (IsReplaceMode)
             {
-                ReplaceEngine engine = null; string method = ReplaceMethods.Pak, detail = "";
-                try { engine = Engine(); method = engine.CurrentMethod(engine.LoadState()); } catch (Exception ex) { detail = ex.Message; }
+                string method = ReplaceMethods.Pak, detail = "";
                 LooseLoaderState loader = LooseLoader.State(config.GameRoot, out detail);
+                try { method = ModeMethod(Engine(), loader); } catch (Exception ex) { detail = ex.Message; }
                 // The health check and the banner say how to turn it on; the strip only gives the state.
                 modeNotice.Text = (forced ? forcedReplaceReason + " · " : "Overwrites game files · ") + ReplaceMethods.Label(method) + (method == ReplaceMethods.Loose ? (loader == LooseLoaderState.Enabled ? " (on)" : " (off)") : "");
                 if (forcedReplaceReason == PakModReason) modeNotice.Text = PakModReason;   // 2.5.6: the replace method plays no part
@@ -256,6 +256,18 @@ namespace SlotsInstaller
             UpdateLibraryUninstall();
             UpdateFooter();
             UpdateDestination();
+        }
+
+        // 1.0.12: the method the mode notice names, read again only when the state file, the method setting, the game
+        // folder, its tool files or the loose file loader changed. Reading replace-state.json (or detecting the tools) for
+        // every opened mod took about 50 ms of each open.
+        private string modeMethodKey, modeMethod;
+        private string ModeMethod(ReplaceEngine engine, LooseLoaderState loader)
+        {
+            var state = new FileInfo(engine.StatePath);
+            string key = config.GameRoot + "|" + (state.Exists ? state.Length + "@" + state.LastWriteTimeUtc.Ticks : "-") + "|" + engine.Settings.Method + "|" + ToolStatus.Stamp(config.GameRoot) + "|" + loader;
+            if (key != modeMethodKey) { modeMethodKey = null; modeMethod = engine.CurrentMethod(engine.LoadState()); modeMethodKey = key; }
+            return modeMethod;
         }
 
         // 1.0.8: the Extra outfit notice for REFramework, or null when it is fine (then Slotsloader's notice shows).
@@ -291,8 +303,9 @@ namespace SlotsInstaller
             }
             else if (ReviewPending)
             {
-                planSummary.Text = "Checking " + package.Name + "…"; planSummary.ForeColor = Palette.Text;
-                planDetails.Text = reviewStage.Length > 0 ? reviewStage : "Running the health check · Install enables when it's done";
+                // 1.0.12 (the user): only the result is shown; a check still running after ReviewSlowHint says "Checking…".
+                planSummary.Text = reviewSlow ? "Checking…" : ""; planSummary.ForeColor = Palette.Muted;
+                planDetails.Text = "";
             }
             else if (plan != null && plan.Errors.Count > 0)
             {
@@ -330,7 +343,7 @@ namespace SlotsInstaller
                 replacesLabel.Text = replacePlan.AffectsText;
                 replacesDetail.Text = replacePlan.Kind == "Pak" ? String.Join(", ", replacePlan.Files.Select(x => x.Path)) + " (after the patch PAKs already there)" : replacePlan.Kind == "Tool" ? (replacePlan.RootFiles == 1 ? "1 file goes" : replacePlan.RootFiles + " files go") + " to the game folder" : (replacePlan.Method == ReplaceMethods.Pak ? (replacePlan.RowsToInvalidate == 1 ? "1 PAK entry" : replacePlan.RowsToInvalidate + " PAK entries") + " invalidated" : "No PAK change (loose file loader)") + (replacePlan.Conflicts > 0 ? " · " + replacePlan.Conflicts + " shared with other replacements" : "");
             }
-            else { replacesLabel.Text = ReviewPending ? "Checking…" : "—"; replacesDetail.Text = editingReplacement != null ? "Updating '" + editingReplacement.Name + "' in place" : ""; }
+            else { replacesLabel.Text = ReviewPending ? "" : "—"; replacesDetail.Text = editingReplacement != null ? "Updating '" + editingReplacement.Name + "' in place" : ""; }
             
             UpdateConflictView();
             UpdateReplaceButtons();
