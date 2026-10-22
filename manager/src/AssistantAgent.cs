@@ -369,7 +369,7 @@ namespace SlotsInstaller
                 if (actions.Count > 0)
                 {
                     string summary = "Applied " + batch.Succeeded + " of " + actions.Count + " approved action" + (actions.Count == 1 ? "" : "s") + (batch.FailedAction != null ? "; stopped at the first failure" : batch.Cancelled ? "; the user cancelled the rest" : "") + ": "
-                        + String.Join("; ", actions.Select(a => "#" + a.Number + " " + a.Title + " — " + (a.State == AssistantActionState.Succeeded ? "done: " + a.Result.TrimEnd('.') : a.State == AssistantActionState.Failed ? "FAILED: " + a.Result.TrimEnd('.') : "not run")))
+                        + String.Join("; ", actions.Select(a => "#" + a.Number + " " + a.Title + " (" + (a.State == AssistantActionState.Succeeded ? "done: " + a.Result.TrimEnd('.') : a.State == AssistantActionState.Failed ? "FAILED: " + a.Result.TrimEnd('.') : "not run") + ")"))
                         + "." + (batch.Succeeded > 0 ? " Restart SF6 to see installed changes." : "");
                     lock (sync) appNotes.Add(summary);
                     Emit(AssistantEventKind.AppNote, summary);

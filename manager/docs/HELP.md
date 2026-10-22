@@ -223,7 +223,7 @@ If the Manager says some game entries "couldn't be proven", or the game still fa
 An SF6 update or a Steam file check puts the game's original files back, so your replacements stop showing in game. Extra outfits work differently: Slotsloader rebuilds its data from the game's own files at the next start.
 
 ### What you'll see
-- The Installed page shows a banner: "Game files changed — reapply replacements", or "SF6 was updated since replacements were applied — run a health check on them".
+- The Installed page shows a banner: "Game files changed. Reapply your replacements", or "SF6 was updated after your replacements were applied. Run a health check on them."
 - Every other page shows the same notice at the bottom right, with **Reapply**, **Show details** and ✕. ✕ hides it until something else changes.
 - **Launch SF6** warns you first. Click it again within 15 seconds to start anyway.
 

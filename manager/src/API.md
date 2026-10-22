@@ -163,7 +163,7 @@ All types in this section are internal unless noted.
 - Library uninstall: `MainForm.LinkedReplacements(source)`, `PopulateReplacementUninstall(item, source)`, `UninstallLibraryReplacement(row)` (the Installed page's `UninstallGameRow` flow), `ReplacementUninstallBlocker()`.
 - `ThemedMessageBox.Show([owner,] text, caption, buttons, icon[, defaultButton]) → DialogResult` replaces every `MessageBox.Show`; `ThemedMessageBox.Dark` (registry `AppsUseLightTheme`, `ForcedDark` for tests), `ThemedMessageForm` (layout for a given DPI, `CopyText`).
 
-## Settings and library — Core.cs
+## Settings and library (Core.cs)
 
 - `AppConfig`: `GameRoot`, `Libraries`, `SevenZipPath`; `CostumeRoot` derives `GameRoot/reframework/costume_mods`. `Load()` / `Save()` use `Data/settings.json`; `DataDir` is beside the executable. GUI view preferences are separate.
 - `Characters`: `ByCode` maps explicit ESF codes to canonical folder names; `Names` returns the roster; `Guess(string)` returns a filename fallback. Native identity takes precedence; preserve intentional code gaps and `A.K.I` spelling.
@@ -171,7 +171,7 @@ All types in this section are internal unless noted.
 - `Library.Scan(IEnumerable<string>[, string sevenZipPath]) → List<LibraryEntry>` scans direct ZIP/RAR/7Z/folder children, deduplicates paths and detects native IDs. Per-source/per-library failures produce diagnostic rows while retaining healthy results; whole-library rows have `Kind == "Library"`. Four workers inherit cancellation and report ordered progress. Failures are uncached. `IdentityCacheDirectory` redirects the optional cache; `ClearIdentityCache()` invalidates it. Archive stamps use path/size/mtime/tool metadata; folders rescan.
 - `Library.InstallState(entry, outfits) → LibraryInstallState` returns `None`, `Partial`, `Full` or `Disabled` from exact saved source paths and option-ID coverage. This is saved selection state, not a loader/game compatibility result.
 
-## Archive I/O — ArchiveSource.cs / ZipIntegrity.cs
+## Archive I/O (ArchiveSource.cs / ZipIntegrity.cs)
 
 Internal APIs:
 
@@ -184,7 +184,7 @@ Internal APIs:
 
 Readers reject unsafe paths, case-insensitive duplicates and links. Password entry, recursive inner archives and PAK composition are unsupported.
 
-## Packages and composition — PackageModels.cs / PackageReader.cs / Composition.cs
+## Packages and composition (PackageModels.cs / PackageReader.cs / Composition.cs)
 
 - `NativeAsset`: `EntryPath`, `DestinationPath` (one `natives/` prefix), `Size`.
 - `ModComponent`: `Id`, `Name`, `Description`, `Author`, `Version`, `AddonFor`, `ParentId`, `PreviewEntry`, `IsDummy`, `Metadata`, `Assets`; `IsChoiceGroup` recognizes an explicit choose-one description. Empty string is a valid root ID. `ParentId == null` means no component parent; `ParentId == ""` points to the root component.
@@ -199,7 +199,7 @@ Any nonempty selection activates implicit-root main/required groups, including n
 
 `CanInstall` validates composition/routes and mesh presence, not binary game compatibility. Missing local MDF may be a warning because the loader can supply vanilla materials.
 
-## Installation and results — Core.cs / LoaderResults.cs
+## Installation and results (Core.cs / LoaderResults.cs)
 
 - `InstallManifest`: format `sf6-slotsloader-installer-v1`, `Id`, `Name`, `Character`, `SourcePath`, `CreatedUtc`, `SelectedIds`, destination-path `Sha256`. Replacement retains the managed ID.
 - `Installer.Install(plan, costumeRoot, character, outfitName, sevenZipPath, replaceManaged) → InstallResult`: reinspects/recomposes, validates target identity and reviewed winning paths/sizes, stages verified bytes, then publishes. Existing destinations require explicit replacement and unchanged managed ownership. `InstallResult` contains `Folder`, `Message`, `FileCount`, `Bytes`.
@@ -210,7 +210,7 @@ Any nonempty selection activates implicit-root main/required groups, including n
 
 Source reinspection compares paths/sizes rather than a review-time hash; ZIP CRC establishes archive consistency and manifest SHA-256 describes staged bytes. Mutations share a named costume-root mutex across app instances in the current Windows session. `Installer.Uninstall`, `SetEnabled`, replacement and library uninstall retain their managed-only guards. Explicit Installed-page batch removal uses the separate `OutfitSetStore` scope below and may include manual entries. Original source mods, unselected entries and installed app Data remain protected. `Safety` enforces path/link rules. `Json.Write` atomically replaces application state; `Json.WriteNew` publishes reports without replacing existing files.
 
-## Named presets and selected removal — OutfitSetStore.cs
+## Named presets and selected removal (OutfitSetStore.cs)
 
 All types and entry points in this section are internal to the app:
 
@@ -245,7 +245,7 @@ Duplicate comparison is case-insensitive for relative paths and requires matchin
 
 All writes use the shared root mutex. Preparation is cancellable and reports file-byte progress through `OperationContext`; final publication/moves and reverse-order rollback are non-cancellable. Brief scanner/share locks receive bounded retries. Ordinary commit failures roll earlier moves back; if rollback is blocked, an error identifies retained staging payloads and they are not deleted by cleanup. There is no durable crash journal or automatic recovery guarantee for a killed process.
 
-## Assistant — Assistant*.cs / ClaudeClient.cs (internal, 1.6)
+## Assistant (Assistant*.cs / ClaudeClient.cs; internal, 1.6)
 
 - ClaudeClient(apiKey[, baseUrl]): Send(body, serverFallback, token) → ClaudeResponse (Status, RequestId, RawBody, exact RawContent, parsed Data).
   - MaxAttempts 3. A 429 waits for etry-after; 5xx/529 and network errors use jittered exponential backoff (BackoffBaseSeconds).

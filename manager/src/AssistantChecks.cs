@@ -456,7 +456,7 @@ namespace SlotsInstaller
                 Require(h.Conv.Send("install black barefoot for cammy and update boots", CancellationToken.None).Status == AssistantTurnStatus.Completed, "turn failed");
                 MockRequest req = h.Requests[1];
                 var q1 = ToolResult(req, "toolu_q1", false);
-                Require((string)q1["message"] == "Queued as action #1 for the user's approval — it has NOT run yet." && (string)q1["status"] == "queued", "Queued message wrong: " + q1["message"]);
+                Require((string)q1["message"] == "Queued as action #1 for the user's approval. It has NOT run yet." && (string)q1["status"] == "queued", "Queued message wrong: " + q1["message"]);
                 Require(((string)ToolResult(req, "toolu_q2", true)["error"]).Contains("Queued action #1 already installs"), "Queued duplicate name not detected.");
                 Require(((string)ToolResult(req, "toolu_q3", true)["error"]).Contains("Name collision"), "Existing name collision not detected.");
                 Require(((string)ToolResult(req, "toolu_q4", true)["error"]).Contains("installed manually"), "Manual replacement not refused.");

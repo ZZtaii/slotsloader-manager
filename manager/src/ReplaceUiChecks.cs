@@ -765,7 +765,7 @@ namespace SlotsInstaller
                 string extraId = picked().First(id => id.IndexOf("Extra", StringComparison.OrdinalIgnoreCase) >= 0);
                 Require(Get<FlatButton>(form, "installButton").Enabled, "fixture: Install not enabled: " + problems());
                 // 1. F5: the list is rescanned and the open mod reloads with its selection.
-                WriteEditZip(zip, "main v2 — longer content", "Extra", "Extra", "extra v2"); File.SetLastWriteTimeUtc(zip, DateTime.UtcNow.AddMinutes(1));
+                WriteEditZip(zip, "main v2, longer content", "Extra", "Extra", "extra v2"); File.SetLastWriteTimeUtc(zip, DateTime.UtcNow.AddMinutes(1));
                 int before = form.SourceReloads;
                 // The rescan also re-checks portraits once Filters was opened; this suite's fixture game must not leave a
                 // portrait cache in the shared Data (filter-real requires none).
@@ -794,7 +794,7 @@ namespace SlotsInstaller
                 Call(form, "InstallCurrent"); WaitIdle(form);
                 ReplaceMod mod = engine.LoadState().Mods.Single(m => String.Equals(m.SourcePath, zip, StringComparison.OrdinalIgnoreCase));
                 DateTime installedAt = LibraryUsage.ParseUtc(mod.InstalledUtc), edited = installedAt.AddSeconds(5);
-                WriteEditZip(zip, "main v5 — edited after install", "Extra v2", "Extra", "extra v5"); File.SetLastWriteTimeUtc(zip, edited);
+                WriteEditZip(zip, "main v5, edited after install", "Extra v2", "Extra", "extra v5"); File.SetLastWriteTimeUtc(zip, edited);
                 while (DateTime.UtcNow < edited.AddSeconds(1)) { Application.DoEvents(); Thread.Sleep(50); }
                 Call(form, "ShowPage", Get<Panel>(form, "installedPage")); Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
                 Require(form.SourceChanged(zip), "the installed copy is not marked Source changed");

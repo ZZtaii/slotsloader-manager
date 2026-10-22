@@ -385,7 +385,7 @@ Extra outfits (Slotsloader) are unchanged. Replace original installs a composed 
 - `Recover()` at startup, and before every change, finishes a committed journal (state generation ≥ journal) or rolls an uncommitted one back.
 - A file changed outside the app is refused on disable or uninstall. Reapply keeps a copy of it, then puts the installed version back.
 
-**Game updates.** `Status()` compares each held PAK's identity and checks that every zeroed row is still zero. It also checks deployed files' presence and size, and the base PAK identity since the last apply. The UI banner and `replace-status` report "Game files changed — reapply". `Reapply` does the following:
+**Game updates.** `Status()` compares each held PAK's identity and checks that every zeroed row is still zero. It also checks deployed files' presence and size, and the base PAK identity since the last apply. The UI banner and `replace-status` report "Game files changed. Reapply your replacements". `Reapply` does the following:
 - re-runs the fixers on stored files with the current game's type signatures;
 - drops rows recorded against an updated PAK layout, since the update already restored them;
 - re-zeroes rows and re-copies files.

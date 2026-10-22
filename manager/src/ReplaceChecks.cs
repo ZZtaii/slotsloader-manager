@@ -812,7 +812,7 @@ namespace SlotsInstaller
             // Same outfit, no shared files: information only, both stay installed.
             ReplacePlan c = Check(f, "modC");
             ReplaceConflict stack = c.ConflictList.Single(x => x.ModId == b.Id);
-            Require(stack.Kind == "stack" && !stack.CanUninstall && stack.Level == "info" && stack.Text == "Also on Cammy Outfit 2: 'Cammy Alt' (enabled, no shared files) — both stay installed.", "stack: " + stack.Kind + " " + stack.Text);
+            Require(stack.Kind == "stack" && !stack.CanUninstall && stack.Level == "info" && stack.Text == "Also on Cammy Outfit 2: 'Cammy Alt' (enabled, no shared files), so both stay installed.", "stack: " + stack.Kind + " " + stack.Text);
             // A disabled older mod is still named.
             f.Engine.SetEnabled(b.Id, false);
             ReplaceConflict disabled = Check(f, "modA").ConflictList.Single();

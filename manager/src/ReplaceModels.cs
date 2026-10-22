@@ -297,10 +297,10 @@ namespace SlotsInstaller
             get
             {
                 if (JournalPending) return "An interrupted change will be rolled back.";
-                if (NeedsReapply) return "Game files changed — reapply replacements" + (Details.Count > 0 ? " (" + Details[0] + ")" : "");
-                if (BackupsMissing > 0) return BackupsMissing + (BackupsMissing == 1 ? " backup is" : " backups are") + " missing — uninstall can't restore the original" + (BackupsMissing == 1 ? "" : "s") + " (" + FirstMissingBackup + ")";
-                if (StoredMissing > 0) return StoredMissing + " stored replacement cop" + (StoredMissing == 1 ? "y is" : "ies are") + " missing — reinstall " + (StoredMissing == 1 ? "that mod" : "those mods") + " (" + FirstMissingStored + ")";
-                if (BaseChanged) return "SF6 was updated since replacements were applied — run a health check on them.";
+                if (NeedsReapply) return "Game files changed. Reapply your replacements" + (Details.Count > 0 ? " (" + Details[0] + ")" : "");
+                if (BackupsMissing > 0) return BackupsMissing + (BackupsMissing == 1 ? " backup is" : " backups are") + " missing, so uninstalling can't restore the original" + (BackupsMissing == 1 ? "" : "s") + " (" + FirstMissingBackup + ")";
+                if (StoredMissing > 0) return StoredMissing + " stored replacement cop" + (StoredMissing == 1 ? "y is" : "ies are") + " missing. Reinstall " + (StoredMissing == 1 ? "that mod" : "those mods") + " (" + FirstMissingStored + ")";
+                if (BaseChanged) return "SF6 was updated after your replacements were applied. Run a health check on them.";
                 if (OrphanedRows > 0) return PakRepair.OrphanText(OrphanedRows) + ".";   // 2.4.2: the banner's Repair
                 if (OrphanCostumePaks.Count > 0) return LoaderCostumePak.OrphanText + ".";
                 if (LooseLoaderOff) return "Loose file loader off: SF6 ignores loose replaced files.";   // 2.4.1: the button says what to do

@@ -452,7 +452,7 @@ namespace SlotsInstaller
 
         internal static void Help()
         {
-            Console.WriteLine("Replace original commands — same engine and safety checks as the app window:");
+            Console.WriteLine("Replace original commands (the same engine and safety checks as the app window):");
             Console.WriteLine("  replace-plan <source> [--select <id> ...] [--game <SF6>] [--method loose|pak] [--json <new.json|->]   read-only health check");
             Console.WriteLine("  replace-install <source> [--select <id> ...] [--name <name>] --game <SF6> [--method loose|pak] [--yes | --no-loader]   loose method, loader off, natives files: --yes turns it on, --no-loader installs without; tool-only mods need neither");
             Console.WriteLine("  replace-status [--game <SF6>]        read-only: base PAK table hash, zeroed entries, natives folder, installed replacements, missing backups, moved-folder paths");

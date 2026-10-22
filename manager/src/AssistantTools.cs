@@ -629,7 +629,7 @@ namespace SlotsInstaller
             if (!workspace.Settings.AutoApply)
             {
                 var queued = new JsonObj().Add("status", "queued").Add("action_number", action.Number).Add("summary", action.Title)
-                    .Add("message", "Queued as action #" + action.Number + " for the user's approval — it has NOT run yet.");
+                    .Add("message", "Queued as action #" + action.Number + " for the user's approval. It has NOT run yet.");
                 if (action.Kind == AssistantActionKind.Install || action.Kind == AssistantActionKind.ReplaceInstall) queued.Add("file_count", action.FileCount).Add("size", Utilities.FriendlyBytes(action.Bytes));
                 if (action.Kind == AssistantActionKind.ReplaceInstall) { AddConflicts(queued, action.Conflicts); AddReplaces(queued, action.Replaces); }
                 queued.Add("mode", action.ModeLabel);

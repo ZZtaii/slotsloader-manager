@@ -464,7 +464,7 @@ namespace SlotsInstaller
             string facts = (c.Enabled ? "enabled" : "disabled") + (when.Length > 0 ? ", installed " + when : "") + ", " + N(c.TheirFiles, "file");
             int rest = c.TheirFiles - c.Shared;
             if (c.Kind == "stack")
-                return "Also on " + area + ": '" + c.ModName + "' (" + (c.Enabled ? "enabled" : "disabled") + ", no shared files) — both stay installed.";
+                return "Also on " + area + ": '" + c.ModName + "' (" + (c.Enabled ? "enabled" : "disabled") + ", no shared files), so both stay installed.";
             if (c.Kind == "files")
             {
                 string where = c.Areas.Count == 0 ? "" : " · " + String.Join(", ", c.Areas.Take(2).Select(ShortArea));

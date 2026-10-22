@@ -142,7 +142,7 @@ namespace SlotsInstaller
         private void DeleteSelected()
         {
             RecoveryEntry entry=Selected(); if (busy || entry==null) return;
-            string question="Permanently delete this copy?\n\n"+entry.Character+" — "+entry.Name+"\n"+Utilities.FriendlyBytes(entry.Bytes)+"\n\n"+entry.Folder+"\n\nThis can't be undone.";
+            string question="Permanently delete this copy?\n\n"+(String.IsNullOrEmpty(entry.Character) ? "" : entry.Character+": ")+entry.Name+"\n"+Utilities.FriendlyBytes(entry.Bytes)+"\n\n"+entry.Folder+"\n\nThis can't be undone.";
             if (ThemedMessageBox.Show(this,question,"Delete copy",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes) return;
             Run("Deleting…",true,delegate { if (entry.Replacement!=null) engine.DeleteRemoved(entry.Folder); else if (entry.Fluffy!=null) engine.DeleteFluffyRemoved(entry.Folder); else if (entry.Released!=null) engine.DropReleased(entry.Released.Path); else if (entry.Foreign!=null) engine.DeleteForeignCopy(entry.Foreign.Copy); else RecoveryStore.Delete(costumeRoot,entry); return true; },delegate(bool done) { Changed=true; if (!closeRequested) RefreshCopies(); });
         }

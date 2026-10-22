@@ -764,7 +764,7 @@ namespace SlotsInstaller
                 if (!String.IsNullOrEmpty(m.Affects) && row.Kind != "Tool") lines.Add("Replaces: " + m.Affects);
                 foreach (string note in m.Notes.Take(12)) lines.Add("• " + note);
                 lines.Add("");
-                foreach (ModFile f in m.Files.Take(80)) lines.Add(f.Path + (String.IsNullOrEmpty(f.Fixes) ? "" : "  — " + f.Fixes));
+                foreach (ModFile f in m.Files.Take(80)) lines.Add(f.Path + (String.IsNullOrEmpty(f.Fixes) ? "" : " (" + f.Fixes + ")"));
                 if (m.Files.Count > 80) lines.Add("… " + (m.Files.Count - 80) + " more");
             }
             installedHelp.Text = String.Join(Environment.NewLine, lines); installedHelp.Select(0, 0);

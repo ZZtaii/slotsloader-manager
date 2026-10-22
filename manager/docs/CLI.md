@@ -111,7 +111,7 @@ An archive or folder you dropped into `costume_mods` can hold several variants. 
 
 `loader-fetch` finds the one Slotsloader build the app installs (since 2.5.9 the newest published `loader-v*` release of ZZtaii/slotsloader-manager when the Manager was packaged; 2.4.3–2.5.8 `loader-v1.9.8`, 1.9.7 before):
 0. the copy bundled with the Manager (`Slotsloader\<asset>` beside the exe, 2.5.9) if it verifies;
-1. a file in a library (top level, any name) with that SHA-256 — only files of exactly that size are hashed;
+1. a file in a library (top level, any name) with that SHA-256 (only files of exactly that size are hashed);
 2. else `Data\downloads\<asset>` if it still verifies (a copy that doesn't is deleted);
 3. else it downloads it over HTTPS (system proxy, redirects only to HTTPS, 30 s time-out, Ctrl+C cancels) into `Data\downloads\<asset>.part`, stops if it grows past the pinned size, checks size and SHA-256 and only then renames it. `--no-download` skips this step.
 
