@@ -169,7 +169,7 @@ namespace SlotsInstaller
         private void LibrarySelectionEvent()
         {
             int count = modList.SelectedItems.Count, before = lastSelectionCount; lastSelectionCount = count;
-            if (count == 0 || busy || selectingMod || (Control.MouseButtons & MouseButtons.Right) != 0) return;
+            if (count == 0 || (busy && !packageLoading) || selectingMod || (Control.MouseButtons & MouseButtons.Right) != 0) return;   // 1.0.12: a pick during a mod's read waits as the next
             // One row picked from one row (or none), no queue open: open it at once, as always.
             if (count == 1 && before <= 1 && !BatchVisible && !selectionQueued)
             {
@@ -186,6 +186,7 @@ namespace SlotsInstaller
         private void LibrarySelectionSettled()
         {
             selectionQueued = false; bool picking = selectionPicking; selectionPicking = false;
+            if (packageLoading) { selectionAfterOpen = true; if (picking) selectionPicking = true; return; }   // 1.0.12: read again once the mod shows
             if (IsDisposed || busy || selectingMod) return;
             List<LibraryEntry> selected = modList.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag as LibraryEntry).Where(x => x != null).ToList();
             if (selected.Count >= 2) { ShowBatch(selected); return; }

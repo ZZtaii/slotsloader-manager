@@ -162,14 +162,18 @@ namespace SlotsInstaller
         // finished run applies only when its generation is still current, otherwise the latest request
         // starts. The app-wide busy state is never set, so the window stays usable.
         internal const int ReviewDelay = 300;
+        // 1.0.12 (the user: browse first, check later): the health check of a mod just opened waits until browsing
+        // settles. Option previews read meanwhile push it back (PostponeReview); pointing at Install or pressing Space
+        // starts it at once (StartReviewNow). While it runs the footer says nothing new; only a check still running after
+        // ReviewSlowHint shows "Checking…", without stage or percentage.
+        internal const int BrowseReviewDelay = 900, ReviewSlowHint = 1200;
         internal static int ReviewTestDelay;
-        private System.Windows.Forms.Timer reviewTimer;
-        private int reviewGeneration, appliedGeneration = -1;
-        private bool reviewRunning, openReportWhenReady, showFilesWhenReady, reviewScreenshotTaken;
+        private System.Windows.Forms.Timer reviewTimer, reviewSlowTimer;
+        private int reviewGeneration, appliedGeneration = -1, reviewDue;
+        private bool reviewRunning, reviewSlow, openReportWhenReady, showFilesWhenReady, reviewScreenshotTaken;
         private CancellationTokenSource reviewCancel;
         private PrepareCache checkCache;
         private ModPackage checkCachePackage;
-        private string reviewStage = "";
         internal int ReviewRuns, ReviewApplied, ReviewDiscarded;
         internal long LastReviewMilliseconds;
         internal string LastReviewSelection = "";
@@ -196,9 +200,11 @@ namespace SlotsInstaller
             if (reviewTimer != null) return;
             reviewTimer = new System.Windows.Forms.Timer { Interval = ReviewDelay };
             reviewTimer.Tick += delegate { reviewTimer.Stop(); ReviewTick(); };
+            reviewSlowTimer = new System.Windows.Forms.Timer { Interval = ReviewSlowHint };
+            reviewSlowTimer.Tick += delegate { reviewSlowTimer.Stop(); if (reviewRunning && !reviewSlow) { reviewSlow = true; UpdateFooter(); } };
             Disposed += delegate
             {
-                reviewTimer.Dispose();
+                reviewTimer.Dispose(); reviewSlowTimer.Dispose();
                 if (reviewCancel != null) try { reviewCancel.Cancel(); } catch (ObjectDisposedException) { }
                 if (checkCache != null) checkCache.Dispose();
             };
@@ -211,6 +217,22 @@ namespace SlotsInstaller
             if (reviewCancel != null) try { reviewCancel.Cancel(); } catch (ObjectDisposedException) { }
             EnsureReviewTimer();
             reviewTimer.Stop(); reviewTimer.Interval = Math.Max(1, delay); reviewTimer.Start();
+            reviewDue = Environment.TickCount + Math.Max(1, delay);
+        }
+
+        // An option preview read from the archive: a check not started yet waits until the reading stops.
+        private void PostponeReview(int delay)
+        {
+            if (!ReviewPending || reviewRunning || reviewTimer == null || !reviewTimer.Enabled || reviewDue - Environment.TickCount >= delay) return;
+            reviewTimer.Stop(); reviewTimer.Interval = delay; reviewTimer.Start();
+            reviewDue = Environment.TickCount + delay;
+        }
+
+        // Install is the next step (pointer on Install, Space): no reason to wait for browsing to settle.
+        internal void StartReviewNow()
+        {
+            if (IsDisposed || package == null || !ReviewPending || reviewRunning || busy || reviewTimer == null) return;
+            reviewTimer.Stop(); ReviewTick();
         }
 
         private void ReviewTick()
@@ -234,15 +256,16 @@ namespace SlotsInstaller
                 checkCache = new PrepareCache(); checkCachePackage = current;
             }
             PrepareCache cache = replace ? checkCache : null;
-            var cancel = new CancellationTokenSource(); reviewCancel = cancel; reviewRunning = true; ReviewRuns++; reviewStage = "";
+            var cancel = new CancellationTokenSource(); reviewCancel = cancel; reviewRunning = true; ReviewRuns++; reviewSlow = false;
+            reviewSlowTimer.Stop(); reviewSlowTimer.Start();
             UpdateFooter();
             if (screenshotFile != null && screenshotPage == "checking" && !reviewScreenshotTaken) { reviewScreenshotTaken = true; CaptureScreenshot(); }
-            var worker = new BackgroundWorker { WorkerReportsProgress = true };
+            var worker = new BackgroundWorker();
             worker.DoWork += delegate(object s, DoWorkEventArgs e)
             {
                 var clock = Stopwatch.StartNew();
                 using (InstallMetrics.Measure("automatic review to ready"))
-                using (OperationContext.Begin(cancel.Token, delegate(OperationProgress p) { worker.ReportProgress(0, p); }))
+                using (OperationContext.Begin(cancel.Token, null))   // 1.0.12: no stage text; a mod of 293 files used to repaint the footer per file
                 {
                     if (ReviewTestDelay > 0) Thread.Sleep(ReviewTestDelay);   // checks: keep a run in flight
                     OperationContext.ThrowIfCancellationRequested();
@@ -265,21 +288,12 @@ namespace SlotsInstaller
                     e.Result = new ReviewResult { Generation = generation, Package = current, Mode = mode, Selection = selection, Composition = composition, Health = health, Milliseconds = clock.ElapsedMilliseconds };
                 }
             };
-            ProgressChangedEventHandler progressed = null;
-            progressed = delegate(object s, ProgressChangedEventArgs e)
-            {
-                if (OffUiThread(delegate { progressed(s, e); })) return;
-                if (IsDisposed || generation != reviewGeneration) return;
-                var p = (OperationProgress)e.UserState;
-                reviewStage = p.Stage + (p.Total > 0 ? " · " + (int)Math.Max(0, Math.Min(100, p.Completed * 100.0 / p.Total)) + "%" : "…");
-                if (planDetails != null && ReviewPending) planDetails.Text = reviewStage;
-            };
-            worker.ProgressChanged += progressed;
             RunWorkerCompletedEventHandler finished = null;
             finished = delegate(object s, RunWorkerCompletedEventArgs e)
             {
                 if (OffUiThread(delegate { finished(s, e); })) return;
-                reviewRunning = false;
+                bool hinted = reviewSlow;
+                reviewRunning = false; reviewSlow = false; if (reviewSlowTimer != null) reviewSlowTimer.Stop();
                 if (reviewCancel == cancel) reviewCancel = null;
                 cancel.Dispose();
                 worker.Dispose();
@@ -299,7 +313,7 @@ namespace SlotsInstaller
                     var failed = new CompositionPlan { Package = current }; failed.Errors.Add("Health check failed: " + e.Error.Message);
                     ApplyReview(new ReviewResult { Generation = generation, Package = current, Mode = mode, Selection = selection, Composition = failed });
                 }
-                else ReviewDiscarded++;
+                else { ReviewDiscarded++; if (hinted) UpdateFooter(); }   // the next check starts quiet again
                 if (ReviewPending && reviewTimer != null && !reviewTimer.Enabled) { if (busy) { reviewTimer.Interval = 150; reviewTimer.Start(); } else StartReview(); }
             };
             worker.RunWorkerCompleted += finished;

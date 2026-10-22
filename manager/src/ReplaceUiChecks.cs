@@ -79,7 +79,7 @@ namespace SlotsInstaller
                         check("Extra outfit mode warns when Slotsloader is missing (1.0.8: after REFramework, which comes first)", delegate { SlotsLoaderNotice(form, f); });
                         check("REFramework (1.0.8): build date, commit and upscaler mark read from dinput8.dll; Extra outfit notice for missing, not started and out-of-date builds (an upscaler build is never old; an unknown date is fine); one click downloads the pinned nightly, verified, opened in Replace original; Install puts dinput8.dll in the game, a newer pin updates that record in place, uninstall puts the earlier dinput8.dll back", delegate { ReFrameworkFlow(form, f); });
                         check("Slotsloader offer (2.3.1, no questions in 2.4.1): only the pinned build: a library copy found by SHA-256 (a renamed SF6_SlotsLoader_v9.9.zip beside it is ignored), else a download (the click is the consent, no dialog) verified into Data\\downloads and opened in Replace original, then the cached copy; a 404 shows the reason and the release page", delegate { LoaderOffer(form, f); });
-                        check("automatic health check (2.0.1): Checking… then Ready without clicking; Install enables automatically; the button reads Report", delegate { AutoCheck(form, f, root); });
+                        check("automatic health check (2.0.1): Ready without clicking; Install enables automatically; the button reads Report (1.0.12: nothing in the footer until the result, the check waits for browsing to settle, one static Checking… only for a slow check)", delegate { AutoCheck(form, f, root); });
                         check("debounce and supersede (2.0.1): rapid changes start one run; a stale run is discarded and the last selection's result applies", delegate { Supersede(form, f); });
                         check("Install waits for a fresh result after a change; Report opens the current result (waits while checking)", delegate { InstallWaits(form, f); });
                         check("report dialog (2.0.1): dark title bar attributes, sized to its content, Re-check, conflicts section", delegate { ReportDialog(form, root); });
@@ -92,6 +92,7 @@ namespace SlotsInstaller
                         check("Extra outfit mode reviews automatically and notes a duplicate install (same source and options)", delegate { DuplicateExtra(form, f); });
                         check("Settings has no automatic-uninstall option", delegate { NoAutoUninstallSetting(form); });
                         check("root alternatives: empty initial choice, radio switching, Reset and saved all-five winner without a record rewrite; renders", delegate { RootChoiceUi(form, f, root); });
+                        check("browsing (1.0.12): opening a mod shows no progress bar or status text and keeps the list and options usable; the newest pick wins and stops the read in flight; the shown mod picked again keeps its ticks; the mod being read picked again after another pick still opens; Ctrl/Shift selection changes during a read decide what opens (one row, or the queue); read archives are kept until they change; the footer shows only the result; the health check waits for browsing to settle and StartReviewNow starts it; the next 7Z row is read ahead and opens from it", delegate { Browse(form, f, root); });
                         check("changed on disk (2.4.1): editing the open zip reloads it on F5, on window activation and before Install (selection kept by option id, else by name; mode and Install kept; status says so); a deleted source clears the inspector; the library index re-reads the edited archive; an installed copy shows Source changed and Reinstall applies the edit in place; no \"changed on disk\" problem reaches the user", delegate { SourceReload(form, f); });
                         check("saved options missing (2.4.2): a click on the footer reviews without them and clears the flag in Replace original and Extra outfit, like Health / Review files", delegate { FooterMissingOptions(form, f); });
                         check("removed copies (2.4.2): Settings → Game files & replacements says how many (the copies Restore original game files keeps for its Undo), their size and the keep rule (1.0.1: only while their Undo is available) under the store (no '(freed on uninstall)'), fits at 1232x640 and 1110x610; render at the device DPI; a new change ends the Undo and the copy is deleted", delegate { SettingsStoreLine(form, f, root); });
@@ -713,13 +714,17 @@ namespace SlotsInstaller
         private static void AutoCheck(MainForm form, ReplaceChecks.Fixture f, string root)
         {
             Call(form, "SetInstallMode", InstallModes.Replace, true);
-            MainForm.ReviewTestDelay = 900;
+            MainForm.ReviewTestDelay = MainForm.ReviewSlowHint + 600;   // the run stays in flight past the slow hint
             try
             {
                 Load(form, f, "modA");
-                Require(form.ReviewPending && Summary(form) == "Checking Cammy Colors…" && !Get<FlatButton>(form, "installButton").Enabled, "checking state: " + Summary(form));
+                Require(form.ReviewPending && Summary(form) == "" && Details(form) == "" && !Get<FlatButton>(form, "installButton").Enabled, "checking state (1.0.12: only the result is shown): " + Summary(form) + " / " + Details(form));
                 Require(!Get<bool>(form, "busy") && Get<OptionTree>(form, "componentTree").Enabled, "the check set the app-wide busy state");
+                Require(!form.ReviewRunning, "the health check started before browsing settled");
                 DateTime until = DateTime.UtcNow.AddSeconds(5); while (!form.ReviewRunning && DateTime.UtcNow < until) { Application.DoEvents(); Thread.Sleep(5); }
+                Require(form.ReviewRunning && Summary(form) == "", "a running check showed text before the slow hint: " + Summary(form));
+                until = DateTime.UtcNow.AddSeconds(5); while (form.ReviewRunning && Summary(form) == "" && DateTime.UtcNow < until) { Application.DoEvents(); Thread.Sleep(5); }
+                Require(Summary(form) == "Checking…" && Details(form) == "", "a slow check: one static Checking… without stage or percentage: " + Summary(form) + " / " + Details(form));
                 Render(form, Path.Combine(root, "library-replace-checking-" + form.DeviceDpi + ".png"));
             }
             finally { MainForm.ReviewTestDelay = 0; }
@@ -1261,7 +1266,7 @@ namespace SlotsInstaller
         {
             Call(form, "SetInstallMode", InstallModes.Slot, true);
             Load(form, f, "modB");
-            Require(form.ReviewPending && Summary(form).StartsWith("Checking"), "slot mode did not review automatically: " + Summary(form));
+            Require(form.ReviewPending && Summary(form) == "", "slot mode did not review automatically (1.0.12: the footer waits for the result): " + Summary(form));
             WaitReview(form);
             Require(Get<CompositionPlan>(form, "plan") != null && Summary(form).StartsWith("Ready to install"), "slot review: " + Summary(form));
             Get<ComboBox>(form, "targetCharacter").SelectedItem = "Cammy"; Get<PaddedTextField>(form, "outfitName").Text = "Alt Extra";
