@@ -301,19 +301,6 @@ ZIP files and folders work without 7-Zip. RAR and 7Z archives are read with 7-Zi
 - An archive that needs a password can't be opened. Extract it yourself and put the folder in one of your mod libraries.
 - While the library is being read, a row shows **Reading…**. Search `is:unreadable` to list the mods the Manager couldn't read.
 
-## Windows Defender flagged the Manager
-> A known false positive on new releases, and what to do about it.
-
-Windows Defender has flagged fresh Manager builds as `Trojan:Win32/Bearfoos.A!ml`. The `!ml` ending marks a guess by a cloud machine-learning model, not a match with known malware. This kind of detection can hit new files that few people have downloaded yet.
-
-### What to do
-- Download the Manager only from its official GitHub releases page (`ZZtaii/slotsloader-manager`). Updating from inside the app uses the same releases and checks each download's SHA-256 before using it.
-- Report the file to Microsoft as a false positive through Microsoft's malware file submission page. Once Microsoft clears it, the detection goes away.
-- If Defender removed a file, download the release again after the report is cleared. Replace the program files and keep your `Data` folder.
-- If you are unsure, ask on Discord before running it.
-
-!! DON'T: Don't turn Windows Defender off, and don't add a broad exclusion for the Manager. Report the false positive instead.
-
 ## Restore and undo
 > What each undo and restore option does, from the lightest to the full reset.
 
