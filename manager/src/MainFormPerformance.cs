@@ -58,6 +58,7 @@ namespace SlotsInstaller
         private CancellationTokenSource filterMatchCancel;
         private string filterMatchRequest;
         private bool customMatchesPending;
+        private bool listAwaitsMatches;   // 1.0.11: the pending matches decide the rows (a chip on Only/Hide, a draft)
 
         private bool EnsureCustomMatches(List<CustomFilter> required)
         {

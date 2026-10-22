@@ -415,8 +415,8 @@ namespace SlotsInstaller
         internal static int ColorRef(Color color) { return color.R | (color.G << 8) | (color.B << 16); }
         internal static void Apply(Form form)
         {
-            form.HandleCreated += delegate { ApplyTo(form.Handle); };
-            if (form.IsHandleCreated) ApplyTo(form.Handle);
+            form.HandleCreated += delegate { ApplyTo(form.Handle); FirstEraseFill.Attach(form); };
+            if (form.IsHandleCreated) { ApplyTo(form.Handle); FirstEraseFill.Attach(form); }
         }
         internal static void ApplyTo(IntPtr window)
         {
@@ -440,6 +440,40 @@ namespace SlotsInstaller
         internal static void Round(Form form)
         {
             form.HandleCreated += delegate { try { int round = RoundCorners; DwmSetWindowAttribute(form.Handle, CornerAttribute, ref round, 4); } catch (DllNotFoundException) { } catch (EntryPointNotFoundException) { } };
+        }
+    }
+
+    // 1.0.11: never a white frame. When a window is shown, Windows erases each control with its own colour, except the
+    // custom-drawn ones (they skip the erase and wait for their first paint), whose area stayed the bare white surface
+    // until then. The window's first visible erase now fills its whole client area, under its controls too, with its
+    // background colour, so a control that has not painted yet shows the app's dark background instead.
+    internal sealed class FirstEraseFill : NativeWindow
+    {
+        [DllImport("user32.dll")] private static extern IntPtr GetDCEx(IntPtr window, IntPtr clip, int flags);
+        [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+        private readonly Form form;
+        private bool done;
+        private FirstEraseFill(Form form) { this.form = form; AssignHandle(form.Handle); }
+        internal static void Attach(Form form)
+        {
+            var fill = new FirstEraseFill(form);
+            form.HandleDestroyed += delegate { GC.KeepAlive(fill); };   // the handle table holds subclasses weakly
+        }
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_ERASEBKGND = 0x14, DCX_CACHE = 0x2, DCX_CLIPSIBLINGS = 0x10;
+            if (m.Msg == WM_ERASEBKGND && !done && IsWindowVisible(Handle))
+            {
+                done = true;
+                IntPtr dc = GetDCEx(Handle, IntPtr.Zero, DCX_CACHE | DCX_CLIPSIBLINGS);   // no DCX_CLIPCHILDREN: under the controls too
+                if (dc != IntPtr.Zero)
+                {
+                    try { using (Graphics g = Graphics.FromHdc(dc)) using (var brush = new SolidBrush(form.BackColor)) g.FillRectangle(brush, form.ClientRectangle); }
+                    finally { ReleaseDC(Handle, dc); }
+                }
+            }
+            base.WndProc(ref m);
         }
     }
 

@@ -148,7 +148,7 @@ namespace SlotsInstaller
             if (libraryCount == null) return;
             int shown = captionShown < 0 ? library.Count : captionShown;
             string text = library.Count == 0 ? "MOD LIBRARY" : shown == library.Count ? library.Count + " MODS" : shown + " OF " + library.Count + " MODS";
-            if (customMatchesPending) text += " · FILTERING…";
+            if (customMatchesPending && listAwaitsMatches) text += " · FILTERING…";
             if (Indexing)
             {
                 if (identityApplied < identityTotal) text += " · READING " + Math.Min(99, identityApplied * 100 / Math.Max(1, identityTotal)) + "%";

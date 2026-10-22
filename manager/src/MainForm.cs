@@ -222,6 +222,7 @@ namespace SlotsInstaller
             ApplyDpiMetrics();
             DpiChanged += delegate { BeginInvoke((MethodInvoker)delegate { pagesLaidOut.Clear(); ApplyDpiMetrics(); }); };
             UpdateLocation();
+            CloakUntilPainted();   // 1.0.11 (MainFormStartPaint.cs): its Shown hook must come before the welcome's
             WireViewPersistence();
             WireDropTarget();
             WireUninstallKeys();   // 2.5.2 (MainFormKeys.cs)
@@ -1597,7 +1598,15 @@ namespace SlotsInstaller
             bool countCustom = FiltersOpen;
             var required = custom.Where((f, i) => countCustom || customState[i] != CustomFilterState.Off).ToList();
             if (draft != null) required.Add(draft);
-            if (!EnsureCustomMatches(required)) { UpdateCustomDraftStatus(); UpdateLibraryCaption(); return; }
+            listAwaitsMatches = false;
+            if (!EnsureCustomMatches(required))
+            {
+                // 1.0.11: with every chip Off and no draft the matches only count the chips. List the mods now; the
+                // chip counts follow when matching ends (it runs ApplyFilters again, and the same rows stay put).
+                listAwaitsMatches = draft != null || customState.Any(s => s != CustomFilterState.Off);
+                if (listAwaitsMatches) { UpdateCustomDraftStatus(); UpdateLibraryCaption(); return; }
+                countCustom = false;
+            }
             var customHit = new bool[customCount]; var customTotals = new int[customCount];
             libraryRanks.Clear();
             var ranked = new List<KeyValuePair<LibraryEntry, int>>();
