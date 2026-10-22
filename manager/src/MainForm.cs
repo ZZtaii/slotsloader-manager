@@ -747,7 +747,7 @@ namespace SlotsInstaller
             // A small gap between the two icon buttons.
             Panel iconGap = new Panel { Dock = DockStyle.Right, Width = 4 };
             selectedLabel = new Label { UseMnemonic=false, Dock = DockStyle.Fill, Text = "0 selected", TextAlign = ContentAlignment.MiddleRight, ForeColor = Palette.Muted, Font = Palette.Small, Padding = new Padding(0, 0, 9, 0) };
-            choiceTabs.Controls.Add(selectedLabel); choiceTabs.Controls.Add(BuildResetOptions()); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); choiceTabs.Controls.Add(collapse); choiceTabs.Controls.Add(iconGap); choiceTabs.Controls.Add(expand); choiceTabs.Controls.Add(filesTab); choiceTabs.Controls.Add(componentTab);
+            choiceTabs.Controls.Add(selectedLabel); choiceTabs.Controls.Add(BuildResetOptions()); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); choiceTabs.Controls.Add(collapse); choiceTabs.Controls.Add(iconGap); choiceTabs.Controls.Add(expand); choiceTabs.Controls.Add(filesTab); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Left, Width = Rhythm.Related }); choiceTabs.Controls.Add(componentTab);   // 1.0.11: a gap between the two tabs (the user)
             componentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
             componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font("Segoe UI", 10.5F) };
             componentTree.EmptyText = "Choose a mod from the library, or drop an archive (ZIP, RAR, 7Z) or mod folder anywhere in this window.\n\nCtrl+O opens an archive · Ctrl+F searches the library";
