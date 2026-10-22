@@ -28,7 +28,7 @@ namespace SlotsInstaller
             new Topic { Tab = "As standalone", Title = "Use it on its own", Lead = "Let this Manager handle every mod, replacements included.", Highlight = 2, Badge = "Automatic fixes", Points = new[] {
                 "Uninstall everything in your external mod manager first. Replace original stays off until it's empty.",
                 "Replace original overwrites the game's files. When two mods change the same outfit, the one higher on the Installed page wins.",
-                "Every replacement gets a health check, and mods made for an older SF6 are fixed as they install: colour files, texture tables and old file names. Mods installed by other managers don't get these fixes." } },
+                "Every replacement gets a health check, and mods made for an older SF6 are fixed as they install: colour files, texture tables and old file names. Only mods installed with SLM get these fixes." } },
             new Topic { Tab = "Repair", Title = "When something breaks", Lead = "Start with the smallest fix.", Points = new[] {
                 "After an SF6 update, a \"Game files changed\" banner appears. Click Reapply to put your replacements back.",
                 "Game won't start? Gear → Restore → Remove this Manager's mods. You can undo it.",
