@@ -37,6 +37,10 @@ Read this before changing layout, navigation, option selection, previews, or scr
 
 These cover the custom screens. **Edit options** loads a managed outfit back into the existing Options view; it is not another editor window. Archive/executable pickers and folder browsers are standard Windows dialogs. Since 2.4.1 there are no confirmations for recoverable actions (they act at once with Undo) and errors are inline; the few remaining questions (permanent deletes, another tool's changes) use the themed message box (2.0.3; standard MessageBoxes before). A successful install uses a green checked status line rather than a popup. Taking screenshots does not require installing, disabling, removing, or replacing an outfit.
 
+## 1.0.12 Empty library note, 2026-10-23
+
+Source: [MainFormLibraryEmpty.cs](../src/MainFormLibraryEmpty.cs). When a scan finds no mods, the library list gives way to a note in its place: **No mod libraries yet** / "Add the folder where you keep your mods." or **No mods found** / "Your mod libraries are empty.", then an accent link (**Add a mod library →** / **Open Mod libraries →**) that opens Settings → General with **Add…** focused. With no libraries the footer reads "No mod libraries yet · add one in gear → Settings". The list returns after a scan that finds mods.
+
 ## 1.0.11 Leftover patch PAKs, 2026-10-22
 
 Source: [ReplaceLeftoverPaks.cs](../src/ReplaceLeftoverPaks.cs), [MainFormLeftoverPaks.cs](../src/MainFormLeftoverPaks.cs). Checks: `--replace-check` ("leftover patch PAKs (1.0.11)"), `--replace-ui-check` ("leftover PAK row (1.0.11)").

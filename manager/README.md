@@ -18,6 +18,7 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
   - **Faster changes with many replacements:** Enable, Disable, priority moves and installs are several times quicker when many files are installed (about 1,000 files in tests: 9.5 s → 1.8 s).
   - **Missing saved options are said, not skipped.** When a mod no longer has an option you saved, Reinstall and preset restore stop and ask you to review its options instead of installing without it.
   - The first start after updating reads each library archive once in the background ("READING n%") to find the PAK mods.
+  - An empty Mod library says so, with a link to add your mods folder in Settings → Mod libraries.
 
 - 1.0.11:
   - **RAR and 7Z mods work without installing 7-Zip.** When 7-Zip isn't installed, the Manager downloads its own (7-Zip 26.00, SHA-256 checked) the first time a RAR or 7Z needs it, into its `7-Zip` folder. An installed 7-Zip is still used first, also when it isn't in `C:\Program Files\7-Zip`, unless it is older than the Manager's copy (7-Zip before 15.06 can't open RAR5 archives). In Settings, the 7-Zip field can stay empty ("Automatic"); the line under it says which 7-Zip is used. A path you chose yourself still comes first; the `C:\Program Files\7-Zip\7z.exe` that earlier versions saved by default counts as Automatic.

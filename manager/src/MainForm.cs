@@ -700,7 +700,7 @@ namespace SlotsInstaller
                 uninstallItem.Visible = LinkedOutfits(source).Count > 0 || (LinkedReplacements(source).Count == 0 && LinkedFluffy(source).Count == 0);
             };
             modList.Disposed += delegate { modMenu.Dispose(); };
-            browser.Controls.Add(modList); browser.Controls.Add(filters);
+            browser.Controls.Add(modList); browser.Controls.Add(BuildLibraryEmpty()); browser.Controls.Add(filters);   // 1.0.12 (23 Oct): in place of an empty list (MainFormLibraryEmpty.cs)
             split.Panel1.Controls.Add(browser);
             split.Panel2.Controls.Add(detailPanel = BuildDetail());
             split.Panel2.Controls.Add(BuildBatchPanel()); batchPanel.BringToFront();   // 1.0.6: hidden until several mods are selected
@@ -978,8 +978,8 @@ namespace SlotsInstaller
             Panel libActions = new Panel { Dock = DockStyle.Fill, Margin=Padding.Empty };
             FlatButton addLibrary = Button("Add…", false, 118, delegate { using (FolderBrowserDialog d = new FolderBrowserDialog { Description = "Choose a library folder, such as your mod manager's Mods folder" }) { if (d.ShowDialog(this) == DialogResult.OK && !settingsLibraries.Items.Cast<string>().Contains(d.SelectedPath, StringComparer.OrdinalIgnoreCase)) { libraryFolderStatus.Remove(d.SelectedPath); settingsLibraries.Items.Add(d.SelectedPath); settingsLibraries.SelectedIndex = settingsLibraries.Items.Count - 1; } } });
             removeLibraryButton = Button("Remove", false, 118, delegate { if (settingsLibraries.SelectedIndex >= 0) { int index = settingsLibraries.SelectedIndex; settingsLibraries.Items.RemoveAt(index); if (settingsLibraries.Items.Count > 0) settingsLibraries.SelectedIndex = Math.Min(index, settingsLibraries.Items.Count - 1); } removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0; });
-            removeLibraryButton.Enabled = false;
-            
+            removeLibraryButton.Enabled = false; addLibraryButton = addLibrary;
+
             addLibrary.Dock = DockStyle.Top; removeLibraryButton.Dock = DockStyle.Top;
             addLibrary.Height = 32; removeLibraryButton.Height = 32;
             libActions.Controls.Add(removeLibraryButton); libActions.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 }); libActions.Controls.Add(addLibrary);
@@ -1551,11 +1551,12 @@ namespace SlotsInstaller
                 library = result.Entries; LibraryNames.Apply(library); installed = result.Installed; UseRemovedUsage(result.Removed); changedSources = result.Changed ?? changedSources; ApplyGameRows(result.Game); UpdateModeUi();
                 quietFilters++; try { filterPanel.SetLibraries(libraries); } finally { quietFilters--; }   // a library removed in Settings loses its tile and selection
                 ApplyFilters(); FillInstalled(); UpdateLibraryUninstall();
+                libraryScanned = true; UpdateLibraryEmpty();   // 1.0.12 (23 Oct)
                 if (toTop && librarySort == LibrarySortKey.Added && !librarySortAscending && modList.Items.Count > 0) modList.EnsureVisible(0);
                 StartIndexing(result.Pending, result.NamesPending);   // 1.0.6: two background passes (MainFormIndexing.cs)
                 // A game update or PAK-method install since the last read changes the PAK identity: re-check.
                 if (portraitsRequested) EnsurePortraits(true);
-                SetPageStatus(libraryPage, LibraryFoundText(library.Count, libraries.Length) + (package == null ? " · drop an archive or folder to open it" : ""));
+                SetPageStatus(libraryPage, libraries.Length == 0 ? "No mod libraries yet · add one in gear → Settings" : LibraryFoundText(library.Count, libraries.Length) + (package == null ? " · drop an archive or folder to open it" : ""));
                 // 2.4.3: nothing is compiled in; when Steam didn't reveal SF6 on the first start, say where to set it.
                 if (String.IsNullOrWhiteSpace(config.GameRoot)) SetPageStatus(libraryPage, "SF6 game folder not found. Choose it in gear → Settings → Game folder.", Palette.Accent);
                 ClearPageStatus(installedPage);

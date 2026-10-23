@@ -2,6 +2,7 @@
 
 ## 1.0.12: installation, options, search and browsing
 
+- An empty Mod library no longer shows a blank list (added to the 1.0.12 download on 23 Oct). With no mod libraries it says to add your mods folder, with a link to Settings → Mod libraries (Add… focused); libraries without mods say so with the same link. The footer names where to add a library.
 - Replacement operations reuse each PAK layout hash within one reconciliation. Live file verification, path checks, ownership, journaling and recovery still run. See [measurements and validation](INSTALL-IMPROVEMENTS.md); the measured improvement is from generated fixtures, not an in-game install.
 - Root alternatives with the same bundle metadata and complete file destinations now appear in a choose-one group, with no guessed default. Queue installation skips an unresolved choice instead of selecting the first option. Independent components and partial overlays keep their existing behavior.
 - Older saved selections containing several equivalent alternatives restore the last effective choice when the composed winning files remain identical, with an explanatory note. Opening a mod does not rewrite its installed record.
