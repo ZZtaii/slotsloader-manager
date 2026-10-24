@@ -463,6 +463,11 @@ namespace SlotsInstaller
                 typeof(Control).GetMethod("OnMouseDown", PrivateInstance).Invoke(grid, new object[] { new MouseEventArgs(MouseButtons.Left, 1, box.Left + box.Width / 2, box.Top + box.Height / 2, 0) });
                 Require(grid.Cards[cammy].Selected && Names(form) == "Cammy Barefoot, Cammy Boots, Cammy Scripted", "click did not select Cammy");
                 Require(grid.HitTest(new Point(box.Left + 1, box.Top + 1)) != cammy, "the slanted corner must not hit the card");
+                // A click picks one fighter (browsing), Ctrl+click adds one.
+                int juri = grid.Cards.ToList().FindIndex(c => c.Code == "016");
+                grid.Activate(juri, false); Require(grid.Selected.SetEquals(new[] { "016" }) && Names(form) == "Juri Jacket", "a click on Juri must replace Cammy: " + Names(form));
+                grid.Activate(cammy, false, true); Require(grid.Selected.SetEquals(new[] { "009", "016" }), "Ctrl+click must add Cammy");
+                grid.Activate(cammy, false); Require(grid.Selected.SetEquals(new[] { "009" }), "a click on one of several selected fighters must keep only it");
                 grid.Activate(cammy + 2, true);
                 Require(grid.Selected.SetEquals(grid.Cards.Skip(cammy).Take(3).Select(c => c.Code)), "Shift+click range");
                 AccessibleObject acc = grid.AccessibilityObject;

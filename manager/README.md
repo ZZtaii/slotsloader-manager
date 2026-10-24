@@ -1,12 +1,12 @@
 # Slotsloader Manager 1.0.12
 
-A Windows mod manager for your ZIP, RAR, 7Z and folder mod libraries. It is built for Street Fighter 6 (more games are planned), and installs SF6 mods two ways:
+A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
-- by **replacing the original** files the way external mod managers do, including tool mods such as REFramework scripts, plugins and Slotsloader itself.
+- by **replacing the original** files, like other mod managers, including tool mods such as REFramework scripts and plugins.
 
-The title bar shows **Slotsloader Manager · 1.0.12**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
+**Start:** unzip anywhere and open **Slotsloader Manager.exe** (keep the other files beside it). Windows already has what it needs (.NET Framework 4.8); 7-Zip for RAR/7Z is downloaded by itself if you don't have it. The game and your mod manager's libraries are found for you; change them in Settings.
 
-Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .NET Framework 4.8 runs it. RAR/7Z are read with 7-Zip: your installed 7-Zip if you have one, otherwise the Manager's own copy, downloaded into its `7-Zip` folder when first needed. No Blender, Node or Python is required. Game/library paths are in Settings. Your existing mod manager libraries are configured by default. `Data` beside the executable holds settings/cache/view preferences and the backups of replaced game files; preserve it during updates. The whole app folder (executables + `Data`) can be moved or renamed; see **Move the app folder** below.
+**Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
 

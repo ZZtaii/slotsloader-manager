@@ -1,5 +1,9 @@
 # Development history
 
+## Unreleased
+
+- A click on a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; it used to add each one to the filter. Ctrl+click adds a fighter, Shift+click a range, and clicking the selected fighter again clears it.
+
 ## 1.0.12: installation, options, search and browsing
 
 - An empty Mod library no longer shows a blank list (added to the 1.0.12 download on 23 Oct). With no mod libraries it says to add your mods folder, with a link to Settings → Mod libraries (Add… focused); libraries without mods say so with the same link. The footer names where to add a library.
