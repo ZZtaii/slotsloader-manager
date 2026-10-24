@@ -180,11 +180,13 @@ Presets live in `reframework/.slotsloader-installer-presets`; keep that folder i
 
 ## Move the app folder
 
-Close the app (and any `Slotsloader CLI.exe` run) first. Then move the whole folder, `Data` included, for example from `<old Manager folder>` to `<Manager folder>`. **Move** it (or copy it and then delete or rename the old folder): while the old folder still exists, the records keep using the files there. Do not move `Data` on its own or leave parts behind.
+Close the app first. Then move the whole folder, `Data` included, for example from `<old Manager folder>` to `<Manager folder>`. **Move** it (or copy it and then delete or rename the old folder): while the old folder still exists, the records keep using the files there. Do not move `Data` on its own or leave parts behind.
 
-When it next starts, the app finds the recorded backups and stored copies in the moved `Data`, writes one line about it to `Data\log.txt` and saves the new locations (the window does this at start-up; the CLI with its next change). To check first, run `Slotsloader CLI.exe replace-status` from the new folder: it changes no record and should show `Backups: N recorded, 0 missing on disk`, `Relocation:` naming the previous folder, and `Status: OK`. A backup that is really missing is reported with its path and is never silently dropped. A custom replacement store outside `Data` (Settings) stays where it is. External mod manager folders, the game folder and your mod libraries are not affected by the move.
+When it next starts, the app finds the recorded backups and stored copies in the moved `Data`, writes one line about it to `Data\log.txt` and saves the new locations. A backup that is really missing is reported with its path and is never silently dropped. A custom replacement store outside `Data` (Settings) stays where it is. External mod manager folders, the game folder and your mod libraries are not affected by the move.
 
 ## Check without opening the app
+
+`Slotsloader CLI.exe` is not in the download; build it from this source (`build.ps1` builds both executables) and put it beside the Manager.
 
 ```powershell
 & '.\Slotsloader CLI.exe' list-options '<library>\My mod.zip'
@@ -193,11 +195,11 @@ When it next starts, the app finds the recorded backups and stored copies in the
 & '.\Slotsloader CLI.exe' replace-status --game '<game folder>'
 ```
 
-Bundles need `--select '<ID>'` options or `--selection '<JSON file>'`. `test-loader` additionally takes an explicit native loader, installed game root and **new separate sandbox**. See **CLI.md** for the full command and report scope. Tests never need to install into the live game.
+Bundles need `--select '<ID>'` options or `--selection '<JSON file>'`. `test-loader` additionally takes an explicit native loader, installed game root and **new separate sandbox**. See [docs/CLI.md](docs/CLI.md) for the full command and report scope. Tests never need to install into the live game.
 
 Extra outfit mode composes loose native costumes. Replace mode installs a PAK-only source as the next patch PAK. Lua and DLL tool mods install in Replace original mode. A composition/integrity pass does not prove appearance in-game. Native loader tests also omit DLC PAKs and report that limitation. No loader/game update is included.
 
-Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks; see docs/DEVELOPMENT.md). See **VALIDATION.txt** for this build's checks. The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
+Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks; see docs/DEVELOPMENT.md). The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
 
 ## License and third-party notices
 

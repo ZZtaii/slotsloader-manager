@@ -3,6 +3,7 @@
 ## Unreleased
 
 - A click on a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; it used to add each one to the filter. Ctrl+click adds a fighter, Shift+click a range, and clicking the selected fighter again clears it.
+- The download no longer carries the command-line tool (`Slotsloader CLI.exe`, its config and `CLI.md`) or `VALIDATION.txt`: only the Manager, its config, the README and the bundled Slotsloader. The CLI is still built from the source. The updater accepts releases without them and removes the old copies (kept for rollback). 1.0.13 still ships them so 1.0.12 and older can update to it. Help: rolling back a Manager update is `Slotsloader Manager.exe update-rollback`.
 
 ## 1.0.12: installation, options, search and browsing
 

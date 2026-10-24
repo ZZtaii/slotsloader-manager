@@ -147,7 +147,7 @@ namespace SlotsInstaller
                     string ok = SafeHttp.Download(server.Base + "/dl/loader-v1.9.8/SF6_SlotsLoader_v1.9.8.zip", dir, "x.zip", l198.Length, Sha(l198), "Downloading", "published");
                     Require(File.ReadAllBytes(ok).SequenceEqual(l198), "good download");
                 });
-                check("Manager self-update on a temporary copy of the app folder: stage (7 files, FileVersion = tag), apply (previous kept, running exes renamed to .old, new files in), .old cleanup and log at the next start, update-rollback, a failure mid-copy restores every file, a missing folder is refused; nothing else in Data changes", delegate { SelfUpdate(root); });
+                check("Manager self-update on a temporary copy of the app folder: stage (Manager exe, config and README, FileVersion = tag), apply (previous kept, running exes renamed to .old, new files in, 1.0.13: the CLI, CLI.md and VALIDATION.txt of an older install removed), .old cleanup and log at the next start, update-rollback, a failure mid-copy restores every file, a missing folder is refused; nothing else in Data changes", delegate { SelfUpdate(root); });
                 check("1.0.11 bundled 7-Zip in a self-update: the 7-Zip folder is accepted only complete (7z.exe, 7z.dll, License.txt); apply replaces the app's copy (old files as .old, kept in previous); a failure after it puts the old copy back; .old removed at the next start; rollback restores it; a release without 7-Zip leaves the app's copy alone", delegate { SelfUpdateSevenZip(root); });
                 check("1.0.11 which 7-Zip runs: an existing Settings path first, else an installed 7-Zip (with its 7z.dll), else the Manager's own copy beside the exe; with none usable (or only one too old for RAR5) the first RAR/7Z read fetches the pinned 7-Zip (a failed fetch says why in RAR/7Z errors and Settings and waits before trying again; a good one replaces a broken 7-Zip folder and a real 7Z archive is listed through it); an installed 7-Zip older than the Manager's copy gives way to it (same, newer or unknown version keeps its place)", delegate { SevenZipChoice(root, server); });
                 check("window: toasts for both products (bottom-right above the status strip, stacked), keyboard reachable with accessible names, no tooltips; Skip this version is remembered; ✕ comes back at the next check; a 404 background check is silent and logged; Settings → Updates reports up to date and the 404 reason", delegate { Window(root, server, catalogue, l197, l198); });
@@ -189,7 +189,7 @@ namespace SlotsInstaller
             string app = Path.Combine(root, "app-copy"), data = Path.Combine(root, "app-copy", "Data");
             Directory.CreateDirectory(data);
             string here = AppDomain.CurrentDomain.BaseDirectory;
-            foreach (string f in AppUpdater.ReleaseFiles)
+            foreach (string f in AppUpdater.AppFiles)   // 1.0.13: an older install still has the CLI, CLI.md and VALIDATION.txt
             {
                 string from = Path.Combine(here, f);
                 if (File.Exists(from)) File.Copy(from, Path.Combine(app, f)); else File.WriteAllText(Path.Combine(app, f), "old " + f);
@@ -199,7 +199,7 @@ namespace SlotsInstaller
             string bundle = Path.Combine(app, LoaderRelease.BundleFolder); Directory.CreateDirectory(bundle);
             File.WriteAllText(Path.Combine(bundle, "SF6_SlotsLoader_v1.9.7.zip"), "old loader");
             var before = Snapshot(app);
-            // The release: the same exe (FileVersion of this build), new docs.
+            // The release: the same exe (FileVersion of this build), new README, no CLI (1.0.13).
             string version = UpdateCheck.Running.ToString(3), zip = Path.Combine(root, "Slotsloader-Manager-" + version + "-portable.zip");
             using (var archive = ZipFile.Open(zip, ZipArchiveMode.Create))
                 foreach (string f in AppUpdater.ReleaseFiles)
@@ -234,7 +234,8 @@ namespace SlotsInstaller
             // The real apply.
             AppUpdater.Apply(app, staged, AppUpdater.PreviousDir(data), "old", version, data);
             Require(File.ReadAllText(Path.Combine(app, "README.md")) == "new README.md" && File.Exists(Path.Combine(app, "Slotsloader Manager.exe.old")) && File.Exists(Path.Combine(app, "Slotsloader CLI.exe.old")), "apply: new files and .old exes");
-            Require(AppUpdater.ReleaseFiles.All(f => File.Exists(Path.Combine(AppUpdater.PreviousDir(data), f))) && LoaderRelease.HashFile(Path.Combine(AppUpdater.PreviousDir(data), "README.md")) == before["README.md"], "the previous version was not kept");
+            Require(AppUpdater.OptionalFiles.All(f => !File.Exists(Path.Combine(app, f))), "apply: the CLI, CLI.md and VALIDATION.txt left in the app folder: " + String.Join(", ", AppUpdater.OptionalFiles.Where(f => File.Exists(Path.Combine(app, f)))));
+            Require(AppUpdater.AppFiles.All(f => File.Exists(Path.Combine(AppUpdater.PreviousDir(data), f))) && LoaderRelease.HashFile(Path.Combine(AppUpdater.PreviousDir(data), "README.md")) == before["README.md"], "the previous version was not kept");
             Require(Directory.GetFiles(bundle).Select(Path.GetFileName).SequenceEqual(new[] { "SF6_SlotsLoader_v1.10.0.zip" }) && File.ReadAllText(Path.Combine(bundle, "SF6_SlotsLoader_v1.10.0.zip")) == "new loader"
                 && File.ReadAllText(Path.Combine(AppUpdater.PreviousDir(data), LoaderRelease.BundleFolder, "SF6_SlotsLoader_v1.9.7.zip")) == "old loader", "bundled loader: the new zip replaces the old one, which is kept for rollback: " + String.Join(", ", Directory.GetFiles(bundle).Select(Path.GetFileName)));
             Require(File.ReadAllText(Path.Combine(data, "settings.json")) == "{}" && File.ReadAllText(Path.Combine(data, "replace-state.json")) == "{\"keep\":true}", "other Data content changed");
@@ -248,13 +249,14 @@ namespace SlotsInstaller
             AppUpdater.CleanupAfterUpdate(app, data);
         }
 
-        // 1.0.11: a release zip of this build's exes and configs, placeholder docs, and the given extra entries.
+        // 1.0.11: a release zip of this build's exes and configs, placeholder docs, and the given extra entries
+        // (all 7 files, as the releases for the updaters of 1.0.12 and older carry them).
         private static string ReleaseZip(string root, string app, string name, params string[] extra)
         {
             string zip = Path.Combine(root, name);
             using (var archive = ZipFile.Open(zip, ZipArchiveMode.Create))
             {
-                foreach (string f in AppUpdater.ReleaseFiles)
+                foreach (string f in AppUpdater.AppFiles)
                 {
                     if (f.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".config", StringComparison.OrdinalIgnoreCase)) archive.CreateEntryFromFile(Path.Combine(app, f), f);
                     else using (var w = new StreamWriter(archive.CreateEntry(f).Open())) w.Write("new " + f);
@@ -268,7 +270,7 @@ namespace SlotsInstaller
         {
             string app = Path.Combine(root, "app-7z"), data = Path.Combine(app, "Data"), here = AppDomain.CurrentDomain.BaseDirectory;
             Directory.CreateDirectory(data);
-            foreach (string f in AppUpdater.ReleaseFiles)
+            foreach (string f in AppUpdater.AppFiles)
             {
                 string from = Path.Combine(here, f);
                 if (File.Exists(from)) File.Copy(from, Path.Combine(app, f)); else File.WriteAllText(Path.Combine(app, f), "old " + f);
