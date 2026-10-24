@@ -1,5 +1,9 @@
 # Development history
 
+## 1.0.14: a smaller download
+
+- Same code as 1.0.13. The release zip is the Manager exe, its config, README.md and Slotsloader\ (tools\Package-Release.ps1 packs the CLI, CLI.md and VALIDATION.txt only before 1.0.14; VALIDATION.txt now goes beside the zip). Published as a pre-release while 1.0.13 stays Latest, so 1.0.12 and older reach 1.0.13 first.
+
 ## 1.0.13: one fighter per click, no CLI in later downloads
 
 - A click on a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; it used to add each one to the filter. Ctrl+click adds a fighter, Shift+click a range, and clicking the selected fighter again clears it.

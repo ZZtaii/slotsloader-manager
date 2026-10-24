@@ -1,4 +1,4 @@
-# Slotsloader Manager 1.0.13
+# Slotsloader Manager 1.0.14
 
 A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
@@ -9,6 +9,9 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 **Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
+
+- 1.0.14:
+  - **A smaller download.** The download is now just the Manager, its `.exe.config`, this README and the bundled Slotsloader: the command-line tool (`Slotsloader CLI.exe`), its guide and `VALIDATION.txt` are no longer in it. Updating removes the old copies; they are kept with the previous version for rollback. Versions before 1.0.13 can't update to 1.0.14 by themselves: update to 1.0.13 first, or download it by hand.
 
 - 1.0.13:
   - **One fighter per click.** Clicking a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; before, each click added another fighter. Ctrl+click adds one, Shift+click a range, and clicking the selected fighter again clears it.
