@@ -11,6 +11,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 ## What changed
 
 - 1.0.14:
+  - **Loader package compatibility.** Manually imported upstream Slots Loader packages declaring `SlotsloaderContract=2` or later are accepted. Packages with an older, missing or invalid contract remain refused. Install Slotsloader still installs the bundled Slotsloader Fork 1.10.4.
   - **A smaller download.** The download is now just the Manager, its `.exe.config`, this README and the bundled Slotsloader: the command-line tool (`Slotsloader CLI.exe`), its guide and `VALIDATION.txt` are no longer in it. Updating removes the old copies; they are kept with the previous version for rollback. Versions before 1.0.13 can't update to 1.0.14 by themselves: update to 1.0.13 first, or download it by hand.
 
 - 1.0.13:

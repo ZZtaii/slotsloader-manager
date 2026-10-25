@@ -53,9 +53,9 @@ namespace SlotsInstaller
             foreach (string e in composition.Errors) plan.Items.Add(new HealthItem("error", e));
             foreach (string w in composition.Warnings) plan.Items.Add(new HealthItem("info", w));
             if (composition.Package.RootFilesIgnored > 0) plan.Items.Add(new HealthItem("info", "Skipped " + N(composition.Package.RootFilesIgnored, "file") + " outside the mod's option folders."));
-            // 1.0.1: only the Manager's own Slotsloader (LoaderCostumePak.IsUpstreamBuild).
+            // Accept the fork or an upstream package declaring Manager contract 2 or later.
             PlannedFile plugin = composition.Files.Values.FirstOrDefault(f => String.Equals(PakHash.Normalize(f.Asset.DestinationPath).TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase));
-            if (plugin != null && plugin.Component != null && LoaderCostumePak.IsUpstreamBuild(plugin.Component.Name, plugin.Component.Version, plugin.Component.Author))
+            if (plugin != null && plugin.Component != null && !LoaderCostumePak.HonoursContract(plugin.Component) && LoaderCostumePak.IsUpstreamBuild(plugin.Component.Name, plugin.Component.Version, plugin.Component.Author))
                 plan.Items.Add(new HealthItem("error", "This is upstream's Slots Loader" + (String.IsNullOrEmpty(plugin.Component.Version) ? "" : " " + plugin.Component.Version) + ", not the Manager's Slotsloader Fork. Install the fork instead: Settings → Install Slotsloader " + UpdateCheck.ShortVersion(LoaderRelease.Pin.Version) + "."));
             ReplaceState state = engine.LoadState();
             // This state is read-only throughout Prepare. Build the lookup once
