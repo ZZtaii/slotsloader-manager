@@ -89,7 +89,7 @@ namespace SlotsInstaller
             string loaderPart = loader != null ? "Slotsloader " + loader.Version + " (you have " + UpdateCheck.ShortVersion(installed) + ")"
                 : installed != null ? "Slotsloader " + UpdateCheck.ShortVersion(installed)
                 : "Slotsloader not installed by the Manager" + (r.Loader != null ? " (newest " + r.Loader.Version + ")" : "");
-            if (LinuxPlatform.IsLinux) return "Linux package " + running + " · " + loaderPart + ". Update the app through its Linux installer.";
+            if (LinuxPlatform.IsLinux) return "Linux package " + running + " · " + loaderPart + ". App updates are checked at launch.";
             string managerPart = "Manager " + (manager != null ? manager.Version + " (you have " + running + ")" : running);
             int updates = (loader != null ? 1 : 0) + (manager != null ? 1 : 0);
             string lead = updates == 2 ? "Updates available" : updates == 1 ? "Update available" : installed != null ? "Up to date" : "Manager up to date";
@@ -255,13 +255,27 @@ namespace SlotsInstaller
             settingsCheckUpdates = Button("Check now", false, 110, delegate { RunUpdateCheck(true); });
             settingsCheckUpdates.Height = 32; settingsCheckUpdates.Font = Palette.Small; settingsCheckUpdates.Margin = Padding.Empty; settingsCheckUpdates.AccessibleName = "Check for updates now";
             var row = new Panel { Height = 32 }; settingsCheckUpdates.Dock = DockStyle.Left; row.Controls.Add(settingsCheckUpdates); add(row);
+            if (LinuxPlatform.IsLinux)
+            {
+                settingsCheckUpdates.Text = "Check loader";
+                var linuxUpdate = Button("Check Linux app updates…", false, 235, delegate
+                {
+                    if (busy) { SetPageStatus(currentPage, "Wait for the current task to finish.", Palette.Red); return; }
+                    if (assistantPage != null && (assistantPage.Running || assistantPage.Applying)) { SetPageStatus(currentPage, "Wait for the Assistant to finish.", Palette.Red); return; }
+                    try { LinuxPlatform.RequestUpdate(); Close(); } catch (Exception error) { Error(error); }
+                });
+                linuxUpdate.Height = 32; linuxUpdate.Font = Palette.Small; linuxUpdate.Dock = DockStyle.Right;
+                linuxUpdate.Name = "linuxAppUpdate";
+                linuxUpdate.AccessibleDescription = "Closes Manager, checks the Linux release and reopens Manager. Installs only with your OK.";
+                row.Controls.Add(linuxUpdate);
+            }
             add(Rhythm.Gap(Rhythm.AfterAction));
             settingsUpdateResult = new NoteLabel { Height = 26, MinLines = 1, ForeColor = Palette.Text, Font = Palette.Small, Name = "settingsUpdateResult" };
             add(settingsUpdateResult);
             settingsUpdateSkipped = new NoteLabel { Height = 0, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdateSkipped" };
             add(settingsUpdateSkipped);
             add(Rhythm.Gap(Rhythm.Group));
-            add(new NoteLabel { Height = LinuxPlatform.IsLinux ? 52 : 26, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdatePrivacy", Text = "Checks GitHub (" + LoaderPin.Repo + ") once a day. Nothing installs without your OK." + (LinuxPlatform.IsLinux ? " Update the app using its Linux installer; Slotsloader updates work here." : "") });
+            add(new NoteLabel { Height = LinuxPlatform.IsLinux ? 78 : 26, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdatePrivacy", Text = "Checks GitHub (" + LoaderPin.Repo + ") once a day. Nothing installs without your OK." + (LinuxPlatform.IsLinux ? " Linux app updates are checked at launch; Check Linux app updates closes and reopens Manager. Loader updates work here. This Linux beta uses its own test-release channel." : "") });
             panel.Controls.Add(column);
             return panel;
         }

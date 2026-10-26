@@ -1,7 +1,13 @@
 # Development history
 
+## 1.0.13: one fighter per click, no CLI in later downloads
+
+- A click on a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; it used to add each one to the filter. Ctrl+click adds a fighter, Shift+click a range, and clicking the selected fighter again clears it.
+- The download no longer carries the command-line tool (`Slotsloader CLI.exe`, its config and `CLI.md`) or `VALIDATION.txt`: only the Manager, its config, the README and the bundled Slotsloader. The CLI is still built from the source. The updater accepts releases without them and removes the old copies (kept for rollback). 1.0.13 still ships them so 1.0.12 and older can update to it. Help: rolling back a Manager update is `Slotsloader Manager.exe update-rollback`.
+
 ## 1.0.12: installation, options, search and browsing
 
+- An empty Mod library no longer shows a blank list (added to the 1.0.12 download on 23 Oct). With no mod libraries it says to add your mods folder, with a link to Settings → Mod libraries (Add… focused); libraries without mods say so with the same link. The footer names where to add a library.
 - Replacement operations reuse each PAK layout hash within one reconciliation. Live file verification, path checks, ownership, journaling and recovery still run. See [measurements and validation](INSTALL-IMPROVEMENTS.md); the measured improvement is from generated fixtures, not an in-game install.
 - Root alternatives with the same bundle metadata and complete file destinations now appear in a choose-one group, with no guessed default. Queue installation skips an unresolved choice instead of selecting the first option. Independent components and partial overlays keep their existing behavior.
 - Older saved selections containing several equivalent alternatives restore the last effective choice when the composed winning files remain identical, with an explanatory note. Opening a mod does not rewrite its installed record.

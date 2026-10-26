@@ -45,6 +45,11 @@ class SetupError(Exception):
     pass
 
 
+class Relaunch(Exception):
+    def __init__(self, root, arguments):
+        self.root, self.arguments = root, arguments
+
+
 def data_home():
     return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))).expanduser()
 
@@ -309,7 +314,8 @@ def install_shortcut(root):
     text = ("[Desktop Entry]\nType=Application\nVersion=1.0\nName=SlotsLoader Manager\n"
             "Comment=Manage Street Fighter 6 mods\nTerminal=false\nCategories=Game;Utility;\n"
             "StartupNotify=true\nExec=" + command + "\nIcon=" + str(icon) + "\n"
-            "Actions=GameSetup;Setup;Repair;Diagnostics;\n\n[Desktop Action GameSetup]\nName=Steam game setup\nExec="
+            "Actions=Update;GameSetup;Setup;Repair;Diagnostics;\n\n[Desktop Action Update]\nName=Check for Linux app updates\nExec="
+            + command + " --update\n\n[Desktop Action GameSetup]\nName=Steam game setup\nExec="
             + command + " --game-setup\n\n[Desktop Action Setup]\nName=Choose game and mod folders\nExec="
             + command + " --configure\n\n[Desktop Action Repair]\nName=Repair compatibility runtime\nExec="
             + command + " --repair\n\n[Desktop Action Diagnostics]\nName=Save diagnostic report\nExec="
@@ -822,6 +828,8 @@ def main(argv=None):
     parser.add_argument("--install", type=Path, help="Install an extracted, checksummed Linux package")
     parser.add_argument("--configure", action="store_true")
     parser.add_argument("--repair", action="store_true")
+    parser.add_argument("--update", action="store_true", help="Check for a complete Linux package update")
+    parser.add_argument("--skip-update", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--diagnostics", action="store_true")
     parser.add_argument("--game-setup", action="store_true")
     parser.add_argument("--wine", help="Advanced: existing Wine executable")
@@ -859,6 +867,12 @@ def main(argv=None):
                 if not args.headless:
                     subprocess.Popen(["xdg-open", str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return 0
+            resume = (["--wine", args.wine, "--prefix", str(args.prefix)] if args.wine and args.prefix else [])
+            if args.update or not (args.skip_update or args.install or args.headless or args.configure or args.repair or args.wine):
+                from updater import check_and_install
+                if check_and_install(root, dialog, sys.modules[__name__], manual=args.update):
+                    # Unwind the native session lock before executing the newly installed launcher.
+                    raise Relaunch(root, ["--skip-update"] + resume)
             if args.configure or not state.get("configured"):
                 if args.headless:
                     raise SetupError("Complete graphical folder setup before using --headless.")
@@ -898,9 +912,16 @@ def main(argv=None):
                             preferred_game=game, preferred_library=libraries[0] if libraries else None) as bridge:
                 process, script = start_app(root, launch_state, bridge, args.wine, selected_prefix)
                 try:
-                    return wait_session(process, bridge, script, dialog=dialog)
+                    code = wait_session(process, bridge, script, dialog=dialog)
                 finally:
                     hold_until_manager_stopped(dialog)
+                requested_update = bridge.update_requested
+            if requested_update and code == 0:
+                raise Relaunch(root, ["--update"] + resume)
+            return code
+    except Relaunch as restart:
+        os.execv(sys.executable, [sys.executable, str(restart.root / "linux/launcher.py")] + restart.arguments)
+        return 1
     except Exception as exc:
         message = str(exc)
         if dialog:

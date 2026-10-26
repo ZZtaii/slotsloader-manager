@@ -165,7 +165,7 @@ Presets live in `reframework\.slotsloader-installer-presets` in the game folder.
 
 Once a day the Manager checks its official GitHub releases for a new Manager or Slotsloader. When there is one, a notice appears at the bottom right with **Update**, **What's new**, **Skip this version** and ✕. Nothing installs until you click **Update**.
 
-- **Manager update:** downloads the release, checks its SHA-256, replaces the program files and restarts. Your settings and records in `Data` stay. The previous version is kept, and `Slotsloader CLI.exe update-rollback` puts it back.
+- **Manager update:** downloads the release, checks its SHA-256, replaces the program files and restarts. Your settings and records in `Data` stay. The previous version is kept: with the Manager closed, run `& '.\Slotsloader Manager.exe' update-rollback` in PowerShell in its folder to put it back.
 - **Slotsloader update:** offered for a Slotsloader the Manager installed. It goes through the health check and installs over the old one at the same priority. Close SF6 first.
 
 **Settings → Updates** has **Check automatically (daily)**, **Include test builds** (pre-releases) and **Check now**.
@@ -332,10 +332,9 @@ If another tool replaced or deleted a file the Manager installed, uninstalling o
 > Where the Manager keeps its data, and what it puts in the game folder.
 
 ### The Manager's folder
-- `Slotsloader Manager.exe` and `Slotsloader CLI.exe`, each with its `.exe.config` beside it.
+- `Slotsloader Manager.exe`, with its `.exe.config` beside it, and `README.md`.
 - `7-Zip`: the 7-Zip copy used for RAR and 7Z archives.
 - `Slotsloader`: the Slotsloader build the Manager installs, so installing it works offline.
-- `CLI.md`: the command-line guide.
 - `Data`: your settings and records (below). Keep it when you update.
 
 You can move or rename the whole folder, `Data` included, while the Manager is closed. Never move `Data` on its own.
@@ -362,7 +361,7 @@ Open it with **Settings → General → Open Data folder**.
 ## Command line
 > Check and manage mods without opening the window.
 
-`Slotsloader CLI.exe` sits beside the Manager and uses the same `Data` folder, settings and safety checks. Run it from PowerShell in the Manager's folder, for example `& '.\Slotsloader CLI.exe' replace-status`. The full guide is `CLI.md`, beside the exe.
+`Slotsloader CLI.exe` is not in the download: build it from the source on GitHub (`build.ps1`) and put it beside the Manager. It uses the same `Data` folder, settings and safety checks. Run it from PowerShell in the Manager's folder, for example `& '.\Slotsloader CLI.exe' replace-status`. The full guide is `docs/CLI.md` in the source.
 
 ### Useful commands
 - `list-options <mod>`: the mod's option IDs, defaults and file counts.
@@ -391,7 +390,6 @@ Open it with **Settings → General → Open Data folder**.
 - For extra outfits, Slotsloader's log: `SF6_CostumeLoader.log` in the game folder. Lines starting with `WARN` or `ERROR`, and the `check:` lines, show what it found and repaired.
 - For a replacement, the Health report (click **Health**) or a screenshot of it.
 - For a banner on the Installed page, click its text to see every detail. Ctrl+C copies them.
-- The output of `Slotsloader CLI.exe replace-status`, which describes your game files without changing anything.
 
 Before you post, remove anything personal from paths, such as your Windows user name.
 

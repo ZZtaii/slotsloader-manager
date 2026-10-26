@@ -17,7 +17,7 @@ namespace SlotsInstaller
     internal static class LinuxPlatform
     {
         internal const string Unavailable = "Linux integration is unavailable. Close this window and start Slotsloader Manager using its Linux launcher. Further changes are blocked until the connection is restored.";
-        internal const string UpdateMessage = "Update the Linux package using its installer; the Windows update cannot update Linux integration. Your Data folder is kept.";
+        internal const string UpdateMessage = "Use Check Linux app updates in Settings or the application menu. Updates keep your Data and compatibility runtime together.";
         internal static bool? TestLinux;
         internal static Func<string, string, Dictionary<string, object>, Dictionary<string, object>> TestRequest;
         private static readonly bool wine = DetectWine();
@@ -139,6 +139,7 @@ namespace SlotsInstaller
         internal static void OpenUrl(string url)
         { Request("POST", "/open", new Dictionary<string, object> { { "url", url } }); }
         internal static void Launch() { Request("POST", "/launch", new Dictionary<string, object>()); }
+        internal static void RequestUpdate() { Request("POST", "/update", new Dictionary<string, object>()); }
         internal static void Trash(string path)
         { Request("POST", "/trash", new Dictionary<string, object> { { "path", Path.GetFullPath(path) } }); }
 

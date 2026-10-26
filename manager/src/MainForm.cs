@@ -305,7 +305,7 @@ namespace SlotsInstaller
             }
             // Invisible pages are docked only when first shown. Apply their
             // splitter minimums after they have a real client extent.
-            if(librarySplit.Width>=Px(952)) {librarySplit.SplitterWidth=Px(12);librarySplit.Panel1MinSize=Px(220);librarySplit.Panel2MinSize=Px(720);RestoreSplitter(librarySplit,Px(libraryLogicalWidth));}
+            if(librarySplit.Width>=Px(LinuxPlatform.IsLinux ? 962 : 952)) {librarySplit.SplitterWidth=Px(12);librarySplit.Panel1MinSize=Px(LinuxPlatform.IsLinux ? 230 : 220);librarySplit.Panel2MinSize=Px(720);RestoreSplitter(librarySplit,Px(libraryLogicalWidth));}
             if(installedSplit.Width>=Px(768)) {installedSplit.SplitterWidth=Px(18);installedSplit.Panel1MinSize=Px(460);installedSplit.Panel2MinSize=Px(290);RestoreSplitter(installedSplit,Px(installedLogicalWidth));}
             componentTree.ItemHeight=Px(32); componentTree.Indent=Px(18);
             foreach(var list in new[]{modList,installedList,fileList,batchList})   // 1.0.6: the queue list too
@@ -557,7 +557,7 @@ namespace SlotsInstaller
         {
             Panel page = new Panel { Dock = DockStyle.Fill };
 
-            SplitContainer split = new SplitContainer { Size = new Size(1180, 680), Dock = DockStyle.Fill, SplitterDistance = 250, SplitterWidth = 12, BackColor = Palette.Background, Panel1MinSize = 220, Panel2MinSize = 720, FixedPanel = FixedPanel.Panel1 };
+            SplitContainer split = new SplitContainer { Size = new Size(1180, 680), Dock = DockStyle.Fill, SplitterDistance = 250, SplitterWidth = 12, BackColor = Palette.Background, Panel1MinSize = LinuxPlatform.IsLinux ? 230 : 220, Panel2MinSize = 720, FixedPanel = FixedPanel.Panel1 };
             librarySplit=split;
             Panel browser = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(10) };
             // 2.4.1: row 2 is the sort strip (LibrarySort.cs): 20 px chips and the Rhythm.Related gap to the list.
@@ -700,7 +700,7 @@ namespace SlotsInstaller
                 uninstallItem.Visible = LinkedOutfits(source).Count > 0 || (LinkedReplacements(source).Count == 0 && LinkedFluffy(source).Count == 0);
             };
             modList.Disposed += delegate { modMenu.Dispose(); };
-            browser.Controls.Add(modList); browser.Controls.Add(filters);
+            browser.Controls.Add(modList); browser.Controls.Add(BuildLibraryEmpty()); browser.Controls.Add(filters);   // 1.0.12 (23 Oct): in place of an empty list (MainFormLibraryEmpty.cs)
             split.Panel1.Controls.Add(browser);
             split.Panel2.Controls.Add(detailPanel = BuildDetail());
             split.Panel2.Controls.Add(BuildBatchPanel()); batchPanel.BringToFront();   // 1.0.6: hidden until several mods are selected
@@ -978,8 +978,8 @@ namespace SlotsInstaller
             Panel libActions = new Panel { Dock = DockStyle.Fill, Margin=Padding.Empty };
             FlatButton addLibrary = Button("Add…", false, 118, delegate { using (FolderBrowserDialog d = new FolderBrowserDialog { Description = "Choose a library folder, such as your mod manager's Mods folder" }) { if (d.ShowDialog(this) == DialogResult.OK && !settingsLibraries.Items.Cast<string>().Contains(d.SelectedPath, StringComparer.OrdinalIgnoreCase)) { libraryFolderStatus.Remove(d.SelectedPath); settingsLibraries.Items.Add(d.SelectedPath); settingsLibraries.SelectedIndex = settingsLibraries.Items.Count - 1; } } });
             removeLibraryButton = Button("Remove", false, 118, delegate { if (settingsLibraries.SelectedIndex >= 0) { int index = settingsLibraries.SelectedIndex; settingsLibraries.Items.RemoveAt(index); if (settingsLibraries.Items.Count > 0) settingsLibraries.SelectedIndex = Math.Min(index, settingsLibraries.Items.Count - 1); } removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0; });
-            removeLibraryButton.Enabled = false;
-            
+            removeLibraryButton.Enabled = false; addLibraryButton = addLibrary;
+
             addLibrary.Dock = DockStyle.Top; removeLibraryButton.Dock = DockStyle.Top;
             addLibrary.Height = 32; removeLibraryButton.Height = 32;
             libActions.Controls.Add(removeLibraryButton); libActions.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 }); libActions.Controls.Add(addLibrary);
@@ -1551,11 +1551,12 @@ namespace SlotsInstaller
                 library = result.Entries; LibraryNames.Apply(library); installed = result.Installed; UseRemovedUsage(result.Removed); changedSources = result.Changed ?? changedSources; ApplyGameRows(result.Game); UpdateModeUi();
                 quietFilters++; try { filterPanel.SetLibraries(libraries); } finally { quietFilters--; }   // a library removed in Settings loses its tile and selection
                 ApplyFilters(); FillInstalled(); UpdateLibraryUninstall();
+                libraryScanned = true; UpdateLibraryEmpty();   // 1.0.12 (23 Oct)
                 if (toTop && librarySort == LibrarySortKey.Added && !librarySortAscending && modList.Items.Count > 0) modList.EnsureVisible(0);
                 StartIndexing(result.Pending, result.NamesPending);   // 1.0.6: two background passes (MainFormIndexing.cs)
                 // A game update or PAK-method install since the last read changes the PAK identity: re-check.
                 if (portraitsRequested) EnsurePortraits(true);
-                SetPageStatus(libraryPage, LibraryFoundText(library.Count, libraries.Length) + (package == null ? " · drop an archive or folder to open it" : ""));
+                SetPageStatus(libraryPage, libraries.Length == 0 ? "No mod libraries yet · add one in gear → Settings" : LibraryFoundText(library.Count, libraries.Length) + (package == null ? " · drop an archive or folder to open it" : ""));
                 // 2.4.3: nothing is compiled in; when Steam didn't reveal SF6 on the first start, say where to set it.
                 if (String.IsNullOrWhiteSpace(config.GameRoot)) SetPageStatus(libraryPage, "SF6 game folder not found. Choose it in gear → Settings → Game folder.", Palette.Accent);
                 ClearPageStatus(installedPage);

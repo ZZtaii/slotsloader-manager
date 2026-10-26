@@ -142,6 +142,13 @@ namespace SlotsInstaller
                         Call(form, "ShowPage", Get<Panel>(form, "settingsPage")); Call(form, "LoadSettingsFields");
                         Get<ListBox>(form, "settingsLibraries").SelectedIndex = 0; Pump(100);
                         Capture(form, root, "05-settings-1280x800", externalCapture, report);
+                        Call(form, "ShowUpdatesTab"); Pump(100);
+                        if (LinuxPlatform.IsLinux)
+                        {
+                            var update = form.Controls.Find("linuxAppUpdate", true).Single();
+                            Require(update.Visible && update.Parent.ClientRectangle.Contains(update.Bounds), "Linux update button does not fit.");
+                        }
+                        Capture(form, root, "05b-updates-1280x800", externalCapture, report);
 
                         Call(form, "ShowAssistant");
                         var assistant = Get<AssistantPage>(form, "assistantPage");
@@ -172,7 +179,14 @@ namespace SlotsInstaller
                         SizeWindow(form, 1280, 800, externalCapture); Pump(150);
                         Require(form.ClientSize.Width >= 1100 && form.ClientSize.Height >= 600, "Resizing back lost usable content space.");
                         report.Add("PASS: window resize preserves usable layout; actual native bounds are recorded for every capture.");
-                        form.Close();
+                        if (externalCapture && LinuxPlatform.IsLinux)
+                        {
+                            Call(form, "ShowPage", Get<Panel>(form, "settingsPage")); Call(form, "ShowUpdatesTab"); Pump(100);
+                            ((Button)form.Controls.Find("linuxAppUpdate", true).Single()).PerformClick(); Pump(100);
+                            Require(form.IsDisposed, "Linux update action did not close the idle window.");
+                            report.Add("PASS: Linux app update action hands off to the authenticated native session and closes the idle app.");
+                        }
+                        else form.Close();
                     }
                 }
                 report.Add("ALL PASS");

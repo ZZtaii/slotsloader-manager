@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import struct
 import tarfile
+import zipfile
 import time
 import types
 import unittest
@@ -42,7 +43,20 @@ class PackageTests(unittest.TestCase):
             self.skipTest("Set SLOTSLOADER_TEST_PACKAGE for a packaged install rehearsal")
         extracted = self.base / "extracted"
         extracted.mkdir()
-        with tarfile.open(package) as archive:
+        if zipfile.is_zipfile(package):
+            import updater
+            path = Path(package)
+            with zipfile.ZipFile(path) as archive:
+                names = archive.namelist()
+                version = names[0].split('/')[0].removeprefix('SlotsLoader-Manager-')
+                self.assertFalse(any(Path(name).name in ('Slotsloader CLI.exe', 'CLI.md', 'VALIDATION.md', 'package-linux.py') for name in names))
+                for item in archive.infolist():
+                    if item.filename.endswith(('.sh', '.desktop')):
+                        self.assertTrue((item.external_attr >> 16) & 0o111)
+            updater.unpack_verified(path, extracted, {'version': version, 'size': path.stat().st_size,
+                                                     'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}, launcher)
+        else:
+          with tarfile.open(package) as archive:
             members = archive.getmembers()
             self.assertTrue(members)
             for member in members:
@@ -60,7 +74,8 @@ class PackageTests(unittest.TestCase):
         self.assertIn("app/7-Zip/7z.dll", manifest["files"])
         self.assertIn("Source-Available Personal Use License", (source / "LICENSE").read_text())
         self.assertIn("bcdec", (source / "THIRD_PARTY_NOTICES.md").read_text())
-        self.assertIn("MIT License", (source / "SLOTSLOADER-LICENSE.txt").read_text())
+        loader_notice = source / "SLOTSLOADER-LICENSE.txt"
+        self.assertIn("MIT License", (loader_notice if loader_notice.exists() else source / "THIRD_PARTY_NOTICES.md").read_text())
         launcher.install_package(source, self.target)
         data = self.target / "app/Data"
         data.mkdir()

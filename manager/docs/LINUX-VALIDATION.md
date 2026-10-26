@@ -1,9 +1,49 @@
 # Linux / Steam Deck test build validation
 
-Test build: **SlotsLoader Manager 1.0.12-linux-beta2**, 23 October 2026.
-This supersedes beta1 with verified fonts, smooth drawing and themed native
-controls. It uses the Windows interface in a dedicated Bottles environment.
-Actual Steam Deck hardware and in-game SF6 acceptance remain volunteer checks.
+Current build: **SlotsLoader Manager 1.0.13-linux-beta3**, 27 October 2026.
+It merges official Manager 1.0.13 (`8961d587dd05e219aceb201749473cb704fc67d6`)
+and retains the polished Bottles interface. The user confirmed beta2 worked;
+their hardware and individual gameplay coverage were not enumerated.
+
+Beta3 adds daily, consent-based complete Linux package updates and a Settings
+button. Release discovery uses a separate Linux tag/asset channel; downloads
+require GitHub's exact asset size and SHA-256 digest. Extraction rejects unsafe
+paths, links, duplicate names and private Data. Installation retains the existing
+transactional rollback and keeps Data and the compatibility runtime.
+
+The ZIP contains the GUI, required helpers, dependencies, fonts and licenses.
+Development reports and the CLI stay outside it. Beta2 users must install beta3
+once manually before automatic checks can offer subsequent Linux releases.
+
+The validation records below preserve beta2's rendering/runtime baseline;
+they are not a claim that its earlier binaries are the beta3 release.
+
+## Beta3 checks
+
+- Final GUI SHA-256: `dc4f0f934a7639375e2bbccb07003bbfe2797e4edabb58931e9a650e8e1b6ee1`.
+- Final ZIP SHA-256: `d540b56438a6a4bdd9701edf0b2b2b89362714c53fc69effb888fcde6b57468c`.
+- Native Python suite: 73 cases; 71 passed with system Python and both actual
+  Gio shortcut roundtrips passed with Bottles' existing Python interpreter.
+  Includes updater channel selection, consent/preferences, offline behavior,
+  hash/size checks, hostile ZIP entries, full-package preservation and rollback.
+- Actual Bottles filter suite passed, including 1.0.13 selection behavior,
+  sort controls at the minimum column width, and filesystem/cache persistence.
+  Long library names may deliberately use ellipsis while retaining their full
+  accessible path; the fit test does not claim every label fits in full.
+- Nine final-binary framebuffer captures cover Library, scrolling, dropdown,
+  Installed, Settings, Updates, Assistant, confirmation and resize. The 1280 x 800
+  window captures use a larger isolated test display; beta2's separate true
+  1280 x 800 dropdown-boundary proof remains the unchanged control baseline.
+- The real Settings update button reached the authenticated host bridge and
+  closed the idle GUI cleanly. The strict rendering probe passed with private
+  fonts, pinned native GDI+, smoothing and 273 antialiased pixels.
+- Exact final ZIP installation, reinstallation and normal relaunch passed in
+  the actual Bottles runtime. Each preserved fixture settings, recovery sentinel,
+  selected runtime, app-local renderer and both prefix system GDI+ DLLs.
+- Windows adapter (22), controls (11), fields, UI polish, filters and updater
+  suites passed. The final subsequent edits only correct Linux test expectations.
+- Requested independent review at medium reasoning found no blocking issues in
+  updates, locking/restart, archive handling, rollback, preservation or packaging.
 
 ## Exact build and environment
 

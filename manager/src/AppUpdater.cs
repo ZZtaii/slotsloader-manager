@@ -8,14 +8,19 @@ using System.Linq;
 namespace SlotsInstaller
 {
     // 2.4.0 Manager self-update. Stage: the verified portable zip is extracted to Data\updates\<version>, which
-    // must hold exactly the release's 7 files with an exe whose FileVersion matches the tag. Apply: the current
+    // must hold the release files (ReleaseFiles, optionally OptionalFiles, nothing else) with an exe whose FileVersion matches the tag. Apply: the current
     // 7 files are copied to Data\updates\previous, the running exes are renamed to *.old (Windows allows renaming
     // a running exe), the new 7 files are copied in; any failure puts every file back. The *.old files are
     // deleted at the next start. Rollback applies Data\updates\previous the same way. Nothing else in Data or in
     // the app folder is touched.
     internal static class AppUpdater
     {
-        internal static readonly string[] ReleaseFiles = { "Slotsloader Manager.exe", "Slotsloader Manager.exe.config", "Slotsloader CLI.exe", "Slotsloader CLI.exe.config", "README.md", "CLI.md", "VALIDATION.txt" };
+        internal static readonly string[] ReleaseFiles = { "Slotsloader Manager.exe", "Slotsloader Manager.exe.config", "README.md" };
+        // 1.0.13: the CLI, its guide and VALIDATION.txt are no longer in the release. A zip may still carry them (the
+        // compatible releases, for the updaters of 1.0.12 and older, which need all 7); an update without them removes
+        // them from the app folder (kept in previous, like every replaced file).
+        internal static readonly string[] OptionalFiles = { "Slotsloader CLI.exe", "Slotsloader CLI.exe.config", "CLI.md", "VALIDATION.txt" };
+        internal static readonly string[] AppFiles = ReleaseFiles.Concat(OptionalFiles).ToArray();
         internal static readonly string[] Executables = { "Slotsloader Manager.exe", "Slotsloader CLI.exe" };
         internal static int FailAfterCopies = -1;   // tests: throw after this many files were copied in
         internal static bool FailAfterSevenZip;     // tests: throw once the 7-Zip files are in (1.0.11)
@@ -39,7 +44,7 @@ namespace SlotsInstaller
                     var names = files.Select(e => e.FullName.Substring(prefix.Length)).ToList();
                     var missing = ReleaseFiles.Where(f => !names.Contains(f, StringComparer.OrdinalIgnoreCase)).ToList();
                     if (missing.Count > 0) throw new IOException("The update zip is not a Slotsloader Manager release (missing " + String.Join(", ", missing) + ").");
-                    var extra = names.Where(n => !ReleaseFiles.Contains(n, StringComparer.OrdinalIgnoreCase) && !IsBundledLoader(n) && !IsBundledSevenZip(n)).ToList();
+                    var extra = names.Where(n => !AppFiles.Contains(n, StringComparer.OrdinalIgnoreCase) && !IsBundledLoader(n) && !IsBundledSevenZip(n)).ToList();
                     if (extra.Count > 0) throw new IOException("The update zip has unexpected files: " + String.Join(", ", extra.Take(5)) + ".");
                     if (names.Count(IsBundledLoader) > 1) throw new IOException("The update zip has more than one bundled Slotsloader zip.");
                     int seven = names.Count(IsBundledSevenZip);
@@ -128,7 +133,7 @@ namespace SlotsInstaller
         }
         private static string Safe(string version) { return new string((version ?? "").Where(c => Char.IsLetterOrDigit(c) || c == '.' || c == '-').ToArray()); }
 
-        // Copies source's 7 files into appDir; previous (when not null) receives the current 7 first.
+        // Copies source's app files into appDir; previous (when not null) receives the current ones first.
         internal static void Apply(string appDir, string source, string previous, string fromVersion, string toVersion, string dataDir)
         {
             if (LinuxPlatform.IsLinux) throw new IOException(LinuxPlatform.UpdateMessage);
@@ -142,7 +147,7 @@ namespace SlotsInstaller
             {
                 if (Directory.Exists(previous)) Directory.Delete(previous, true);
                 Directory.CreateDirectory(previous);
-                foreach (string f in ReleaseFiles) { string from = Path.Combine(appDir, f); if (File.Exists(from)) File.Copy(from, Path.Combine(previous, f), true); }
+                foreach (string f in AppFiles) { string from = Path.Combine(appDir, f); if (File.Exists(from)) File.Copy(from, Path.Combine(previous, f), true); }
                 CopyBundled(appDir, previous);   // 2.5.9
                 CopySevenZip(appDir, previous);   // 1.0.11
             }
@@ -153,7 +158,7 @@ namespace SlotsInstaller
             var sevenMoved = new List<string>(); var sevenAdded = new List<string>();
             try
             {
-                foreach (string f in ReleaseFiles.Except(Executables)) { string from = Path.Combine(appDir, f); if (File.Exists(from)) File.Copy(from, Path.Combine(undo, f), true); }
+                foreach (string f in AppFiles.Except(Executables)) { string from = Path.Combine(appDir, f); if (File.Exists(from)) File.Copy(from, Path.Combine(undo, f), true); }
                 CopyBundled(appDir, undo);
                 foreach (string exe in Executables)
                 {
@@ -162,10 +167,12 @@ namespace SlotsInstaller
                     if (File.Exists(path)) { File.Move(path, old); renamed.Add(exe); }
                 }
                 int n = 0;
-                foreach (string f in ReleaseFiles)
+                foreach (string f in AppFiles)
                 {
                     if (FailAfterCopies >= 0 && n >= FailAfterCopies) throw new IOException("Test failure after " + n + " copied files.");
-                    File.Copy(Path.Combine(source, f), Path.Combine(appDir, f), true); copied.Add(f); n++;
+                    string from = Path.Combine(source, f), to = Path.Combine(appDir, f);
+                    if (File.Exists(from)) { File.Copy(from, to, true); copied.Add(f); n++; }
+                    else if (!Executables.Contains(f)) TryDelete(to);   // not in this release (an exe left out stays as *.old)
                 }
                 bundleReplaced = true; ReplaceBundled(source, appDir);
                 ReplaceSevenZip(source, appDir, sevenMoved, sevenAdded);   // 1.0.11
@@ -177,7 +184,7 @@ namespace SlotsInstaller
                 UndoSevenZip(sevenMoved, sevenAdded);
                 foreach (string f in copied.Where(f => Executables.Contains(f))) TryDelete(Path.Combine(appDir, f));
                 foreach (string exe in renamed) { string path = Path.Combine(appDir, exe); TryDelete(path); try { File.Move(path + ".old", path); } catch (IOException) { } }
-                foreach (string f in ReleaseFiles.Except(Executables)) { string saved = Path.Combine(undo, f); if (File.Exists(saved)) try { File.Copy(saved, Path.Combine(appDir, f), true); } catch (IOException) { } else if (copied.Contains(f)) TryDelete(Path.Combine(appDir, f)); }
+                foreach (string f in AppFiles.Except(Executables)) { string saved = Path.Combine(undo, f); if (File.Exists(saved)) try { File.Copy(saved, Path.Combine(appDir, f), true); } catch (IOException) { } else if (copied.Contains(f)) TryDelete(Path.Combine(appDir, f)); }
                 if (bundleReplaced && BundledZips(Path.Combine(source, LoaderRelease.BundleFolder)).Count > 0)
                 {
                     // Back to the bundled zips from before the update.
@@ -225,7 +232,7 @@ namespace SlotsInstaller
             Directory.CreateDirectory(temp);
             try
             {
-                foreach (string f in ReleaseFiles) File.Copy(Path.Combine(previous, f), Path.Combine(temp, f), true);
+                foreach (string f in AppFiles) if (File.Exists(Path.Combine(previous, f))) File.Copy(Path.Combine(previous, f), Path.Combine(temp, f), true);
                 CopyBundled(previous, temp);   // 2.5.9
                 CopySevenZip(previous, temp);  // 1.0.11
                 Apply(appDir, temp, null, SafeHttp.AppVersion(), version + " (rollback)", dataDir);

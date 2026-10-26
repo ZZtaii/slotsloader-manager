@@ -417,7 +417,13 @@ namespace SlotsInstaller
                 Require(panel.Kinds.Cards.Skip(3).Select(c => c.Name).SequenceEqual(new[] { "a", "b" }), "duplicate names: " + String.Join(", ", panel.Kinds.Cards.Skip(3).Select(c => c.Name)));
                 panel.SetLibraries(new[] { @"E:\Fluffy\Games\SF6\Mods", @"E:\Games\Fluffy - Copy\Games\SF6\Mods" });
                 Require(panel.Kinds.Cards.Skip(3).Select(c => c.Name).SequenceEqual(new[] { "Fluffy", "Fluffy - Copy" }), "the user's two libraries: " + String.Join(", ", panel.Kinds.Cards.Skip(3).Select(c => c.Name)));
-                Require(panel.Kinds.Cards.All(c => panel.Kinds.NameFits(c.Name)), "a tile name is cut: " + String.Join(", ", panel.Kinds.Cards.Where(c => !panel.Kinds.NameFits(c.Name)).Select(c => c.Name)));
+                // Inter's metrics can ellipsize a library name that Segoe fits. The
+                // portrait band intentionally uses EndEllipsis; retain the full accessible name.
+                Require(panel.Kinds.Cards.Select((c, i) => panel.Kinds.NameFits(c.Name) ||
+                    (LinuxPlatform.IsLinux && i >= panel.Kinds.GroupBreak && panel.Kinds.GroupBreak >= 0 &&
+                     panel.Kinds.ItemAccessibleName(i).StartsWith("Library ", StringComparison.Ordinal) &&
+                     panel.Kinds.ItemAccessibleName(i).Contains(c.Name))).All(ok => ok),
+                    "a tile name is cut without its full accessible name: " + String.Join(", ", panel.Kinds.Cards.Where(c => !panel.Kinds.NameFits(c.Name)).Select(c => c.Name)));
             }
         }
 
@@ -463,6 +469,11 @@ namespace SlotsInstaller
                 typeof(Control).GetMethod("OnMouseDown", PrivateInstance).Invoke(grid, new object[] { new MouseEventArgs(MouseButtons.Left, 1, box.Left + box.Width / 2, box.Top + box.Height / 2, 0) });
                 Require(grid.Cards[cammy].Selected && Names(form) == "Cammy Barefoot, Cammy Boots, Cammy Scripted", "click did not select Cammy");
                 Require(grid.HitTest(new Point(box.Left + 1, box.Top + 1)) != cammy, "the slanted corner must not hit the card");
+                // A click picks one fighter (browsing), Ctrl+click adds one.
+                int juri = grid.Cards.ToList().FindIndex(c => c.Code == "016");
+                grid.Activate(juri, false); Require(grid.Selected.SetEquals(new[] { "016" }) && Names(form) == "Juri Jacket", "a click on Juri must replace Cammy: " + Names(form));
+                grid.Activate(cammy, false, true); Require(grid.Selected.SetEquals(new[] { "009", "016" }), "Ctrl+click must add Cammy");
+                grid.Activate(cammy, false); Require(grid.Selected.SetEquals(new[] { "009" }), "a click on one of several selected fighters must keep only it");
                 grid.Activate(cammy + 2, true);
                 Require(grid.Selected.SetEquals(grid.Cards.Skip(cammy).Take(3).Select(c => c.Code)), "Shift+click range");
                 AccessibleObject acc = grid.AccessibilityObject;
@@ -719,12 +730,17 @@ namespace SlotsInstaller
             DateTime written = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc), created = new DateTime(2026, 2, 1, 8, 0, 0, DateTimeKind.Utc);
             File.SetLastWriteTimeUtc(later, written); File.SetCreationTimeUtc(later, created);   // creation later than the write time
             File.SetCreationTimeUtc(normal, written); File.SetLastWriteTimeUtc(normal, created);
-            Require(new FileInfo(later).CreationTimeUtc > new FileInfo(later).LastWriteTimeUtc, "the temp file did not keep a creation time later than its write time");
+            // Linux filesystems need not support setting birth time through Wine. Verify the
+            // fallback with explicit values, then use the actual persisted times for disk/cache checks.
+            Require(Library.AddedTime(created, written) == written && Library.AddedTime(written, created) == written, "creation/write fallback");
+            if (!LinuxPlatform.IsLinux) Require(new FileInfo(later).CreationTimeUtc > new FileInfo(later).LastWriteTimeUtc, "the temp file did not keep a creation time later than its write time");
+            DateTime laterExpected = Library.AddedTime(new FileInfo(later).CreationTimeUtc, new FileInfo(later).LastWriteTimeUtc);
+            DateTime normalExpected = Library.AddedTime(new FileInfo(normal).CreationTimeUtc, new FileInfo(normal).LastWriteTimeUtc);
             LibraryEntry e1 = Library.DescribeEntry(later), e2 = Library.DescribeEntry(normal);
-            Require(e1.AddedUtc == written && e2.AddedUtc == written, "Added: later creation -> " + e1.AddedUtc.ToString("o") + " (expected the write time " + written.ToString("o") + "); normal -> " + e2.AddedUtc.ToString("o"));
+            Require(e1.AddedUtc == laterExpected && e2.AddedUtc == normalExpected, "Added times differ from the persisted filesystem timestamps");
             Require(Library.AddedTime(DateTime.FromFileTimeUtc(0), written) == written && Library.AddedTime(created, DateTime.FromFileTimeUtc(0)) == created && Library.AddedTime(DateTime.MinValue, DateTime.MinValue) == DateTime.MinValue, "missing creation/write times");
             string folder = Path.Combine(lib, "Folder Mod"); Directory.CreateDirectory(folder); Directory.SetCreationTimeUtc(folder, created); Directory.SetLastWriteTimeUtc(folder, created.AddHours(1));
-            Require(Library.DescribeEntry(folder).AddedUtc == created, "folder Added: " + Library.DescribeEntry(folder).AddedUtc.ToString("o"));
+            Require(Library.DescribeEntry(folder).AddedUtc == Library.AddedTime(new DirectoryInfo(folder).CreationTimeUtc, new DirectoryInfo(folder).LastWriteTimeUtc), "folder Added: " + Library.DescribeEntry(folder).AddedUtc.ToString("o"));
             string cache = Path.Combine(root, "added-index"), previous = Library.IdentityCacheDirectory;
             try
             {
@@ -733,15 +749,15 @@ namespace SlotsInstaller
                 List<LibraryEntry> listed = Library.Scan(new[] { lib }, "");
                 string index = Path.Combine(cache, Library.CacheFilename);
                 LibraryIdentityCache records = Json.Read<LibraryIdentityCache>(index);
-                Require(Library.CacheMisses - misses == 3 && records.Format == "sf6-native-library-index-v4" && records.Records.Count == 2 && records.Records.All(r => r.AddedUtc == Library.AddedStamp(written)) && listed.Single(e => e.Name == "Copied Later").AddedUtc == written, "first listing: index " + String.Join(", ", records.Records.Select(r => Path.GetFileName(r.SourcePath) + " " + r.AddedUtc)));
+                Require(Library.CacheMisses - misses == 3 && records.Format == "sf6-native-library-index-v4" && records.Records.Count == 2 && records.Records.All(r => r.AddedUtc == Library.AddedStamp(Path.GetFileName(r.SourcePath) == "Copied Later.zip" ? laterExpected : normalExpected)) && listed.Single(e => e.Name == "Copied Later").AddedUtc == laterExpected, "first listing: index " + String.Join(", ", records.Records.Select(r => Path.GetFileName(r.SourcePath) + " " + r.AddedUtc)));
                 // A record from before 2.4.1 (no AddedUtc): loaded, not relisted, filled in and saved.
                 foreach (LibraryIdentityRecord r in records.Records) r.AddedUtc = null;
                 Json.Write(index, records);
-                Require(!File.ReadAllText(index).Contains(Library.AddedStamp(written)), "the old-style index still has Added times");
+                Require(Json.Read<LibraryIdentityCache>(index).Records.All(r => r.AddedUtc == null), "the old-style index still has Added times");
                 misses = Library.CacheMisses; Library.IdentityCacheDirectory = cache;
                 listed = Library.Scan(new[] { lib }, "");
                 records = Json.Read<LibraryIdentityCache>(index);
-                Require(Library.CacheMisses - misses == 1 && records.Records.All(r => r.AddedUtc == Library.AddedStamp(written)) && listed.Single(e => e.Name == "Normal").AddedUtc == written, "upgrade relisted " + (Library.CacheMisses - misses) + " sources (only the folder is listed again) / records " + String.Join(", ", records.Records.Select(r => r.AddedUtc)));
+                Require(Library.CacheMisses - misses == 1 && records.Records.All(r => r.AddedUtc == Library.AddedStamp(Path.GetFileName(r.SourcePath) == "Copied Later.zip" ? laterExpected : normalExpected)) && listed.Single(e => e.Name == "Normal").AddedUtc == normalExpected, "upgrade relisted " + (Library.CacheMisses - misses) + " sources (only the folder is listed again) / records " + String.Join(", ", records.Records.Select(r => r.AddedUtc)));
             }
             finally { Library.IdentityCacheDirectory = previous; }
         }

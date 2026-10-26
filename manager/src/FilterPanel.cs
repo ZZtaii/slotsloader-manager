@@ -17,7 +17,7 @@ namespace SlotsInstaller
         internal const string ToolsKind = "tools", MiscKind = "misc", InstalledKind = "installed", LibraryPrefix = "lib:";
         // Hover text of the tiles (library tiles: the full path).
         internal event EventHandler FiltersChanged;
-        internal readonly FighterGrid Grid = new FighterGrid();
+        internal readonly FighterGrid Grid = new FighterGrid { ClickReplaces = true };   // one fighter at a time; Ctrl+click adds
         internal readonly FighterGrid Kinds = new FighterGrid { KeepOrder = true };
         internal readonly FlowLayoutPanel MiscChips;
         internal readonly Label Title, KindsTitle;
@@ -296,16 +296,26 @@ namespace SlotsInstaller
             if (e.Button != MouseButtons.Left) return;
             int hit = HitTest(e.Location);
             if (hit < 0) return;
-            Activate(hit, (ModifierKeys & Keys.Shift) != 0);
+            Activate(hit, (ModifierKeys & Keys.Shift) != 0, (ModifierKeys & Keys.Control) != 0);
         }
-        // Click toggles; Shift+click selects the range from the last clicked item.
-        internal void Activate(int index, bool range)
+        // Click toggles (with ClickReplaces it picks only that item, Ctrl+click toggles); Shift+click selects the
+        // range from the last clicked item.
+        internal bool ClickReplaces;
+        internal void Activate(int index, bool range, bool add = false)
         {
             if (index < 0 || index >= ItemCount) return;
             focusIndex = index;
             if (range && anchorIndex >= 0 && anchorIndex < ItemCount) SelectRange(anchorIndex, index);
-            else { ToggleItem(index); anchorIndex = index; }
+            else { if (ClickReplaces && !add) SelectOnly(index); else ToggleItem(index); anchorIndex = index; }
             RaiseSelectionChanged();
+        }
+        // Selects only this item; clicking the one selected item clears it.
+        private void SelectOnly(int index)
+        {
+            bool only = IsItemSelected(index);
+            for (int i = 0; i < ItemCount && only; i++) if (i != index && IsItemSelected(i)) only = false;
+            for (int i = 0; i < ItemCount; i++) if (i != index && IsItemSelected(i)) ToggleItem(i);
+            if (only || !IsItemSelected(index)) ToggleItem(index);
         }
         protected override bool IsInputKey(Keys keyData)
         {
@@ -332,7 +342,7 @@ namespace SlotsInstaller
                 case Keys.End: next = count - 1; break;
                 case Keys.PageUp: next = Math.Max(0, next - page); break;
                 case Keys.PageDown: next = Math.Min(count - 1, next + page); break;
-                case Keys.Space: case Keys.Enter: Activate(next, e.Shift); e.Handled = e.SuppressKeyPress = true; return;
+                case Keys.Space: case Keys.Enter: Activate(next, e.Shift, e.Control); e.Handled = e.SuppressKeyPress = true; return;
                 default: return;
             }
             e.Handled = true;
@@ -387,7 +397,7 @@ namespace SlotsInstaller
             public override AccessibleRole Role { get { return AccessibleRole.CheckButton; } }
             public override AccessibleObject Parent { get { return parent; } }
             public override string DefaultAction { get { return owner.IsItemSelected(index) ? "Clear" : "Select"; } }
-            public override void DoDefaultAction() { owner.Activate(index, false); }
+            public override void DoDefaultAction() { owner.Activate(index, false, true); }
             public override AccessibleStates State
             {
                 get
@@ -549,10 +559,12 @@ namespace SlotsInstaller
         internal int NameWidth() { Measure(); return cardWidth - Px(4); }
         internal Font NameFont(string name)
         {
-            const TextFormatFlags flags = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+            TextFormatFlags flags = NameFlags;
             return TextRenderer.MeasureText(name, Palette.Small, Size.Empty, flags).Width <= NameWidth() ? Palette.Small : Palette.Tiny;
         }
-        internal bool NameFits(string name) { return TextRenderer.MeasureText(name, NameFont(name), Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width <= NameWidth(); }
+        // The band already supplies its inset; Wine's additional glyph padding cuts short library names.
+        private static TextFormatFlags NameFlags { get { return TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | (LinuxPlatform.IsLinux ? TextFormatFlags.NoPadding : 0); } }
+        internal bool NameFits(string name) { return TextRenderer.MeasureText(name, NameFont(name), Size.Empty, NameFlags).Width <= NameWidth(); }
         // The slanted card: top edge shifted right by the slant.
         internal GraphicsPath CardPath(Rectangle box)
         {
@@ -655,7 +667,7 @@ namespace SlotsInstaller
                 Rectangle bandRect = new Rectangle(box.Left, box.Bottom - band - Px(6), box.Width, band + Px(6));
                 using (Brush shade = VerticalGradient(bandRect, Color.FromArgb(0, 0, 0, 0), Color.FromArgb(215, 8, 9, 12))) g.FillRectangle(shade, bandRect);
                 Color nameColor = dim ? Palette.Muted : card.Selected ? Palette.Accent : Palette.Text;
-                if (image != null) TextRenderer.DrawText(g, card.Name, NameFont(card.Name), new Rectangle(box.Left + Px(3), box.Bottom - band, NameWidth(), band), nameColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                if (image != null) TextRenderer.DrawText(g, card.Name, NameFont(card.Name), new Rectangle(box.Left + Px(3), box.Bottom - band, NameWidth(), band), nameColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | NameFlags);
                 // Mod count, top right.
                 string count = card.Count.ToString();
                 Size textSize = TextRenderer.MeasureText(g, count, Palette.Tiny, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);

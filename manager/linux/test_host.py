@@ -30,6 +30,17 @@ class NativeFixtures(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_update_request_is_deferred_until_the_active_session_closes(self):
+        with self.assertRaises(HostError):
+            self.bridge.dispatch("POST", "/update", {})
+        self.bridge.dispatch("POST", "/session", {"event": "started"})
+        self.bridge.dispatch("POST", "/update", {})
+        self.assertTrue(self.bridge.update_requested)
+        self.assertFalse(self.bridge.session_exited)
+        self.bridge.dispatch("POST", "/session", {"event": "exited", "exit_code": 0})
+        with self.assertRaises(HostError):
+            self.bridge.dispatch("POST", "/update", {})
+
     def process(self, pid, name, args):
         folder = self.proc / str(pid)
         folder.mkdir(exist_ok=True)

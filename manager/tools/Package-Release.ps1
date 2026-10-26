@@ -3,8 +3,9 @@
 #     with exactly one .zip asset and GitHub's sha256 digest. Refuses a release older than the current pin unless
 #     -AllowOlderLoader (so a Manager never ships an older loader than the one it already pins).
 #  2. Downloads that zip, checks its size and SHA-256 against the digest, and rewrites assets\loader-pin.json.
-#  3. Builds (build.ps1 embeds the pin) and packs Slotsloader-Manager-<version>-portable.zip: the 7 release files at
-#     the root plus Slotsloader\<loader zip>, then SHA256SUMS.txt beside it.
+#  3. Builds (build.ps1 embeds the pin) and packs Slotsloader-Manager-<version>-portable.zip: the Manager exe, its
+#     config and README.md at the root (1.0.13 also the CLI, its config, CLI.md and VALIDATION.txt) plus
+#     Slotsloader\<loader zip>, then SHA256SUMS.txt beside it.
 #  4. 1.0.11: 7-Zip is NOT in the zip: a Manager 1.0.10 or older refuses an update zip with a 7-Zip folder ("unexpected
 #     files"), and someone can update from any older version. The Manager fetches its pinned 7-Zip release
 #     (SevenZipTool.Supported, tag tool-7zip-26.00) when no usable 7-Zip is installed. -BundleSevenZip still puts
@@ -99,9 +100,14 @@ $build = Join-Path $OutputDirectory 'build'
 $exe = Join-Path $build 'Slotsloader Manager.exe'
 $version = ([version](Get-Item -LiteralPath $exe).VersionInfo.FileVersion).ToString(3)
 $stage = Join-Path $OutputDirectory 'stage'; New-Item -ItemType Directory -Path (Join-Path $stage 'Slotsloader') -Force | Out-Null
-foreach ($f in 'Slotsloader Manager.exe', 'Slotsloader Manager.exe.config', 'Slotsloader CLI.exe', 'Slotsloader CLI.exe.config') { Copy-Item -LiteralPath (Join-Path $build $f) -Destination $stage }
+# 1.0.13: the release is the Manager, its config, README and Slotsloader\. The CLI is still built (build\) but not
+# shipped, nor CLI.md or VALIDATION.txt (VALIDATION.txt goes beside the zip). A Manager 1.0.12 or older updates only
+# from a zip with all 7 files, so 1.0.13 (the first updater that accepts fewer) still carries them.
+$compatible = [version]$version -lt [version]'1.0.14'
+$files = @('Slotsloader Manager.exe', 'Slotsloader Manager.exe.config'); if ($compatible) { $files += 'Slotsloader CLI.exe', 'Slotsloader CLI.exe.config' }
+foreach ($f in $files) { Copy-Item -LiteralPath (Join-Path $build $f) -Destination $stage }
 Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination $stage
-Copy-Item -LiteralPath (Join-Path $project 'docs\CLI.md') -Destination $stage
+if ($compatible) { Copy-Item -LiteralPath (Join-Path $project 'docs\CLI.md') -Destination $stage; Write-Output "$version still carries the CLI, CLI.md and VALIDATION.txt so Manager 1.0.12 and older can update to it." }
 Copy-Item -LiteralPath $zipPath -Destination (Join-Path $stage 'Slotsloader')
 $validation = @("Slotsloader Manager $version", "Built $(Get-Date -Format 'yyyy-MM-dd HH:mm') by tools\Package-Release.ps1.", "Bundled Slotsloader: $($pin.tag), Slotsloader\$($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256)")
 if (-not $BundleSevenZip) { $validation += "7-Zip: not in this zip (any older Manager can update to it); the Manager downloads its pinned 7-Zip release tool-7zip-26.00 when no usable 7-Zip is installed." }
@@ -114,9 +120,9 @@ else {
     }
 }
 if ($TestReport) { $validation += ''; $validation += 'Tests:'; $validation += Get-Content -LiteralPath $TestReport } else { $validation += 'Tests: none attached (run test.ps1 -RealArchives and pass -TestReport before publishing).' }
-[IO.File]::WriteAllText((Join-Path $stage 'VALIDATION.txt'), (($validation -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText((Join-Path $(if ($compatible) { $stage } else { $OutputDirectory }) 'VALIDATION.txt'), (($validation -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
 
-# Entries with forward slashes, the 7 files at the root, the loader under Slotsloader/ and 7-Zip under 7-Zip/.
+# Entries with forward slashes, the app files at the root, the loader under Slotsloader/ and 7-Zip under 7-Zip/.
 $portable = Join-Path $OutputDirectory ("Slotsloader-Manager-$version-portable.zip")
 $archive = [IO.Compression.ZipFile]::Open($portable, [IO.Compression.ZipArchiveMode]::Create)
 try {

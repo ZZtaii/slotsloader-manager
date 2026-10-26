@@ -1,14 +1,19 @@
-# Slotsloader Manager 1.0.12
+# Slotsloader Manager 1.0.13
 
-A Windows mod manager for your ZIP, RAR, 7Z and folder mod libraries. It is built for Street Fighter 6 (more games are planned), and installs SF6 mods two ways:
+A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
-- by **replacing the original** files the way external mod managers do, including tool mods such as REFramework scripts, plugins and Slotsloader itself.
+- by **replacing the original** files, like other mod managers, including tool mods such as REFramework scripts and plugins.
 
-The title bar shows **Slotsloader Manager · 1.0.12**. Private builds before the public release were numbered 2.0.0 to 2.5.9 and called **SlotsLoader Manager** (2.1.0 to 2.5.8) and **SF6 SlotsLoader Installer** before that; see [docs/HISTORY.md](docs/HISTORY.md).
+**Start:** unzip anywhere and open **Slotsloader Manager.exe** (keep the other files beside it). Windows already has what it needs (.NET Framework 4.8); 7-Zip for RAR/7Z is downloaded by itself if you don't have it. The game and your mod manager's libraries are found for you; change them in Settings.
 
-Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .NET Framework 4.8 runs it. RAR/7Z are read with 7-Zip: your installed 7-Zip if you have one, otherwise the Manager's own copy, downloaded into its `7-Zip` folder when first needed. No Blender, Node or Python is required. Game/library paths are in Settings. Your existing mod manager libraries are configured by default. `Data` beside the executable holds settings/cache/view preferences and the backups of replaced game files; preserve it during updates. The whole app folder (executables + `Data`) can be moved or renamed; see **Move the app folder** below.
+**Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
+
+- 1.0.13:
+  - **One fighter per click.** Clicking a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; before, each click added another fighter. Ctrl+click adds one, Shift+click a range, and clicking the selected fighter again clears it.
+  - **Smaller downloads from the next version on.** Future downloads leave out the command-line tool and its guide. This version still has them, so earlier versions can update to it.
+  - A shorter start to this README.
 
 - 1.0.12:
   - **Browsing is instant.** Opening a mod no longer shows a progress bar or "Reading…", and the library list keeps taking keys and clicks meanwhile: the mod you stop on opens, and the ones you pass over aren't read. Mods opened this session stay ready while unchanged, and the next RAR or 7Z in the list is read ahead, so arrowing through the library shows the options and preview at once.
@@ -18,6 +23,7 @@ Open **Slotsloader Manager.exe** and keep its `.exe.config` beside it. Windows .
   - **Faster changes with many replacements:** Enable, Disable, priority moves and installs are several times quicker when many files are installed (about 1,000 files in tests: 9.5 s → 1.8 s).
   - **Missing saved options are said, not skipped.** When a mod no longer has an option you saved, Reinstall and preset restore stop and ask you to review its options instead of installing without it.
   - The first start after updating reads each library archive once in the background ("READING n%") to find the PAK mods.
+  - An empty Mod library says so, with a link to add your mods folder in Settings → Mod libraries.
 
 - 1.0.11:
   - **RAR and 7Z mods work without installing 7-Zip.** When 7-Zip isn't installed, the Manager downloads its own (7-Zip 26.00, SHA-256 checked) the first time a RAR or 7Z needs it, into its `7-Zip` folder. An installed 7-Zip is still used first, also when it isn't in `C:\Program Files\7-Zip`, unless it is older than the Manager's copy (7-Zip before 15.06 can't open RAR5 archives). In Settings, the 7-Zip field can stay empty ("Automatic"); the line under it says which 7-Zip is used. A path you chose yourself still comes first; the `C:\Program Files\7-Zip\7z.exe` that earlier versions saved by default counts as Automatic.
@@ -179,11 +185,13 @@ Presets live in `reframework/.slotsloader-installer-presets`; keep that folder i
 
 ## Move the app folder
 
-Close the app (and any `Slotsloader CLI.exe` run) first. Then move the whole folder, `Data` included, for example from `<old Manager folder>` to `<Manager folder>`. **Move** it (or copy it and then delete or rename the old folder): while the old folder still exists, the records keep using the files there. Do not move `Data` on its own or leave parts behind.
+Close the app first. Then move the whole folder, `Data` included, for example from `<old Manager folder>` to `<Manager folder>`. **Move** it (or copy it and then delete or rename the old folder): while the old folder still exists, the records keep using the files there. Do not move `Data` on its own or leave parts behind.
 
-When it next starts, the app finds the recorded backups and stored copies in the moved `Data`, writes one line about it to `Data\log.txt` and saves the new locations (the window does this at start-up; the CLI with its next change). To check first, run `Slotsloader CLI.exe replace-status` from the new folder: it changes no record and should show `Backups: N recorded, 0 missing on disk`, `Relocation:` naming the previous folder, and `Status: OK`. A backup that is really missing is reported with its path and is never silently dropped. A custom replacement store outside `Data` (Settings) stays where it is. External mod manager folders, the game folder and your mod libraries are not affected by the move.
+When it next starts, the app finds the recorded backups and stored copies in the moved `Data`, writes one line about it to `Data\log.txt` and saves the new locations. A backup that is really missing is reported with its path and is never silently dropped. A custom replacement store outside `Data` (Settings) stays where it is. External mod manager folders, the game folder and your mod libraries are not affected by the move.
 
 ## Check without opening the app
+
+`Slotsloader CLI.exe` is not in the download; build it from this source (`build.ps1` builds both executables) and put it beside the Manager.
 
 ```powershell
 & '.\Slotsloader CLI.exe' list-options '<library>\My mod.zip'
@@ -192,11 +200,11 @@ When it next starts, the app finds the recorded backups and stored copies in the
 & '.\Slotsloader CLI.exe' replace-status --game '<game folder>'
 ```
 
-Bundles need `--select '<ID>'` options or `--selection '<JSON file>'`. `test-loader` additionally takes an explicit native loader, installed game root and **new separate sandbox**. See **CLI.md** for the full command and report scope. Tests never need to install into the live game.
+Bundles need `--select '<ID>'` options or `--selection '<JSON file>'`. `test-loader` additionally takes an explicit native loader, installed game root and **new separate sandbox**. See [docs/CLI.md](docs/CLI.md) for the full command and report scope. Tests never need to install into the live game.
 
 Extra outfit mode composes loose native costumes. Replace mode installs a PAK-only source as the next patch PAK. Lua and DLL tool mods install in Replace original mode. A composition/integrity pass does not prove appearance in-game. Native loader tests also omit DLC PAKs and report that limitation. No loader/game update is included.
 
-Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks; see docs/DEVELOPMENT.md). See **VALIDATION.txt** for this build's checks. The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
+Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks; see docs/DEVELOPMENT.md). The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
 
 ## License and third-party notices
 

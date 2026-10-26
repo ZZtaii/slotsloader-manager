@@ -242,6 +242,7 @@ class HostBridge:
         self.session_last_seen = 0.0
         self.session_exited = False
         self.session_exit_code = None
+        self.update_requested = False
         self._state_lock = threading.Lock()
         self._storage: dict[Path, tuple[int, int]] = {}
         self._case_cache = {}
@@ -517,6 +518,12 @@ class HostBridge:
                     self.session_exited = True
                     self.session_exit_code = code
                     self.session_last_seen = time.monotonic()
+            return {}
+        if method == "POST" and route == "/update":
+            with self._state_lock:
+                if not self.session_started or self.session_exited:
+                    raise HostError("The Manager session is not active.")
+                self.update_requested = True
             return {}
         if method == "POST" and route == "/validate":
             path = self.validate(body.get("path"), body.get("kind", "path"))
