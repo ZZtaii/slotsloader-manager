@@ -65,6 +65,14 @@ naming nothing): three outfits, the main (its body, hair, texture), "Fixture Mai
 alone. With `--old-loader`, the previous build makes Ribbon alone without the
 main's files.
 
+A second game (unreleased fix) gets "Fixture Overrides.zip": a main and five options,
+each with AddonFor naming the main and its own body mesh (all the same file, as
+Ingrid C1 Barefoot Stockings v2). Six outfits: the main and "main + Option 0N" with
+that option's body and the main's hair and texture. "Fixture Mixed.zip" has four
+such add-ons, two on the body and two on the hair: still "too many to combine",
+the main alone. With `--old-loader` (any build before this fix) the overrides give
+the main alone. The Ribbon check under `--old-loader` needs a build before 1.9.8.
+
 ## Joint constraints (1.9.8)
 
 After `build.bat`, run `python tests/joint_constraints.py [--old-loader <previous

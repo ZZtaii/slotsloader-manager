@@ -5019,17 +5019,22 @@ static void finalize_units(ScanOutputs& o) {
                              [&](const auto& e) { return e.first == b.mod_id; }), o.mods_out.end());
             printf("\n  %s: put with its add-on(s) in one sub-folder, only the combined outfit is made\n", unit_label(b).c_str());
         }
-        if (adds.size() > 3) {
+        bool apart = true, alternatives = true;
+        for (size_t x = 0; x < adds.size(); ++x)
+            for (size_t y = x + 1; y < adds.size(); ++y)
+                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
+                else alternatives = false;
+        for (auto a : adds) if (!complete_addon_of.count(a)) alternatives = false;
+        // Complete add-ons that all replace the same files (one body mesh each, pick one) cannot be
+        // combined: each is one variant, however many there are (Ingrid C1 Barefoot Stockings v2:
+        // "Main Files" + five whole-body overrides, each with AddonFor "Main Files")
+        if (adds.size() > 3 && !alternatives) {
             printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
                    unit_label(b).c_str(), adds.size());
             continue;
         }
         std::vector<std::vector<size_t>> variants;
         for (auto a : adds) variants.push_back({a});
-        bool apart = true;
-        for (size_t x = 0; x < adds.size(); ++x)
-            for (size_t y = x + 1; y < adds.size(); ++y)
-                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
         if (adds.size() >= 2 && apart) variants.push_back(adds);
         for (auto& v : variants) {
             std::vector<size_t> parts{j};

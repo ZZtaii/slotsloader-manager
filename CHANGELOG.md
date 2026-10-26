@@ -1,3 +1,12 @@
+# Unreleased
+
+- A mod whose options are whole-outfit alternatives of its main files (each with its own
+  copy of the same body mesh and "AddonFor" naming the main) gave only the main files once
+  it had more than three options ("too many to combine"). Each option is now a variant,
+  however many there are: Ingrid C1 Barefoot Stockings v2 gives its main and five
+  "main + option" outfits. Add-ons that don't all replace the same files keep the limit
+  of three. Needs a new build ID, or an outfit PAK built before stays as it was.
+
 # 1.10.4 (2026-10-18)
 
 Package `SF6_Slotsloader_Fork_v1.10.4.zip`, build ID 2026-10-18-1.10.4-slotsloader-fork
