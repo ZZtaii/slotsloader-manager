@@ -112,7 +112,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-18-1.10.4-slotsloader-fork";
+static const char* LOADER_BUILD_ID = "2026-10-27-1.10.5-slotsloader-fork";
 
 // ============================================================================
 // Utility

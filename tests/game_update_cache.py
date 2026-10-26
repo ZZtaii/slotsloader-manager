@@ -167,7 +167,7 @@ def main() -> int:
     check("manual outfit validates", "1 slots checked, 0 left out" in log)
     if args.old_loader:
         check("loader upgrade replaces the prior build cache",
-              "2026-10-18-1.10.4-slotsloader-fork" in fingerprint(current))
+              "2026-10-27-1.10.5-slotsloader-fork" in fingerprint(current))
     slot_before = json.loads((current / DATA / "registry.json").read_text())["slots"]
 
     stages = [
