@@ -301,6 +301,22 @@ ZIP files and folders work without 7-Zip. RAR and 7Z archives are read with 7-Zi
 - An archive that needs a password can't be opened. Extract it yourself and put the folder in one of your mod libraries.
 - While the library is being read, a row shows **Reading…**. Search `is:unreadable` to list the mods the Manager couldn't read.
 
+## A path is too long
+> Windows limits file paths to 259 characters until long paths are turned on.
+
+A mod with deep folders, in a game folder that is deep too, can need a longer path while it installs: the Manager unpacks RAR and 7Z files next to the game, keeping the mod's own folder names. Windows refuses such a path unless long paths are turned on for the whole PC. The Manager is already set up to use them; Windows only needs the switch.
+
+The install then stops before anything changes, with "This path is too long for Windows (… characters; the limit is 259 while Windows long paths are off)" and the path.
+
+### Turn on long paths
+- Windows 11: **Settings → System → Advanced → Enable long paths**.
+- Or, in Command Prompt or PowerShell opened as administrator: `reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f`
+- Close the Manager and open it again, then install again.
+
+### Without long paths
+- Shorten the mod's folder names: extract the archive, rename its long folders (keep the `natives` folders as they are) and put the folder in one of your mod libraries.
+- A game in a shorter folder helps too, like a Steam library at the top of a drive instead of under `Program Files (x86)`.
+
 ## Restore and undo
 > What each undo and restore option does, from the lightest to the full reset.
 

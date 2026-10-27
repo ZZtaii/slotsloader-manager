@@ -196,7 +196,7 @@ Street Fighter 6/reframework/
     modinfo.ini
     .slots-installer.json
     natives/stm/...
-  .slotsloader-installer-staging/<transaction GUID>/
+  .slotsloader-installer-staging/<8 hex>/            (1.0.15: was a 32-character GUID; 7-Zip scratch "r"; see LongPaths.cs)
   .slotsloader-installer-backups/<backup GUID>/
   .slotsloader-installer-disabled/<managed outfit ID>/
   .slotsloader-installer-trash/<ID>-<UTC timestamp>-<suffix>/

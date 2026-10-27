@@ -61,6 +61,9 @@ namespace SlotsInstaller
             using (Window w = Open(root, null, new Size(1460, 920), lib))
             {
                 MainForm form = w.Form; FilterPanel panel = Get<FilterPanel>(form, "filterPanel");
+                // 1.0.15: the library starts at 330, where the grid has 7 fighters per row and MY FILTERS scrolls into
+                // view (accepted by the user); the chip place is checked with the 250 library, 8 per row as before.
+                SplitContainer librarySplit = Get<SplitContainer>(form, "librarySplit"); librarySplit.SplitterDistance = DpiMetrics.Px(form, MainForm.OldDefaultLibraryWidth);
                 form.ShowFilters(true, false); Settle(w.Host);
                 FlatButton button = Get<FlatButton>(form, "filterButton");
                 Func<string, FlatButton> chip = delegate(string id) { return panel.CustomChips.Controls.OfType<FlatButton>().Single(b => (string)b.Tag == id); };

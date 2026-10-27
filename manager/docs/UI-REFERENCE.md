@@ -37,6 +37,11 @@ Read this before changing layout, navigation, option selection, previews, or scr
 
 These cover the custom screens. **Edit options** loads a managed outfit back into the existing Options view; it is not another editor window. Archive/executable pickers and folder browsers are standard Windows dialogs. Since 2.4.1 there are no confirmations for recoverable actions (they act at once with Undo) and errors are inline; the few remaining questions (permanent deletes, another tool's changes) use the themed message box (2.0.3; standard MessageBoxes before). A successful install uses a green checked status line rather than a popup. Taking screenshots does not require installing, disabling, removing, or replacing an outfit.
 
+## Unreleased: library width and long paths, 2026-10-27
+
+- Source: [MainForm.cs](../src/MainForm.cs) `DefaultLibraryWidth`. The Mod library column starts at 330 logical pixels on the default window (was 250; chosen by the user from renders at 250/300/340/380/420). Until the splitter is dragged (`SplitterMoving`), the width follows the window: 330 x split width / 1420, between 250 and 330 (250 at the 1110 minimum). `view-settings.json` saves `LibraryWidth` 0 for an undragged library; a saved width within 2 of 250 is treated as the old default, so existing users who never dragged get the new default too; any other saved width is kept.
+- Source: [LongPaths.cs](../src/LongPaths.cs). With Windows long paths off, an install whose unpacked or installed file path would pass 259 characters (a folder 247) stops before anything is unpacked, with one red status line: "This path is too long for Windows (N characters; the limit is 259 while Windows long paths are off): <path>. Turn on long paths and try again (Help: "A path is too long")."
+
 ## Unreleased: another mod's outfit name, 2026-10-27
 
 Source: [MainFormSlots.cs](../src/MainFormSlots.cs). Opening a mod in Extra outfit whose name another installed outfit of that fighter already has (an edited copy of a zip, with the same option names) suggests "<name> 2" (" 3"…), so Install adds a slot beside the other mod's instead of replacing it. Typing the other slot's name still replaces it; the hint then says "Replaces this slot, installed from <its zip or folder>."

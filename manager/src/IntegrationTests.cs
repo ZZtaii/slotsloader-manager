@@ -54,6 +54,7 @@ namespace SlotsInstaller
                 Test("ZIP wrapper and metadata preview", TestZip);
                 Test("7Z archive and source provenance", TestSevenZip);
                 Test("solid 7Z batches metadata and preview reads", TestSevenZipBatch);
+                Test("long paths: short staging names, too long stops before 7-Zip (1.0.15)", TestLongPaths);
                 Test("existing RAR reader", TestRar);
                 Test("library deduplication and archive kinds", TestLibrary);
                 Test("four-option normal and five-option bundle indexing survives cache reload", TestLibraryOptionCount);
@@ -170,6 +171,56 @@ namespace SlotsInstaller
             Require(package.PreviewBytes(alternative.Id,sevenZip).SequenceEqual(image),"Alternative preview differs after batch extraction.");
             ModPackage uncached = PackageReader.Load(path,sevenZip);
             Require(uncached.PreloadedPreviews.Count == 0 && uncached.Components.Count == package.Components.Count,"Non-UI package load changed with preview preloading.");
+        }
+
+        // 1.0.15 (LongPaths.cs): a user's 7-Zip scratch path was 265 characters. The fixture root is deeper than any real
+        // game folder, so the limit is moved to sit exactly at this fixture's longest scratch path.
+        private static void TestLongPaths()
+        {
+            Require(File.Exists(sevenZip), "7-Zip tool is unavailable.");
+            string path = Path.Combine(library, "Long paths.7z");
+            RunTool(sevenZip, "a -t7z -y " + Quote(path) + " " + Quote(simpleSource), root);
+            ModPackage package = PackageReader.Load(path, sevenZip);
+            CompositionPlan plan = Composer.Plan(package, package.Components.Where(c => c.Assets.Count > 0).Select(c => c.Id));
+            string staging = Path.Combine(Path.GetDirectoryName(costumeRoot), ".slotsloader-installer-staging");
+            string longest = plan.Files.Values.Select(f => f.Asset.EntryPath).OrderByDescending(p => p.Length).First();
+            var outputs = new List<string>(); bool ran = false;
+            Func<string,string,string> previous = SourceReader.SevenZipRun;
+            try
+            {
+                SourceReader.SevenZipRun = delegate(string exe, string args)
+                {
+                    ran = true;
+                    int at = args.IndexOf("\"-o", StringComparison.Ordinal); outputs.Add(args.Substring(at + 3, args.IndexOf('"', at + 3) - at - 3));
+                    return ProcessUtil.RunText(exe, args);
+                };
+                LongPaths.EnabledOverride = false; LongPaths.FileLimitOverride = 32000;
+                Installer.Install(plan, costumeRoot, "Ingrid", "Long A", sevenZip, false);
+                Require(outputs.Count == 1, "7-Zip should run once.");
+                string raw = outputs[0];
+                Require(Path.GetFileName(raw) == "r" && System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(Path.GetDirectoryName(raw)), "^[0-9a-f]{8}$") && String.Equals(Path.GetDirectoryName(Path.GetDirectoryName(raw)), staging, StringComparison.OrdinalIgnoreCase), "Scratch should be <staging>\\<8 hex>\\r: " + raw);
+                int need = Safety.Under(raw, longest).Length;
+
+                LongPaths.FileLimitOverride = need; ran = false;
+                Installer.Install(plan, costumeRoot, "Ingrid", "Long B", sevenZip, false);
+                Require(ran && Directory.Exists(Path.Combine(costumeRoot, "Ingrid", "Long B")), "A scratch path exactly at the limit should install.");
+
+                LongPaths.FileLimitOverride = need - 1; ran = false;
+                int before = Directory.GetDirectories(staging).Length;
+                try { Installer.Install(plan, costumeRoot, "Ingrid", "Long C", sevenZip, false); throw new InvalidOperationException("A scratch path over the limit installed."); }
+                catch (IOException ex) { Require(ex.Message.StartsWith("This path is too long for Windows (" + need + " characters; the limit is " + (need - 1)), "Unexpected message: " + ex.Message); }
+                Require(!ran, "7-Zip ran although a path was too long.");
+                Require(!Directory.Exists(Path.Combine(costumeRoot, "Ingrid", "Long C")) && Directory.GetDirectories(staging).Length == before, "A refused install left files behind.");
+
+                // Where the files land counts too (ZIP: no 7-Zip scratch).
+                ModPackage zip = PackageReader.Load(Path.Combine(library, "Simple Ingrid.zip"), sevenZip);
+                CompositionPlan zipPlan = Composer.Plan(zip, new[] { zip.Components[0].Id });
+                LongPaths.FileLimitOverride = Safety.Under(Path.Combine(costumeRoot, "Ingrid", "Long D"), zipPlan.Files.Keys.OrderByDescending(p => p.Length).First()).Length - 1;
+                try { Installer.Install(zipPlan, costumeRoot, "Ingrid", "Long D", sevenZip, false); throw new InvalidOperationException("An installed path over the limit installed."); }
+                catch (IOException ex) { Require(ex.Message.StartsWith("This path is too long for Windows"), "Unexpected message: " + ex.Message); }
+                Require(!Directory.Exists(Path.Combine(costumeRoot, "Ingrid", "Long D")) && Directory.GetDirectories(staging).Length == before, "A refused ZIP install left files behind.");
+            }
+            finally { SourceReader.SevenZipRun = previous; LongPaths.EnabledOverride = null; LongPaths.FileLimitOverride = null; }
         }
 
         private static void TestBoundedPreviews()

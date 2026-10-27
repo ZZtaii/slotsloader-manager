@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Extra outfit: a mod whose name another installed outfit of that fighter already has (an edited copy of a zip, with the same option names) replaced that outfit on Install, so the two could never be installed together. Its suggested name now gets " 2", so it installs beside the other one. Typing the other outfit's name still replaces it, and the hint says whose it is: "Replaces this slot, installed from <zip>."
+- Long paths: a RAR or 7Z mod with deep folders, in a game under `C:\Program Files (x86)\Steam`, failed after 7-Zip had unpacked it with "Could not find file '…\.slotsloader-installer-staging\<32 characters>\raw\…'" (265 characters). Windows refuses paths over 259 characters unless long paths are turned on for the PC (LongPathsEnabled), and 7-Zip writes them anyway. The working folders are shorter now (8 characters instead of a 32-character id, `r` instead of `raw`, in Temp `slm-read-`/`slm-verify-`), which takes 26 characters off that path, and every path is checked before anything is unpacked: a path that still doesn't fit stops the install with "This path is too long for Windows (N characters; the limit is 259 while Windows long paths are off): <path>". New Help article "A path is too long".
+- The library column starts at 330 wide on the default window (was 250), so longer mod names fit; few users find out it can be dragged. Until it is dragged it follows the window: smaller windows get less, never under 250, so the options keep their room at the minimum size (the layout check's 370 at 1110x610). A dragged width is kept as before; an undragged one is saved as 0, and a saved width within 2 of the old 250 counts as never dragged.
 
 ## 1.0.14: a smaller download
 

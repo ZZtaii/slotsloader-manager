@@ -295,7 +295,8 @@ namespace SlotsInstaller
                     try { foreach (ListViewItem item in list.SelectedItems.Cast<ListViewItem>().ToList()) item.Selected = false; if (list.Items.Count > 0) { list.Items[0].Selected = true; list.EnsureVisible(0); } }
                     finally { Field("selectingMod").SetValue(form, false); }
                     LayoutAll(canvas); Application.DoEvents(); LayoutAll(canvas); canvas.Refresh();
-                    if (shot == "filters-misc-ui.png") Require(!panel.VerticalScroll.Visible, "the panel scrolls at 1460x920 with the Misc chips showing (real libraries)");
+                    // 1.0.15: no "fits" requirement here any more: at the 330 library the panel may scroll (accepted by the
+                    // user); the filters suite checks it fits with a 250 library. The status line still says which.
                     statusLines.Add(shot + ": " + list.Items.Count + " mods listed, status \"" + status.Text + "\", panel " + (panel.VerticalScroll.Visible ? "scrolls" : "fits"));
                     string file = Path.Combine(output, shot);
                     using (var full = new Bitmap(canvas.Width, canvas.Height))

@@ -80,7 +80,12 @@ namespace SlotsInstaller
         private bool firstLoad = true;
         private bool dpiLayoutReady;
         private bool applyingDpi;
-        private int libraryLogicalWidth=250, installedLogicalWidth=650;
+        // 1.0.15: the library starts at 330 (was 250; the user picked it from renders): few users find the splitter,
+        // and long mod names were cut. Until the splitter is dragged the width follows the window (DefaultLibraryFor),
+        // so a small window keeps room for the options.
+        internal const int DefaultLibraryWidth=330, OldDefaultLibraryWidth=250;
+        private int libraryLogicalWidth=DefaultLibraryWidth, installedLogicalWidth=650;
+        private bool libraryWidthChosen;
         private readonly List<Action> dpiLayouts = new List<Action>();
         private readonly List<Tuple<TableLayoutPanel,float[],float[]>> tableMetrics=new List<Tuple<TableLayoutPanel,float[],float[]>>();
         private SplitContainer librarySplit, installedSplit;
@@ -305,7 +310,7 @@ namespace SlotsInstaller
             }
             // Invisible pages are docked only when first shown. Apply their
             // splitter minimums after they have a real client extent.
-            if(librarySplit.Width>=Px(952)) {librarySplit.SplitterWidth=Px(12);librarySplit.Panel1MinSize=Px(220);librarySplit.Panel2MinSize=Px(720);RestoreSplitter(librarySplit,Px(libraryLogicalWidth));}
+            if(librarySplit.Width>=Px(952)) {librarySplit.SplitterWidth=Px(12);librarySplit.Panel1MinSize=Px(220);librarySplit.Panel2MinSize=Px(720);RestoreSplitter(librarySplit,Px(libraryWidthChosen ? libraryLogicalWidth : DefaultLibraryFor()));}
             if(installedSplit.Width>=Px(768)) {installedSplit.SplitterWidth=Px(18);installedSplit.Panel1MinSize=Px(460);installedSplit.Panel2MinSize=Px(290);RestoreSplitter(installedSplit,Px(installedLogicalWidth));}
             componentTree.ItemHeight=Px(32); componentTree.Indent=Px(18);
             foreach(var list in new[]{modList,installedList,fileList,batchList})   // 1.0.6: the queue list too
@@ -329,6 +334,9 @@ namespace SlotsInstaller
             LocationChanged+=delegate { QueueViewSave(); };
             SizeChanged+=delegate { if (WindowState!=FormWindowState.Minimized) lastMaximized=WindowState==FormWindowState.Maximized; QueueViewSave(); };
             librarySplit.SplitterMoved+=delegate {if(!applyingDpi) libraryLogicalWidth=(int)Math.Round(librarySplit.SplitterDistance*96.0/DeviceDpi);QueueViewSave();};
+            // 1.0.15: SplitterMoving fires only for a drag (mouse or keyboard); until then the width follows the window.
+            librarySplit.SplitterMoving+=delegate {libraryWidthChosen=true;};
+            librarySplit.SizeChanged+=delegate {if(!libraryWidthChosen && dpiLayoutReady && !applyingDpi && librarySplit.Width>=Px(952)) {applyingDpi=true;try{RestoreSplitter(librarySplit,Px(DefaultLibraryFor()));}finally{applyingDpi=false;}}};
             installedSplit.SplitterMoved+=delegate {if(!applyingDpi) installedLogicalWidth=(int)Math.Round(installedSplit.SplitterDistance*96.0/DeviceDpi);QueueViewSave();};
             installedState.SelectedIndexChanged+=delegate {QueueViewSave();};
             filterPanel.FiltersChanged+=delegate {QueueViewSave();};
@@ -357,7 +365,7 @@ namespace SlotsInstaller
             return new ViewPreferences {
                 Dpi=DeviceDpi, HasBounds=bounds.Width>0 && bounds.Height>0, X=bounds.X,Y=bounds.Y,Width=bounds.Width,Height=bounds.Height,
                 Maximized=WindowState==FormWindowState.Maximized || (WindowState==FormWindowState.Minimized && lastMaximized),
-                LibraryWidth=(int)Math.Round(librarySplit.SplitterDistance*96.0/DeviceDpi),InstalledWidth=(int)Math.Round(installedSplit.SplitterDistance*96.0/DeviceDpi),Page=lastMainPage,
+                LibraryWidth=libraryWidthChosen ? (int)Math.Round(librarySplit.SplitterDistance*96.0/DeviceDpi) : 0,InstalledWidth=(int)Math.Round(installedSplit.SplitterDistance*96.0/DeviceDpi),Page=lastMainPage,
                 Search=search.Text,Character=SingleFighterName(),
                 InstalledOnly=filterPanel.InstalledOn,OverridesOnly=overridesOnly.Checked,
                 InstalledSearch=installedSearch.Text,InstalledCharacter=SavedInstalledCharacters(),InstalledState=Convert.ToString(installedState.SelectedItem),
@@ -417,10 +425,18 @@ namespace SlotsInstaller
             int maximum=split.ClientSize.Width-split.SplitterWidth-split.Panel2MinSize;
             if(width>0 && maximum>=split.Panel1MinSize) split.SplitterDistance=Math.Max(split.Panel1MinSize,Math.Min(width,maximum));
         }
+        // 330 on the default window (library split about 1430 wide), less on a smaller one, never under the old 250.
+        private int DefaultLibraryFor()
+        {
+            double split=librarySplit.Width*96.0/DeviceDpi;
+            return Math.Max(OldDefaultLibraryWidth,Math.Min(DefaultLibraryWidth,(int)Math.Round(split*DefaultLibraryWidth/1420.0)));
+        }
         private void RestoreSplitters()
         {
             if(viewPreferences==null) return;
-            if(viewPreferences.LibraryWidth>0) libraryLogicalWidth=viewPreferences.LibraryWidth;
+            // Until 1.0.15 every saved view had a width, dragged or not; one within DPI rounding of the old default was
+            // never dragged. Since 1.0.15 an undragged library saves 0.
+            if(viewPreferences.LibraryWidth>0 && Math.Abs(viewPreferences.LibraryWidth-OldDefaultLibraryWidth)>2) {libraryLogicalWidth=viewPreferences.LibraryWidth;libraryWidthChosen=true;}
             if(viewPreferences.InstalledWidth>0) installedLogicalWidth=viewPreferences.InstalledWidth;
             ApplyDpiMetrics();
         }
@@ -557,7 +573,7 @@ namespace SlotsInstaller
         {
             Panel page = new Panel { Dock = DockStyle.Fill };
 
-            SplitContainer split = new SplitContainer { Size = new Size(1180, 680), Dock = DockStyle.Fill, SplitterDistance = 250, SplitterWidth = 12, BackColor = Palette.Background, Panel1MinSize = 220, Panel2MinSize = 720, FixedPanel = FixedPanel.Panel1 };
+            SplitContainer split = new SplitContainer { Size = new Size(1180, 680), Dock = DockStyle.Fill, SplitterDistance = DefaultLibraryWidth, SplitterWidth = 12, BackColor = Palette.Background, Panel1MinSize = 220, Panel2MinSize = 720, FixedPanel = FixedPanel.Panel1 };
             librarySplit=split;
             Panel browser = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Padding = new Padding(10) };
             // 2.4.1: row 2 is the sort strip (LibrarySort.cs): 20 px chips and the Rhythm.Related gap to the list.
