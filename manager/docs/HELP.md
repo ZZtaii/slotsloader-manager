@@ -27,6 +27,7 @@ The Manager installs Street Fighter 6 mods from your own mod folders: ZIP, RAR a
 - On the first start the Manager looks for SF6 through Steam and adds your external mod manager's mod folder as a library when it finds one. If it can't, set them in **Settings → General**: the **Game folder**, and your **Mod libraries** with **Add…**, then click **Save settings**.
 - Add every folder where you keep downloaded mods as a mod library.
 - A short welcome shows once. Open it again with **Settings → General → Show welcome**. This Help opens any time with F1 or **Gear → Help**.
+- Short tours point at the real controls: the Mod library's after the welcome, and the Installed page's and Settings' the first time you open them. **Gear → Take the tour** shows any of them again. Esc or **Skip tour** ends one.
 
 ### Your first extra outfit
 - Open **Mod library** and pick a mod. Ctrl+F searches, and Enter opens the top match. You can also drop an archive or folder on the window.

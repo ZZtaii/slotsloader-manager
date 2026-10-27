@@ -63,6 +63,7 @@ namespace SlotsInstaller
                         CheckOldErrors(form, report);
                         CheckWelcome(form, root, report);
                         CheckHelp(form, root, report);
+                        CheckTours(form, root, report);
                         form.Close();
                     }
                     if (!String.IsNullOrWhiteSpace(realArchive) && File.Exists(realArchive)) CheckRealRequired(realArchive, report);
@@ -414,6 +415,7 @@ namespace SlotsInstaller
         internal static readonly string[] WindowAllowList =
         {
             "WelcomeForm.ShowWelcome",      // 1.0.11 the welcome: once at the first start, then gear → Welcome (Esc / Close)
+            "TourForm.Run",                 // 1.0.15 the tours: once per page at first use, then gear → Take the tour (Esc / Skip tour)
             "AddPartsForm.Choose",          // 1.0.6 Add to outfit…: pick the installed outfit and the parts (Cancel changes nothing)
             "FluffyPresetForm.Review",      // Import Fluffy preset: map each entry before anything installs (Cancel installs nothing)
             "MainForm.EnlargePreview",      // the preview image, enlarged (click the preview)
@@ -481,6 +483,76 @@ namespace SlotsInstaller
                 Require(welcome.IsDisposed || !welcome.Visible, "Done did not close the welcome");
             }
             report.Add("PASS: welcome (1.0.11): a borderless card with ✕, three topics with tabs, Next / Done (no Back or Close); sized to the tallest topic; never opens by itself in a check window; renders welcome-1..3.png and welcome-overlay.png.");
+        }
+
+        // 1.0.15 tours (Tours.cs, MainFormTours.cs): every step outlines a visible control inside the window, its card fits
+        // the window without covering that control, Back from step 2 and Done on the last; never opens by itself in a
+        // check window. Renders each step over the window (tour-<id>-<n>-<dpi>.png) for review.
+        private static void CheckTours(MainForm form, string root, List<string> report)
+        {
+            Require(Application.OpenForms.OfType<TourForm>().Count() == 0, "a tour opened by itself in a check window");
+            var counts = new List<string>();
+            foreach (Tour tour in new[] { form.LibraryTour(), form.InstalledTour(), form.SettingsTour() })
+            {
+                List<TourStep> steps = TourForm.Applicable(form, tour);
+                int expected = tour.Id == MainForm.InstalledTourId ? 3 : tour.Steps.Count;   // Installed: rows from elsewhere and Reapply only when there are such rows
+                Require(steps.Count >= expected && steps.Count <= tour.Steps.Count, "tour " + tour.Id + ": " + steps.Count + " of " + tour.Steps.Count + " steps apply");
+                using (var card = new TourForm(form, steps))
+                {
+                    card.ShowInTaskbar = false; card.Opacity = 0; card.ShowStep(0); card.Show(form); Application.DoEvents();
+                    Func<string, Control> part = delegate(string name) { return card.Controls.Find(name, true).Single(); };
+                    for (int i = 0; i < steps.Count; i++)
+                    {
+                        card.ShowStep(i); Application.DoEvents();
+                        string context = "tour " + tour.Id + " step " + (i + 1) + " '" + steps[i].Title + "'";
+                        Rectangle client = form.ClientRectangle;
+                        Require(!card.Hole.IsEmpty && client.Contains(card.Hole), context + ": outline " + card.Hole + " outside the window " + client);
+                        Require(client.Contains(card.CardBounds), context + ": card " + card.CardBounds + " outside the window " + client);
+                        Require(!card.CardBounds.IntersectsWith(card.Hole), context + ": card " + card.CardBounds + " covers the outlined control " + card.Hole);
+                        Require(part("tourNext").Text == (i == steps.Count - 1 ? "Done" : "Next") && part("tourBack").Visible == (i > 0) && part("tourSkip").Visible, context + ": buttons");
+                        Require(steps[i].Body.All(line => !line.Contains("—")), context + ": an em-dash in the copy");
+                        RenderTour(form, card, Path.Combine(root, "tour-" + tour.Id + "-" + (i + 1) + "-" + form.DeviceDpi + ".png"));
+                    }
+                    ((FlatButton)part("tourNext")).PerformClick(); Application.DoEvents();
+                    Require(card.IsDisposed || !card.Visible, "tour " + tour.Id + ": Done did not close it");
+                }
+                counts.Add(tour.Id + " " + steps.Count);
+            }
+            report.Add("PASS: tours (1.0.15): every step outlines a control inside the window and its card fits without covering it; Back / Next / Done; never opens by itself (" + String.Join(", ", counts) + " steps); renders tour-<id>-<n>.png.");
+        }
+
+        // The window as the tour shows it: dimmed except the outlined control, the accent ring, the card (and pointer).
+        private static void RenderTour(MainForm form, TourForm card, string file)
+        {
+            using (var window = new Bitmap(form.Width, form.Height))
+            using (var shot = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
+            using (var cardImage = new Bitmap(card.Width, card.Height))
+            {
+                form.DrawToBitmap(window, new Rectangle(Point.Empty, window.Size));
+                Point origin = form.PointToScreen(Point.Empty); origin.Offset(-form.Left, -form.Top);
+                card.DrawToBitmap(cardImage, new Rectangle(Point.Empty, cardImage.Size));
+                using (Graphics g = Graphics.FromImage(shot))
+                {
+                    g.DrawImage(window, -origin.X, -origin.Y);
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    using (var cut = new System.Drawing.Drawing2D.GraphicsPath { FillMode = System.Drawing.Drawing2D.FillMode.Alternate })
+                    using (var hole = Glyphs.Rounded(card.Hole, DpiMetrics.Px(form, 8)))
+                    using (var dim = new SolidBrush(Color.FromArgb((int)Math.Round(255 * WelcomeForm.DimOpacity), Color.Black)))
+                    using (var ring = new Pen(Palette.Accent, Math.Max(2, DpiMetrics.Px(form, 3))))
+                    {
+                        cut.AddRectangle(new Rectangle(Point.Empty, shot.Size)); cut.AddPath(hole, false);
+                        g.FillPath(dim, cut); g.DrawPath(ring, hole);
+                    }
+                    Rectangle at = form.RectangleToClient(card.Bounds);
+                    using (var shape = (System.Drawing.Drawing2D.GraphicsPath)card.Shape.Clone())
+                    using (var move = new System.Drawing.Drawing2D.Matrix())
+                    {
+                        move.Translate(at.X, at.Y); shape.Transform(move);
+                        g.SetClip(shape); g.DrawImage(cardImage, at.X, at.Y); g.ResetClip();
+                    }
+                }
+                shot.Save(file, ImageFormat.Png);
+            }
         }
 
         // 1.0.11 Help (gear → Help, F1): every topic of docs/HELP.md in the list and readable in the article (rendered for

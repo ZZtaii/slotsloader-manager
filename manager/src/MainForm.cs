@@ -39,6 +39,8 @@ namespace SlotsInstaller
         public List<string> FiltersOnly = new List<string>(), FiltersHidden = new List<string>();
         // 1.0.11: the welcome (WelcomeForm) was shown; missing in older files, so updating users see it once too.
         public bool WelcomeSeen;
+        // 1.0.15: the tours that ran ("library", "installed", "settings"; MainFormTours.cs); missing in older files.
+        public List<string> ToursSeen = new List<string>();
         // 1.0.11: where Help resumes: the topic's title and the article's scroll offset (logical pixels).
         public string HelpTopic = "";
         public int HelpOffset;
@@ -239,8 +241,10 @@ namespace SlotsInstaller
                 if (!Program.Headless && screenshotFile==null) { RestoreSplitters(); rememberView=true; }
                 if (firstLoad) { firstLoad = false; if (screenshotFile != null && !screenshotAvailableSize) ClientSize = new Size(Px(1460), Px(920)); RefreshLibrary(); }
                 // 1.0.11: the welcome once, over the opened window (marked seen first, so a crash doesn't bring it back).
+                // 1.0.15: then the Mod library tour, unless the welcome's Help link was used (it runs at the next start).
                 if (rememberView && viewPreferences != null && !viewPreferences.WelcomeSeen)
-                    BeginInvoke((MethodInvoker)delegate { viewPreferences.WelcomeSeen = true; SaveView(); WelcomeForm.ShowWelcome(this, ShowHelp); });
+                    BeginInvoke((MethodInvoker)delegate { viewPreferences.WelcomeSeen = true; SaveView(); if (!WelcomeForm.ShowWelcome(this, ShowHelp)) StartTour(LibraryTourId, true); });
+                else if (rememberView) BeginInvoke((MethodInvoker)delegate { StartTour(LibraryTourId, true); });
             };
             FormClosing += delegate { SaveView(); if (assistantPage != null) assistantPage.Shutdown(); };
             FormClosed += delegate { if (filterMatchCancel != null) filterMatchCancel.Cancel(); StopReadAhead(false); ClearPreviewCache(); if (previewImage != null) previewImage.Dispose(); if (hoverTimer != null) hoverTimer.Dispose(); if (portraitLoad != null) portraitLoad.Cancel(); };
@@ -375,6 +379,7 @@ namespace SlotsInstaller
                 LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,
                 FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide),
                 WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen,
+                ToursSeen=viewPreferences!=null && viewPreferences.ToursSeen!=null ? viewPreferences.ToursSeen : new List<string>(),
                 HelpTopic=HelpResumeTopic ?? "",HelpOffset=HelpResumeOffset
             };
         }
@@ -533,6 +538,7 @@ namespace SlotsInstaller
             toolsMenu.Items.Add(shortcutsItem);
             // 1.0.11 (the user): Help here (F1); no Welcome (Settings → General → Show welcome) and no About (Settings → About tab).
             toolsMenu.Items.Add(new ToolStripMenuItem("Help", null, delegate { RunShortcut(ShortcutAction.HelpPage); }) { ShortcutKeyDisplayString = Shortcuts.Display(ShortcutAction.HelpPage) });
+            toolsMenu.Items.Add(BuildTourMenu());   // 1.0.15: the three tours again (MainFormTours.cs)
             RoomyMenu(toolsMenu); RoomyMenu(shortcutsMenu); RoomyMenu(restoreMenu);   // 1.0.1: larger text and taller rows (the user)
             toolsMenu.Opening+=delegate {if (assistantShortcutItem != null) assistantShortcutItem.Visible = assistantTabShown;};
             navSettings = Button("", false, 42, delegate { toolsMenu.Show(navSettings, new Point(0, navSettings.Height)); });
@@ -1436,6 +1442,12 @@ namespace SlotsInstaller
                 if (complete) pagesLaidOut.Add(page);
             }
             ShowPageStatus();
+            // 1.0.15: the first visit of Installed or Settings runs its tour (MainFormTours.cs; not while restoring the view).
+            if (changed && AutoToursAllowed && (page == installedPage || page == settingsPage))
+            {
+                string tour = page == installedPage ? InstalledTourId : SettingsTourId;
+                if (!TourSeen(tour)) BeginInvoke((MethodInvoker)delegate { StartTour(tour, true); });
+            }
         }
 
         // ---- Page-aware status -------------------------------------------------
