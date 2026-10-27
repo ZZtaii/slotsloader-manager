@@ -14,6 +14,13 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
   - **One fighter per click.** Clicking a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; before, each click added another fighter. Ctrl+click adds one, Shift+click a range, and clicking the selected fighter again clears it.
   - **Smaller downloads from the next version on.** Future downloads leave out the command-line tool and its guide. This version still has them, so earlier versions can update to it.
   - A shorter start to this README.
+  - Download updated 27 Oct:
+    - Bundles **Slotsloader Fork 1.10.6**: an extra outfit without its own scene loads next to a replacement of the same outfit, and an extra whose mod ships its own colour list shows the mod's colours again.
+    - **Long paths.** A RAR or 7Z mod with deep folders, in a game under `Program Files (x86)`, could fail to install with "Could not find file". The Manager's working folders are shorter now, and a path that is still too long for Windows stops the install with a message that says how to turn on long paths (Help: "A path is too long").
+    - **Same outfit name, another mod.** An edited copy of a mod, with the same option names, now installs as "<name> 2" beside the other one instead of replacing it.
+    - **Tours.** Short step-by-step tours point at the real controls: the Mod library's after the welcome (or at the next start if you saw the welcome before), the Installed page's and Settings' the first time you open them. Gear → Take the tour shows them again.
+    - **Wider mod list.** The library column starts wider, so longer mod names fit. Drag the divider to change it.
+    - **Loader package compatibility.** Manually imported upstream Slots Loader packages declaring `SlotsloaderContract=2` or later are accepted. Packages with an older, missing or invalid contract remain refused.
 
 - 1.0.12:
   - **Browsing is instant.** Opening a mod no longer shows a progress bar or "Reading…", and the library list keeps taking keys and clicks meanwhile: the mod you stop on opens, and the ones you pass over aren't read. Mods opened this session stay ready while unchanged, and the next RAR or 7Z in the list is read ahead, so arrowing through the library shows the options and preview at once.

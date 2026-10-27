@@ -936,7 +936,9 @@ namespace SlotsInstaller
             string reviewedManifest = oldManifest == null ? null : File.ReadAllText(Path.Combine(dest,ManifestName));
             string transactionRoot=Path.Combine(parent,".slotsloader-installer-staging"); Safety.NoReparseChain(transactionRoot);
             Directory.CreateDirectory(transactionRoot);
-            string transaction=Safety.Under(transactionRoot,Guid.NewGuid().ToString("N")); Directory.CreateDirectory(transaction);
+            // 1.0.15: where the files land, checked before extracting (the 7-Zip scratch is checked in CopyFilesEach).
+            LongPaths.Check(plan.Files.Keys.Select(p=>Safety.Under(dest,p)));
+            string transaction=Safety.NewFolder(transactionRoot,"");
             string stage=Path.Combine(transaction,"outfit"); Directory.CreateDirectory(stage);
             string backup=null; bool committed=false;
             try
@@ -1256,6 +1258,17 @@ namespace SlotsInstaller
                 if (Directory.Exists(current) || File.Exists(current)) NoReparse(current);
                 current=Path.GetDirectoryName(current);
             }
+        }
+        // 1.0.15: a new folder under `root` with a short name (prefix + 8 hex), not a 32-character GUID, so deep
+        // mods stay under Windows' path limit (LongPaths.cs).
+        internal static string NewFolder(string root,string prefix)
+        {
+            for (int attempt=0;attempt<20;attempt++)
+            {
+                string path=Under(root,prefix+Guid.NewGuid().ToString("N").Substring(0,8));
+                if (!Directory.Exists(path) && !File.Exists(path)) { Directory.CreateDirectory(path); return path; }
+            }
+            throw new IOException("Could not make a working folder in "+root+".");
         }
         internal static void DeleteGenerated(string path,string root)
         {

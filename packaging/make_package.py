@@ -71,7 +71,7 @@ STAGE_MODS_TXT = CRLF.join([
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="1.10.4")
+    ap.add_argument("--version", default="1.10.6")
     ap.add_argument("--out", default=None)
     ap.add_argument("--game", default=DEFAULT_GAME)
     ap.add_argument("--costumes-only", action="store_true", help="the costume loader alone, without stage slots")

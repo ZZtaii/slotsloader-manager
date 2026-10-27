@@ -858,10 +858,13 @@ namespace SlotsInstaller
             ToolStripMenuItem settingsItem = menu.Items.OfType<ToolStripMenuItem>().FirstOrDefault(i => i.Text.StartsWith("Settings", StringComparison.OrdinalIgnoreCase));
             Require(settingsItem != null && settingsItem.Enabled, context + ": Settings menu item is unavailable.");
             // 2.5.9: gear menu without Open costume folder, Refresh libraries and Import external preset.
-            // 1.0.11 (the user): Help (F1) at the end; no Welcome (Settings → General) and no About (the Settings → About tab).
+            // 1.0.11 (the user): Help (F1); no Welcome (Settings → General) and no About (the Settings → About tab).
+            // 1.0.15: Take the tour at the end, with the three tours.
             string[] gearItems = menu.Items.OfType<ToolStripMenuItem>().Select(i => i.Text).ToArray();
-            Require(gearItems.SequenceEqual(new[] { "Settings…", "History", "Restore", "Keyboard shortcuts", "Help" }), context + ": gear menu items: " + String.Join(" | ", gearItems));
-            ToolStripMenuItem helpItem = menu.Items.OfType<ToolStripMenuItem>().Last();
+            Require(gearItems.SequenceEqual(new[] { "Settings…", "History", "Restore", "Keyboard shortcuts", "Help", "Take the tour" }), context + ": gear menu items: " + String.Join(" | ", gearItems));
+            string[] tours = menu.Items.OfType<ToolStripMenuItem>().Last().DropDownItems.OfType<ToolStripMenuItem>().Select(i => i.Text).ToArray();
+            Require(tours.SequenceEqual(new[] { "Mod library", "Installed page", "Settings" }), context + ": tour menu items: " + String.Join(" | ", tours));
+            ToolStripMenuItem helpItem = menu.Items.OfType<ToolStripMenuItem>().Single(i => i.Text == "Help");
             helpItem.PerformClick(); menu.Close(); Application.DoEvents(); LayoutChildren(layoutHost);
             Panel helpPage = ControlField<Panel>(form, "helpPage");
             Require(helpItem.ShortcutKeyDisplayString == "F1" && helpPage != null && helpPage.Visible && !settingsPage.Visible && gear.Active, context + ": gear → Help did not open the Help page.");

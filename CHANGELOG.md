@@ -1,3 +1,35 @@
+# 1.10.6 (2026-10-27)
+
+Package `SF6_Slotsloader_Fork_v1.10.6.zip`, build ID 2026-10-27-1.10.6-slotsloader-fork
+(the first launch rebuilds the outfit PAK once).
+
+- An extra outfit without its own scene was left out ("slot scene missing") when a
+  replacement of the same outfit, installed by Fluffy or by Slotsloader Manager's PAK
+  method, had turned the game's scene off in the PAK (a no-SCN Ingrid C1 as an extra next
+  to an Ingrid C1 replacement that ships its scene). The game's scene is now read from its
+  turned-off entry: the PAK's table is sorted by path hash and a turned-off entry keeps its
+  row, so the one turned-off row where the scene belongs, if it is a scene of that outfit's
+  model folder, is the scene. When that can't be told for sure (two such rows, a table not
+  sorted) the slot is left out as before.
+- An extra outfit whose mod ships its own colour list (`<fighter>_<folder>_ccvd.user.2`)
+  showed the original outfit's colours since 1.10.3: the slot's scene named the mod's list
+  copied under the slot's file name, which still listed the original folder's colour files.
+  The scene now keeps the list the loader points at the slot's own colours (M. Bison C2
+  Cammy Officer v4, the WT Swimwear bundles). Mods without a colour list build the same
+  outfit PAK as before.
+
+# 1.10.5 (2026-10-27)
+
+Package `SF6_Slotsloader_Fork_v1.10.5.zip`, build ID 2026-10-27-1.10.5-slotsloader-fork
+(the first launch rebuilds the outfit PAK once).
+
+- A mod whose options are whole-outfit alternatives of its main files (each with its own
+  copy of the same body mesh and "AddonFor" naming the main) gave only the main files once
+  it had more than three options ("too many to combine"). Each option is now a variant,
+  however many there are: Ingrid C1 Barefoot Stockings v2 gives its main and five
+  "main + option" outfits. Add-ons that don't all replace the same files keep the limit
+  of three.
+
 # 1.10.4 (2026-10-18)
 
 Package `SF6_Slotsloader_Fork_v1.10.4.zip`, build ID 2026-10-18-1.10.4-slotsloader-fork

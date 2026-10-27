@@ -121,11 +121,11 @@ namespace SlotsInstaller
             }
             string tempRoot = Path.GetFullPath(Path.GetTempPath());
             Safety.NoReparseChain(tempRoot);
-            string scratch = Safety.Under(tempRoot,"slotsloader-read-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(scratch);
+            string scratch = Safety.NewFolder(tempRoot,"slm-read-");
             try
             {
-                string raw = Path.Combine(scratch,"raw"); Directory.CreateDirectory(raw);
+                string raw = Path.Combine(scratch,"r"); Directory.CreateDirectory(raw);
+                LongPaths.Check(chosen.Select(e => Safety.Under(raw,e.Path)));
                 string list = Path.Combine(scratch,"entries.txt");
                 File.WriteAllLines(list,chosen.Select(e => e.Original),new UTF8Encoding(false));
                 OperationContext.Report("Reading mod info and previews",0,chosen.Count);
@@ -157,9 +157,13 @@ namespace SlotsInstaller
         internal void CopyFilesEach(IEnumerable<PlannedFile> files, string target, string scratch, Action<PlannedFile,string> done, bool keepPartial)
         {
             var chosen = files.ToList();
+            // 1.0.15: every path is checked before anything is written (LongPaths.cs); 7-Zip's scratch is "r", not "raw".
+            LongPaths.Check(chosen.Select(f => Safety.Under(target,f.Asset.DestinationPath)));
             if (!folder && zip == null)
             {
-                string raw = Path.Combine(scratch,"raw"); Directory.CreateDirectory(raw);
+                string raw = Path.Combine(scratch,"r");
+                LongPaths.Check(chosen.Select(f => Safety.Under(raw,f.Asset.EntryPath)));
+                Directory.CreateDirectory(raw);
                 string list = Path.Combine(scratch,"entries.txt");
                 File.WriteAllLines(list,chosen.Select(f=>Entries[f.Asset.EntryPath].Original),new UTF8Encoding(false));
                 OperationContext.Report("Extracting selected files",0,chosen.Count);
@@ -292,11 +296,11 @@ namespace SlotsInstaller
             }
             if (chosen.Count == 0) return hashes;
             string tempRoot=Path.GetFullPath(Path.GetTempPath()); Safety.NoReparseChain(tempRoot);
-            string scratch=Safety.Under(tempRoot,"slotsloader-verify-"+Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(scratch);
+            string scratch=Safety.NewFolder(tempRoot,"slm-verify-");
             try
             {
-                string raw=Path.Combine(scratch,"raw"); Directory.CreateDirectory(raw);
+                string raw=Path.Combine(scratch,"r"); Directory.CreateDirectory(raw);
+                LongPaths.Check(chosen.Select(file=>Safety.Under(raw,Entries[file.Asset.EntryPath].Path)));
                 string list=Path.Combine(scratch,"entries.txt");
                 File.WriteAllLines(list,chosen.Select(file=>Entries[file.Asset.EntryPath].Original).Distinct(StringComparer.OrdinalIgnoreCase),new UTF8Encoding(false));
                 OperationContext.Report("Verifying selected files",0,chosen.Count);

@@ -138,6 +138,17 @@ namespace SlotsInstaller
                         Require(installed.Items.Count >= 8, "Generated Installed page is empty.");
                         installed.Items[0].Selected = true; Call(form, "ShowInstalledSelection"); Pump(100);
                         Capture(form, root, "04-installed-1280x800", externalCapture, report);
+                        // beta4: a tour step with its real layers (dim with a hole, accent ring, card) under Wine.
+                        using (TourForm tour = TourForm.ShowPreview(form, form.InstalledTour(), 2))
+                        {
+                            Pump(300);
+                            Require(tour.Visible && !tour.Hole.IsEmpty && form.ClientRectangle.Contains(tour.CardBounds) && !tour.CardBounds.IntersectsWith(tour.Hole), "Tour step layout: outline " + tour.Hole + ", card " + tour.CardBounds);
+                            Require(tour.Current != null && tour.Current.Title == "Change what's installed", "Tour preview opened '" + (tour.Current == null ? "" : tour.Current.Title) + "'.");
+                            Capture(form, root, "04b-tour-installed-1280x800", externalCapture, report);
+                            tour.Close();
+                        }
+                        Pump(150);
+                        report.Add("PASS: a tour step shows over the window (dimmed, outlined control, card) and closes with its layers.");
 
                         Call(form, "ShowPage", Get<Panel>(form, "settingsPage")); Call(form, "LoadSettingsFields");
                         Get<ListBox>(form, "settingsLibraries").SelectedIndex = 0; Pump(100);

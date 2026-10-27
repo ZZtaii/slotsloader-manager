@@ -218,7 +218,16 @@ namespace SlotsInstaller
                 int content = panel.Body.Height + panel.Padding.Vertical;
                 bool scrolls = panel.VerticalScroll.Visible;
                 Require(content <= panel.ClientSize.Height || scrolls, ctx + ": content " + content + " taller than the panel " + panel.ClientSize.Height + " without scrolling");
-                if (logical.Width == 1460) Require(!scrolls && content <= panel.ClientSize.Height, ctx + ": the panel scrolls at 1460x920 with the Misc chips showing (content " + content + ", panel " + panel.ClientSize.Height + ")");
+                // 1.0.15: the library starts at 330, where the grid has 7 per row and the panel may scroll (accepted by the
+                // user); with the library at the old 250 it still fits on one screen.
+                if (logical.Width == 1460 && scrolls)
+                {
+                    SplitContainer split = Get<SplitContainer>(form, "librarySplit"); int was = split.SplitterDistance;
+                    split.SplitterDistance = DpiMetrics.Px(form, MainForm.OldDefaultLibraryWidth); Settle(host);
+                    int narrow = panel.Body.Height + panel.Padding.Vertical; bool still = panel.VerticalScroll.Visible;
+                    split.SplitterDistance = was; Settle(host);
+                    Require(!still && narrow <= panel.ClientSize.Height, ctx + ": the panel scrolls at 1460x920 with the Misc chips showing and a 250 library (content " + narrow + ", panel " + panel.ClientSize.Height + ")");
+                }
                 if (scrolls)
                 {
                     panel.ScrollControlIntoView(panel.MiscChips); Settle(host);

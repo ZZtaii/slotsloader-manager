@@ -27,6 +27,7 @@ The Manager installs Street Fighter 6 mods from your own mod folders: ZIP, RAR a
 - On the first start the Manager looks for SF6 through Steam and adds your external mod manager's mod folder as a library when it finds one. If it can't, set them in **Settings → General**: the **Game folder**, and your **Mod libraries** with **Add…**, then click **Save settings**.
 - Add every folder where you keep downloaded mods as a mod library.
 - A short welcome shows once. Open it again with **Settings → General → Show welcome**. This Help opens any time with F1 or **Gear → Help**.
+- Short tours point at the real controls: the Mod library's after the welcome, and the Installed page's and Settings' the first time you open them. **Gear → Take the tour** shows any of them again. Esc or **Skip tour** ends one.
 
 ### Your first extra outfit
 - Open **Mod library** and pick a mod. Ctrl+F searches, and Enter opens the top match. You can also drop an archive or folder on the window.
@@ -126,7 +127,7 @@ Extra outfits need REFramework and Slotsloader in the game folder. In Extra outf
 ### Slots and the outfit name
 - **CHARACTER** is the fighter the mod is for. The Manager doesn't move a mod to another fighter.
 - **OUTFIT NAME** is the slot. Each name is one folder in `reframework\costume_mods\<Character>\<Outfit name>`.
-- Installing under a name that fighter already has updates that slot. A new name adds a slot, so several variants of one mod can sit side by side. Hover over the name or **Install** to see which ("Updates this slot." or "Adds a new slot.").
+- Installing under a name that fighter already has updates that slot. A new name adds a slot, so several variants of one mod can sit side by side. Hover over the name or **Install** to see which ("Updates this slot." or "Adds a new slot."). A different mod whose name is already taken (an edited copy of a zip) gets the name with " 2" added, so it sits beside the first one; type the first one's name to replace it instead ("Replaces this slot, installed from …").
 - The Manager suggests a name from the mod and your ticked options. Type your own to keep it.
 - **Reset options** puts the mod's default ticks back.
 - Slotsloader numbers new slots the next time SF6 starts. Until then the Installed row says "Restart SF6 to load".
@@ -300,6 +301,22 @@ ZIP files and folders work without 7-Zip. RAR and 7Z archives are read with 7-Zi
 ### Other cases
 - An archive that needs a password can't be opened. Extract it yourself and put the folder in one of your mod libraries.
 - While the library is being read, a row shows **Reading…**. Search `is:unreadable` to list the mods the Manager couldn't read.
+
+## A path is too long
+> Windows limits file paths to 259 characters until long paths are turned on.
+
+A mod with deep folders, in a game folder that is deep too, can need a longer path while it installs: the Manager unpacks RAR and 7Z files next to the game, keeping the mod's own folder names. Windows refuses such a path unless long paths are turned on for the whole PC. The Manager is already set up to use them; Windows only needs the switch.
+
+The install then stops before anything changes, with "This path is too long for Windows (… characters; the limit is 259 while Windows long paths are off)" and the path.
+
+### Turn on long paths
+- Windows 11: **Settings → System → Advanced → Enable long paths**.
+- Or, in Command Prompt or PowerShell opened as administrator: `reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f`
+- Close the Manager and open it again, then install again.
+
+### Without long paths
+- Shorten the mod's folder names: extract the archive, rename its long folders (keep the `natives` folders as they are) and put the folder in one of your mod libraries.
+- A game in a shorter folder helps too, like a Steam library at the top of a drive instead of under `Program Files (x86)`.
 
 ## Restore and undo
 > What each undo and restore option does, from the lightest to the full reset.

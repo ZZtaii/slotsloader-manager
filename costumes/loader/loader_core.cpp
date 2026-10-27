@@ -112,7 +112,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-18-1.10.4-slotsloader-fork";
+static const char* LOADER_BUILD_ID = "2026-10-27-1.10.6-slotsloader-fork";
 
 // ============================================================================
 // Utility
@@ -2981,6 +2981,29 @@ static void add_slot_files(PakWriter& writer,
         uint64_t sh = pak_path_hash(std::string_view(orig_costume->scene));
         auto* se = base_pak.find(sh);
         std::vector<uint8_t> vdata;
+        if (!se && mc->files_scene.empty()) {
+            // 1.10.6: a replacement installed over the pak turned the game's scene off (Ingrid C1 with its
+            // own scene as a replacement, a no-SCN Ingrid C1 as an extra: the slot was left out). The
+            // entry keeps its data and its row of the table sorted by hash: the one turned-off row there
+            // that is a scene of this costume's model folder is the game's scene.
+            // "natives/stm/product/model/esf/esf032/001" in the index, "Product/Model/..." in the scene
+            std::string want = str_lower(orig_costume->model_dir) + "/";
+            if (want.compare(0, 12, "natives/stm/") == 0) want.erase(0, 12);
+            const PakEntry* found = nullptr;
+            int n = 0;
+            for (auto* e : base_pak.turned_off_candidates(sh)) {
+                if (e->decompressed_size <= 0 || e->decompressed_size > (8 << 20)) continue;
+                bool own = false;
+                for (auto& r : scene_model_refs(base_pak.read(*e)))
+                    if (str_lower(r.text).compare(0, want.size(), want) == 0) { own = true; break; }
+                if (own) { found = e; n++; }
+            }
+            if (n == 1) {
+                se = found;
+                printf("      scene: the game's %s is turned off in the pak (a replacement installed over it): "
+                       "read from its turned-off entry\n", orig_costume->scene.c_str());
+            }
+        }
         if (se) {
             auto scene_data = base_pak.read(*se);
             vdata.assign(scene_data.begin(), scene_data.end());
@@ -3064,6 +3087,12 @@ static void add_slot_files(PakWriter& writer,
                         while (!head.empty() && (head[0] == '@' || head[0] == ' ')) head.erase(0, 1);
                         std::string target = scene_ref_pak_path(head + new_wpfx + ws.substr(old_wpfx.size()), inv.suffixes);
                         slot_has = !target.empty() && written_paths.count(target);
+                        // A reference that already names a file of the slot stays: the CCVD (moved, not
+                        // renamed, by patch_scene_minimal) went to the mod's list copied under the slot's
+                        // name, which still listed the original folder's colours (M. Bison C2 Cammy
+                        // Officer: Bison's colours on the mod's materials, 1.10.3-1.10.5)
+                        const std::string current = scene_ref_pak_path(head + ws, inv.suffixes);
+                        if (!current.empty() && written_paths.count(current)) slot_has = false;
                     }
                     if (slot_has) {
                         memcpy(vdata.data()+wi, nw16.data(), nw16.size());
@@ -5019,17 +5048,22 @@ static void finalize_units(ScanOutputs& o) {
                              [&](const auto& e) { return e.first == b.mod_id; }), o.mods_out.end());
             printf("\n  %s: put with its add-on(s) in one sub-folder, only the combined outfit is made\n", unit_label(b).c_str());
         }
-        if (adds.size() > 3) {
+        bool apart = true, alternatives = true;
+        for (size_t x = 0; x < adds.size(); ++x)
+            for (size_t y = x + 1; y < adds.size(); ++y)
+                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
+                else alternatives = false;
+        for (auto a : adds) if (!complete_addon_of.count(a)) alternatives = false;
+        // Complete add-ons that all replace the same files (one body mesh each, pick one) cannot be
+        // combined: each is one variant, however many there are (Ingrid C1 Barefoot Stockings v2:
+        // "Main Files" + five whole-body overrides, each with AddonFor "Main Files")
+        if (adds.size() > 3 && !alternatives) {
             printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
                    unit_label(b).c_str(), adds.size());
             continue;
         }
         std::vector<std::vector<size_t>> variants;
         for (auto a : adds) variants.push_back({a});
-        bool apart = true;
-        for (size_t x = 0; x < adds.size(); ++x)
-            for (size_t y = x + 1; y < adds.size(); ++y)
-                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
         if (adds.size() >= 2 && apart) variants.push_back(adds);
         for (auto& v : variants) {
             std::vector<size_t> parts{j};

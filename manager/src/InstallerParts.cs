@@ -97,7 +97,7 @@ namespace SlotsInstaller
 
             string parent = Path.GetDirectoryName(root);
             string transactionRoot = Path.Combine(parent, ".slotsloader-installer-staging"); Safety.NoReparseChain(transactionRoot); Directory.CreateDirectory(transactionRoot);
-            string transaction = Safety.Under(transactionRoot, Guid.NewGuid().ToString("N")); Directory.CreateDirectory(transaction);
+            string transaction = Safety.NewFolder(transactionRoot, "");
             string stage = Path.Combine(transaction, "outfit");
             string reviewedManifest = File.ReadAllText(Path.Combine(outfit.Folder, ManifestName));
             string backup = null; bool committed = false;
@@ -146,7 +146,7 @@ namespace SlotsInstaller
                 if (opened != null && (current.Files.Count != opened.Files.Count || current.Files.Any(k => !opened.Files.ContainsKey(k.Key) || opened.Files[k.Key].Asset.Size != k.Value.Asset.Size || opened.Files[k.Key].Asset.EntryPath != k.Value.Asset.EntryPath)))
                     throw new IOException("The mod changed after it was opened. Reload it and try again.");
                 foreach (string path in current.Files.Keys) { string file = Safety.Under(stage, path); if (File.Exists(file)) File.Delete(file); }
-                string scratch = Path.Combine(transaction, "add-" + Guid.NewGuid().ToString("N").Substring(0, 8)); Directory.CreateDirectory(scratch);
+                string scratch = Safety.NewFolder(transaction, "a");
                 Dictionary<string, string> copied = reader.CopyFiles(current.Files.Values, stage, scratch);
                 foreach (var kv in copied) hashes[kv.Key] = kv.Value;
                 graft.Files = copied.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();

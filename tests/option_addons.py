@@ -18,6 +18,22 @@ import nested_modular as nm
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = "Fixture Main"
+OVERRIDES = [f"Option 0{n}" for n in range(1, 6)]
+
+
+def make_overrides(game: Path) -> None:
+    """Ingrid C1 Barefoot Stockings v2: a main and five whole-body overrides naming it (1.11)"""
+    nm.fixture(game)
+    lay = {"00 Main Files": (nm.modinfo(MAIN), {**nm.files_of("01", "MAIN_BODY", tex=True),
+                                                **nm.files_of("02", "MAIN_HAIR")})}
+    for n, name in enumerate(OVERRIDES, 1):
+        lay[f"0{n} {name}"] = (nm.modinfo(name, MAIN), nm.files_of("01", f"OPT{n}_BODY"))
+    nm.write_zip(game / "reframework/costume_mods/Luke/Fixture Overrides.zip", "Fixture Overrides", lay)
+    # four complete add-ons, not all replacing the same files: still the main alone
+    lay = {"00 Main": (nm.modinfo("Mixed Main"), {**nm.files_of("01", "MIXED_BODY"), **nm.files_of("02", "MIXED_HAIR")})}
+    for n, part in enumerate(("01", "01", "02", "02"), 1):
+        lay[f"0{n} Mixed {n}"] = (nm.modinfo(f"Mixed {n}", "Mixed Main"), nm.files_of(part, f"MIXED{n}"))
+    nm.write_zip(game / "reframework/costume_mods/Luke/Fixture Mixed.zip", "Fixture Mixed", lay)
 
 
 def make(game: Path) -> None:
@@ -74,6 +90,21 @@ def main() -> int:
     check("unmatched addonfor: its own outfit as before", s.get("Other", {}).get("01") == "OTHER_BODY")
     check("logged as an add-on of the main", f"Ribbon: add-on of {MAIN} (its addonfor), made with it" in log)
 
+    g3 = run / "overrides-game"
+    make_overrides(g3)
+    r3, tex3 = slots(g3, args.loader.resolve(), run / "overrides-log.txt")
+    s3, log3 = r3["slots"], r3["log"]
+    combos = [f"{MAIN} + {name}" for name in OVERRIDES]
+    check("five overrides of one file: the main and main + each override",
+          sorted(s3) == sorted([MAIN, *combos, "Mixed Main"]), repr(sorted(s3)))
+    check("each override's body wins, with the main's hair and texture",
+          all(s3.get(c, {}).get("01") == f"OPT{n}_BODY" and s3.get(c, {}).get("02") == "MAIN_HAIR"
+              and tex3.get(c) == main_tex for n, c in enumerate(combos, 1)), repr(s3))
+    check("not logged as too many to combine", f"{MAIN}: 5 add-ons" not in log3)
+    check("four add-ons on different files: the main alone",
+          "Mixed Main: 4 add-ons, too many to combine; the base alone is installed" in log3
+          and not any(k.startswith("Mixed Main +") for k in s3))
+
     if args.old_loader:
         g2 = run / "old-game"
         make(g2)
@@ -82,6 +113,11 @@ def main() -> int:
         check("previous build: Ribbon alone, without the main's hair or texture",
               "Ribbon" in so and so["Ribbon"].get("02") != "MAIN_HAIR" and to.get("Ribbon") != main_tex,
               repr(so))
+        g4 = run / "old-overrides-game"
+        make_overrides(g4)
+        ro4, _ = slots(g4, args.old_loader.resolve(), run / "old-overrides-log.txt")
+        check("previous build: five overrides give the main alone",
+              sorted(ro4["slots"]) == sorted([MAIN, "Mixed Main"]), repr(sorted(ro4["slots"])))
     result = {"checks": checks, "passed": sum(c["passed"] for c in checks), "total": len(checks),
               "scope": "native packaging of modular options; synthetic data; no SF6 runtime test"}
     (run / "results.json").write_text(json.dumps(result, indent=2), encoding="utf-8")

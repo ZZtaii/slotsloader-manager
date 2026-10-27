@@ -65,6 +65,35 @@ naming nothing): three outfits, the main (its body, hair, texture), "Fixture Mai
 alone. With `--old-loader`, the previous build makes Ribbon alone without the
 main's files.
 
+A second game (unreleased fix) gets "Fixture Overrides.zip": a main and five options,
+each with AddonFor naming the main and its own body mesh (all the same file, as
+Ingrid C1 Barefoot Stockings v2). Six outfits: the main and "main + Option 0N" with
+that option's body and the main's hair and texture. "Fixture Mixed.zip" has four
+such add-ons, two on the body and two on the hair: still "too many to combine",
+the main alone. With `--old-loader` (any build before this fix) the overrides give
+the main alone. The Ribbon check under `--old-loader` needs a build before 1.9.8.
+
+## Scene turned off by a replacement (unreleased fix)
+
+After `build.bat`, run `python tests/turned_off_scene.py [--old-loader <previous exe>]`.
+fluffy_coexistence's fixture game (its ManualFixture has no scene), the base PAK
+rewritten sorted by hash as the game's are, with the outfit's scene entry zeroed:
+(a) the slot is built from the zeroed entry's data, pointed at the slot's files;
+(b) a zeroed scene of another model folder in the same gap is passed over; (c) a
+second zeroed scene of the same folder there: left out, no guess; (d) a table not
+sorted: left out. The index names model folders from `natives/`, as the game's does.
+With `--old-loader` (1.10.5 or earlier) case a is left out ("slot scene missing").
+
+## A mod's own colour list (unreleased fix)
+
+After `build.bat`, run `python tests/mod_colour_list.py [--old-loader <previous exe>]`.
+fluffy_coexistence's ManualFixture also ships the outfit's CCVD (naming its two colours
+in mixed case, `Product/Model/.../esf002_003_CMD_001.user`, as M. Bison C2 Cammy Officer
+v4 does) and both CMD files. The slot's scene must name a colour list in the slot's
+folder whose colours are in the slot's folder and hold the mod's bytes, with no "from
+the game, not the mod's version" warning. With `--old-loader` (1.10.3 to 1.10.5) the list
+the scene names points at the original folder.
+
 ## Joint constraints (1.9.8)
 
 After `build.bat`, run `python tests/joint_constraints.py [--old-loader <previous

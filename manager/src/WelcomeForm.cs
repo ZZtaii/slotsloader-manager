@@ -45,10 +45,10 @@ namespace SlotsInstaller
         internal int Index { get { return page.Index; } }
         internal bool HelpRequested { get; private set; }   // the footer's Help link closed it
 
-        // `openHelp` runs after the card closed through its Help link (the main window's Help page).
-        internal static void ShowWelcome(Form owner, Action openHelp)
+        // `openHelp` runs after the card closed through its Help link (the main window's Help page); returns whether it did.
+        internal static bool ShowWelcome(Form owner, Action openHelp)
         {
-            if (Program.Headless) return;
+            if (Program.Headless) return false;
             bool help;
             // The main window dims behind the card: a black layer (DimOpacity) over its client area, owning the card.
             using (var dim = new Form { FormBorderStyle = FormBorderStyle.None, BackColor = Color.Black, Opacity = DimOpacity, ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Bounds = owner.RectangleToScreen(owner.ClientRectangle) })
@@ -59,6 +59,7 @@ namespace SlotsInstaller
                 help = form.HelpRequested;
             }
             if (help && openHelp != null) openHelp();
+            return help;
         }
 
         internal WelcomeForm()

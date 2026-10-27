@@ -107,7 +107,8 @@ namespace SlotsInstaller
         // process and folder names used for detection, persisted Data/history/record values, the internal row kind,
         // the old CLI and Assistant names kept as aliases, and the --make-replace-fixture sample data.
         internal static readonly string[] WordAllowed = { "FluffyModManager", "fluffy", "Fluffy", "fluffy:", "fluffy_uninstall", "fluffy-preset:", "sf6-fluffy-removed-v1", "fluffy-removed", "fluffy-ini-backups", "fluffy-backup",
-            "import_fluffy_preset", "fluffy-status", "fluffy-uninstall", "fluffy-restore", "[Fluffy Tool]\r\nModName=Fluffy Tool\r\ninstalltype=invalidate\r\nfile=reframework/autorun/fluffy_tool.lua\r\n" };
+            "import_fluffy_preset", "fluffy-status", "fluffy-uninstall", "fluffy-restore", "[Fluffy Tool]\r\nModName=Fluffy Tool\r\ninstalltype=invalidate\r\nfile=reframework/autorun/fluffy_tool.lua\r\n",
+            "fluffy_running" };   // Linux: the host helper's process-status key (linux/host.py), never shown
         // Every string literal (ldstr) of the app outside checks and test helpers that contains `word`, as "Type.Method: text".
         internal static List<string> LiteralFindings(string word, out int scanned)
         {

@@ -59,21 +59,27 @@ namespace SlotsInstaller
         }
 
         // Nothing of this mod installed: the plain mod name (as before 2.5.0). The same options as an installed slot:
-        // that slot's name (Install updates it). Otherwise "<mod> · <options joined with ' + '>", " 2", " 3"… when taken.
+        // that slot's name (Install updates it). Otherwise "<mod> · <options joined with ' + '>". Either gets " 2", " 3"…
+        // when taken: 1.0.15, the plain name too, since another mod with the same option name (an edited copy of a zip)
+        // took over that mod's slot on Install.
         internal string SuggestedOutfitName()
         {
             if (package == null) return "";
             string plain = CleanName(package.Name), character = TargetCharacter();
             List<InstalledOutfit> slots = ModSlots(character);
-            if (slots.Count == 0) return plain;
+            if (slots.Count == 0) return Untaken(plain, character);
             var selection = new HashSet<string>(selectedOrder, StringComparer.OrdinalIgnoreCase);
             InstalledOutfit same = slots.FirstOrDefault(o => o.Enabled && o.SelectedIds != null && Composer.MatchesSavedSelection(package, selection, o.SelectedIds));
             if (same != null) return same.Name;
             List<string> options = VariantOptionNames();
             string name = CleanName(options.Count == 0 ? plain : plain + " · " + String.Join(" + ", options));
             if (name.Length > SlotNameLimit) name = name.Substring(0, SlotNameLimit).Trim().TrimEnd('.');
+            return Untaken(name, character);
+        }
+        private string Untaken(string name, string character)
+        {
             string candidate = name;
-            for (int n = 2; installed.Any(o => String.Equals(o.Character, character, StringComparison.OrdinalIgnoreCase) && String.Equals(o.Name, candidate, StringComparison.OrdinalIgnoreCase)); n++) candidate = name + " " + n;
+            for (int n = 2; installed != null && installed.Any(o => String.Equals(o.Character, character, StringComparison.OrdinalIgnoreCase) && String.Equals(o.Name, candidate, StringComparison.OrdinalIgnoreCase)); n++) candidate = name + " " + n;
             return candidate;
         }
         // Called when the mod opens, the options or the character change, the mode switches or the installed list refreshes.
@@ -93,7 +99,11 @@ namespace SlotsInstaller
             if (package == null || IsReplaceMode || outfitName == null || installed == null) return "";
             string character = TargetCharacter(), name = outfitName.Text.Trim();
             if (name.Length == 0 || String.IsNullOrEmpty(character)) return "";
-            if (installed.Any(o => o.Managed && o.Enabled && String.Equals(o.Character, character, StringComparison.OrdinalIgnoreCase) && String.Equals(o.Name, name, StringComparison.OrdinalIgnoreCase))) return "Updates this slot.";
+            InstalledOutfit taken = installed.FirstOrDefault(o => o.Managed && o.Enabled && String.Equals(o.Character, character, StringComparison.OrdinalIgnoreCase) && String.Equals(o.Name, name, StringComparison.OrdinalIgnoreCase));
+            // 1.0.15: a slot of another mod is replaced by this one (the same-name switch): say whose it is
+            if (taken != null && !String.IsNullOrWhiteSpace(taken.SourcePath) && !ReplacePlanner.SameSource(taken.SourcePath, package.SourcePath))
+                return "Replaces this slot, installed from " + Path.GetFileName((taken.SourcePath ?? "").TrimEnd('\\', '/')) + ".";
+            if (taken != null) return "Updates this slot.";
             List<InstalledOutfit> slots = ModSlots(character);
             if (slots.Count == 0 || installed.Any(o => String.Equals(o.Character, character, StringComparison.OrdinalIgnoreCase) && String.Equals(o.Name, name, StringComparison.OrdinalIgnoreCase))) return "";
             return "Adds a new slot. Keeps: " + String.Join(", ", slots.Take(SlotNamesShown).Select(o => o.Name)) + (slots.Count > SlotNamesShown ? " +" + (slots.Count - SlotNamesShown) + " more" : "") + ".";

@@ -141,7 +141,8 @@ namespace SlotsInstaller
         internal const string PluginPath = "reframework/plugins/SF6_CostumeSlotsNative.dll";
         internal static bool IsLoaderMod(ReplaceMod m) { return m != null && m.Files.Any(f => String.Equals(f.Path.Replace('\\', '/'), PluginPath, StringComparison.OrdinalIgnoreCase)); }
 
-        // 1.0.1: the Manager installs only its own Slotsloader (this fork): released as "Slotsloader Fork" (earlier
+        // Identifies upstream builds; Prepare separately accepts their declared Manager contract >= 2.
+        // The Manager's own Slotsloader (this fork) is released as "Slotsloader Fork" (earlier
         // "Slotsloader", author ZZtaii) or a "-custom" development build. Upstream's own builds (author Wael, none of
         // those marks) lack the fork's fixes (e.g. a PAK-method replacement of Outfit 1 leaves its slots without a
         // scene), so a package of one is refused with a pointer to the Manager's.
@@ -151,6 +152,15 @@ namespace SlotsInstaller
                 || (author ?? "").IndexOf("ZZtaii", StringComparison.OrdinalIgnoreCase) >= 0
                 || (version ?? "").IndexOf("-custom", StringComparison.OrdinalIgnoreCase) >= 0;
             return !fork && (author ?? "").IndexOf("Wael", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        // Package-declared compatibility for manual installs; the bundled/default loader pin is unchanged.
+        internal const int KnownContract = 2;
+        internal static bool HonoursContract(ModComponent c)
+        {
+            string v; int n;
+            return c != null && c.Metadata != null && c.Metadata.TryGetValue("SlotsloaderContract", out v)
+                && Int32.TryParse((v ?? "").Trim(), out n) && n >= KnownContract;
         }
 
         // SlotsLoader isn't installed (no proxy/plugin/loader data in the game folder) but its costume pak is.
