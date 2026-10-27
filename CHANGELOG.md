@@ -1,3 +1,14 @@
+# Unreleased
+
+- An extra outfit without its own scene was left out ("slot scene missing") when a
+  replacement of the same outfit, installed by Fluffy or by Slotsloader Manager's PAK
+  method, had turned the game's scene off in the PAK (a no-SCN Ingrid C1 as an extra next
+  to an Ingrid C1 replacement that ships its scene). The game's scene is now read from its
+  turned-off entry: the PAK's table is sorted by path hash and a turned-off entry keeps its
+  row, so the one turned-off row where the scene belongs, if it is a scene of that outfit's
+  model folder, is the scene. When that can't be told for sure (two such rows, a table not
+  sorted) the slot is left out as before.
+
 # 1.10.5 (2026-10-27)
 
 Package `SF6_Slotsloader_Fork_v1.10.5.zip`, build ID 2026-10-27-1.10.5-slotsloader-fork

@@ -73,6 +73,17 @@ such add-ons, two on the body and two on the hair: still "too many to combine",
 the main alone. With `--old-loader` (any build before this fix) the overrides give
 the main alone. The Ribbon check under `--old-loader` needs a build before 1.9.8.
 
+## Scene turned off by a replacement (unreleased fix)
+
+After `build.bat`, run `python tests/turned_off_scene.py [--old-loader <previous exe>]`.
+fluffy_coexistence's fixture game (its ManualFixture has no scene), the base PAK
+rewritten sorted by hash as the game's are, with the outfit's scene entry zeroed:
+(a) the slot is built from the zeroed entry's data, pointed at the slot's files;
+(b) a zeroed scene of another model folder in the same gap is passed over; (c) a
+second zeroed scene of the same folder there: left out, no guess; (d) a table not
+sorted: left out. The index names model folders from `natives/`, as the game's does.
+With `--old-loader` (1.10.5 or earlier) case a is left out ("slot scene missing").
+
 ## Joint constraints (1.9.8)
 
 After `build.bat`, run `python tests/joint_constraints.py [--old-loader <previous

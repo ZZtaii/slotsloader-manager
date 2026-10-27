@@ -112,7 +112,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-27-1.10.5-slotsloader-fork";
+static const char* LOADER_BUILD_ID = "2026-10-27-1.10.5-scene-fix-slotsloader-fork";
 
 // ============================================================================
 // Utility
@@ -2981,6 +2981,29 @@ static void add_slot_files(PakWriter& writer,
         uint64_t sh = pak_path_hash(std::string_view(orig_costume->scene));
         auto* se = base_pak.find(sh);
         std::vector<uint8_t> vdata;
+        if (!se && mc->files_scene.empty()) {
+            // 1.10.6: a replacement installed over the pak turned the game's scene off (Ingrid C1 with its
+            // own scene as a replacement, a no-SCN Ingrid C1 as an extra: the slot was left out). The
+            // entry keeps its data and its row of the table sorted by hash: the one turned-off row there
+            // that is a scene of this costume's model folder is the game's scene.
+            // "natives/stm/product/model/esf/esf032/001" in the index, "Product/Model/..." in the scene
+            std::string want = str_lower(orig_costume->model_dir) + "/";
+            if (want.compare(0, 12, "natives/stm/") == 0) want.erase(0, 12);
+            const PakEntry* found = nullptr;
+            int n = 0;
+            for (auto* e : base_pak.turned_off_candidates(sh)) {
+                if (e->decompressed_size <= 0 || e->decompressed_size > (8 << 20)) continue;
+                bool own = false;
+                for (auto& r : scene_model_refs(base_pak.read(*e)))
+                    if (str_lower(r.text).compare(0, want.size(), want) == 0) { own = true; break; }
+                if (own) { found = e; n++; }
+            }
+            if (n == 1) {
+                se = found;
+                printf("      scene: the game's %s is turned off in the pak (a replacement installed over it): "
+                       "read from its turned-off entry\n", orig_costume->scene.c_str());
+            }
+        }
         if (se) {
             auto scene_data = base_pak.read(*se);
             vdata.assign(scene_data.begin(), scene_data.end());

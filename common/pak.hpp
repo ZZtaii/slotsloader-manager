@@ -80,6 +80,12 @@ public:
     // pak (Fluffy writes zeros over the entry's hash)
     void forget(uint64_t hash) { entries_.erase(hash); }
 
+    // Entries a replacement mod manager turned off (zeros over the hash) that can have held this hash,
+    // in this pak then the added ones. The game's tables are sorted by hash and a turned-off entry
+    // keeps its row, so only those between the two entries around the hash can. Empty when the
+    // table is not sorted. read() reads them like any other entry.
+    std::vector<const PakEntry*> turned_off_candidates(uint64_t hash) const;
+
     // A pak the game reads under this one (the DLC paks under re_chunk_000.pak): find() looks in
     // this pak first, then in the added paks in the order they were added, and read() reads an
     // entry from the pak it came from. The added pak must outlive this reader.
@@ -98,6 +104,9 @@ private:
     FILE*    fp_ = nullptr;
     EntryMap entries_;
     std::vector<PakReader*> over_;
+    // A turned-off entry and the hashes of the entries around it (0 / UINT64_MAX at the table's ends)
+    struct TurnedOff { uint64_t after, before; PakEntry e; };
+    std::vector<TurnedOff> turned_off_;
 
     PakReader* owner_of(const PakEntry& e);
 };
