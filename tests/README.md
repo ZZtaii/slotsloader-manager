@@ -84,6 +84,16 @@ second zeroed scene of the same folder there: left out, no guess; (d) a table no
 sorted: left out. The index names model folders from `natives/`, as the game's does.
 With `--old-loader` (1.10.5 or earlier) case a is left out ("slot scene missing").
 
+## A mod's own colour list (unreleased fix)
+
+After `build.bat`, run `python tests/mod_colour_list.py [--old-loader <previous exe>]`.
+fluffy_coexistence's ManualFixture also ships the outfit's CCVD (naming its two colours
+in mixed case, `Product/Model/.../esf002_003_CMD_001.user`, as M. Bison C2 Cammy Officer
+v4 does) and both CMD files. The slot's scene must name a colour list in the slot's
+folder whose colours are in the slot's folder and hold the mod's bytes, with no "from
+the game, not the mod's version" warning. With `--old-loader` (1.10.3 to 1.10.5) the list
+the scene names points at the original folder.
+
 ## Joint constraints (1.9.8)
 
 After `build.bat`, run `python tests/joint_constraints.py [--old-loader <previous

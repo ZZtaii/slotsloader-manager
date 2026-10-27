@@ -8,6 +8,12 @@
   row, so the one turned-off row where the scene belongs, if it is a scene of that outfit's
   model folder, is the scene. When that can't be told for sure (two such rows, a table not
   sorted) the slot is left out as before.
+- An extra outfit whose mod ships its own colour list (`<fighter>_<folder>_ccvd.user.2`)
+  showed the original outfit's colours since 1.10.3: the slot's scene named the mod's list
+  copied under the slot's file name, which still listed the original folder's colour files.
+  The scene now keeps the list the loader points at the slot's own colours (M. Bison C2
+  Cammy Officer v4, the WT Swimwear bundles). Mods without a colour list build the same
+  outfit PAK as before.
 
 # 1.10.5 (2026-10-27)
 

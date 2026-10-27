@@ -112,7 +112,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-27-1.10.5-scene-fix-slotsloader-fork";
+static const char* LOADER_BUILD_ID = "2026-10-27-1.10.5-colour-fix-slotsloader-fork";
 
 // ============================================================================
 // Utility
@@ -3087,6 +3087,12 @@ static void add_slot_files(PakWriter& writer,
                         while (!head.empty() && (head[0] == '@' || head[0] == ' ')) head.erase(0, 1);
                         std::string target = scene_ref_pak_path(head + new_wpfx + ws.substr(old_wpfx.size()), inv.suffixes);
                         slot_has = !target.empty() && written_paths.count(target);
+                        // A reference that already names a file of the slot stays: the CCVD (moved, not
+                        // renamed, by patch_scene_minimal) went to the mod's list copied under the slot's
+                        // name, which still listed the original folder's colours (M. Bison C2 Cammy
+                        // Officer: Bison's colours on the mod's materials, 1.10.3-1.10.5)
+                        const std::string current = scene_ref_pak_path(head + ws, inv.suffixes);
+                        if (!current.empty() && written_paths.count(current)) slot_has = false;
                     }
                     if (slot_has) {
                         memcpy(vdata.data()+wi, nw16.data(), nw16.size());
