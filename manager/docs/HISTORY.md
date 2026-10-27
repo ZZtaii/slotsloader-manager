@@ -1,5 +1,9 @@
 # Development history
 
+## Unreleased
+
+- Extra outfit: a mod whose name another installed outfit of that fighter already has (an edited copy of a zip, with the same option names) replaced that outfit on Install, so the two could never be installed together. Its suggested name now gets " 2", so it installs beside the other one. Typing the other outfit's name still replaces it, and the hint says whose it is: "Replaces this slot, installed from <zip>."
+
 ## 1.0.14: a smaller download
 
 - Same code as 1.0.13. The release zip is the Manager exe, its config, README.md and Slotsloader\ (tools\Package-Release.ps1 packs the CLI, CLI.md and VALIDATION.txt only before 1.0.14; VALIDATION.txt now goes beside the zip). Published as a pre-release while 1.0.13 stays Latest, so 1.0.12 and older reach 1.0.13 first.

@@ -126,7 +126,7 @@ Extra outfits need REFramework and Slotsloader in the game folder. In Extra outf
 ### Slots and the outfit name
 - **CHARACTER** is the fighter the mod is for. The Manager doesn't move a mod to another fighter.
 - **OUTFIT NAME** is the slot. Each name is one folder in `reframework\costume_mods\<Character>\<Outfit name>`.
-- Installing under a name that fighter already has updates that slot. A new name adds a slot, so several variants of one mod can sit side by side. Hover over the name or **Install** to see which ("Updates this slot." or "Adds a new slot.").
+- Installing under a name that fighter already has updates that slot. A new name adds a slot, so several variants of one mod can sit side by side. Hover over the name or **Install** to see which ("Updates this slot." or "Adds a new slot."). A different mod whose name is already taken (an edited copy of a zip) gets the name with " 2" added, so it sits beside the first one; type the first one's name to replace it instead ("Replaces this slot, installed from …").
 - The Manager suggests a name from the mod and your ticked options. Type your own to keep it.
 - **Reset options** puts the mod's default ticks back.
 - Slotsloader numbers new slots the next time SF6 starts. Until then the Installed row says "Restart SF6 to load".

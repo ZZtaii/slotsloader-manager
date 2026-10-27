@@ -62,6 +62,7 @@ namespace SlotsInstaller
                         check("Install all variants (2.5.4): an archive with several options is copied unchanged into costume_mods\\<character>\\ like a manual drop, linked to its library mod (✓ Full, Reinstall, footer Uninstall for good with no Undo, 1.0.1); folders and Replace original get no button; a manual file of the same name is never overwritten", delegate { AllVariants(form, mod, game, root); });
                         check("Renamed archive reinstall (1.0.5): keeps the installed filename, record and variant choices; outside-root records are ignored; changed, wrong-character and ambiguous copies are refused", delegate { RenamedArchiveReinstall(root); });
                         check("Archive records from another game (1.0.5): existing and absent old copies do not block a new root; their files and records stay untouched", delegate { ArchiveOtherGameRoots(root); });
+                        check("Same option name, another mod (1.0.15): an edited copy of an installed mod suggests \"<name> 2\" with no hint and installs beside it, the first mod's slot and source untouched; typing the first slot's name says \"Replaces this slot, installed from <its source>.\"", delegate { OtherSourceName(form, mods, game); });
                         form.Close();
                     }
                 }
@@ -143,6 +144,33 @@ namespace SlotsInstaller
             Require(form.SlotHintText == "", "hint in Replace mode");
             Call(form, "SetInstallMode", InstallModes.Slot, true); WaitIdle(form);
             Require(Name(form) == both, "slot mode name: " + Name(form));
+        }
+
+        // Ingrid C1 NO SCN v2 and its "no jcn" copy: one option name, so the copy took over the first one's slot on Install
+        private static void OtherSourceName(MainForm form, string mods, string game)
+        {
+            const string twin = "Twin Outfit";
+            string a = Path.Combine(mods, "Twin A"), b = Path.Combine(mods, "Twin B"), costume = Path.Combine(game, "reframework", "costume_mods", "Luke");
+            foreach (string m in new[] { a, b })
+            {
+                Put(m, "Main/modinfo.ini", "name=" + twin + "\r\n");
+                Put(m, "Main/natives/stm/product/model/esf/esf002/001/01/esf002_001_01.mesh.230110883", "twin body " + Path.GetFileName(m));
+            }
+            Call(form, "ShowPage", Get<Panel>(form, "libraryPage"));
+            Call(form, "LoadPackage", new LibraryEntry { SourcePath = a, Name = twin }); WaitIdle(form);
+            Require(Name(form) == twin && form.SlotHintText == "", "first mod: " + Name(form) + " / " + form.SlotHintText);
+            Install(form);
+            Call(form, "LoadPackage", new LibraryEntry { SourcePath = b, Name = twin }); WaitIdle(form);
+            Require(Name(form) == twin + " 2" && form.SlotHintText == "", "copy: " + Name(form) + " / " + form.SlotHintText);
+            Install(form);
+            Func<string, InstalledOutfit> slot = delegate(string name) { return Installer.ListInstalled(Path.Combine(game, "reframework", "costume_mods")).FirstOrDefault(o => o.Character == "Luke" && o.Name == name); };
+            InstalledOutfit first = slot(twin), second = slot(twin + " 2");
+            Require(first != null && ReplacePlanner.SameSource(first.SourcePath, a) && File.ReadAllText(Path.Combine(costume, twin, "natives", "stm", "product", "model", "esf", "esf002", "001", "01", "esf002_001_01.mesh.230110883")) == "twin body Twin A", "the first mod's slot changed: " + (first == null ? "gone" : first.SourcePath));
+            Require(second != null && ReplacePlanner.SameSource(second.SourcePath, b), "the copy's slot: " + (second == null ? "missing" : second.SourcePath));
+            Require(Name(form) == twin + " 2" && form.SlotHintText == "Updates this slot.", "copy after install: " + Name(form) + " / " + form.SlotHintText);
+            Get<PaddedTextField>(form, "outfitName").Text = twin; Application.DoEvents();
+            Require(form.SlotHintText == "Replaces this slot, installed from Twin A.", "typed the first slot's name: " + form.SlotHintText);
+            Get<PaddedTextField>(form, "outfitName").Text = ""; Application.DoEvents();
         }
 
         private static void Reset(MainForm form)
