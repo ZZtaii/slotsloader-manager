@@ -1,4 +1,7 @@
-# Unreleased
+# 1.10.6 (2026-10-27)
+
+Package `SF6_Slotsloader_Fork_v1.10.6.zip`, build ID 2026-10-27-1.10.6-slotsloader-fork
+(the first launch rebuilds the outfit PAK once).
 
 - An extra outfit without its own scene was left out ("slot scene missing") when a
   replacement of the same outfit, installed by Fluffy or by Slotsloader Manager's PAK
