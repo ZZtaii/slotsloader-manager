@@ -126,7 +126,7 @@ namespace SlotsInstaller
             rows.SelectedIndex = unresolved > 0 ? plan.Rows.FindIndex(r => r.Problem != null) : Math.Max(0,selected);
             title.Text = "We found your SF6 mod setup";
             status.Text = ReplacePlanner.N(plan.Rows.Count, "active mod") + " in install order" +
-                (unresolved == 0 ? " · All sources matched" : " · " + unresolved + (unresolved == 1 ? " needs attention" : " need attention")) +
+                (unresolved == 0 ? " · Sources located. Start migration to verify them." : " · " + unresolved + (unresolved == 1 ? " needs attention" : " need attention")) +
                 Environment.NewLine + "Select a mod to review its source and shared files.";
             ShowDetails(); Buttons();
         }
@@ -201,8 +201,10 @@ namespace SlotsInstaller
 
         private void WaitForHandoff()
         {
-            waiting = true; pollFailed = false; title.Text = "Your setup is saved";
-            status.Text = "In the other mod manager, choose Uninstall all mods for Street Fighter 6, then close it. Migration will continue automatically.";
+            waiting = true; pollFailed = false;
+            title.Text = plan.CompatibilityChecked ? "Your setup is saved" : "Checking the earlier migration plan";
+            status.Text = plan.CompatibilityChecked ? "In the other mod manager, choose Uninstall all mods for Street Fighter 6, then close it. Migration will continue automatically." :
+                "Keep any active mods installed while the Manager checks this plan.";
             timer.Start(); Buttons();
         }
 

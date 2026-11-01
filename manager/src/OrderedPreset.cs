@@ -60,6 +60,9 @@ namespace SlotsInstaller
             using (Lock())
             try
             {
+                string method = migration == null ? null : migration.InstallMethod(this,LoadState());
+                var options = new ChangeOptions();
+                if (migration != null) options.MigrationOriginals = new Dictionary<string,string>(migration.Originals,StringComparer.OrdinalIgnoreCase);
                 Change("Import ordered preset replacements", true, delegate(ReplaceState state)
                 {
                     GameProcesses.RequireGameClosed("import preset replacements");
@@ -118,7 +121,7 @@ namespace SlotsInstaller
                         string folder = null;
                         try
                         {
-                            ReplacePlan plan = ReplacePlanner.PrepareCore(payload, sevenZip, this, stage, null, old == null ? null : old.Id, state, reservePatch, migration == null ? null : migration.Rows[i].PayloadHashes);
+                            ReplacePlan plan = ReplacePlanner.PrepareCore(payload, sevenZip, this, stage, null, old == null ? null : old.Id, state, reservePatch, migration == null ? null : migration.Rows[i], method);
                             if (!plan.CanInstall) throw new IOException(unit.Name + ": " + String.Join(" ", plan.Errors));
                             ReplaceMod mod = PublishPrepared(plan, unit.Name, false, state, out folder, ids[i]);
                             // An unchanged reimport retains the installed store and its ID, including references held by the UI.
@@ -149,7 +152,7 @@ namespace SlotsInstaller
                         state.LastMigration = migration.Id;
                     }
                     return state;
-                }, false, null);
+                }, options, method, null);
             }
             catch
             {

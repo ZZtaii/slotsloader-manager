@@ -603,6 +603,12 @@ namespace SlotsInstaller
                 using (InstallMetrics.Measure("reconcile path safety")) Safety.NoReparseChain(full);
                 string actual;
                 using (InstallMetrics.Measure("reconcile current SHA", InstallMetrics.Enabled && File.Exists(full) ? new FileInfo(full).Length : 0)) actual = CurrentSha(path, full); // empty placeholder counts as no file
+                string expected;
+                if (options.MigrationOriginals != null && options.MigrationOriginals.TryGetValue(path,out expected) && actual != expected)
+                {
+                    Cleanup(journal.CreatedPaths);
+                    throw new IOException("The original game file changed during migration: " + path);
+                }
                 OriginalBackup original = originals.FirstOrDefault(o => String.Equals(o.Path, path, StringComparison.OrdinalIgnoreCase));
                 DriftChoice choice = options.Choice;
                 string beforeSource = null;
@@ -649,8 +655,8 @@ namespace SlotsInstaller
                         {
                             string backup = Path.Combine(BackupDir, Guid.NewGuid().ToString("N") + ".bin");
                             Directory.CreateDirectory(BackupDir); File.Copy(full, backup);
-                            if (Sha(backup) != actual) throw new IOException("Could not back up " + path + " exactly.");
                             journal.CreatedPaths.Add(backup);
+                            if (Sha(backup) != actual) { Cleanup(journal.CreatedPaths); throw new IOException("Could not back up " + path + " exactly."); }
                             original = new OriginalBackup { Path = path, Backup = backup, Sha256 = actual, Size = new FileInfo(full).Length };
                             originals.Add(original); beforeSource = backup;
                         }
@@ -792,6 +798,7 @@ namespace SlotsInstaller
         private sealed class ChangeOptions
         {
             internal DriftChoice Choice = DriftChoice.Refuse;
+            internal Dictionary<string,string> MigrationOriginals;
             internal HashSet<string> RestoreReleased;   // "Restore original game file" for these kept paths
             internal bool RecycleSurvivingFiles;
             internal bool IncludeReleased;              // restore-all: kept files are part of the question
