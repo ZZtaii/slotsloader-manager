@@ -14,9 +14,67 @@ namespace SlotsInstaller
         {
             Directory.CreateDirectory(root);
             Options(Path.Combine(root, "options"));
+            BundleEditing(root);
             Search(Path.Combine(root, "search"));
             Ranking();
             Console.WriteLine("PASS install improvements: root choices, saved winners, PAK search/index and portrait ordering");
+        }
+        private static void BundleEditing(string root)
+        {
+            string path = Path.Combine(root,"bundle-edit.zip");
+            ZipFile.CreateFromDirectory(Path.Combine(root,"options"), path);
+            var original = PackageReader.Load(path,"");
+            var rows = BundleLayout.Options(original);
+            Require(!BundleSuggestions.Local(original,rows).Changed,"local suggestion subdivided an existing exclusive group");
+            var neutral=new ModPackage();
+            foreach(var label in new[]{"Red palette","Blue palette","Cape"})
+                neutral.Components.Add(new ModComponent {Id=label,Name=label});
+            var plain=BundleLayout.Options(neutral);
+            var proposed=BundleSuggestions.Local(neutral,plain);
+            Require(proposed.Changed && proposed.Items.Single(r=>r.Name=="Colors").Rule=="Choose any" &&
+                proposed.Items.Single(r=>r.Name=="Cape").Parent==null && plain.All(r=>r.Parent==null) &&
+                !BundleSuggestions.Local(neutral,proposed.Items).Changed,"uncertain options, draft isolation or repeated suggestion");
+            var group = rows.Single(r => original.Find(r.Id).InferredChoice);
+            group.Rule = "Choose up to one";
+            var newGroup = new BundleOption { Id=BundleLayout.GroupPrefix+Guid.NewGuid().ToString("N"), Name="Options", Rule="Choose any" };
+            rows.Add(newGroup); group.Parent=newGroup.Id;
+            string digest = ReplaceEngine.Sha(path), stamp = SourceReader.Stamp(path);
+            long length = new FileInfo(path).Length;
+            BundleLayout.Save(path,stamp,rows);
+            var edited = PackageReader.Load(path,"");
+            Require(edited.Find(group.Id).ParentId==newGroup.Id && !edited.Find(group.Id).RequiresChoice,"edited parent and rule");
+            long size;
+            Require(BundleLayout.ArchiveHash(path,out size)==digest && size==length,"original payload identity after editing");
+            var members = edited.Components.Where(c=>c.ParentId==group.Id).Select(c=>c.Id).ToList();
+            Require(Composer.Plan(edited,members.Take(1),true).CanInstall && !Composer.Plan(edited,members.Take(2),true).CanInstall,"edited optional choose-one group");
+            newGroup.Parent=group.Id; string now=SourceReader.Stamp(path);
+            try { BundleLayout.Save(path,now,rows); throw new Exception("Circular bundle saved"); } catch(InvalidDataException) { }
+            Require(now==SourceReader.Stamp(path),"rejected edit modified the ZIP");
+            BundleLayout.Save(path,now,null);
+            Require(ReplaceEngine.Sha(path)==digest,"author layout restoration changed the original archive");
+            // 1.0.15: a readable trailer; a save is recorded as layout-only ("Source changed" ignores it).
+            var fresh = BundleLayout.Options(PackageReader.Load(path,"")); fresh[0].Name += " edited";
+            BundleLayout.Save(path,SourceReader.Stamp(path),fresh);
+            byte[] layoutComment; using (var s = File.OpenRead(path)) layoutComment = ZipIntegrity.EndComment(s);
+            Require(Encoding.UTF8.GetString(layoutComment).Contains("Slotsloader Manager option layout") && PackageReader.Load(path,"").HasBundleLayout,"readable layout trailer");
+            Require(BundleEdits.LayoutOnlySince(path,DateTime.UtcNow.AddMinutes(1)) && !BundleEdits.LayoutOnlySince(path,new DateTime(2001,1,2,0,0,0,DateTimeKind.Utc)),"layout-only save not recorded");
+            // A layout that no longer fits its ZIP (here another ZIP's, as when files are added in another program)
+            // opens with the author layout and a note, and Edit bundle can save over it.
+            foreach (string option in new[] { "A", "B" })
+            {
+                Directory.CreateDirectory(Path.Combine(root, "other-options", option, "natives", "stm"));
+                File.WriteAllText(Path.Combine(root, "other-options", option, "modinfo.ini"), "name=" + option);
+                File.WriteAllBytes(Path.Combine(root, "other-options", option, "natives", "stm", option + ".bin"), new byte[] { 1 });
+            }
+            string other = Path.Combine(root,"bundle-other.zip");
+            ZipFile.CreateFromDirectory(Path.Combine(root,"other-options"), other);
+            byte[] bytes = File.ReadAllBytes(other);   // no comment yet: its last two bytes are the comment length 0
+            File.WriteAllBytes(other, bytes.Take(bytes.Length-2).Concat(new[] { (byte)layoutComment.Length, (byte)(layoutComment.Length>>8) }).Concat(layoutComment).ToArray());
+            var stale = PackageReader.Load(other,"");
+            Require(stale.LayoutError!=null && !stale.HasBundleLayout && stale.Warnings[0]==stale.LayoutError && stale.Components.Any(c=>c.Id=="A"),"a layout that no longer fits its ZIP: "+stale.LayoutError);
+            BundleLayout.Save(other,SourceReader.Stamp(other),BundleLayout.Options(stale));
+            var repaired = PackageReader.Load(other,"");
+            Require(repaired.LayoutError==null && repaired.HasBundleLayout,"saving the author layout did not replace a stale one");
         }
         internal static string OptionsFixture(string root)
         {

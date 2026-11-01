@@ -112,7 +112,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-27-1.10.6-slotsloader-fork";
+static const char* LOADER_BUILD_ID = "2026-11-01-1.10.7-slotsloader-fork";
 
 // ============================================================================
 // Utility
@@ -2183,6 +2183,11 @@ static void add_slot_files(PakWriter& writer,
     // constraint or physics file of the mod that none of them names is reported below
     std::vector<std::string> slot_ref_files;
     std::vector<std::pair<std::string, std::string>> mod_constraint_files;   // mod path, slot path
+    // A donor colour table may also name the host's palettes (DriveTech ships both).
+    const bool donor_colours = std::any_of(mc->files_in_folder.begin(), mc->files_in_folder.end(), [&](const auto& item) {
+        const std::string name = str_lower(item.first.substr(item.first.rfind('/') + 1));
+        return name.compare(0, 3, "esf") == 0 && name.compare(0, 6, fd) != 0 && str_ends_with(name, "_ccvd.user.2");
+    });
     auto record_relocation = [&](const std::string& source, const std::string& target) {
         if (source == target || !writer.find(pak_path_hash(std::string_view(target)))) return;
         std::string src = str_lower(source), dst = str_lower(target);
@@ -2195,6 +2200,16 @@ static void add_slot_files(PakWriter& writer,
                      || src.find("_shape.user.") != std::string::npos
                      || src.find("_jcs.user.") != std::string::npos
                      || src.find("_aogeo.user.") != std::string::npos)) ext = ".user.";
+        // Cross-fighter scenes can bring their donor's colour and material-setting files into
+        // the host costume folder. Follow only references to emitted donor files.
+        const std::string leaf = src.substr(src.rfind('/') + 1);
+        const bool donor_user = leaf.size() > 7 && leaf.compare(0, 3, "esf") == 0
+            && leaf[6] == '_' && (leaf.compare(0, 6, fd) != 0 || donor_colours)
+            && leaf.find_first_not_of("0123456789", 3) == 6
+            && (str_ends_with(leaf, "_ccvd.user.2") || str_ends_with(leaf, "_msl.user.2") ||
+                str_ends_with(leaf, "_bsd.user.2") || str_ends_with(leaf, "_nsd.user.2") ||
+                (leaf.find("_cmd_") != std::string::npos && str_ends_with(leaf, ".user.2")));
+        if (donor_user) ext = ".user.";
         if (!ext || src.compare(0, 12, "natives/stm/") != 0
                  || dst.compare(0, 12, "natives/stm/") != 0) return;
         auto a = src.rfind(ext), b = dst.rfind(ext);

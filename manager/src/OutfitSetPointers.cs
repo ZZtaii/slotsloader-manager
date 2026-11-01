@@ -33,6 +33,9 @@ namespace SlotsInstaller
     {
         public string Name = "", SourcePath = "", SourceStamp = "", Kind = "";
         public List<string> SelectedIds = new List<string>();
+        public bool PresetLayer;
+        public string ArchiveSha;
+        public long ArchiveSize;
         public int Order = -1;   // its place among all saved replacements, copied ones included (-1: saved before it was kept)
     }
 
@@ -87,7 +90,7 @@ namespace SlotsInstaller
             // 1.0.10: a recorded source that is gone (renamed or moved outside the Manager) is not guessed; it is copied and says so.
             if (!SourceExists(m.SourcePath)) { why = NotFound(m.SourcePath); return null; }
             string source = System.IO.Path.GetFullPath(m.SourcePath);
-            return new PresetReplacementPointer { Name = m.Name ?? "", SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "", Kind = m.Kind ?? "", SelectedIds = (m.SelectedIds ?? new List<string>()).ToList() };
+            return new PresetReplacementPointer { ArchiveSha = m.ArchiveSha, ArchiveSize = m.ArchiveSize, PresetLayer = m.PresetLayer, Name = m.Name ?? "", SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "", Kind = m.Kind ?? "", SelectedIds = (m.SelectedIds ?? new List<string>()).ToList() };
         }
         internal const string ManualDrop = "manual drop";
         internal static string NotFound(string path) { return String.IsNullOrWhiteSpace(path) ? "" : "not found at " + path; }
@@ -243,6 +246,13 @@ namespace SlotsInstaller
         }
         private static bool SameName(string a, string b) { return String.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.OrdinalIgnoreCase); }
 
+        private static ReplaceMod PointerMatch(IEnumerable<ReplaceMod> installed, PresetReplacementPointer p)
+        {
+            return installed.FirstOrDefault(m => m.PresetLayer == p.PresetLayer && ReplacePlanner.SameSource(m.SourcePath, p.SourcePath) &&
+                (p.ArchiveSha == null || m.ArchiveSha == null || m.ArchiveSha == p.ArchiveSha) &&
+                (!p.PresetLayer || SameIds(m.SelectedIds, p.SelectedIds)));
+        }
+
         private static void RestoreReplacementPointers(List<PresetReplacementPointer> saved, ReplaceEngine engine, string sevenZip, OutfitSetRestoreResult result, Dictionary<int, string> restored)
         {
             if (engine == null) throw new IOException("Replacements can't be restored without the game folder.");
@@ -253,7 +263,14 @@ namespace SlotsInstaller
                 PresetReplacementPointer p = saved[i];
                 OperationContext.Report("Restoring replacement " + (n + 1) + " of " + saved.Count, n, saved.Count);
                 List<ReplaceMod> installed = engine.LoadState().Mods;
-                ReplaceMod same = installed.FirstOrDefault(m => ReplacePlanner.SameSource(m.SourcePath, p.SourcePath));
+                ReplaceMod same = PointerMatch(installed, p);
+                if (same == null && p.ArchiveSha != null)
+                {
+                    string exact = engine.FindPointerArchive(p);
+                    if (exact == null) { result.Notes.Add(p.Name + ": the original archive is not in your libraries any more."); continue; }
+                    p.SourcePath = exact;
+                    same = PointerMatch(installed, p);
+                }
                 if (same != null)
                 {
                     if (SameIds(same.SelectedIds, p.SelectedIds)) result.ReplacementsSkipped++;
@@ -261,7 +278,7 @@ namespace SlotsInstaller
                     continue;
                 }
                 // Another archive or version under the saved name: skipped and reported, like a copied one (ClassifyPreset).
-                if (installed.Any(m => SameName(m.Name, p.Name))) { result.ReplacementConflicts.Add(p.Name); continue; }
+                if (installed.Any(m => !(p.PresetLayer && m.PresetLayer) && SameName(m.Name, p.Name))) { result.ReplacementConflicts.Add(p.Name); continue; }
                 if (!SourceExists(p.SourcePath)) { result.Notes.Add(p.Name + ": not in your libraries any more (" + p.SourcePath + ")."); continue; }
                 if (!checkedGame)
                 {
@@ -277,6 +294,14 @@ namespace SlotsInstaller
                     ModPackage package = PackageReader.Load(p.SourcePath, sevenZip);
                     List<string> dropped; List<string> ids = MapIds(package, p.SelectedIds, out dropped);
                     if (dropped.Count > 0) throw new IOException("Saved options are missing: " + String.Join(", ", dropped) + ". Review the mod's options.");
+                    if (p.PresetLayer)
+                    {
+                        if (ids.Count != 1) throw new IOException("The saved preset option changed.");
+                        var layer = new PresetLayer { Package = package, Id = ids[0], Name = p.Name, Stamp = MainForm.SourceStamp(p.SourcePath) };
+                        restored[i] = engine.ImportLayers(new List<PresetLayer> { layer }, sevenZip).Single().Id;
+                        result.ReplacementsRestored++;
+                        continue;
+                    }
                     CompositionPlan composition = Composer.SavedPlan(package, ids, true);
                     if (!composition.CanInstall) throw new IOException(String.Join(" ", composition.Errors.DefaultIfEmpty("Its options changed.")));
                     ReplacePlan plan;
@@ -318,7 +343,7 @@ namespace SlotsInstaller
                     if (slot.Key)
                     {
                         if (listed.TryGetValue(slot.Value, out id)) restored.Add(id);
-                        else { PresetReplacementPointer p = record.Pointers.Replacements[slot.Value]; ReplaceMod same = installed.FirstOrDefault(m => ReplacePlanner.SameSource(m.SourcePath, p.SourcePath)); id = same == null ? null : same.Id; }
+                        else { PresetReplacementPointer p = record.Pointers.Replacements[slot.Value]; ReplaceMod same = PointerMatch(installed, p); id = same == null ? null : same.Id; }
                     }
                     else if (copied != null)
                     {
@@ -467,8 +492,8 @@ namespace SlotsInstaller
                 List<ReplaceMod> installed = engine.LoadState().Mods;
                 foreach (PresetReplacementPointer p in record.Pointers.Replacements)
                 {
-                    ReplaceMod same = installed.FirstOrDefault(m => ReplacePlanner.SameSource(m.SourcePath, p.SourcePath));
-                    if (same == null && installed.Any(m => SameName(m.Name, p.Name))) preview.ConflictReplacements.Add(p.Name);
+                    ReplaceMod same = PointerMatch(installed, p);
+                    if (same == null && installed.Any(m => !(p.PresetLayer && m.PresetLayer) && SameName(m.Name, p.Name))) preview.ConflictReplacements.Add(p.Name);
                     else if (same == null) { preview.AddReplacements.Add(p.Name); if (p.Kind != "Tool" && p.Kind != "Pak") preview.InstallsNatives = true; }
                     else if (SameIds(same.SelectedIds, p.SelectedIds)) preview.SameReplacements.Add(p.Name);
                     else preview.ConflictReplacements.Add(p.Name);

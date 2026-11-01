@@ -57,7 +57,7 @@ namespace SlotsInstaller
         private Panel gameBanner;
         private FlatButton bannerRemovePak;   // 2.4.0
         private Label gameBannerText;
-        private FlatButton bannerReapply, bannerRestore, bannerLoader, bannerPak, moveUpButton, moveDownButton, reapplyButton;
+        private FlatButton bannerReapply, bannerRestore, bannerLoader, bannerPak, moveUpButton, moveDownButton;
         private List<GameModRow> gameRows = new List<GameModRow>();
         private GameFilesStatus gameStatus = new GameFilesStatus();
         private readonly HashSet<string> replacedSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -66,9 +66,12 @@ namespace SlotsInstaller
         private Control[] settingsGeneralParts = new Control[0];
         private Label settingsSubtitle;   // 2.4.0: shown on the General tab only
         private ComboBox settingsMethod;
-        private CheckBox settingsCrashReporter, settingsSwapRepairs;
+        private CheckBox settingsCrashReporter;
         private Label settingsMethodStatus, settingsToolStatus, settingsGameFiles, settingsStoreStatus, settingsFluffyStatus;
         private PaddedTextField settingsStore;
+        private FlatButton reclaimSpaceButton;
+        private Control reclaimSpaceRow;
+        private bool reclaimShown;   // the row's requested state (Visible reads false while Settings is hidden)
         private FlatButton loaderOnButton, loaderOffButton, installSlotsLoaderButton, installReFrameworkButton;
         private bool loadingReplaceSettings;
         private string gameMethod = "";
@@ -82,7 +85,7 @@ namespace SlotsInstaller
         private bool FluffyBlocksPlan { get { return fluffyRunning && replacePlan != null && replacePlan.Method == ReplaceMethods.Pak && replacePlan.Files.Any(f => f.Native); } }
 
         internal bool IsReplaceMode { get { return installMode == InstallModes.Replace; } }
-        private ReplaceEngine Engine() { replaceSettings = ReplaceSettings.Load(); var engine = new ReplaceEngine(config.GameRoot, AppConfig.DataDir, replaceSettings); AppConfig cfg = config; ReplaceSettings rs = replaceSettings; engine.FluffyProvider = delegate { return FluffyInstalls.Load(FluffyInstalls.DetectRoots(cfg.Libraries, rs.FluffyRoots)); }; return engine; }
+        private ReplaceEngine Engine() { replaceSettings = ReplaceSettings.Load(); var engine = new ReplaceEngine(config.GameRoot, AppConfig.DataDir, replaceSettings) { SourceConfig = config }; AppConfig cfg = config; ReplaceSettings rs = replaceSettings; engine.FluffyProvider = delegate { return FluffyInstalls.Load(FluffyInstalls.DetectRoots(cfg.Libraries, rs.FluffyRoots)); }; return engine; }
 
         // ---- Header: Launch SF6 with a running indicator
         private Control BuildGameTools()
@@ -250,7 +253,7 @@ namespace SlotsInstaller
                 modeNotice.Text = notice;
                 modeNotice.ForeColor = fine ? Palette.Muted : Palette.Accent;
                 modeNotice.Cursor = clickable ? Cursors.Hand : Cursors.Default;
-                installButton.Text = "Install"; previewButton.Text = "Review files"; previewButton.AccessibleName = "Review files";
+                installButton.Text = "Install"; previewButton.Text = "Health"; previewButton.AccessibleName = "Health";
                 // Extra outfit mode always shows Uninstall outfit (UpdateLibraryUninstall).
             }
             UpdateLibraryUninstall();
@@ -452,7 +455,7 @@ namespace SlotsInstaller
             if (overridden)
             {
                 ReplaceSettings pakSettings = ReplaceSettings.Load(); pakSettings.Method = ReplaceMethods.Pak;
-                engine = new ReplaceEngine(config.GameRoot, AppConfig.DataDir, pakSettings) { FluffyProvider = engine.FluffyProvider };
+                engine = new ReplaceEngine(config.GameRoot, AppConfig.DataDir, pakSettings) { FluffyProvider = engine.FluffyProvider, SourceConfig = config };
             }
             string replaceId = editingReplacement == null ? null : editingReplacement.Id;
             if (replaceId == null) replaceId = PendingLoaderReplaceId();   // 2.4.0: a SlotsLoader update replaces the recorded one in place
@@ -574,13 +577,14 @@ namespace SlotsInstaller
             // 1.0.1: the keep rule is "only what a live Undo needs": nothing else can use a copy any more.
             if (allowRecovery)
             {
+                try { engine.RelinkArchives(); } catch (IOException ex) { Program.Log(ex); }
                 try { string trash = engine.RetryTrash(); if (trash != null && String.IsNullOrEmpty(result.Recovery)) result.Recovery = trash; }
                 catch (Exception ex) { Program.Log(ex); }
                 try { engine.DeleteRemovedExcept(ProtectedRemovedFolders()); }
                 catch (Exception ex) { Program.Log(ex); }
                 try { engine.DiscardLeftoverCopiesExcept(ProtectedRemovedFolders(), RecycleBin.Current); }   // 1.0.11: a removed leftover PAK no Undo needs
                 catch (Exception ex) { Program.Log(ex); }
-                SwapRepairFlag.Sync(engine.GameRoot, engine.Settings.SwapRepairs);   // 1.0.5: Slotsloader follows the setting
+                SwapRepairFlag.Ensure(engine.GameRoot);
                 ManagerInstalls.Sync(engine);   // 1.0.9: the installs list other costume loaders read follows the state
                 // 1.0.1: a gap in the patch PAK row (any tool's) is filled at start-up and every refresh, with SF6 and
                 // the external mod manager closed.
@@ -1104,9 +1108,6 @@ namespace SlotsInstaller
             // (ReplaceSettings.DefaultMode stays in the file and is used only before a first choice).
             settingsCrashReporter = new CheckBox { Text = "Rename the crash reporter while replacements are installed", Height = 28, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0) };
             add(left, settingsCrashReporter);
-            // 1.0.5: off by default, so ordinary mods never get swap warnings; Replace original and Slotsloader both follow it.
-            settingsSwapRepairs = new CheckBox { Text = "Try to fix character-swap mods broken by game updates", Height = 28, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0) };
-            add(left, settingsSwapRepairs);
             add(left, Rhythm.Gap(Rhythm.Group));
             add(left, Caption("REFramework and Slotsloader"));
             settingsToolStatus = note("", 52); add(left, settingsToolStatus);
@@ -1125,9 +1126,9 @@ namespace SlotsInstaller
             add(right, Rhythm.Gap(Rhythm.Group));
             add(right, Caption("Replacement store"));
             // 1.0.11 (the user): what the store is, under its caption like Mod libraries; gives way on short windows.
-            var storeHint = new Label { UseMnemonic = false, Name = "settingsStoreNote", Text = "A ready copy of each installed replacement, used by Enable, Reapply and presets.", ForeColor = Palette.Muted, Font = Palette.Small, Height = 20 + Rhythm.Related, Margin = Padding.Empty, AutoEllipsis = true };
+            var storeHint = new Label { UseMnemonic = false, Name = "settingsStoreNote", Text = "Archives supply active files. Disabled, overridden and repaired files stay here.", ForeColor = Palette.Muted, Font = Palette.Small, Height = 20 + Rhythm.Related, Margin = Padding.Empty, AutoEllipsis = true };
             add(right, storeHint);
-            right.Resize += delegate { storeHint.Visible = right.Height >= right.Controls.Cast<Control>().Where(c => c != storeHint).Sum(c => c.Height) + storeHint.Height; };
+            right.Resize += delegate { storeHint.Visible = right.Height >= right.Controls.Cast<Control>().Where(c => c != storeHint && (c != reclaimSpaceRow || reclaimShown)).Sum(c => c.Height) + storeHint.Height; };
             var storeRow = new TableLayoutPanel { Height = 32, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
             storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92)); storeRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             settingsStore = TextField(); settingsStore.Dock = DockStyle.Fill; settingsStore.Margin = new Padding(0, 0, 8, 0); settingsStore.AccessibleName = "Replacement store folder"; settingsStore.PlaceholderText = "Default: Data\\replace-store";
@@ -1138,6 +1139,13 @@ namespace SlotsInstaller
             storeRow.Controls.Add(settingsStore, 0, 0); storeRow.Controls.Add(browse, 1, 0); storeRow.Controls.Add(save, 2, 0);
             add(right, storeRow);
             settingsStoreStatus = note("", 52); add(right, settingsStoreStatus);
+            // 1.0.15: its own row under the store's status (only while older installs hold full copies), so the folder
+            // field keeps its width.
+            var reclaimRow = buttonRow(0); reclaimRow.Name = "reclaimSpaceRow"; reclaimRow.Visible = false;
+            reclaimSpaceButton = Button("Reclaim space…", false, 150, delegate { ConfirmReclaimSpace(); });
+            reclaimSpaceButton.Margin = Padding.Empty; reclaimSpaceButton.Height = 32; reclaimSpaceButton.Font = Palette.Small;
+            reclaimRow.Controls.Add(reclaimSpaceButton); reclaimSpaceRow = reclaimRow;
+            add(right, reclaimRow);
             add(right, Rhythm.Gap(Rhythm.Group));
             add(right, Caption("External mod manager"));
             settingsFluffyStatus = note("", 52); add(right, settingsFluffyStatus);
@@ -1149,7 +1157,6 @@ namespace SlotsInstaller
             panel.Controls.Add(columns);
             settingsMethod.SelectedIndexChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
             settingsCrashReporter.CheckedChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
-            settingsSwapRepairs.CheckedChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
             return panel;
         }
 
@@ -1162,10 +1169,10 @@ namespace SlotsInstaller
                 replaceSettings = ReplaceSettings.Load();
                 settingsMethod.SelectedIndex = replaceSettings.Method == ReplaceMethods.Loose ? 1 : replaceSettings.Method == ReplaceMethods.Pak ? 2 : 0;
                 settingsCrashReporter.Checked = replaceSettings.RenameCrashReporter;
-                settingsSwapRepairs.Checked = replaceSettings.SwapRepairs;
                 settingsStore.Text = replaceSettings.StoreLocation ?? "";
                 ReplaceEngine engine = Engine(); ReplaceState state = null;
                 try { state = engine.LoadState(); } catch (Exception ex) { settingsGameFiles.Text = ex.Message; }
+                reclaimShown = engine.CanReclaimArchiveStore(state); reclaimSpaceRow.Visible = reclaimShown;
                 string detail; LooseLoaderState loader = LooseLoader.State(config.GameRoot, out detail);
                 string current = state == null ? "" : ReplaceMethods.Label(engine.CurrentMethod(state));
                 settingsMethodStatus.Text = "In use: " + current + (state != null && state.Mods.Count > 0 && engine.DesiredMethod() != engine.CurrentMethod(state) ? " · changing it converts installed replacements" : "") + Environment.NewLine + detail;
@@ -1196,6 +1203,25 @@ namespace SlotsInstaller
             finally { loadingReplaceSettings = false; }
         }
 
+        // Reclaim space deletes stored copies the mod archives still hold: after it, repairing those files needs the
+        // archives, so the user decides (no Undo).
+        private void ConfirmReclaimSpace()
+        {
+            if (busy) return;
+            ReplaceEngine target = Engine();
+            long bytes = 0;
+            try { bytes = target.ReclaimableBytes(target.LoadState()); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            bool ignored;
+            int choice = ThemedMessageBox.Ask(this, "This deletes the stored copies of installed replacement files that their mod archives still hold" +
+                (bytes > 0 ? " (up to " + Utilities.FriendlyBytes(bytes) + ")" : "") + ". Each file is checked against its archive first, and copies of disabled, overridden or repaired files stay.\r\n\r\n" +
+                "Afterwards, if a game file of one of these mods is changed or deleted, repairing it needs the mod's archive in your Mod libraries.",
+                "Reclaim space", MessageBoxIcon.Question, new[] { "Reclaim space", "Cancel" }, 1, null, out ignored);
+            if (choice != 0) return;
+            Work("Verifying installed files against the mod archives…", target.CompactArchiveStore,
+                delegate(string message) { LoadReplaceSettingsFields(); SetPageStatus(settingsPage, message, Palette.Green); });
+        }
+
         private void SaveReplacePreferences()
         {
             try
@@ -1211,7 +1237,6 @@ namespace SlotsInstaller
                 string previousMethod = replaceSettings.Method ?? "";
                 replaceSettings.Method = method;
                 replaceSettings.RenameCrashReporter = settingsCrashReporter.Checked;
-                replaceSettings.SwapRepairs = settingsSwapRepairs.Checked;
                 string store = settingsStore.Text.Trim();
                 if (!String.Equals(store, replaceSettings.StoreLocation ?? "", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1220,7 +1245,6 @@ namespace SlotsInstaller
                     replaceSettings.StoreLocation = store;
                 }
                 replaceSettings.Save();
-                SwapRepairFlag.Sync(config.GameRoot, replaceSettings.SwapRepairs);
                 if (methodChanged && (state.Mods.Count > 0 || state.Deployed.Count > 0))
                 {
                     engine = Engine(); string target = engine.DesiredMethod();
@@ -1252,7 +1276,8 @@ namespace SlotsInstaller
                 file = d.FileName;
             }
             List<LibraryEntry> entries = library; string sevenZip = config.SevenZipPath;
-            Work("Matching the preset to your libraries…", delegate { return FluffyPresets.Group(FluffyPresets.Map(FluffyPresets.Parse(File.ReadAllText(file)), entries, sevenZip)); }, delegate(List<PresetMapping> mappings)
+            // One row per preset entry, so each entry can be left out (PresetInstaller groups an archive's rows itself).
+            Work("Matching the preset to your libraries…", delegate { return FluffyPresets.Map(FluffyPresets.Parse(File.ReadAllText(file)), entries, sevenZip); }, delegate(List<PresetMapping> mappings)
             {
                 if (FluffyPresetForm.Review(this, Path.GetFileNameWithoutExtension(file), mappings))
                 {

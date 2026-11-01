@@ -1,4 +1,4 @@
-# Slotsloader Manager 1.0.14
+# Slotsloader Manager 1.0.15
 
 A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
@@ -10,9 +10,13 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 ## What changed
 
-- 1.0.14:
-  - **Loader package compatibility.** Manually imported upstream Slots Loader packages declaring `SlotsloaderContract=2` or later are accepted. Packages with an older, missing or invalid contract remain refused. Install Slotsloader still installs the bundled Slotsloader Fork 1.10.4.
-  - **A smaller download.** The download is now just the Manager, its `.exe.config`, this README and the bundled Slotsloader: the command-line tool (`Slotsloader CLI.exe`), its guide and `VALIDATION.txt` are no longer in it. Updating removes the old copies; they are kept with the previous version for rollback. Versions before 1.0.13 can't update to 1.0.14 by themselves: update to 1.0.13 first, or download it by hand.
+- 1.0.15:
+  - Edit a ZIP bundle in the Library to group its options and set selection rules. Suggest layout runs locally. Refine with Assistant is optional. Save ZIP writes the reviewed layout to the archive.
+  - Uninstall selected replacements from the Library or Installed tab. Health checks installed files, names the mods that supply shared files and shows recorded fixes; it changes nothing. Disable and Enable stay on the Installed page. Extra outfit previews group common colour repairs.
+  - Presets install in entry order across archives. Each entry can be left out, and an entry several archives match is chosen in the review. Eligible archive installs can use their library source to save disk space.
+  - Character-swap repairs now always run during installation (the Settings switch is gone).
+  - Includes Slotsloader Fork 1.10.7 with character-swap resource fixes and a fix for opening Opponent Outfit Settings on fighters with many extra outfits. The Manager also accepts compatible upstream loader packages declaring contract 2 or later.
+  - The Windows portable ZIP contains the Manager, its configuration, this README and the loader ZIP. Manager 1.0.13 and later can update in the app. On 1.0.12 or earlier, close the Manager and extract the new ZIP over the existing app folder. Keep your `Data` folder.
 
 - 1.0.13:
   - **One fighter per click.** Clicking a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; before, each click added another fighter. Ctrl+click adds one, Shift+click a range, and clicking the selected fighter again clears it.
@@ -84,7 +88,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
   - Portrait art for several fighters counts as a UI mod. A portrait bundle no longer shows under every fighter.
   - Colour-only mods keep their fighter after you open them.
   - Reinstalling an Install all variants copy updates that file, even after the source was renamed.
-  - Settings → Game files & replacements → **Try to fix character-swap mods broken by game updates** (off by default). On, Replace original and Slotsloader 1.10.4 apply known fixes to old character swaps: the Alex update's scene signature, and some Mai and Elena physics files rebuilt from the current game. Only files that match a verified older version are changed. Off, nothing changes and no swap warnings show.
+  - The Manager automatically checks character swaps during installation and reinstallation. It repairs the scene signature changed by the Alex update and certain Mai and Elena physics files when their old versions can be verified against the current game. Slotsloader applies these repairs to extra outfits when it rebuilds them.
   - Bundles **Slotsloader Fork 1.10.4**: the swap fixes above, and an archive briefly locked by a virus scanner is no longer skipped.
 
 - 1.0.4:

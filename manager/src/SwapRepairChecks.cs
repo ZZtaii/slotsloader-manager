@@ -36,10 +36,8 @@ namespace SlotsInstaller
         private static void Scenes()
         {
             byte[] old = Scene(SwapRepairs.TimelineType, SwapRepairs.TimelineOld), current = Scene(SwapRepairs.TimelineType, SwapRepairs.TimelineCurrent);
-            // 1.0.5: off by default (Settings): no scene is touched and nothing is reported.
             byte[] data = (byte[])old.Clone();
-            Require(ModFixes.UpgradeModFile(ref data, new GameReference { GameFile = delegate { return current; } }, ScenePath).Count == 0 && data.SequenceEqual(old), "swap repair ran while the setting is off");
-            var reference = new GameReference { GameFile = delegate { return current; }, SwapRepairs = true };
+            var reference = new GameReference { GameFile = delegate { return current; } };
             var fixes = ModFixes.UpgradeModFile(ref data, reference, ScenePath);
             Require(fixes.Count == 1 && fixes[0].Changed && fixes[0].Kind == "swap-scene" && data.SequenceEqual(current), "scene CRC repair changed something beyond the typed signature");
             Require(old.SequenceEqual(Scene(SwapRepairs.TimelineType, SwapRepairs.TimelineOld)), "repair changed source input buffer");
@@ -160,9 +158,6 @@ namespace SlotsInstaller
             ReplaceChecks.Put(mod, ScenePath, old);
             ModPackage package = PackageReader.Load(mod, "");
             CompositionPlan composition = Composer.Plan(package, Composer.DefaultSelection(package, true), true);
-            ReplacePlan unset = ReplacePlanner.Prepare(composition, "", f.Engine, Path.Combine(root, "off"));
-            Require(!unset.Files.Single().Fixes.Any() && File.ReadAllBytes(unset.Files.Single().Source).SequenceEqual(old), "preparation repaired a scene with the setting off");
-            f.Engine.Settings.SwapRepairs = true;
             ReplacePlan direct = ReplacePlanner.Prepare(composition, "", f.Engine, Path.Combine(root, "direct"));
             Require(direct.Files.Single().Fixes.Any(x => x.Kind == "swap-scene" && x.Changed) && File.ReadAllBytes(direct.Files.Single().Source).SequenceEqual(current), "uncached preparation skipped SCN");
             using (var cache = new PrepareCache())
@@ -198,7 +193,6 @@ namespace SlotsInstaller
                 string deployed = Safety.Under(f.Game, ScenePath);
                 Require(File.ReadAllBytes(deployed).SequenceEqual(old), "fixture could not retain a scene installed before the update");
                 write(current, 101);
-                f.Engine.Settings.SwapRepairs = true;
                 string cleanPak = ReplaceEngine.Sha(pak);
                 Require(f.Engine.Status().NeedsReapply, "fixture game update was not detected");
                 string message = f.Engine.Reapply();
@@ -214,17 +208,16 @@ namespace SlotsInstaller
             finally { GameProcesses.Probe = previous; }
         }
 
-        // The Slotsloader marker follows the setting; nothing is written without a reframework folder.
+        // Older Slotsloader builds get the marker automatically; nothing is written without a reframework folder.
         private static void Flag(string root)
         {
             string game = Path.Combine(root, "game"), file = SwapRepairFlag.FilePath(game);
             Directory.CreateDirectory(game);
-            SwapRepairFlag.Sync(game, true);
+            SwapRepairFlag.Ensure(game);
             Require(!Directory.Exists(Path.Combine(game, "reframework")), "the marker created a reframework folder");
-            Directory.CreateDirectory(Path.Combine(game, "reframework"));
-            SwapRepairFlag.Sync(game, true); Require(File.Exists(file) && new FileInfo(file).Length == 0, "setting on: no marker for Slotsloader");
-            SwapRepairFlag.Sync(game, true); Require(File.Exists(file), "repeated sync lost the marker");
-            SwapRepairFlag.Sync(game, false); Require(!File.Exists(file), "setting off: the marker stayed");
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+            SwapRepairFlag.Ensure(game); Require(File.Exists(file) && new FileInfo(file).Length == 0, "missing default swap repair marker");
+            SwapRepairFlag.Ensure(game); Require(File.Exists(file), "repeated sync lost the marker");
         }
     }
 }

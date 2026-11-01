@@ -154,7 +154,7 @@ namespace SlotsInstaller
         private Label componentVersion;
         private Label packageTitle, packageMeta, packageDescription, packageHint, noPreview, libraryCount, selectedLabel, targetPath, planSummary, planDetails, searchClear;
         private Label installedTitle, installedDetail, statusText, componentTitle;
-        private FlatButton previewButton, installButton, libraryUninstallButton, componentTab, filesTab, openInstalledButton, editInstalledButton, toggleInstalledButton, removeInstalledButton, filterButton;
+        private FlatButton previewButton, installButton, libraryUninstallButton, componentTab, filesTab, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, filterButton;
         private Panel componentPanel, filesPanel;
         private ProgressBar statusProgress;
         private FlatButton cancelWork;
@@ -162,7 +162,7 @@ namespace SlotsInstaller
         private Label settingsStatus;
         // 1.5 polish: header tools, icon buttons, installed detail layout,
         // page-aware status, required-choice marking, drop target and search pacing.
-        private FlatButton openArchiveButton, openFolderButton, expandAllButton, collapseAllButton, copyPathButton, removeLibraryButton;
+        private FlatButton openArchiveButton, openFolderButton, copyPathButton, removeLibraryButton;
         private FlowLayoutPanel headerTools;
         private ChipStrip installedChips;
         private Panel installedPathRow, installedActions;
@@ -601,7 +601,7 @@ namespace SlotsInstaller
             filters.Controls.Add(filterActions, 1, 0);
             search = TextField(); search.Dock = DockStyle.Fill; search.Margin = new Padding(0, 0, 0, 7); search.TrailingSpace=27; search.PlaceholderText="Search or is:bundle"; search.AccessibleName="Search mod library"; search.TextChanged += delegate { libraryToTop = true; QueueLibraryFilter(); };
             filters.Controls.Add(search, 0, 1); filters.SetColumnSpan(search, 2);
-            Panel searchOptions = BuildSearchOptions(); filters.Controls.Add(searchOptions, 0, 2); filters.SetColumnSpan(searchOptions, 2);   // 1.0.6
+            Panel searchOptions = BuildSearchOptions(page); filters.Controls.Add(searchOptions, 0, 2); filters.SetColumnSpan(searchOptions, 2);   // 1.0.6
             Panel sorts = BuildSortStrip(); filters.Controls.Add(sorts, 0, 3); filters.SetColumnSpan(sorts, 2);
             search.Editor.KeyDown += delegate(object sender, KeyEventArgs e)
             {
@@ -679,6 +679,21 @@ namespace SlotsInstaller
             modMenu.Items.Add("Open", null, delegate { OpenLibrarySource(modMenu.Tag as LibraryEntry, false); });
             modMenu.Items.Add("Open in Explorer", null, delegate { OpenLibrarySource(modMenu.Tag as LibraryEntry, true); });
             AddLibraryRename(modMenu);   // 1.0.5 (MainFormRename.cs)
+            var editBundle = modMenu.Items.Add("Edit bundle…", null, delegate
+            {
+                var entry = modMenu.Tag as LibraryEntry;
+                if (entry == null || busy || !BundleLayout.IsZip(entry.SourcePath)) return;
+                string stamp = null;
+                Work("Opening bundle editor", delegate
+                {
+                    stamp = SourceReader.Stamp(entry.SourcePath);
+                    return PackageReader.Load(entry.SourcePath, config.SevenZipPath);
+                }, delegate(ModPackage loaded)
+                {
+                    using (var editor = new BundleEditorForm(loaded, stamp, assistantTabShown, assistantKeys, assistantSettings))
+                        if (editor.ShowDialog(this) == DialogResult.OK) LoadPackage(entry);
+                });
+            });
             modMenu.Items.Add(new ToolStripSeparator());
             ToolStripMenuItem uninstallItem = new ToolStripMenuItem("Uninstall outfit");
             uninstallItem.Click += delegate { LibraryEntry entry = modMenu.Tag as LibraryEntry; if (entry != null) UninstallAllOutfits(entry.SourcePath); };   // 2.4.1: all of its extra outfits, Undo
@@ -687,6 +702,9 @@ namespace SlotsInstaller
             ToolStripMenuItem uninstallReplacementItem = new ToolStripMenuItem("Uninstall replacement") { Visible = false };
             uninstallReplacementItem.Click += delegate { LibraryEntry entry = modMenu.Tag as LibraryEntry; if (entry != null) UninstallAllReplacements(entry.SourcePath); };   // 2.4.1: all of its records, Undo
             modMenu.Items.Add(uninstallReplacementItem);
+            var uninstallSelectionItem = new ToolStripMenuItem("Uninstall selection") { Visible = false };
+            uninstallSelectionItem.Click += delegate { UninstallLibrarySelection(); };
+            modMenu.Items.Add(uninstallSelectionItem);
             // 2.2.0: sources Fluffy Mod Manager installed (its Mods folder entry matches an installed.ini section).
             ToolStripMenuItem uninstallFluffyItem = new ToolStripMenuItem("Uninstall mod (external manager)") { Visible = false };
             uninstallFluffyItem.Click += delegate { GameModRow row = uninstallFluffyItem.Tag as GameModRow; if (row != null) UninstallFluffyRow(row); };
@@ -716,10 +734,16 @@ namespace SlotsInstaller
                 PopulateLibraryUninstall(uninstallItem, source);
                 PopulateReplacementUninstall(uninstallReplacementItem, source);
                 PopulateFluffyUninstall(uninstallFluffyItem, source);
+                bool multi = BatchVisible && entry != null && BatchSourcePaths().Contains(entry.SourcePath);
+                editBundle.Visible = !multi && BundleLayout.IsZip(source) && File.Exists(source);
+                editBundle.Enabled = !busy;
+                uninstallSelectionItem.Visible = multi;
+                uninstallSelectionItem.Enabled = multi && batchUninstallButton.Enabled;
+                if (multi) { uninstallReplacementItem.Visible = false; uninstallFluffyItem.Visible = false; }
                 PopulateLibraryDelete(entry);   // 2.4.1
                 PopulateLibraryRename(entry);   // 1.0.5
                 // A source installed only as replacements (or by Fluffy) shows just that action; with neither, the disabled outfit action stays.
-                uninstallItem.Visible = LinkedOutfits(source).Count > 0 || (LinkedReplacements(source).Count == 0 && LinkedFluffy(source).Count == 0);
+                uninstallItem.Visible = !multi && (LinkedOutfits(source).Count > 0 || (LinkedReplacements(source).Count == 0 && LinkedFluffy(source).Count == 0));
             };
             modList.Disposed += delegate { modMenu.Dispose(); };
             browser.Controls.Add(modList); browser.Controls.Add(BuildLibraryEmpty()); browser.Controls.Add(filters);   // 1.0.12 (23 Oct): in place of an empty list (MainFormLibraryEmpty.cs)
@@ -741,7 +765,7 @@ namespace SlotsInstaller
             installButton = Button("Install", true, 136, delegate { InstallCurrent(); }); installButton.Enabled = false;
             installButton.MouseEnter += delegate { StartReviewNow(); };   // 1.0.12: heading for Install, the check need not wait
             installButton.KeyHint = "Space"; installButton.AccessibleDescription = "Shortcut: Space";   // 2.4.1
-            previewButton = Button("Review files", false, 116, delegate { BuildPlan(true); }); previewButton.Enabled = false;
+            previewButton = Button("Health", false, 116, delegate { BuildPlan(true); }); previewButton.Enabled = false;
             libraryUninstallButton = Button("Uninstall outfit", false, 172, delegate { UninstallLibraryOutfit(); }); libraryUninstallButton.Enabled = false; libraryUninstallButton.Danger = true;
             libraryUninstallButton.KeyHint = "Ctrl"; libraryUninstallButton.AccessibleDescription = "Shortcut: tap Ctrl";   // 2.5.2 (MainFormKeys.cs)
             foreach (FlatButton button in new[] { installButton, previewButton, libraryUninstallButton }) { button.Height = 38; button.Margin = new Padding(5, 0, 0, 0); button.Font = Palette.Small; }
@@ -770,17 +794,12 @@ namespace SlotsInstaller
             Panel choiceTabs = new Panel { Dock = DockStyle.Top, Height = 36 };
             componentTab = Button("Options", false, 102, delegate { ShowDetailTab(false); }); componentTab.Dock = DockStyle.Left;
             filesTab = Button("Merged files", false, 116, delegate { ShowDetailTab(true); if (plan == null && !ReviewPending && package != null) RequestReview(1); }); filesTab.Dock = DockStyle.Left;
-            FlatButton expand = Button("", false, 38, delegate { componentTree.ExpandAll(); if (componentTree.Nodes.Count > 0) componentTree.TopNode = componentTree.Nodes[0]; }); expand.Dock = DockStyle.Right;
-            FlatButton collapse = Button("", false, 38, delegate { componentTree.CollapseAll(); foreach (OptionNode root in componentTree.Nodes) root.Expand(); }); collapse.Dock = DockStyle.Right;
-            expand.Glyph = ButtonGlyph.ExpandAll; collapse.Glyph = ButtonGlyph.CollapseAll;
-            expand.AccessibleName = "Expand all option groups"; collapse.AccessibleName = "Collapse option groups";
-            expand.Padding = new Padding(0); collapse.Padding = new Padding(0);
-            
-            expandAllButton = expand; collapseAllButton = collapse;
-            // A small gap between the two icon buttons.
-            Panel iconGap = new Panel { Dock = DockStyle.Right, Width = 4 };
             selectedLabel = new Label { UseMnemonic=false, Dock = DockStyle.Fill, Text = "0 selected", TextAlign = ContentAlignment.MiddleRight, ForeColor = Palette.Muted, Font = Palette.Small, Padding = new Padding(0, 0, 9, 0) };
-            choiceTabs.Controls.Add(selectedLabel); choiceTabs.Controls.Add(BuildResetOptions()); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 4 }); choiceTabs.Controls.Add(collapse); choiceTabs.Controls.Add(iconGap); choiceTabs.Controls.Add(expand); choiceTabs.Controls.Add(filesTab); choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Left, Width = Rhythm.Related }); choiceTabs.Controls.Add(componentTab);   // 1.0.11: a gap between the two tabs (the user)
+            choiceTabs.Controls.Add(selectedLabel);
+            choiceTabs.Controls.Add(BuildResetOptions());
+            choiceTabs.Controls.Add(filesTab);
+            choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Left, Width = Rhythm.Related });
+            choiceTabs.Controls.Add(componentTab);
             componentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
             componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font("Segoe UI", 10.5F) };
             componentTree.EmptyText = "Choose a mod from the library, or drop an archive (ZIP, RAR, 7Z) or mod folder anywhere in this window.\n\nCtrl+O opens an archive · Ctrl+F searches the library";
@@ -934,19 +953,20 @@ namespace SlotsInstaller
             installedActions = new Panel { Dock = DockStyle.Top, Height = 92, Padding = new Padding(0, 12, 0, 0) };
             openInstalledButton = Button("Open folder", false, 200, delegate { GameModRow row = GetGameRowSelection(); if (row != null) { OpenPath(row.Fluffy != null ? row.Fluffy.Root : config.GameRoot); return; } InstalledOutfit outfit = GetInstalledSelection(); OutfitGroup group = GetGroupSelection(); if (group != null) outfit = group.Slots[0]; if (outfit != null) OpenPath(File.Exists(outfit.Folder) ? Path.GetDirectoryName(outfit.Folder) : outfit.Folder); });
             editInstalledButton = Button("Edit options", false, 200, delegate { EditOutfit(); });
-            toggleInstalledButton = Button("Disable outfit", false, 200, delegate { ToggleOutfit(); });
+            toggleInstalledButton = Button("Health", false, 200, InspectOrToggleInstalled);
+            // 1.0.15: Health took the Enable/Disable button's place (read-only, Enable for a disabled entry); Disable is its own action.
+            disableInstalledButton = Button("Disable", false, 200, delegate { DisableInstalled(); }); disableInstalledButton.Visible = false;
             removeInstalledButton = Button("Uninstall outfit", false, 200, delegate { RemoveOutfit(); }); removeInstalledButton.Danger = true;
             removeInstalledButton.KeyHint = "Ctrl";   // 2.5.3: a lone Ctrl tap, as in the Mod library (MainFormKeys.cs)
             moveUpButton = Button("Move up", false, 200, delegate { MoveGameRow(-1); }); moveDownButton = Button("Move down", false, 200, delegate { MoveGameRow(1); });
-            reapplyButton = Button("Reapply all", false, 200, delegate { ReapplyAll(); });
             reinstallButton = Button("Reinstall", false, 200, delegate { ReinstallSelected(); }); reinstallButton.AccessibleName = "Reinstall from the changed source"; reinstallButton.Visible = false;   // 2.4.1
             
-            openInstalledButton.Enabled = false; editInstalledButton.Enabled = false; toggleInstalledButton.Enabled = false; removeInstalledButton.Enabled = false;
-            foreach (FlatButton button in new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, removeInstalledButton, moveUpButton, moveDownButton, reapplyButton }) { button.Margin = Padding.Empty; installedActions.Controls.Add(button); }
+            openInstalledButton.Enabled = false; editInstalledButton.Enabled = false; toggleInstalledButton.Enabled = false; disableInstalledButton.Enabled = false; removeInstalledButton.Enabled = false;
+            foreach (FlatButton button in new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, moveUpButton, moveDownButton }) { button.Margin = Padding.Empty; installedActions.Controls.Add(button); }
             installedActions.Resize += delegate { LayoutInstalledActions(); }; dpiLayouts.Add(LayoutInstalledActions);
             installedSectionCaption = Caption("ABOUT"); installedSectionCaption.Dock = DockStyle.Top; installedSectionCaption.Height = 34; installedSectionCaption.Padding = new Padding(0, 10, 0, 0); installedSectionCaption.AutoEllipsis = true;
             Panel helpCard = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Background, Padding = new Padding(12, 10, 6, 10) };
-            installedHelp = new TextBox { Dock = DockStyle.Fill, AutoSize = false, Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Palette.Background, ForeColor = Palette.Muted, ScrollBars = ScrollBars.Vertical, Font = Palette.Small, Text = "Outfits the Manager installed can be disabled or uninstalled. Others are listed for reference." };
+            installedHelp = new TextBox { Dock = DockStyle.Fill, AutoSize = false, Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Palette.Background, ForeColor = Palette.Muted, ScrollBars = ScrollBars.Vertical, Font = Palette.Small, Text = "Select an outfit to see its details and available actions." };
             NativeDpiFont.Attach(installedHelp); WireHelpSelection();
             helpCard.Controls.Add(installedHelp);
             refreshHint = new Label { UseMnemonic=false, Text = "Restart SF6 to see changes.", ForeColor = Palette.Accent, Dock = DockStyle.Bottom, Height = 30, Font = Palette.Small, TextAlign = ContentAlignment.BottomLeft };
@@ -1291,7 +1311,7 @@ namespace SlotsInstaller
         private static Label Caption(string text) { return new Label { UseMnemonic=false, Text = text, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, AutoSize = false, Height = 24, TextAlign = ContentAlignment.MiddleLeft }; }
         private static Label Heading(string text) { return new Label { UseMnemonic=false, Text = text, Font = new Font("Segoe UI", 22F, FontStyle.Bold), Height = 45, AutoSize = false }; }
         private static PaddedTextField TextField() { return new PaddedTextField(); }
-        private static ComboBox Combo() { return new DarkCombo { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Palette.Raised, ForeColor = Palette.Text, Font = Palette.Small, IntegralHeight = false, DropDownHeight = 350 }; }
+        internal static ComboBox Combo() { return new DarkCombo { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Palette.Raised, ForeColor = Palette.Text, Font = Palette.Small, IntegralHeight = false, DropDownHeight = 350 }; }
 
         private static ListView CreateList(int rowHeight)
         {
@@ -1381,7 +1401,7 @@ namespace SlotsInstaller
                 { Rectangle inner = Rectangle.Inflate(mark, -Px(3), -Px(3)); if (radio) using (Brush fill = new SolidBrush(Palette.Accent)) e.Graphics.FillEllipse(fill, inner); else Glyphs.FillRounded(e.Graphics, Palette.Accent, inner, Px(1)); }
             }
             bool choice = component.IsDummy && IsChoiceGroup(component);
-            string name = component.Name + (choice && !required && !component.InferredChoice ? "  ·  Choose one" : "");
+            string name = component.Name + (component.BundleRule == "Required" ? "  ·  Required" : choice && !required && !component.InferredChoice ? "  ·  Choose one" : "");
             Font nameFont = component.IsDummy ? Palette.Strong : componentTree.Font;
             int available = Math.Max(1, row.Width - x - Px(8));
             int pillWidth = 0; string pill = component.InferredChoice ? "Choose an option" : "Required · choose one";
@@ -2312,6 +2332,12 @@ namespace SlotsInstaller
                     if (c != null && !c.IsDummy) { child.Checked = false; selectedOrder.Remove(c.Id); }
                 }
             }
+            if (package.HasBundleLayout)
+                foreach (var needed in Composer.RequiredForSelection(package,selectedOrder,IsReplaceMode))
+                {
+                    componentNodes[needed.Id].Checked=true;
+                    selectedOrder.Add(needed.Id);
+                }
             changingChecks = false; UpdateRequiredChoices(); ResetPlan(); UpdateSelectedCount(); componentTree.Invalidate();
             if (groupHint != null) SetPageStatus(libraryPage, groupHint);
         }
@@ -2431,8 +2457,24 @@ namespace SlotsInstaller
 
         private void ShowCompositionReport()
         {
-            if (plan == null) return;
-            using (Form report = CreateCompositionReport()) report.ShowDialog(this);
+            if (plan == null || busy) return;
+            CompositionPlan selection = plan;
+            string game = config.GameRoot, sevenZip = config.SevenZipPath;
+            if (!selection.CanInstall)
+            {
+                using (Form report = CreateCompositionReport()) report.ShowDialog(this);
+                return;
+            }
+            bool previous = keepUndo; keepUndo = true;
+            try
+            {
+                Work("Checking outfit compatibility…", delegate { return OutfitPatchReport.Preview(selection, game, sevenZip); }, delegate(OutfitPatchReport health)
+                {
+                    if (!Object.ReferenceEquals(plan, selection)) return;
+                    using (Form report = CreateCompositionReport(health)) report.ShowDialog(this);
+                });
+            }
+            finally { keepUndo = previous; }
         }
 
         // Used by PolishChecks to verify dialog chrome without a real plan.
@@ -2443,12 +2485,14 @@ namespace SlotsInstaller
             finally { plan = saved; }
         }
 
-        private Form CreateCompositionReport()
+        private Form CreateCompositionReport(OutfitPatchReport health = null, InstalledOutfit installed = null)
         {
             Form report = new Form();
             report.SuspendLayout();
             report.AutoScaleDimensions=new SizeF(96F,96F);report.AutoScaleMode=AutoScaleMode.Dpi;
-            report.Text="Composition review";report.ClientSize=new Size(780,620);report.MinimumSize=new Size(600,400);report.StartPosition=FormStartPosition.CenterParent;
+            string outfitTitle = installed != null ? installed.Name : plan.Package == null ? "" : plan.Package.Name;
+            report.Text = String.IsNullOrWhiteSpace(outfitTitle) ? "Outfit health" : "Outfit health · " + outfitTitle;
+            report.ClientSize=new Size(780,620);report.MinimumSize=new Size(600,400);report.StartPosition=FormStartPosition.CenterParent;
             report.BackColor=Palette.Surface;report.ForeColor=Palette.Text;report.ShowInTaskbar=false;report.Padding=new Padding(20);
             AppBranding.Apply(report);
             FlowLayoutPanel body = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
@@ -2457,28 +2501,112 @@ namespace SlotsInstaller
                 Label label = new Label { UseMnemonic=false, Text = text, ForeColor = color, Font = heading ? Palette.Strong : Palette.Normal, AutoSize = true, MaximumSize = new Size(690, 0), Margin = new Padding(0, heading ? 16 : 4, 0, 7) };
                 body.Controls.Add(label);
             };
-            line(plan.CanInstall ? "Ready to install" : "Complete your selection", plan.CanInstall ? Palette.Green : Palette.Text, true);
-            line(ReplacePlanner.N(plan.Files.Count, "file") + " · " + Utilities.FriendlyBytes(plan.TotalBytes) + " · " + ReplacePlanner.N(plan.Overrides.Count, "override"), Palette.Muted, false);
-            if (plan.Errors.Count > 0)
+            if (installed != null)
             {
-                line("Required changes", Palette.Red, true);
-                foreach (string error in plan.Errors)
+                line(installed.Name, Palette.Text, true);
+                line(health.Integrity, Palette.Text, false);
+                if (!String.IsNullOrEmpty(installed.LoaderStatus))
+                    line("Slotsloader · " + installed.LoaderStatus + (String.IsNullOrEmpty(installed.LoaderOutfitName) ? "" : " · " + installed.LoaderOutfitName) +
+                        (String.IsNullOrEmpty(installed.LoaderGenerated) ? "" : " (" + installed.LoaderGenerated + ")"), Palette.Muted, false);
+            }
+            else
+            {
+                bool incomplete = health != null && health.Errors.Count > 0;
+                line(incomplete ? "Compatibility check incomplete" : plan.CanInstall ? "Ready to install" : "Complete your selection",
+                    incomplete ? Palette.Accent : plan.CanInstall ? Palette.Green : Palette.Text, true);
+                line(ReplacePlanner.N(plan.Files.Count, "file") + " · " + Utilities.FriendlyBytes(plan.TotalBytes) + " · " + ReplacePlanner.N(plan.Overrides.Count, "override"), Palette.Muted, false);
+                if (plan.Errors.Count > 0)
                 {
-                    string issue = error;
-                    FlatButton jump = Button(issue + "  →", false, 680, delegate
+                    line("Required changes", Palette.Red, true);
+                    foreach (string error in plan.Errors)
                     {
-                        OptionNode node = componentNodes.Values.FirstOrDefault(n => issue.IndexOf(((ModComponent)n.Tag).Name, StringComparison.OrdinalIgnoreCase) >= 0);
-                        ShowDetailTab(false); if (node != null) { node.Expand(); node.EnsureVisible(); componentTree.SelectedNode = node; componentTree.Focus(); } report.Close();
-                    });
-                    jump.TextAlign = ContentAlignment.MiddleLeft; body.Controls.Add(jump);
+                        string issue = error;
+                        FlatButton jump = Button(issue + "  →", false, 680, delegate
+                        {
+                            OptionNode node = componentNodes.Values.FirstOrDefault(n => issue.IndexOf(((ModComponent)n.Tag).Name, StringComparison.OrdinalIgnoreCase) >= 0);
+                            ShowDetailTab(false); if (node != null) { node.Expand(); node.EnsureVisible(); componentTree.SelectedNode = node; componentTree.Focus(); } report.Close();
+                        });
+                        jump.TextAlign = ContentAlignment.MiddleLeft; body.Controls.Add(jump);
+                    }
                 }
             }
-            if (plan.Warnings.Count > 0) { line("Notes", Palette.Text, true); foreach (string warning in plan.Warnings) line(warning, Palette.Muted, false); }
-            line("Option order", Palette.Text, true);
-            for (int i = 0; i < plan.Layers.Count; i++) line((i + 1) + ".  " + plan.Layers[i].Name, Palette.Text, false);
-            line("Overrides · the later option wins", Palette.Text, true);
-            if (plan.Overrides.Count == 0) line("No selected options overwrite each other.", Palette.Muted, false);
-            foreach (var item in plan.Overrides) line(item.Path + "\n" + item.Previous + " → " + item.Winner, Palette.Muted, false);
+            Action<string, IEnumerable<string>> disclosure = delegate(string caption, IEnumerable<string> rows)
+            {
+                Label contents = null;
+                FlatButton toggle = null;
+                toggle = Button("▸  " + caption, false, 680, delegate {
+                    contents.Visible = !contents.Visible;
+                    toggle.Text = (contents.Visible ? "▾  " : "▸  ") + caption;
+                    toggle.AccessibleDescription = contents.Visible ? "Expanded" : "Collapsed";
+                });
+                toggle.TextAlign = ContentAlignment.MiddleLeft;
+                toggle.AccessibleName = caption;
+                toggle.AccessibleDescription = "Collapsed";
+                body.Controls.Add(toggle);
+                line(String.Join(Environment.NewLine, rows), Palette.Muted, false);
+                contents = (Label)body.Controls[body.Controls.Count - 1];
+                contents.Visible = false;
+            };
+            Action<string, List<string>, Color> issues = delegate(string title, List<string> rows, Color color)
+            {
+                if (rows.Count == 0) return;
+                line(title, color, true);
+                line(rows[0], Palette.Text, false);
+                if (rows.Count == 2) line(rows[1], Palette.Text, false);
+                if (rows.Count > 2) disclosure("Show " + (rows.Count - 1) + " more", rows.Skip(1));
+            };
+            if (health != null)
+            {
+                int files = health.Patches.Select(p => p.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                // Installed: Slotsloader applies these when it builds the slot (nothing to do); only swatches wait for a reinstall.
+                int onReinstall = health.Patches.Where(p => p.Kind == "swatch").Select(p => p.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                string status = installed == null ? ReplacePlanner.N(files, "file") + " to patch"
+                    : ReplacePlanner.N(files - onReinstall, "file") + " patched by Slotsloader" + (onReinstall > 0 ? "   ·   " + ReplacePlanner.N(onReinstall, "file") + " fixed by Reinstall" : "");
+                line(status + "   ·   " + ReplacePlanner.N(health.Warnings.Count, "warning") +
+                    "   ·   " + ReplacePlanner.N(health.Errors.Count, "error") +
+                    (installed == null && plan.Warnings.Count > 0 ? "   ·   " + ReplacePlanner.N(plan.Warnings.Count, "note") : "") +
+                    (health.Applied.Count > 0 ? "   ·   " + health.Applied.Count + " already patched" : ""), Palette.Text, true);
+                issues("Errors", health.Errors, Palette.Red);
+                issues("Unpatched or unchecked", health.Warnings, Palette.Accent);
+                if (files > 0)
+                {
+                    line(installed == null ? "Would be patched" : "Patched automatically", Palette.Text, true);
+                    foreach (var group in health.Patches.GroupBy(p => p.Kind).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal))
+                    {
+                        int count = group.Select(p => p.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                        string caption;
+                        switch (group.Key)
+                        {
+                            case "crc": caption = ReplacePlanner.N(count, "colour file") + " · " + ReplacePlanner.N(group.Sum(p => p.Count), "outdated signature"); break;
+                            case "layout": caption = "2023 colour layout · " + ReplacePlanner.N(count, "file"); break;
+                            case "swatch": caption = "Select-screen swatches · " + ReplacePlanner.N(count, "file"); break;
+                            case "mip": caption = "Texture pitch repair · " + ReplacePlanner.N(count, "file"); break;
+                            case "suffix": caption = "Texture filename update · " + ReplacePlanner.N(count, "file"); break;
+                            case "swap-scene": caption = "Character-swap scenes · " + ReplacePlanner.N(count, "file"); break;
+                            case "swap-user": caption = "Character-swap resources · " + ReplacePlanner.N(count, "file"); break;
+                            default: caption = "Compatibility repair · " + ReplacePlanner.N(count, "file"); break;
+                        }
+                        caption += group.Key == "swatch" ? (installed == null ? " · on install" : " · on reinstall") : " · on slot build";
+                        disclosure(caption, group.OrderBy(p => p.Path, StringComparer.OrdinalIgnoreCase).Select(p => p.Path + " · " + p.Description));
+                    }
+                }
+                if (health.Applied.Count > 0)
+                    disclosure("Installed patches · " + ReplacePlanner.N(health.Applied.Count, "rebuilt swatch file"), health.Applied);
+            }
+            if (installed == null) issues("Notes", plan.Warnings, Palette.Text);
+            if (health != null && (health.Unchanged.Count > 0 || health.Other.Count > 0))
+            {
+                line("File details", Palette.Text, true);
+                if (health.Unchanged.Count > 0) disclosure("No patch identified · " + ReplacePlanner.N(health.Unchanged.Count, "file"), health.Unchanged.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+                if (health.Other.Count > 0) disclosure("Outside compatibility checks · " + ReplacePlanner.N(health.Other.Count, "file"), health.Other.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+            }
+            if (installed == null && plan.Layers.Count > 0)
+            {
+                if (plan.Layers.Count == 1) line("Selected option · " + plan.Layers[0].Name, Palette.Muted, false);
+                else disclosure("Option order · " + ReplacePlanner.N(plan.Layers.Count, "option"), plan.Layers.Select((layer, i) => (i + 1) + ".  " + layer.Name));
+                if (plan.Overrides.Count > 0)
+                    disclosure(ReplacePlanner.N(plan.Overrides.Count, "override") + " · later option wins", plan.Overrides.Select(o => o.Path + " · " + o.Previous + " → " + o.Winner));
+            }
             body.Resize += delegate { foreach (Control c in body.Controls) { c.MaximumSize = new Size(Math.Max(DpiMetrics.Px(report,100), body.ClientSize.Width-DpiMetrics.Px(report,28)), c is FlatButton ? DpiMetrics.Px(report,38) : 0); if (c is FlatButton) { c.Width = Math.Max(DpiMetrics.Px(report,100), body.ClientSize.Width-DpiMetrics.Px(report,28)); c.Height = DpiMetrics.Px(report,38); } } };
             FlatButton close = Button("Close", false, 110, delegate { report.Close(); }); close.Dock = DockStyle.Bottom;
             report.Controls.Add(body); report.Controls.Add(close); DarkTheme.Apply(report); report.ResumeLayout(true);report.PerformAutoScale();return report;
@@ -2541,7 +2669,7 @@ namespace SlotsInstaller
             else if (missingRestoredOptions.Count > 0 && plan == null)
             {
                 planSummary.Text = "Saved options are missing"; planSummary.ForeColor = Palette.Red;
-                planDetails.Text = "Click Review files to check the remaining selection.";
+                planDetails.Text = "Click Health to check the remaining selection.";
                 tip = "Missing saved options: " + String.Join(", ", missingRestoredOptions);
             }
             else if (unresolvedChoices.Count > 0)
@@ -2695,6 +2823,7 @@ namespace SlotsInstaller
                 if (completionStatus != null) SetSharedStatus(completionStatus, completionStatus.Contains("wasn't saved") || completionStatus.Contains("Not restored") ? Palette.Accent : Palette.Green);   // 2.4.2: a warning is not a green success
                 else SetPageStatus(installedPage, ReplacePlanner.N(installed.Count, "extra outfit"));
                 ShowInstalledSelection();
+                if (BatchVisible) UpdateBatchUi();
             };
         }
 
@@ -2813,7 +2942,7 @@ namespace SlotsInstaller
             InstalledOutfit outfit = GetInstalledSelection();
             GameModRow gameRow = GetGameRowSelection();
             ShowVariants(outfit);   // 2.5.0: a manual archive/folder with several variants (MainFormVariants.cs)
-            moveUpButton.Visible = moveDownButton.Visible = reapplyButton.Visible = gameRow != null && gameRow.Mod != null;
+            moveUpButton.Visible = moveDownButton.Visible = gameRow != null && gameRow.Mod != null;
             if (gameRow != null)
             {
                 bool idle = RowChangesAllowed;
@@ -2827,12 +2956,29 @@ namespace SlotsInstaller
                 bool leftover = gameRow.Leftover != null;
                 removeInstalledButton.Visible = own || gameRow.Fluffy != null || leftover;
                 string fluffyBlocker = gameRow.Fluffy != null ? FluffyUninstallBlocker(gameRow.Fluffy) : leftover ? LeftoverBlocker : null;
-                editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = idle && own; removeInstalledButton.Enabled = own ? idle : leftover ? !busy : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
-                moveUpButton.Enabled = idle && own && gameRow.Priority > 1; moveDownButton.Enabled = idle && own && gameRow.Priority < gameRows.Count(r => r.Mod != null); reapplyButton.Enabled = idle && own;
-                editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Disable" : "Enable"; removeInstalledButton.Text = leftover ? LeftoverRemoveText : "Uninstall";
+                editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = own && !busy && (gameRow.Mod.Enabled || idle); removeInstalledButton.Enabled = own ? idle : leftover ? !busy : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
+                moveUpButton.Enabled = idle && own && gameRow.Priority > 1; moveDownButton.Enabled = idle && own && gameRow.Priority < gameRows.Count(r => r.Mod != null);
+                editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Health" : "Enable"; removeInstalledButton.Text = leftover ? LeftoverRemoveText : "Uninstall";
+                disableInstalledButton.Visible = own && gameRow.Mod.Enabled; disableInstalledButton.Enabled = idle && own; disableInstalledButton.Text = "Disable";
                 reinstallButton.Visible = own && SourceChanged(gameRow.Mod.SourcePath); reinstallButton.Enabled = idle && own;
                 LayoutInstalledActions(); ShowGameRow(gameRow);
                 return;
+            }
+            var selectedGameRows = SelectedGameRows();
+            if (selectedGameRows.Count > 0)
+            {
+                bool supported = selectedGameRows.All(r => r.Mod != null);
+                int count = installedList.SelectedItems.Count;
+                installedSelectionCount.Text = count + " selected · " + installedList.Items.Count + " visible";
+                installedTitle.Text = count + " entries selected";
+                installedDetail.Text = ReplacePlanner.N(selectedGameRows.Count(r => r.Mod != null), "replacement") + " · " + ReplacePlanner.N(selected.Count, "extra outfit");
+                string blocker = supported ? ReplacementUninstallBlocker(selectedGameRows) : "Deselect external mods and leftover PAKs to uninstall this selection.";
+                installedHelp.Text = blocker ?? "Uninstall the selected copies from the game. Their library sources stay available.";
+                installedChips.SetChips(new ChipStrip.Chip[0]);
+                removeInstalledButton.Visible = true; removeInstalledButton.Text = "Uninstall selection"; removeInstalledButton.Enabled = !busy && blocker == null;
+                editInstalledButton.Visible = toggleInstalledButton.Visible = disableInstalledButton.Visible = reinstallButton.Visible = false;
+                openInstalledButton.Enabled = false; clearInstalledSelectionButton.Enabled = selectAllInstalledButton.Enabled = presetsButton.Enabled = !busy;
+                LayoutInstalledActions(); return;
             }
             installedSelectionCount.Text=selected.Count+" selected · "+installedList.Items.Count+" visible";   // 2.4.1: the multi-select hint is in the detail line
             selectAllInstalledButton.Enabled=!busy && installedList.Items.Count>0;clearInstalledSelectionButton.Enabled=!busy && (selected.Count>0 || InstalledFiltersSet);presetsButton.Enabled=!busy;
@@ -2840,7 +2986,8 @@ namespace SlotsInstaller
             editInstalledButton.Visible = toggleInstalledButton.Visible = outfit != null && outfit.Managed;removeInstalledButton.Visible=selected.Count>0;
             reinstallButton.Visible = outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath); reinstallButton.Enabled = !busy;
             removeInstalledButton.Text=selected.Count>1 ? "Uninstall selection" : "Uninstall outfit";
-            if (outfit != null) toggleInstalledButton.Text = outfit.Enabled ? "Disable outfit" : "Enable outfit";
+            if (outfit != null) toggleInstalledButton.Text = outfit.Enabled ? "Health" : "Enable outfit";
+            disableInstalledButton.Visible = outfit != null && outfit.Managed && outfit.Enabled && selected.Count == 1; disableInstalledButton.Enabled = !busy; disableInstalledButton.Text = "Disable outfit";
             OutfitGroup group = GetGroupSelection();   // 2.5.0: one group row = all its slots
             if (group != null) { removeInstalledButton.Text = "Uninstall " + ReplacePlanner.N(group.Slots.Count, "slot"); openInstalledButton.Enabled = !busy; }
             else if (SlotsOfOneGroup() != null) removeInstalledButton.Text = "Uninstall " + ReplacePlanner.N(selected.Count, "slot");   // 2.5.0: some slots of one group
@@ -2879,7 +3026,7 @@ namespace SlotsInstaller
             if (sourceGone != null) chips.Add(ChipStrip.Quiet(sourceGone));   // 2.4.1 Delete: still installed, its source is gone
             installedChips.SetChips(chips);
             installedDetail.Text = outfit.Folder; installedPathRow.Visible = true;
-            string help = (outfit.Managed ? "Installed by Manager. Disable moves it out of costume_mods. " : outfit.WholeArchive ? "Every variant, copied by the Manager from " + Path.GetFileName(outfit.SourcePath) + ". " : "Not installed by Manager. ") + RemovedCopyHelp(new List<InstalledOutfit> { outfit });
+            string help = (outfit.Managed ? (outfit.Enabled ? "Health checks the outfit files against the install record. " : "Enable outfit makes it available to Slotsloader again. ") : outfit.WholeArchive ? "Every variant, copied by the Manager from " + Path.GetFileName(outfit.SourcePath) + ". " : "Not installed by Manager. ") + RemovedCopyHelp(new List<InstalledOutfit> { outfit });
             if(!String.IsNullOrEmpty(outfit.LoaderStatus))
             {
                 installedSectionCaption.Text = "LAST SLOTSLOADER RUN · " + (String.IsNullOrEmpty(outfit.LoaderGenerated) ? "NO RESULT" : outfit.LoaderGenerated.ToUpperInvariant());
@@ -2904,19 +3051,28 @@ namespace SlotsInstaller
             return String.Join("\r\n\r\n", blocks) + "\r\n\r\n";
         }
 
-        // Visible actions pack into two equal columns, so hidden actions never
-        // leave a staggered gap.
+        // Visible actions pack into two equal columns. Move up and Move down always share a row; an action left
+        // alone on its row takes the full width, so hidden actions never leave a gap.
         private void LayoutInstalledActions()
         {
             if (installedActions == null) return;
-            var buttons = new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, removeInstalledButton, moveUpButton, moveDownButton, reapplyButton };
+            var buttons = new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, moveUpButton, moveDownButton };
             // Control.Visible reads false while the page is hidden; use the requested state.
-            var shown = buttons.Where(b => InstalledActionShown(b)).ToList();
+            var rows = new List<List<FlatButton>>(); var current = new List<FlatButton>();
+            foreach (FlatButton b in buttons.Where(b => InstalledActionShown(b)))
+            {
+                if (b == moveUpButton && current.Count == 1) { rows.Add(current); current = new List<FlatButton>(); }
+                current.Add(b);
+                if (current.Count == 2) { rows.Add(current); current = new List<FlatButton>(); }
+            }
+            if (current.Count > 0) rows.Add(current);
             int gap = Px(8), height = Px(38), top = installedActions.Padding.Top;
             int width = Math.Max(Px(60), (installedActions.ClientSize.Width - gap) / 2);
-            for (int i = 0; i < shown.Count; i++) shown[i].Bounds = new Rectangle((i % 2) * (width + gap), top + (i / 2) * (height + gap), width, height);
-            int rows = Math.Max(1, (shown.Count + 1) / 2);
-            int wanted = top + rows * height + (rows - 1) * gap;
+            for (int r = 0; r < rows.Count; r++)
+                for (int i = 0; i < rows[r].Count; i++)
+                    rows[r][i].Bounds = new Rectangle(i * (width + gap), top + r * (height + gap), rows[r].Count == 1 ? width * 2 + gap : width, height);
+            int count = Math.Max(1, rows.Count);
+            int wanted = top + count * height + (count - 1) * gap;
             if (installedActions.Height != wanted) installedActions.Height = wanted;
         }
         private bool InstalledActionShown(FlatButton button)
@@ -2925,8 +3081,9 @@ namespace SlotsInstaller
             if (button == openInstalledButton) return true;
             GameModRow gameRow = installedList == null ? null : GetGameRowSelection();
             if (button == reinstallButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && SourceChanged(gameRow.Mod.SourcePath) : outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath));
+            if (button == disableInstalledButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && gameRow.Mod.Enabled : outfit != null && outfit.Managed && outfit.Enabled);
             if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && (gameRow.Fluffy != null || gameRow.Leftover != null));
-            if (button == moveUpButton || button == moveDownButton || button == reapplyButton) return false;
+            if (button == moveUpButton || button == moveDownButton) return false;
             if (button == removeInstalledButton) return count > 0;
             return outfit != null && outfit.Managed;
         }
@@ -2939,12 +3096,58 @@ namespace SlotsInstaller
             catch (Exception error) { SetPageStatus(installedPage, "Could not copy the path: " + error.Message, Palette.Red); }
         }
 
-        private void ToggleOutfit()
+        private void InspectOrToggleInstalled()
         {
-            GameModRow gameRow = GetGameRowSelection(); if (gameRow != null) { if (!busy) ToggleGameRow(gameRow); return; }
+            if (busy) return;
+            GameModRow gameRow = GetGameRowSelection();
+            if (gameRow != null)
+            {
+                if (gameRow.Mod == null) return;
+                if (!gameRow.Mod.Enabled) { if (RowChangesAllowed) ToggleGameRow(gameRow); return; }
+                ReplaceEngine engine = Engine();
+                bool hadUndo = keepUndo; keepUndo = true;
+                try
+                {
+                    Work("Checking installed files…", delegate { return engine.CheckInstalledFiles(gameRow.Mod.Id); }, delegate(List<HealthItem> items)
+                    {
+                        using (Form report = CreateHealthWindow(gameRow.Name, delegate(Action<string, Color, bool> line)
+                        {
+                            foreach (HealthItem item in items)
+                                line(item.Text, item.Level == "error" ? Palette.Red : item.Level == "warn" ? Palette.Accent :
+                                    item.Level == "good" ? Palette.Green : Palette.Text, item.Level == "good" || item.Level == "heading");
+                        }, null)) report.ShowDialog(this);
+                    });
+                }
+                finally { keepUndo = hadUndo; }
+                return;
+            }
             InstalledOutfit outfit = GetInstalledSelection(); if (outfit == null || !outfit.Managed || busy) return;
-            string root = config.CostumeRoot; bool enabled = !outfit.Enabled;
-            Work(enabled ? "Enabling outfit…" : "Disabling outfit…", delegate { return Installer.SetEnabled(outfit, root, enabled); }, delegate(string path) { RefreshInstalled(); });
+            string root = config.CostumeRoot;
+            if (!outfit.Enabled)
+            {
+                Work("Enabling outfit…", delegate { return Installer.SetEnabled(outfit, root, true); }, delegate(string path) { RefreshInstalled(); });
+                return;
+            }
+            bool previous = keepUndo; keepUndo = true;
+            try
+            {
+                Work("Checking installed outfit…", delegate { return Installer.CheckInstalledHealth(outfit, root); }, delegate(OutfitPatchReport health)
+                {
+                    using (Form report = CreateCompositionReport(health, outfit)) report.ShowDialog(this);
+                });
+            }
+            finally { keepUndo = previous; }
+        }
+
+        // Disable keeps a replacement (with Undo) or an extra outfit installed but out of the game; Enable brings it back.
+        private void DisableInstalled()
+        {
+            if (busy) return;
+            GameModRow gameRow = GetGameRowSelection();
+            if (gameRow != null) { if (gameRow.Mod != null && gameRow.Mod.Enabled && RowChangesAllowed) ToggleGameRow(gameRow); return; }
+            InstalledOutfit outfit = GetInstalledSelection(); if (outfit == null || !outfit.Managed || !outfit.Enabled) return;
+            string root = config.CostumeRoot;
+            Work("Disabling outfit…", delegate { return Installer.SetEnabled(outfit, root, false); }, delegate(string path) { RefreshInstalled(); });
         }
 
         private void EditOutfit()
@@ -2959,7 +3162,10 @@ namespace SlotsInstaller
         private void RemoveOutfit()
         {
             GameModRow gameRow = GetGameRowSelection(); if (gameRow != null) { if (!busy) UninstallGameRow(gameRow); return; }
-            var selected=GetInstalledSelections();if(busy || selected.Count==0)return;
+            var selected = GetInstalledSelections();
+            var rows = SelectedGameRows();
+            if (rows.Count > 0) { UninstallSelection(selected, rows); return; }
+            if (busy || selected.Count == 0) return;
             // 2.4.1: no confirmation. 1.0.1: the selection is deleted (no source: Recycle Bin); no Undo.
             OutfitGroup group = GetGroupSelection();   // 2.5.0: a group row uninstalls all its slots
             OutfitGroup some = group == null ? SlotsOfOneGroup() : null;
@@ -3220,7 +3426,7 @@ namespace SlotsInstaller
             if (filterPanel != null && filterPanel.Visible && filterPanel.Contains(focused)) return false;
             if (toastHost != null && toastHost.Contains(focused)) return false;
             if (!libraryPage.Contains(focused)) return false;
-            return !(focused is TextBoxBase || focused is ComboBox || focused is ButtonBase || focused is SegmentedToggle || focused is ListControl || focused is UpDownBase || focused is TrackBar);
+            return !(focused is TextBoxBase || focused is ComboBox || focused is ButtonBase || focused is SegmentedToggle || focused is SegmentedChoice || focused is ListControl || focused is UpDownBase || focused is TrackBar);
         }
         internal Control FocusOverride;   // tests: hidden windows cannot hold keyboard focus
         private Control FocusedControl()
@@ -3235,9 +3441,10 @@ namespace SlotsInstaller
         private void PressInstall()
         {
             if (installButton != null && !installButton.Enabled && !BatchVisible) StartReviewNow();   // 1.0.12: Space before the check ran starts it
-            if (busy || installButton == null || !installButton.Enabled || !installButton.Visible || BatchVisible) return;   // 1.0.6: never under the queue
+            FlatButton action = BatchVisible ? batchInstallButton : installButton;
+            if (busy || action == null || !action.Enabled || !action.Visible) return;
             SpaceInstalls++;
-            installButton.PerformClick();
+            action.PerformClick();
         }
         private PaddedTextField PageSearch() { return currentPage == libraryPage ? search : currentPage == installedPage ? installedSearch : null; }
         // Returns true when the key was consumed.

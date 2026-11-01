@@ -34,7 +34,8 @@ namespace SlotsInstaller
                 foreach (ReplaceMod m in mods)
                     foreach (ModFile f in m.Files)
                     {
-                        string stored = StoreFile(state, m, f);
+                        if (f.ArchiveEntry != null && File.Exists(m.SourcePath)) continue; // A list preset stores a pointer. A copied preset verifies the bytes in ReadPayload.
+                        string stored = ReadPayload(state, m, f);
                         Safety.NoReparseChain(stored);
                         if (!File.Exists(stored)) throw new IOException("The stored copy of '" + m.Name + "' is missing (" + f.Path + "). Reinstall it, then save.");
                     }
@@ -57,9 +58,12 @@ namespace SlotsInstaller
             var plan = new PresetReplacementPlan();
             for (int i = 0; i < saved.Count; i++)
             {
-                ReplaceMod same = state.Mods.FirstOrDefault(m => SameFiles(m, saved[i]));
+                ReplaceMod item = saved[i];
+                Func<ReplaceMod, bool> sameLayer = m => m.PresetLayer && item.PresetLayer && ReplacePlanner.SameSource(m.SourcePath, item.SourcePath)
+                    && m.SelectedIds.SequenceEqual(item.SelectedIds, StringComparer.OrdinalIgnoreCase);
+                ReplaceMod same = state.Mods.FirstOrDefault(m => ((!item.PresetLayer && !m.PresetLayer) || sameLayer(m)) && SameFiles(m, item));
                 if (same != null) { plan.Identical.Add(i); plan.Matched[i] = same.Id; }
-                else if (state.Mods.Any(m => String.Equals((m.Name ?? "").Trim(), (saved[i].Name ?? "").Trim(), StringComparison.OrdinalIgnoreCase))) plan.Conflicts.Add(i);
+                else if (state.Mods.Any(m => sameLayer(m) || (!(item.PresetLayer && m.PresetLayer) && String.Equals((m.Name ?? "").Trim(), (item.Name ?? "").Trim(), StringComparison.OrdinalIgnoreCase)))) plan.Conflicts.Add(i);
                 else plan.Missing.Add(i);
             }
             plan.InstallsNatives = plan.Missing.Any(i => saved[i].Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)));
@@ -102,7 +106,7 @@ namespace SlotsInstaller
                         var mod = new ReplaceMod
                         {
                             Id = Guid.NewGuid().ToString("N"), Name = source.Name, SourcePath = source.SourcePath ?? "", Kind = source.Kind ?? "", InstalledUtc = DateTime.UtcNow.ToString("o"),
-                            Description = source.Description ?? "", SelectedIds = (source.SelectedIds ?? new List<string>()).ToList(), Enabled = source.Enabled, Test = false,
+                            PresetLayer = source.PresetLayer, Description = source.Description ?? "", SelectedIds = (source.SelectedIds ?? new List<string>()).ToList(), Enabled = source.Enabled, Test = false,
                             Files = source.Files.Select(f => new ModFile { Path = f.Path, Sha256 = f.Sha256, Size = f.Size, Fixes = f.Fixes ?? "" }).ToList(),
                             Notes = (source.Notes ?? new List<string>()).ToList(), Affects = source.Affects ?? ""
                         };

@@ -11,7 +11,7 @@ namespace SlotsInstaller
 {
     // Vector glyphs drawn with anti-aliased GDI+ at the control's device DPI.
     // Font glyphs such as "⌄" fall back to a plain letter in Segoe UI.
-    internal enum ButtonGlyph { None, ExpandAll, CollapseAll, Gear, Coffee, Bug, Chat, GitHub, Patreon, Nexus, ColorSync, History, Presets, Refresh }
+    internal enum ButtonGlyph { None, Gear, Coffee, Bug, Chat, GitHub, Patreon, Nexus, ColorSync, History, Presets, Refresh }
     internal enum ChevronDirection { Right, Down, Up }
 
     internal static class Glyphs
@@ -56,14 +56,7 @@ namespace SlotsInstaller
             float scale = dpi / 96F;
             var center = new PointF(area.Left + area.Width / 2F, area.Top + area.Height / 2F);
             float stroke = 1.6F * scale;
-            if (glyph == ButtonGlyph.ExpandAll || glyph == ButtonGlyph.CollapseAll)
-            {
-                var direction = glyph == ButtonGlyph.ExpandAll ? ChevronDirection.Down : ChevronDirection.Up;
-                float half = 4.5F * scale, offset = 2.8F * scale;
-                Chevron(graphics, new PointF(center.X, center.Y - offset), half, direction, color, stroke);
-                Chevron(graphics, new PointF(center.X, center.Y + offset), half, direction, color, stroke);
-            }
-            else if (glyph == ButtonGlyph.Gear)
+            if (glyph == ButtonGlyph.Gear)
             {
                 float outer = 9F * scale, inner = outer * 0.72F, hole = outer * 0.34F;
                 const int teeth = 8;
