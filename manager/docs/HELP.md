@@ -55,7 +55,7 @@ The header shows "● Mod manager running". While your replacements use the PAK 
 ### Tips
 - Don't install the same mod in both managers.
 - Your mod manager's mod folder can be one of your **Mod libraries**, so the same downloads show here.
-- **Settings → Game files & replacements → Import external preset (.prt)…** brings over a preset from your mod manager. The numbers beside an archive show its positions in the preset. Later positions win shared replacement files. Importing enables the selected replacements at the top of Installed. Entries with multiple matches are skipped.
+- **Settings → Game files & replacements → Import external preset (.prt)…** brings over a preset from your mod manager. Each row is a preset entry, numbered in preset order; untick a row to leave that entry out. Later entries win shared replacement files. Importing enables the selected replacements at the top of Installed. When several archives match an entry, double-click the row to choose one; until then it is skipped. The same download in two libraries counts as one match.
 
 ### Moving everything to the Manager
 - Uninstall every mod in your external mod manager first. Replace original stays off until that manager lists no mods.
@@ -91,16 +91,16 @@ For an **extra outfit**, Health inspects the selected files when you open the pr
 The check runs by itself, and the footer says "Ready to install" or "Cannot install" with the first problem. Click **Health** for the full report: problems, other mods for the same outfit, warnings, fixes and notes. **Re-check** runs it again.
 
 ### Reapply and uninstall
-Archive installs keep one active extracted copy in the game. The Manager keeps disabled, overridden and repaired files in its replacement store. To convert older installs, open **Settings → Game files & replacements → Reclaim space**. The Manager checks the archive, installed file and stored copy before freeing space. This one-time option disappears after cleanup finishes successfully.
+Archive installs keep one active extracted copy in the game. The Manager keeps disabled, overridden and repaired files in its replacement store. To convert older installs, open **Settings → Game files & replacements → Reclaim space**. It says how much it can free and asks first. The Manager checks the archive, installed file and stored copy before freeing space. This one-time option disappears after cleanup finishes successfully.
 
-You can rename an archive in the Mod library. If you move or rename it outside the Manager, add its destination library in Settings and refresh. The Manager reconnects a unique archive with the same contents. If it finds two identical candidates, keep one in the configured libraries and refresh again. Deleting an archive leaves the installed mod playable. Repairing a lost game file may then require the original download.
+You can rename an archive in the Mod library. If you move or rename it outside the Manager, add its destination library in Settings and refresh. The Manager reconnects a unique archive with the same contents. A repair can use any identical copy, but to reconnect the mod to one of two identical copies, keep only one in the configured libraries and refresh again. Deleting an archive leaves the installed mod playable. Repairing a lost game file may then require the original download.
 
-On the Installed tab, **Health** checks the selected replacement’s deployed files, counts files supplied by other mods, and shows fixes recorded at install. A previously disabled mod shows **Enable**.
+On the Installed tab, **Health** checks the selected replacement’s deployed files, names the mods higher in the list that supply some of its files, and shows fixes recorded at install. It changes nothing. **Disable** takes a mod out of the game and keeps it; a disabled mod shows **Enable**.
 
 After an SF6 update or a Steam file check, the game-files warning offers **Reapply**. You can also use **Settings → Game files & replacements → Reapply all**. Uninstall restores the original files exactly and keeps no copy, so reinstall from the Mod library to get the mod back.
 
 ## Automatic fixes
-> What the Manager repairs in older mods as they install, and the one fix you turn on yourself.
+> What the Manager repairs in older mods as they install.
 
 Mods are made for the game as it was on the day they were published. Every **Replace original** install gets these fixes in the copy it installs. The mod in your library is never changed.
 
@@ -149,10 +149,11 @@ For an archive with several options, **Install all variants** copies the whole a
 On the Installed page, select an outfit and click **Edit options**. It opens in the Mod library with its options ticked. Change them and click **Install** to update that slot. Two or more slots from one mod show as one row with "N slots"; click its arrow to see each slot.
 
 ### Organize a ZIP bundle
-**Suggest layout** works locally. It groups recognizable alternatives and explains which rules came from the author. Review any uncertain groups before saving. **Refine with Assistant** sends option names, rules and descriptions to your configured Claude model. It works on the current draft. Use **Undo suggestion** to return to the previous draft, or **Save ZIP** to apply it.
-In the library, right-click a ZIP and choose **Edit bundle**. Select an option to rename it or change its rule. Use **New group** under the selected item, then drag options into it or use **Move under**. Pick **Choose one** for required alternatives or **Choose up to one** when the base outfit works on its own.
+In the library, right-click a ZIP with several options and choose **Edit bundle**. Select an option to rename it or change its rule. Use **New group** under the selected item, then drag options onto it or use **Move under**. Drop an option near the top or bottom edge of a row to place it above or below that row. Pick **Choose one** for required alternatives or **Choose up to one** when the base outfit works on its own. The line under the list says when a rule would stop the layout from saving.
 
-**Save ZIP** updates the original archive. Other Slotsloader Managers with the editor can read the layout. **Restore author layout** lets you preview the original menu and save it again. An installed outfit uses its existing files until you reinstall it.
+**Suggest layout** works locally. It groups recognizable alternatives and explains which rules came from the author. Review any uncertain groups before saving. **Refine with Assistant** sends option names, rules and descriptions to your configured Claude model. It works on the current draft, and **Cancel refinement** stops it. Use **Undo suggestion** to return to the previous draft, or **Save ZIP** to apply it.
+
+**Save ZIP** updates the original archive: the layout goes into the ZIP's comment, and the files inside stay as they are, so installed copies don't show "Source changed". Other Slotsloader Managers with the editor can read the layout. **Restore author layout** lets you preview the original menu and save it again. An installed outfit uses its existing files until you reinstall it. If files are added to the ZIP in another program and the saved layout no longer fits, the Manager shows the author's layout with a note; open **Edit bundle** and save to replace it.
 
 ## Presets
 > Save your whole setup as a list and bring it back later.
@@ -211,7 +212,7 @@ Select the outfit. Its row says what Slotsloader did with it:
 > Start with the smallest fix you can undo, and go further only if you need to.
 
 ### Step 1: remove this Manager's mods
-**Gear → Restore → Remove this Manager's mods** takes out every replacement and tool mod the Manager installed and restores the original files. **Undo** in the status bar puts them all back. If SF6 starts now, reinstall your replacements from the Library one at a time and test after each install to identify the mod that causes the problem.
+**Gear → Restore → Remove this Manager's mods** takes out every replacement and tool mod the Manager installed and restores the original files. **Undo** in the status bar puts them all back. If SF6 starts now, press **Undo**, then on the Installed page **Disable** the replacements one at a time until you find the one that breaks it. Each Disable has its own Undo.
 
 Keep the Manager open and make no other change before you press Undo: the Undo ends at your next change or when you close the Manager. While your external mod manager has mods installed, Undo waits ("Can't undo yet: …").
 
@@ -221,7 +222,7 @@ This also removes REFramework and Slotsloader if the Manager installed them, so 
 - A PAK mod made for an older game version can stop SF6 from starting. Uninstalling it puts the game back.
 - A **Leftover PAK** row on the Installed page: a patch PAK no mod manager lists, which SF6 still loads. See [[Leftover PAKs]].
 - A missing number in the patch PAKs (`re_chunk_000.pak.patch_NNN.pak`) can stop the game at a black screen. The Manager fills such a gap with an empty placeholder at start-up and on refresh, while SF6 and the external mod manager are closed, and says so in the status line.
-- If loading stalls on the character select screen, select the extra outfit on the Installed page and click **Health** to check its installed files and last Slotsloader result. Check `SF6_CostumeLoader.log` in the game folder for loader warnings.
+- If loading stalls on the character select screen, an extra outfit may be the cause. Select it on the Installed page and click **Health** to check its installed files and last Slotsloader result, or **Disable outfit** to test without it. Check `SF6_CostumeLoader.log` in the game folder for loader warnings.
 - SF6 was just updated: see [[After an SF6 update]] first.
 
 ### Step 2: restore the game to vanilla
@@ -334,7 +335,7 @@ The install then stops before anything changes, with "This path is too long for 
 > What each undo and restore option does, from the lightest to the full reset.
 
 ### Undo
-Many actions happen at once and show **Undo** in the status bar: enabling a previously disabled replacement or tool mod, **Move up** and **Move down**, **Remove this Manager's mods**, changing the replacement method, turning the loose file loader on or off, **Remove PAK**, and turning a variant on or off. An Undo lasts until your next change or until you close the Manager. If it can't run yet, it says why ("Can't undo yet: …") and stays.
+Many actions happen at once and show **Undo** in the status bar: **Disable** and **Enable** of a replacement or tool mod, **Move up** and **Move down**, **Remove this Manager's mods**, changing the replacement method, turning the loose file loader on or off, **Remove PAK**, and turning a variant on or off. An Undo lasts until your next change or until you close the Manager. If it can't run yet, it says why ("Can't undo yet: …") and stays.
 
 **Uninstall has no Undo.** It keeps no copy, so reinstall the mod from the Mod library. An outfit or replacement with no library source (a manual drop) goes to the Recycle Bin instead. If the Recycle Bin can't take it, an outfit stays installed and a replacement's files are deleted; the status line says which. Deleting a mod in the Mod library also moves it to the Recycle Bin.
 

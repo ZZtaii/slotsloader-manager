@@ -1142,6 +1142,7 @@ namespace SlotsInstaller
                 GamePaks paks = GamePaks.Load(GameRoot);
                 GameReference reference = GameReference.Load(GameRoot, paks.Base, paks.Dlc);
                 int changed = 0;
+                var unreadable = new List<string>();
                 foreach (ReplaceMod mod in state.Mods)
                 {
                     var candidates = mod.Files.Where(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) && f.Size <= 256L * 1024 * 1024 &&
@@ -1158,7 +1159,12 @@ namespace SlotsInstaller
                         if (Verified(live, f)) paths[f] = live;
                         else missing.Add(f);
                     }
-                    Hydrate(state, mod, missing);
+                    // A mod whose archive is gone keeps its files as they are; the others still update (the missing
+                    // files stay unreadable below, so they are skipped).
+                    try { Hydrate(state, mod, missing); }
+                    catch (IOException ex) { unreadable.Add(mod.Name); Program.Log(ex); }
+                    catch (InvalidDataException ex) { unreadable.Add(mod.Name); Program.Log(ex); }
+                    catch (UnauthorizedAccessException ex) { unreadable.Add(mod.Name); Program.Log(ex); }
                     foreach (ModFile f in candidates)
                     {
                         string stored = StoreFile(state, mod, f), readable = paths[f];
@@ -1175,9 +1181,11 @@ namespace SlotsInstaller
                         f.ArchiveEntry = null; f.Sha256 = Sha(data); f.Size = data.Length; changed++;
                     }
                 }
-                if (changed == 0) return "";
+                string skipped = unreadable.Count == 0 ? "" : " Not checked for the current game version: " + String.Join(", ", unreadable.Distinct()) +
+                    " (the original archive is not in your Mod libraries).";
+                if (changed == 0) return skipped.Trim();
                 state.Generation++; DurableFile.WriteJson(StatePath, state);
-                return ReplacePlanner.N(changed, "stored file") + " updated for the current game version.";
+                return ReplacePlanner.N(changed, "stored file") + " updated for the current game version." + skipped;
             }
         }
 
@@ -1261,16 +1269,29 @@ namespace SlotsInstaller
             if (mod == null || !mod.Enabled) throw new IOException("This mod is no longer enabled. Refresh the Installed tab.");
             var deployments = state.Deployed.ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);
             var rows = new List<HealthItem>();
-            int matches = 0, overridden = 0;
+            int matches = 0, overridden = 0, done = 0;
+            // Files a higher mod supplies, by that mod (the one that wins them in the game).
+            var winners = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (ModFile file in mod.Files)
             {
+                OperationContext.ThrowIfCancellationRequested();
+                OperationContext.Report("Checking " + Path.GetFileName(file.Path), done++, mod.Files.Count);
                 DeployedFile deployed;
                 if (!deployments.TryGetValue(file.Path, out deployed))
                 {
-                    rows.Add(new HealthItem("warn", "No active deployment · " + file.Path));
+                    ReleasedFile kept = state.Release(file.Path);
+                    rows.Add(new HealthItem("warn", (kept != null && !String.IsNullOrEmpty(kept.Changer) ? "Left as " + kept.Changer + " changed it · " : "No active deployment · ") + file.Path));
                     continue;
                 }
-                if (!String.Equals(deployed.Owner, mod.Id, StringComparison.OrdinalIgnoreCase)) { overridden++; continue; }
+                if (!String.Equals(deployed.Owner, mod.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    overridden++;
+                    ReplaceMod winner = state.Find(deployed.Owner);
+                    string name = winner == null ? "another mod" : "'" + winner.Name + "'";
+                    List<string> paths; if (!winners.TryGetValue(name, out paths)) winners[name] = paths = new List<string>();
+                    paths.Add(file.Path);
+                    continue;
+                }
                 try
                 {
                     string full = GamePath(deployed.Path);
@@ -1284,8 +1305,11 @@ namespace SlotsInstaller
                 catch (UnauthorizedAccessException) { rows.Add(new HealthItem("warn", "Cannot read · " + file.Path)); }
             }
             string summary = "Verified " + matches + " of " + ReplacePlanner.N(mod.Files.Count, "installed file");
-            if (overridden > 0) summary += " · " + overridden + " supplied by other mods";
+            if (overridden > 0) summary += " · " + overridden + " supplied by " + (winners.Count == 1 ? winners.Keys.First() : "other mods");
             rows.Insert(0, new HealthItem(rows.Count == 0 && matches > 0 ? "good" : "heading", summary));
+            foreach (var winner in winners.OrderByDescending(w => w.Value.Count))
+                rows.Add(new HealthItem("info", "Supplied by " + winner.Key + " (higher on the Installed page) · " + ReplacePlanner.N(winner.Value.Count, "file") +
+                    " · " + String.Join(", ", winner.Value.Take(3).Select(Path.GetFileName)) + (winner.Value.Count > 3 ? ", …" : "")));
             foreach (var fix in mod.Files.Where(f => !String.IsNullOrWhiteSpace(f.Fixes)).GroupBy(f => f.Fixes))
                 rows.Add(new HealthItem("info", "Patched at install · " + ReplacePlanner.N(fix.Count(), "file") + " · " + fix.Key));
             foreach (string note in mod.Notes) rows.Add(new HealthItem("info", note));

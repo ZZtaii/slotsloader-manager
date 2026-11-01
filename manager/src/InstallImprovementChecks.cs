@@ -52,6 +52,29 @@ namespace SlotsInstaller
             Require(now==SourceReader.Stamp(path),"rejected edit modified the ZIP");
             BundleLayout.Save(path,now,null);
             Require(ReplaceEngine.Sha(path)==digest,"author layout restoration changed the original archive");
+            // 1.0.15: a readable trailer; a save is recorded as layout-only ("Source changed" ignores it).
+            var fresh = BundleLayout.Options(PackageReader.Load(path,"")); fresh[0].Name += " edited";
+            BundleLayout.Save(path,SourceReader.Stamp(path),fresh);
+            byte[] layoutComment; using (var s = File.OpenRead(path)) layoutComment = ZipIntegrity.EndComment(s);
+            Require(Encoding.UTF8.GetString(layoutComment).Contains("Slotsloader Manager option layout") && PackageReader.Load(path,"").HasBundleLayout,"readable layout trailer");
+            Require(BundleEdits.LayoutOnlySince(path,DateTime.UtcNow.AddMinutes(1)) && !BundleEdits.LayoutOnlySince(path,new DateTime(2001,1,2,0,0,0,DateTimeKind.Utc)),"layout-only save not recorded");
+            // A layout that no longer fits its ZIP (here another ZIP's, as when files are added in another program)
+            // opens with the author layout and a note, and Edit bundle can save over it.
+            foreach (string option in new[] { "A", "B" })
+            {
+                Directory.CreateDirectory(Path.Combine(root, "other-options", option, "natives", "stm"));
+                File.WriteAllText(Path.Combine(root, "other-options", option, "modinfo.ini"), "name=" + option);
+                File.WriteAllBytes(Path.Combine(root, "other-options", option, "natives", "stm", option + ".bin"), new byte[] { 1 });
+            }
+            string other = Path.Combine(root,"bundle-other.zip");
+            ZipFile.CreateFromDirectory(Path.Combine(root,"other-options"), other);
+            byte[] bytes = File.ReadAllBytes(other);   // no comment yet: its last two bytes are the comment length 0
+            File.WriteAllBytes(other, bytes.Take(bytes.Length-2).Concat(new[] { (byte)layoutComment.Length, (byte)(layoutComment.Length>>8) }).Concat(layoutComment).ToArray());
+            var stale = PackageReader.Load(other,"");
+            Require(stale.LayoutError!=null && !stale.HasBundleLayout && stale.Warnings[0]==stale.LayoutError && stale.Components.Any(c=>c.Id=="A"),"a layout that no longer fits its ZIP: "+stale.LayoutError);
+            BundleLayout.Save(other,SourceReader.Stamp(other),BundleLayout.Options(stale));
+            var repaired = PackageReader.Load(other,"");
+            Require(repaired.LayoutError==null && repaired.HasBundleLayout,"saving the author layout did not replace a stale one");
         }
         internal static string OptionsFixture(string root)
         {

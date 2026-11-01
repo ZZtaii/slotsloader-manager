@@ -34,7 +34,9 @@ namespace SlotsInstaller
                 if (key != VK_CONTROL) return;
                 bool fire = ctrlTapArmed; ctrlTapArmed = false;
                 if (!fire) return;
-                if (CtrlUninstallsHere(libraryPage)) PressUninstall(BatchVisible ? batchUninstallButton : libraryUninstallButton, ref CtrlUninstalls);
+                // Never under the library queue: a Ctrl released without a click while picking rows would uninstall every
+                // selected mod (replacements with no Undo). The queue's Uninstall is a click.
+                if (CtrlUninstallsHere(libraryPage)) PressUninstall(libraryUninstallButton, ref CtrlUninstalls);
                 else if (CtrlUninstallsHere(installedPage)) PressUninstall(removeInstalledButton, ref InstalledCtrlUninstalls);
                 return;
             }

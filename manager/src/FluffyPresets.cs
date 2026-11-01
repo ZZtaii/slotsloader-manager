@@ -28,6 +28,7 @@ namespace SlotsInstaller
         internal string Character = "";
         internal string Message = "", Stamp;
         internal bool Ambiguous;
+        internal List<PresetMapping> Choices;   // Ambiguous: the matching archives (Entry, Package, OptionIds), one to pick
         internal bool Include = true;
         internal string DisplayName { get { return Sections.Count == 0 ? "" : Sections[0].ModName.Length > 0 ? Sections[0].ModName : Sections[0].Section; } }
     }
@@ -88,8 +89,12 @@ namespace SlotsInstaller
                 candidates.AddRange(usable.Where(archiveMatch));
                 candidates.AddRange(usable.Where(e => e.OptionIds.Any(id => Key(LastSegment(id)) == sectionKey)));
                 candidates.AddRange(usable.Where(e => nameKey.Length > 0 && (Key(e.DisplayName) == nameKey || (e.OptionNames != null && e.OptionNames.Any(n => Key(n) == nameKey)))));
-                var words = Regex.Split(entry.Section + " " + entry.ModName, @"[^A-Za-z0-9]+").Where(w => w.Length >= 4).Select(Key).Distinct().ToList();
-                var fallback = usable.Where(e => words.Any(w => Key(e.Name).Contains(w)) || (sectionKey.Length >= 4 && Key(e.Name).Contains(sectionKey)));
+                // Option folders without native files (tool mods) are not indexed: the best-named others are read too,
+                // at most 16 per entry, so a large library is never read whole.
+                var words = Regex.Split(entry.Section + " " + entry.ModName, @"[^A-Za-z0-9]+").Where(w => w.Length >= 4).Select(Key).Where(w => !StopWords.Contains(w)).Distinct().ToList();
+                var fallback = usable.Select(e => new { E = e, K = Key(e.Name) })
+                    .Select(x => new { x.E, Score = words.Count(w => x.K.Contains(w)) + (sectionKey.Length >= 4 && x.K.Contains(sectionKey) ? 2 : 0) })
+                    .Where(x => x.Score > 0).OrderByDescending(x => x.Score).Take(16).Select(x => x.E);
                 int best = 0;
                 var matches = new List<PresetMapping>();
                 var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -113,26 +118,61 @@ namespace SlotsInstaller
                             OptionIds = c == null ? Composer.DefaultSelection(package, true) : new List<string> { c.Id } });
                     }
                 }
-                if (matches.Count == 1)
+                if (matches.Count > 1) matches = DistinctCopies(matches);
+                if (matches.Count == 1) Resolve(mapping, matches[0], stamps);
+                else if (matches.Count > 1)
                 {
-                    mapping.Entry = matches[0].Entry; mapping.Package = matches[0].Package;
-                    entry.ExplicitIds = matches[0].OptionIds;
-                    entry.RequiredIds = Complete(mapping.Package, entry.ExplicitIds);
-                    mapping.OptionIds = entry.RequiredIds.ToList();
-                    if (!stamps.TryGetValue(mapping.Entry.SourcePath, out mapping.Stamp)) stamps[mapping.Entry.SourcePath] = mapping.Stamp = MainForm.SourceStamp(mapping.Entry.SourcePath);
+                    // The review picks one (FluffyPresetForm); until then the entry is skipped.
+                    mapping.Ambiguous = true; mapping.Choices = matches; mapping.Include = false;
+                    // The paths are in the review's chooser (FluffyPresetForm.ChooseMatch); the column stays short.
+                    mapping.Message = "'" + entry.Section + "' matches " + matches.Count + " archives. Double-click this row to choose one.";
                 }
-                mapping.Ambiguous = matches.Count > 1;
-                if (mapping.Entry == null)
-                {
-                    mapping.Message = mapping.Ambiguous ? "Multiple matches for '" + entry.Section + "': " +
-                        String.Join(" | ", matches.Select(m => m.Entry.SourcePath + " (" + String.Join(", ", m.OptionIds) + ")")) :
-                        "'" + entry.Section + "' (" + entry.ModName + ") not found in your libraries.";
-                    mapping.Include = false;
-                }
-                else Describe(mapping);
+                else { mapping.Message = "'" + entry.Section + "' (" + entry.ModName + ") not found in your libraries."; mapping.Include = false; }
                 result.Add(mapping);
             }
             return result;
+        }
+        private static readonly HashSet<string> StopWords = new HashSet<string>(new[] { "barefoot", "with", "mods", "main" });
+
+        // A match the review chose, or the only one: its options become the entry's layer in preset order.
+        internal static void Resolve(PresetMapping mapping, PresetMapping match, Dictionary<string, string> stamps = null)
+        {
+            FluffyPresetEntry entry = mapping.Sections[0];
+            mapping.Entry = match.Entry; mapping.Package = match.Package;
+            entry.ExplicitIds = match.OptionIds.ToList();
+            entry.RequiredIds = Complete(mapping.Package, entry.ExplicitIds);
+            mapping.OptionIds = entry.RequiredIds.ToList();
+            if (stamps == null || !stamps.TryGetValue(mapping.Entry.SourcePath, out mapping.Stamp))
+            {
+                mapping.Stamp = MainForm.SourceStamp(mapping.Entry.SourcePath);
+                if (stamps != null) stamps[mapping.Entry.SourcePath] = mapping.Stamp;
+            }
+            mapping.Ambiguous = false; mapping.Choices = null; mapping.Include = true;
+            Describe(mapping);
+        }
+        internal static string ChoiceText(PresetMapping match)
+        {
+            var names = match.OptionIds.Select(id => match.Package.Find(id)).Where(c => c != null).Select(c => c.Name).ToList();
+            return match.Entry.SourcePath + (names.Count == 0 ? "" : " (" + String.Join(" + ", names) + ")");
+        }
+        // The same download in two libraries is one match: the same option of byte-identical archives.
+        private static List<PresetMapping> DistinctCopies(List<PresetMapping> matches)
+        {
+            var kept = new List<PresetMapping>();
+            foreach (PresetMapping m in matches) if (!kept.Any(k => SameCopy(k, m))) kept.Add(m);
+            return kept;
+        }
+        private static bool SameCopy(PresetMapping a, PresetMapping b)
+        {
+            if (!a.OptionIds.SequenceEqual(b.OptionIds, StringComparer.OrdinalIgnoreCase)) return false;
+            try
+            {
+                var x = new FileInfo(a.Entry.SourcePath); var y = new FileInfo(b.Entry.SourcePath);
+                if (!x.Exists || !y.Exists || x.Length != y.Length) return false;   // folders are never collapsed
+                return ReplaceEngine.Sha(x.FullName) == ReplaceEngine.Sha(y.FullName);
+            }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
         }
 
         // Adds the real ancestors and in-scope main files an option needs.

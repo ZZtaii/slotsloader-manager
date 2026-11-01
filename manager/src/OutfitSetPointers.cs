@@ -267,7 +267,7 @@ namespace SlotsInstaller
                 if (same == null && p.ArchiveSha != null)
                 {
                     string exact = engine.FindPointerArchive(p);
-                    if (exact == null) { result.Notes.Add(p.Name + ": the original archive could not be uniquely matched in your libraries."); continue; }
+                    if (exact == null) { result.Notes.Add(p.Name + ": the original archive is not in your libraries any more."); continue; }
                     p.SourcePath = exact;
                     same = PointerMatch(installed, p);
                 }

@@ -154,7 +154,7 @@ namespace SlotsInstaller
         private Label componentVersion;
         private Label packageTitle, packageMeta, packageDescription, packageHint, noPreview, libraryCount, selectedLabel, targetPath, planSummary, planDetails, searchClear;
         private Label installedTitle, installedDetail, statusText, componentTitle;
-        private FlatButton previewButton, installButton, libraryUninstallButton, componentTab, filesTab, openInstalledButton, editInstalledButton, toggleInstalledButton, removeInstalledButton, filterButton;
+        private FlatButton previewButton, installButton, libraryUninstallButton, componentTab, filesTab, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, filterButton;
         private Panel componentPanel, filesPanel;
         private ProgressBar statusProgress;
         private FlatButton cancelWork;
@@ -954,13 +954,15 @@ namespace SlotsInstaller
             openInstalledButton = Button("Open folder", false, 200, delegate { GameModRow row = GetGameRowSelection(); if (row != null) { OpenPath(row.Fluffy != null ? row.Fluffy.Root : config.GameRoot); return; } InstalledOutfit outfit = GetInstalledSelection(); OutfitGroup group = GetGroupSelection(); if (group != null) outfit = group.Slots[0]; if (outfit != null) OpenPath(File.Exists(outfit.Folder) ? Path.GetDirectoryName(outfit.Folder) : outfit.Folder); });
             editInstalledButton = Button("Edit options", false, 200, delegate { EditOutfit(); });
             toggleInstalledButton = Button("Health", false, 200, InspectOrToggleInstalled);
+            // 1.0.15: Health took the Enable/Disable button's place (read-only, Enable for a disabled entry); Disable is its own action.
+            disableInstalledButton = Button("Disable", false, 200, delegate { DisableInstalled(); }); disableInstalledButton.Visible = false;
             removeInstalledButton = Button("Uninstall outfit", false, 200, delegate { RemoveOutfit(); }); removeInstalledButton.Danger = true;
             removeInstalledButton.KeyHint = "Ctrl";   // 2.5.3: a lone Ctrl tap, as in the Mod library (MainFormKeys.cs)
             moveUpButton = Button("Move up", false, 200, delegate { MoveGameRow(-1); }); moveDownButton = Button("Move down", false, 200, delegate { MoveGameRow(1); });
             reinstallButton = Button("Reinstall", false, 200, delegate { ReinstallSelected(); }); reinstallButton.AccessibleName = "Reinstall from the changed source"; reinstallButton.Visible = false;   // 2.4.1
             
-            openInstalledButton.Enabled = false; editInstalledButton.Enabled = false; toggleInstalledButton.Enabled = false; removeInstalledButton.Enabled = false;
-            foreach (FlatButton button in new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, removeInstalledButton, moveUpButton, moveDownButton }) { button.Margin = Padding.Empty; installedActions.Controls.Add(button); }
+            openInstalledButton.Enabled = false; editInstalledButton.Enabled = false; toggleInstalledButton.Enabled = false; disableInstalledButton.Enabled = false; removeInstalledButton.Enabled = false;
+            foreach (FlatButton button in new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, moveUpButton, moveDownButton }) { button.Margin = Padding.Empty; installedActions.Controls.Add(button); }
             installedActions.Resize += delegate { LayoutInstalledActions(); }; dpiLayouts.Add(LayoutInstalledActions);
             installedSectionCaption = Caption("ABOUT"); installedSectionCaption.Dock = DockStyle.Top; installedSectionCaption.Height = 34; installedSectionCaption.Padding = new Padding(0, 10, 0, 0); installedSectionCaption.AutoEllipsis = true;
             Panel helpCard = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Background, Padding = new Padding(12, 10, 6, 10) };
@@ -2556,8 +2558,11 @@ namespace SlotsInstaller
             if (health != null)
             {
                 int files = health.Patches.Select(p => p.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-                string status = installed == null ? " to patch" : (files == 1 ? " needs patching" : " need patching");
-                line(ReplacePlanner.N(files, "file") + status + "   ·   " + ReplacePlanner.N(health.Warnings.Count, "warning") +
+                // Installed: Slotsloader applies these when it builds the slot (nothing to do); only swatches wait for a reinstall.
+                int onReinstall = health.Patches.Where(p => p.Kind == "swatch").Select(p => p.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                string status = installed == null ? ReplacePlanner.N(files, "file") + " to patch"
+                    : ReplacePlanner.N(files - onReinstall, "file") + " patched by Slotsloader" + (onReinstall > 0 ? "   ·   " + ReplacePlanner.N(onReinstall, "file") + " fixed by Reinstall" : "");
+                line(status + "   ·   " + ReplacePlanner.N(health.Warnings.Count, "warning") +
                     "   ·   " + ReplacePlanner.N(health.Errors.Count, "error") +
                     (installed == null && plan.Warnings.Count > 0 ? "   ·   " + ReplacePlanner.N(plan.Warnings.Count, "note") : "") +
                     (health.Applied.Count > 0 ? "   ·   " + health.Applied.Count + " already patched" : ""), Palette.Text, true);
@@ -2565,7 +2570,7 @@ namespace SlotsInstaller
                 issues("Unpatched or unchecked", health.Warnings, Palette.Accent);
                 if (files > 0)
                 {
-                    line(installed == null ? "Would be patched" : "Compatibility patches needed", Palette.Text, true);
+                    line(installed == null ? "Would be patched" : "Patched automatically", Palette.Text, true);
                     foreach (var group in health.Patches.GroupBy(p => p.Kind).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal))
                     {
                         int count = group.Select(p => p.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
@@ -2954,6 +2959,7 @@ namespace SlotsInstaller
                 editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = own && !busy && (gameRow.Mod.Enabled || idle); removeInstalledButton.Enabled = own ? idle : leftover ? !busy : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
                 moveUpButton.Enabled = idle && own && gameRow.Priority > 1; moveDownButton.Enabled = idle && own && gameRow.Priority < gameRows.Count(r => r.Mod != null);
                 editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Health" : "Enable"; removeInstalledButton.Text = leftover ? LeftoverRemoveText : "Uninstall";
+                disableInstalledButton.Visible = own && gameRow.Mod.Enabled; disableInstalledButton.Enabled = idle && own; disableInstalledButton.Text = "Disable";
                 reinstallButton.Visible = own && SourceChanged(gameRow.Mod.SourcePath); reinstallButton.Enabled = idle && own;
                 LayoutInstalledActions(); ShowGameRow(gameRow);
                 return;
@@ -2970,7 +2976,7 @@ namespace SlotsInstaller
                 installedHelp.Text = blocker ?? "Uninstall the selected copies from the game. Their library sources stay available.";
                 installedChips.SetChips(new ChipStrip.Chip[0]);
                 removeInstalledButton.Visible = true; removeInstalledButton.Text = "Uninstall selection"; removeInstalledButton.Enabled = !busy && blocker == null;
-                editInstalledButton.Visible = toggleInstalledButton.Visible = reinstallButton.Visible = false;
+                editInstalledButton.Visible = toggleInstalledButton.Visible = disableInstalledButton.Visible = reinstallButton.Visible = false;
                 openInstalledButton.Enabled = false; clearInstalledSelectionButton.Enabled = selectAllInstalledButton.Enabled = presetsButton.Enabled = !busy;
                 LayoutInstalledActions(); return;
             }
@@ -2981,6 +2987,7 @@ namespace SlotsInstaller
             reinstallButton.Visible = outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath); reinstallButton.Enabled = !busy;
             removeInstalledButton.Text=selected.Count>1 ? "Uninstall selection" : "Uninstall outfit";
             if (outfit != null) toggleInstalledButton.Text = outfit.Enabled ? "Health" : "Enable outfit";
+            disableInstalledButton.Visible = outfit != null && outfit.Managed && outfit.Enabled && selected.Count == 1; disableInstalledButton.Enabled = !busy; disableInstalledButton.Text = "Disable outfit";
             OutfitGroup group = GetGroupSelection();   // 2.5.0: one group row = all its slots
             if (group != null) { removeInstalledButton.Text = "Uninstall " + ReplacePlanner.N(group.Slots.Count, "slot"); openInstalledButton.Enabled = !busy; }
             else if (SlotsOfOneGroup() != null) removeInstalledButton.Text = "Uninstall " + ReplacePlanner.N(selected.Count, "slot");   // 2.5.0: some slots of one group
@@ -3044,19 +3051,28 @@ namespace SlotsInstaller
             return String.Join("\r\n\r\n", blocks) + "\r\n\r\n";
         }
 
-        // Visible actions pack into two equal columns, so hidden actions never
-        // leave a staggered gap.
+        // Visible actions pack into two equal columns. Move up and Move down always share a row; an action left
+        // alone on its row takes the full width, so hidden actions never leave a gap.
         private void LayoutInstalledActions()
         {
             if (installedActions == null) return;
-            var buttons = new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, removeInstalledButton, moveUpButton, moveDownButton };
+            var buttons = new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, moveUpButton, moveDownButton };
             // Control.Visible reads false while the page is hidden; use the requested state.
-            var shown = buttons.Where(b => InstalledActionShown(b)).ToList();
+            var rows = new List<List<FlatButton>>(); var current = new List<FlatButton>();
+            foreach (FlatButton b in buttons.Where(b => InstalledActionShown(b)))
+            {
+                if (b == moveUpButton && current.Count == 1) { rows.Add(current); current = new List<FlatButton>(); }
+                current.Add(b);
+                if (current.Count == 2) { rows.Add(current); current = new List<FlatButton>(); }
+            }
+            if (current.Count > 0) rows.Add(current);
             int gap = Px(8), height = Px(38), top = installedActions.Padding.Top;
             int width = Math.Max(Px(60), (installedActions.ClientSize.Width - gap) / 2);
-            for (int i = 0; i < shown.Count; i++) shown[i].Bounds = new Rectangle((i % 2) * (width + gap), top + (i / 2) * (height + gap), width, height);
-            int rows = Math.Max(1, (shown.Count + 1) / 2);
-            int wanted = top + rows * height + (rows - 1) * gap;
+            for (int r = 0; r < rows.Count; r++)
+                for (int i = 0; i < rows[r].Count; i++)
+                    rows[r][i].Bounds = new Rectangle(i * (width + gap), top + r * (height + gap), rows[r].Count == 1 ? width * 2 + gap : width, height);
+            int count = Math.Max(1, rows.Count);
+            int wanted = top + count * height + (count - 1) * gap;
             if (installedActions.Height != wanted) installedActions.Height = wanted;
         }
         private bool InstalledActionShown(FlatButton button)
@@ -3065,6 +3081,7 @@ namespace SlotsInstaller
             if (button == openInstalledButton) return true;
             GameModRow gameRow = installedList == null ? null : GetGameRowSelection();
             if (button == reinstallButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && SourceChanged(gameRow.Mod.SourcePath) : outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath));
+            if (button == disableInstalledButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && gameRow.Mod.Enabled : outfit != null && outfit.Managed && outfit.Enabled);
             if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && (gameRow.Fluffy != null || gameRow.Leftover != null));
             if (button == moveUpButton || button == moveDownButton) return false;
             if (button == removeInstalledButton) return count > 0;
@@ -3120,6 +3137,17 @@ namespace SlotsInstaller
                 });
             }
             finally { keepUndo = previous; }
+        }
+
+        // Disable keeps a replacement (with Undo) or an extra outfit installed but out of the game; Enable brings it back.
+        private void DisableInstalled()
+        {
+            if (busy) return;
+            GameModRow gameRow = GetGameRowSelection();
+            if (gameRow != null) { if (gameRow.Mod != null && gameRow.Mod.Enabled && RowChangesAllowed) ToggleGameRow(gameRow); return; }
+            InstalledOutfit outfit = GetInstalledSelection(); if (outfit == null || !outfit.Managed || !outfit.Enabled) return;
+            string root = config.CostumeRoot;
+            Work("Disabling outfit…", delegate { return Installer.SetEnabled(outfit, root, false); }, delegate(string path) { RefreshInstalled(); });
         }
 
         private void EditOutfit()
