@@ -24,6 +24,7 @@ namespace SlotsInstaller
         internal readonly string Source, SevenZip;
         internal readonly Dictionary<string,SourceEntry> Entries = new Dictionary<string,SourceEntry>(StringComparer.OrdinalIgnoreCase);
         internal string ListingStamp;
+        internal byte[] ZipComment = new byte[0];
         private ZipArchive zip; private bool folder;
         internal bool UsesSevenZip { get { return !folder && zip == null; } }
         internal static string Stamp(string source) { var f = new FileInfo(source); return f.Length + ":" + f.LastWriteTimeUtc.Ticks; }
@@ -38,7 +39,7 @@ namespace SlotsInstaller
                 else if (Path.GetExtension(Source).Equals(".zip",StringComparison.OrdinalIgnoreCase))
                 {
                     zip = ZipFile.OpenRead(Source);
-                    uint[] checksums = ZipIntegrity.ReadChecksums(Source,zip);
+                    uint[] checksums = ZipIntegrity.ReadChecksums(Source,zip,out ZipComment);
                     for (int index = 0; index < zip.Entries.Count; index++)
                     {
                         OperationContext.ThrowIfCancellationRequested();

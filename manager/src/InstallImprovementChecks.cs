@@ -14,9 +14,44 @@ namespace SlotsInstaller
         {
             Directory.CreateDirectory(root);
             Options(Path.Combine(root, "options"));
+            BundleEditing(root);
             Search(Path.Combine(root, "search"));
             Ranking();
             Console.WriteLine("PASS install improvements: root choices, saved winners, PAK search/index and portrait ordering");
+        }
+        private static void BundleEditing(string root)
+        {
+            string path = Path.Combine(root,"bundle-edit.zip");
+            ZipFile.CreateFromDirectory(Path.Combine(root,"options"), path);
+            var original = PackageReader.Load(path,"");
+            var rows = BundleLayout.Options(original);
+            Require(!BundleSuggestions.Local(original,rows).Changed,"local suggestion subdivided an existing exclusive group");
+            var neutral=new ModPackage();
+            foreach(var label in new[]{"Red palette","Blue palette","Cape"})
+                neutral.Components.Add(new ModComponent {Id=label,Name=label});
+            var plain=BundleLayout.Options(neutral);
+            var proposed=BundleSuggestions.Local(neutral,plain);
+            Require(proposed.Changed && proposed.Items.Single(r=>r.Name=="Colors").Rule=="Choose any" &&
+                proposed.Items.Single(r=>r.Name=="Cape").Parent==null && plain.All(r=>r.Parent==null) &&
+                !BundleSuggestions.Local(neutral,proposed.Items).Changed,"uncertain options, draft isolation or repeated suggestion");
+            var group = rows.Single(r => original.Find(r.Id).InferredChoice);
+            group.Rule = "Choose up to one";
+            var newGroup = new BundleOption { Id=BundleLayout.GroupPrefix+Guid.NewGuid().ToString("N"), Name="Options", Rule="Choose any" };
+            rows.Add(newGroup); group.Parent=newGroup.Id;
+            string digest = ReplaceEngine.Sha(path), stamp = SourceReader.Stamp(path);
+            long length = new FileInfo(path).Length;
+            BundleLayout.Save(path,stamp,rows);
+            var edited = PackageReader.Load(path,"");
+            Require(edited.Find(group.Id).ParentId==newGroup.Id && !edited.Find(group.Id).RequiresChoice,"edited parent and rule");
+            long size;
+            Require(BundleLayout.ArchiveHash(path,out size)==digest && size==length,"original payload identity after editing");
+            var members = edited.Components.Where(c=>c.ParentId==group.Id).Select(c=>c.Id).ToList();
+            Require(Composer.Plan(edited,members.Take(1),true).CanInstall && !Composer.Plan(edited,members.Take(2),true).CanInstall,"edited optional choose-one group");
+            newGroup.Parent=group.Id; string now=SourceReader.Stamp(path);
+            try { BundleLayout.Save(path,now,rows); throw new Exception("Circular bundle saved"); } catch(InvalidDataException) { }
+            Require(now==SourceReader.Stamp(path),"rejected edit modified the ZIP");
+            BundleLayout.Save(path,now,null);
+            Require(ReplaceEngine.Sha(path)==digest,"author layout restoration changed the original archive");
         }
         internal static string OptionsFixture(string root)
         {

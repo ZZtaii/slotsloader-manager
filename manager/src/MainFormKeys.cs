@@ -34,7 +34,7 @@ namespace SlotsInstaller
                 if (key != VK_CONTROL) return;
                 bool fire = ctrlTapArmed; ctrlTapArmed = false;
                 if (!fire) return;
-                if (CtrlUninstallsHere(libraryPage)) PressUninstall(libraryUninstallButton, ref CtrlUninstalls);
+                if (CtrlUninstallsHere(libraryPage)) PressUninstall(BatchVisible ? batchUninstallButton : libraryUninstallButton, ref CtrlUninstalls);
                 else if (CtrlUninstallsHere(installedPage)) PressUninstall(removeInstalledButton, ref InstalledCtrlUninstalls);
                 return;
             }

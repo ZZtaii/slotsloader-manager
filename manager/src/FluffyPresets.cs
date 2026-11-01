@@ -13,6 +13,8 @@ namespace SlotsInstaller
     {
         internal string Section = "", ModName = "", ModId = "";
         internal int Order;
+        internal List<string> ExplicitIds = new List<string>();
+        internal List<string> RequiredIds = new List<string>();
     }
 
     internal sealed class PresetMapping
@@ -24,7 +26,8 @@ namespace SlotsInstaller
         internal string Kind = "";        // Costume, Tool, Mixed
         internal string Mode = InstallModes.Replace;
         internal string Character = "";
-        internal string Message = "";
+        internal string Message = "", Stamp;
+        internal bool Ambiguous;
         internal bool Include = true;
         internal string DisplayName { get { return Sections.Count == 0 ? "" : Sections[0].ModName.Length > 0 ? Sections[0].ModName : Sections[0].Section; } }
     }
@@ -65,6 +68,7 @@ namespace SlotsInstaller
         // One mapping per preset section, in preset order. Package loads are cached.
         internal static List<PresetMapping> Map(List<FluffyPresetEntry> entries, IList<LibraryEntry> library, string sevenZip)
         {
+            var stamps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var packages = new Dictionary<string, ModPackage>(StringComparer.OrdinalIgnoreCase);
             Func<LibraryEntry, ModPackage> load = delegate(LibraryEntry e)
             {
@@ -80,29 +84,51 @@ namespace SlotsInstaller
                 var mapping = new PresetMapping(); mapping.Sections.Add(entry);
                 string sectionKey = Key(entry.Section), nameKey = Key(entry.ModName);
                 var candidates = new List<LibraryEntry>();
-                candidates.AddRange(usable.Where(e => Key(e.Name) == sectionKey));
+                Func<LibraryEntry, bool> archiveMatch = e => Key(e.Name) == sectionKey || Key(Path.GetFileName(e.SourcePath)) == sectionKey;
+                candidates.AddRange(usable.Where(archiveMatch));
                 candidates.AddRange(usable.Where(e => e.OptionIds.Any(id => Key(LastSegment(id)) == sectionKey)));
-                if (sectionKey.Length >= 4) candidates.AddRange(usable.Where(e => { string k = Key(e.Name); return k.Length >= 4 && (k.Contains(sectionKey) || sectionKey.Contains(k)); }));
-                if (nameKey.Length >= 4) candidates.AddRange(usable.Where(e => { string k = Key(e.Name); return k == nameKey || (k.Length >= 4 && (k.Contains(nameKey) || nameKey.Contains(k))); }));
-                // Option folders without native files (tool mods) are not indexed: rank by shared name words.
-                var words = Regex.Split(entry.Section + " " + entry.ModName, @"[^A-Za-z0-9]+").Select(w => w.ToLowerInvariant()).Where(w => w.Length >= 4 && w != "barefoot" && w != "with" && w != "mods" && w != "main").Distinct().ToList();
-                if (words.Count > 0) candidates.AddRange(usable.Select(e => new { E = e, K = Key(e.Name), N = 0 }).Select(x => new { x.E, Score = words.Count(w => x.K.Contains(w)) }).Where(x => x.Score > 0).OrderByDescending(x => x.Score).Take(6).Select(x => x.E));
-                candidates = candidates.Distinct().Take(16).ToList();
-                foreach (LibraryEntry candidate in candidates)
+                candidates.AddRange(usable.Where(e => nameKey.Length > 0 && (Key(e.DisplayName) == nameKey || (e.OptionNames != null && e.OptionNames.Any(n => Key(n) == nameKey)))));
+                var words = Regex.Split(entry.Section + " " + entry.ModName, @"[^A-Za-z0-9]+").Where(w => w.Length >= 4).Select(Key).Distinct().ToList();
+                var fallback = usable.Where(e => words.Any(w => Key(e.Name).Contains(w)) || (sectionKey.Length >= 4 && Key(e.Name).Contains(sectionKey)));
+                int best = 0;
+                var matches = new List<PresetMapping>();
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (LibraryEntry candidate in candidates.Concat(fallback))
                 {
+                    if (!visited.Add(candidate.SourcePath)) continue;
+                    OperationContext.ThrowIfCancellationRequested();
                     ModPackage package = load(candidate);
                     if (package == null) continue;
-                    ModComponent byFolder = package.Components.FirstOrDefault(c => c.Id.Length > 0 && Key(LastSegment(c.Id)) == sectionKey && c.HasFiles(true));
-                    ModComponent byName = package.Components.FirstOrDefault(c => nameKey.Length > 0 && Key(c.Name) == nameKey && c.HasFiles(true));
-                    ModComponent chosen = byFolder ?? byName;
-                    bool entryMatch = Key(candidate.Name) == sectionKey;
-                    if (chosen == null && !entryMatch) continue;
-                    mapping.Entry = candidate; mapping.Package = package;
-                    var ids = chosen != null ? new List<string> { chosen.Id } : Composer.DefaultSelection(package, true);
-                    mapping.OptionIds = Complete(package, ids);
-                    break;
+                    bool archive = archiveMatch(candidate);
+                    foreach (ModComponent c in package.Components.Where(c => !c.IsDummy && c.HasFiles(true)).Concat(new ModComponent[] { null }))
+                    {
+                        bool folder = c != null && c.Id.Length > 0 && Key(LastSegment(c.Id)) == sectionKey;
+                        bool named = c != null && nameKey.Length > 0 && Key(c.Name) == nameKey;
+                        // The section names the archive or folder. Display names refine that match.
+                        int score = c == null && archive ? 4 : 0;
+                        if (named || folder) score = (archive || folder ? 4 : 0) + (named ? 2 : 0) + (folder && archive ? 1 : 0);
+                        if (score == 0 || score < best) continue;
+                        if (score > best) { matches.Clear(); best = score; }
+                        matches.Add(new PresetMapping { Entry = candidate, Package = package,
+                            OptionIds = c == null ? Composer.DefaultSelection(package, true) : new List<string> { c.Id } });
+                    }
                 }
-                if (mapping.Entry == null) { mapping.Message = "'" + entry.Section + "' (" + entry.ModName + ") not found in your libraries."; mapping.Include = false; }
+                if (matches.Count == 1)
+                {
+                    mapping.Entry = matches[0].Entry; mapping.Package = matches[0].Package;
+                    entry.ExplicitIds = matches[0].OptionIds;
+                    entry.RequiredIds = Complete(mapping.Package, entry.ExplicitIds);
+                    mapping.OptionIds = entry.RequiredIds.ToList();
+                    if (!stamps.TryGetValue(mapping.Entry.SourcePath, out mapping.Stamp)) stamps[mapping.Entry.SourcePath] = mapping.Stamp = MainForm.SourceStamp(mapping.Entry.SourcePath);
+                }
+                mapping.Ambiguous = matches.Count > 1;
+                if (mapping.Entry == null)
+                {
+                    mapping.Message = mapping.Ambiguous ? "Multiple matches for '" + entry.Section + "': " +
+                        String.Join(" | ", matches.Select(m => m.Entry.SourcePath + " (" + String.Join(", ", m.OptionIds) + ")")) :
+                        "'" + entry.Section + "' (" + entry.ModName + ") not found in your libraries.";
+                    mapping.Include = false;
+                }
                 else Describe(mapping);
                 result.Add(mapping);
             }
@@ -142,7 +168,7 @@ namespace SlotsInstaller
             mapping.Message = (plan.CanInstall ? "" : String.Join(" ", plan.Errors) + " ") + Path.GetFileName(mapping.Entry.SourcePath) + " · " + String.Join(" + ", layers.Select(c => c.Name));
         }
 
-        // Sections that resolve to the same library entry install together, in first-seen order.
+        // Group archive rows for review and extra outfits. Sections retain the replacement execution order.
         internal static List<PresetMapping> Group(List<PresetMapping> mappings)
         {
             var grouped = new List<PresetMapping>();

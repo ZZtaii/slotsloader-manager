@@ -170,7 +170,7 @@ namespace SlotsInstaller
         internal static int ReviewTestDelay;
         private System.Windows.Forms.Timer reviewTimer, reviewSlowTimer;
         private int reviewGeneration, appliedGeneration = -1, reviewDue;
-        private bool reviewRunning, reviewSlow, openReportWhenReady, showFilesWhenReady, reviewScreenshotTaken;
+        private bool reviewRunning, reviewSlow, openReportWhenReady, reviewScreenshotTaken;
         private CancellationTokenSource reviewCancel;
         private PrepareCache checkCache;
         private ModPackage checkCachePackage;
@@ -276,7 +276,7 @@ namespace SlotsInstaller
                         return;
                     }
                     CompositionPlan composition = Composer.Plan(current, selection, replace);
-                    if (missing.Length > 0) composition.Errors.Add("Saved options are missing: " + String.Join(", ", missing) + ". Click " + (replace ? "Health" : "Review files") + " to review the changed selection.");
+                    if (missing.Length > 0) composition.Errors.Add("Saved options are missing: " + String.Join(", ", missing) + ". Click " + "Health" + " to review the changed selection.");
                     ReplacePlan health = null;
                     if (replace && composition.CanInstall && !choicesOpen)
                     {
@@ -342,7 +342,7 @@ namespace SlotsInstaller
                 CaptureScreenshot(); return;
             }
             if (openReportWhenReady) { openReportWhenReady = false; ShowCurrentReport(); }
-            if (showFilesWhenReady) { showFilesWhenReady = false; ShowDetailTab(true); }
+
             if (pendingLoaderUpdate != null) BeginInvoke((Action)ContinueLoaderUpdate);   // 2.4.0
         }
 
@@ -355,12 +355,12 @@ namespace SlotsInstaller
             if (!open) { RequestReview(1); return; }   // explicit re-check
             if (!ReviewPending)
             {
-                if (IsReplaceMode) ShowCurrentReport(); else ShowDetailTab(true);
+                ShowCurrentReport();
                 return;
             }
-            if (open) { if (IsReplaceMode) openReportWhenReady = true; else showFilesWhenReady = true; }
+            openReportWhenReady = true;
             if (!reviewRunning) { EnsureReviewTimer(); reviewTimer.Stop(); ReviewTick(); }
-            if (open) SetPageStatus(libraryPage, "Checking " + package.Name + "… " + (IsReplaceMode ? "the report opens" : "the merged files show") + " when done.");
+            if (open) SetPageStatus(libraryPage, "Checking " + package.Name + "… " + "the report opens" + " when done.");
         }
 
         private void ShowCurrentReport()
@@ -492,19 +492,12 @@ namespace SlotsInstaller
         // ---- Health report dialog: sized to its content (scrolls when long), dark title bar, Re-check.
         private Form CreateHealthReport(ReplacePlan health)
         {
-            Form report = new Form();
-            report.SuspendLayout();
-            report.AutoScaleDimensions = new SizeF(96F, 96F); report.AutoScaleMode = AutoScaleMode.Dpi;
-            report.Text = "Health check · " + health.ModName; report.ClientSize = new Size(820, 640); report.MinimumSize = new Size(600, 300); report.StartPosition = FormStartPosition.CenterParent;
-            report.BackColor = Palette.Surface; report.ForeColor = Palette.Text; report.ShowInTaskbar = false; report.Padding = new Padding(20, 14, 20, 14);
-            report.MinimizeBox = false; report.KeyPreview = true;
-            report.KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) report.Close(); };
-            AppBranding.Apply(report);
-            var body = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
-            Action<string, Color, bool> line = delegate(string text, Color color, bool heading)
-            {
-                body.Controls.Add(new Label { UseMnemonic = false, Text = text, ForeColor = color, Font = heading ? Palette.Strong : Palette.Normal, AutoSize = true, MaximumSize = new Size(740, 0), Margin = new Padding(0, heading ? 12 : 2, 0, 4) });
-            };
+            return CreateHealthWindow(health.ModName, line => DrawReplacementPreview(health, line),
+                delegate { openReportWhenReady = true; RequestReview(1); });
+        }
+
+        private static void DrawReplacementPreview(ReplacePlan health, Action<string, Color, bool> line)
+        {
             line(health.CanInstall ? "Ready to install" : "Cannot install yet", health.CanInstall ? Palette.Green : Palette.Red, true);
             line("Replaces: " + (health.Affects.Count == 0 ? health.AffectsText : String.Join(", ", health.Affects)), Palette.Text, false);
             line(ReplacePlanner.N(health.Files.Count, "file") + " · " + Utilities.FriendlyBytes(health.Bytes) + " · " + (health.VanillaReplaced == 1 ? "1 replaces a game file · " : health.VanillaReplaced + " replace game files · ") + health.NewFiles + " new · " + health.RootFiles + " in the game folder · " + health.Fixed + " auto-fixed", Palette.Muted, false);
@@ -553,12 +546,31 @@ namespace SlotsInstaller
             }
             if (health.Method == ReplaceMethods.Pak && health.InvalidationPreview.Count > 0) { line("PAK entries to invalidate", Palette.Text, true); foreach (string row in health.InvalidationPreview.Take(30)) line(row, Palette.Muted, false); if (health.InvalidationPreview.Count > 30) line("… " + (health.InvalidationPreview.Count - 30) + " more", Palette.Muted, false); }
             if (health.Milliseconds > 0) line("Checked automatically · " + Seconds(health.Milliseconds).Substring("checked in ".Length), Palette.Muted, false);
+        }
+
+        private Form CreateHealthWindow(string modName, Action<Action<string, Color, bool>> render, Action recheck)
+        {
+            Form report = new Form();
+            report.SuspendLayout();
+            report.AutoScaleDimensions = new SizeF(96F, 96F); report.AutoScaleMode = AutoScaleMode.Dpi;
+            report.Text = "Health check · " + modName; report.ClientSize = new Size(820, 640); report.MinimumSize = new Size(600, 300); report.StartPosition = FormStartPosition.CenterParent;
+            report.BackColor = Palette.Surface; report.ForeColor = Palette.Text; report.ShowInTaskbar = false; report.Padding = new Padding(20, 14, 20, 14);
+            report.MinimizeBox = false; report.KeyPreview = true;
+            report.KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) report.Close(); };
+            AppBranding.Apply(report);
+            var body = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+            Action<string, Color, bool> line = delegate(string text, Color color, bool heading)
+            {
+                body.Controls.Add(new Label { UseMnemonic = false, Text = text, ForeColor = color, Font = heading ? Palette.Strong : Palette.Normal, AutoSize = true, MaximumSize = new Size(740, 0), Margin = new Padding(0, heading ? 12 : 2, 0, 4) });
+            };
+            render(line);
             Action fit = delegate { int w = Math.Max(DpiMetrics.Px(report, 100), body.ClientSize.Width - DpiMetrics.Px(report, 28)); foreach (Control c in body.Controls) c.MaximumSize = new Size(w, 0); };
             body.Resize += delegate { fit(); };
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
             FlatButton close = Button("Close", false, 110, delegate { report.Close(); });
-            FlatButton recheck = Button("Re-check", false, 110, delegate { report.Close(); openReportWhenReady = true; RequestReview(1); });
-            foreach (FlatButton b in new[] { close, recheck }) { b.Height = 36; b.Margin = new Padding(8, 0, 0, 0); actions.Controls.Add(b); }
+            var buttons = new List<FlatButton> { close };
+            if (recheck != null) buttons.Add(Button("Re-check", false, 110, delegate { report.Close(); recheck(); }));
+            foreach (FlatButton b in buttons) { b.Height = 36; b.Margin = new Padding(8, 0, 0, 0); actions.Controls.Add(b); }
             report.CancelButton = close;
             report.Controls.Add(body); report.Controls.Add(actions); DarkTheme.Apply(report); report.ResumeLayout(true); report.PerformAutoScale();
             // Size to the content: no large empty area for short reports; long ones scroll.

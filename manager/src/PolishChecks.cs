@@ -403,8 +403,10 @@ namespace SlotsInstaller
         {
             "AssistantPage.Build",          // the usage meter's per-model breakdown: a viewer the user opens by clicking
             "MainForm.AskDrift",            // another tool changed our files: Restore original / Keep current (only the user can decide)
+            "MainForm.ArchiveDeleteChoice",   // deleting the original archive can remove a replacement repair source
             "MainForm.AskPermanentDelete",  // library Delete where the Recycle Bin can't take it: deleted for good (no Undo); never asked when it can
             "MainForm.BuildGameBanner",     // the banner's details: a viewer the user opens by clicking the banner text
+            "MainForm.InspectOrToggleInstalled", // Health on an installed extra outfit opens its file and loader report
             "MainForm.RemoveApiKey",        // the saved API key is deleted for good (no Undo)
             "Program.ShowError",            // an error the app cannot continue after (start-up, unhandled)
             "RecoveryForm.DeleteSelected",  // a recoverable copy is deleted for good (no Undo)

@@ -12,22 +12,37 @@ namespace SlotsInstaller
     // https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
     internal static class ZipIntegrity
     {
-        internal static uint[] ReadChecksums(string path, ZipArchive archive)
+        internal static byte[] EndComment(Stream stream)
+        {
+            if (stream.Length < 22) throw Invalid();
+            int length = (int)Math.Min(stream.Length, 65535L + 22);
+            stream.Position = stream.Length - length;
+            using (var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, true))
+            {
+                byte[] tail = reader.ReadBytes(length);
+                for (int i = tail.Length - 22; i >= 0; i--)
+                    if (U32(tail, i) == 0x06054b50 && i + 22 + U16(tail, i + 20) == tail.Length)
+                    {
+                        var comment = new byte[tail.Length - i - 22];
+                        Array.Copy(tail, i + 22, comment, 0, comment.Length);
+                        return comment;
+                    }
+                throw Invalid();
+            }
+        }
+
+        internal static uint[] ReadChecksums(string path, ZipArchive archive, out byte[] comment)
         {
             try
             {
                 using (var stream = File.OpenRead(path))
                 using (var reader = new BinaryReader(stream))
                 {
-                    if (stream.Length < 22) throw Invalid();
-                    int tailLength = (int)Math.Min(stream.Length, 65535L + 22);
-                    stream.Position = stream.Length - tailLength;
-                    byte[] tail = reader.ReadBytes(tailLength);
-                    int end = -1;
-                    for (int i = tail.Length - 22; i >= 0; i--)
-                        if (U32(tail, i) == 0x06054b50 && i + 22 + U16(tail, i + 20) == tail.Length) { end = i; break; }
-                    if (end < 0) throw Invalid();
-                    long endPosition = stream.Length - tailLength + end;
+                    comment = EndComment(stream);
+                    long endPosition = stream.Length - comment.Length - 22;
+                    stream.Position = endPosition;
+                    byte[] tail = reader.ReadBytes(22);
+                    const int end = 0;
                     if (U16(tail, end + 4) != 0 || U16(tail, end + 6) != 0) throw new IOException("Multi-disk ZIP archives are unsupported.");
                     long count = U16(tail, end + 10), centralSize = U32(tail, end + 12), centralOffset = U32(tail, end + 16);
                     long centralEndLimit = endPosition;

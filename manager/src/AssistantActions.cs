@@ -146,7 +146,7 @@ namespace SlotsInstaller
             // Same outfit / same files as installed replacements, exactly as the app's health check reports them.
             ReplaceMod updating = String.IsNullOrEmpty(a.ReplacementId) ? null : FindReplacement(state, a.ReplacementId);
             var dests = plan.Files.Keys.Select(path => { string d = path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) ? ModFixes.NormalizeNativePath(path) : PakHash.Normalize(path).TrimStart('/'); return d.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) ? ModFixes.UpgradeTexSuffix(d, reference.TexVersion) ?? d : d; }).ToList();
-            a.Replaces = state.Mods.Where(m => !m.Test && ReplacePlanner.SameSource(m.SourcePath, a.SourcePath)).Select(m => m.Name).ToList();
+            a.Replaces = state.Mods.Where(m => !m.Test && !m.PresetLayer && ReplacePlanner.SameSource(m.SourcePath, a.SourcePath)).Select(m => m.Name).ToList();
             a.Conflicts = ReplacePlanner.AnalyzeConflicts(dests, state, updating == null ? null : updating.Id, GameReference.Tables(workspace.Config.GameRoot), a.SourcePath, plan.Layers.Select(c => c.Id));
             foreach (AssistantAction other in others ?? new AssistantAction[0])
             {
@@ -388,7 +388,7 @@ namespace SlotsInstaller
                     else
                     {
                         // 2.4.1: as the app's one-click Uninstall: every record of that mod's source goes (1.0.1: no kept copy).
-                        var ids = current.Mods.Where(m => m.Id == id || !m.Test && ReplacePlanner.SameSource(m.SourcePath, target.SourcePath)).Select(m => m.Id).ToList();
+                        var ids = current.Mods.Where(m => m.Id == id || !target.PresetLayer && !m.Test && !m.PresetLayer && ReplacePlanner.SameSource(m.SourcePath, target.SourcePath)).Select(m => m.Id).ToList();
                         foreach (string each in ids) engine.UninstallForGood(each, DriftChoice.Ask, null);
                         if (ids.Count > 1) return "Uninstall '" + String.Join("", a.InstalledNames) + "' (" + ids.Count + " installs of this mod): done.";
                     }
@@ -402,7 +402,7 @@ namespace SlotsInstaller
                     var selected = mappings.Where(m => m.Entry != null).ToList();
                     string summary = PresetInstaller.Install(workspace.Config, workspace.Engine(), selected);
                     int missing = mappings.Count(m => m.Entry == null);
-                    return summary.TrimStart('✓', ' ') + (missing > 0 ? " " + missing + (missing == 1 ? " mod from the preset is" : " mods from the preset are") + " not in your libraries." : "");
+                    return summary.TrimStart('✓', ' ') + (missing > 0 ? " " + missing + (missing == 1 ? " mod from the preset is" : " mods from the preset are") + " missing or ambiguous." : "");
                 }
                 default:
                 {

@@ -71,7 +71,7 @@ STAGE_MODS_TXT = CRLF.join([
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="1.10.6")
+    ap.add_argument("--version", default="1.10.7")
     ap.add_argument("--out", default=None)
     ap.add_argument("--game", default=DEFAULT_GAME)
     ap.add_argument("--costumes-only", action="store_true", help="the costume loader alone, without stage slots")
@@ -96,6 +96,7 @@ def main():
         (proxy, "amd_ags_x64.dll"),
         (real, "amd_ags_x64_real.dll"),
         (plugin, "reframework/plugins/SF6_CostumeSlotsNative.dll"),
+        (os.path.join(REPO, "costumes", "SlotsloaderOpponentOutfitSummary.lua"), "reframework/autorun/SlotsloaderOpponentOutfitSummary.lua"),
         (os.path.join(loader_dir, "vanilla_costume_index.tsv"), "reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv"),
     ]
     for n in ("SF6_CostumeAudit.bat", "SF6_CostumeAudit.ps1"):

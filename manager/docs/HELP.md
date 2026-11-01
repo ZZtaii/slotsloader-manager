@@ -36,8 +36,6 @@ The Manager installs Street Fighter 6 mods from your own mod folders: ZIP, RAR a
 - Check **CHARACTER** and **OUTFIT NAME**, then click **Install** (or press Space).
 - Click **Launch SF6**. New outfits show on the character select screen once SF6 has started.
 
-!! GOOD TO KNOW: The Manager never moves a mod onto another fighter. Pick the character the mod was made for.
-
 Using an external mod manager too? Read [[Using it with your mod manager]] next.
 
 ## Using it with your mod manager
@@ -57,7 +55,7 @@ The header shows "● Mod manager running". While your replacements use the PAK 
 ### Tips
 - Don't install the same mod in both managers.
 - Your mod manager's mod folder can be one of your **Mod libraries**, so the same downloads show here.
-- **Settings → Game files & replacements → Import external preset (.prt)…** brings over a preset from your mod manager.
+- **Settings → Game files & replacements → Import external preset (.prt)…** brings over a preset from your mod manager. The numbers beside an archive show its positions in the preset. Later positions win shared replacement files. Importing enables the selected replacements at the top of Installed. Entries with multiple matches are skipped.
 
 ### Moving everything to the Manager
 - Uninstall every mod in your external mod manager first. Replace original stays off until that manager lists no mods.
@@ -88,10 +86,18 @@ Changing the method converts installed replacements; **Undo** converts them back
 - Installing another option set of a mod you already installed replaces it in place.
 
 ### The Health report
+
+For an **extra outfit**, Health inspects the selected files when you open the preview. **Would be patched** groups automatic repairs by type. The colour-file row counts affected files and outdated signatures. Expand a row for the exact paths and individual findings. Expand the file counts to see which files have no known patch and which are outside those checks. In **Installed**, Health reads the current outfit files, shows verified swatch rebuilds from newer installs, and flags missing or changed files. Slotsloader applies its own repairs when it builds the slot.
 The check runs by itself, and the footer says "Ready to install" or "Cannot install" with the first problem. Click **Health** for the full report: problems, other mods for the same outfit, warnings, fixes and notes. **Re-check** runs it again.
 
 ### Reapply and uninstall
-**Reapply all** (Installed page, or **Settings → Game files & replacements**) copies every replacement back after an SF6 update or a Steam file check. Uninstall restores the original files exactly and keeps no copy, so reinstall from the Mod library to get the mod back.
+Archive installs keep one active extracted copy in the game. The Manager keeps disabled, overridden and repaired files in its replacement store. To convert older installs, open **Settings → Game files & replacements → Reclaim space**. The Manager checks the archive, installed file and stored copy before freeing space. This one-time option disappears after cleanup finishes successfully.
+
+You can rename an archive in the Mod library. If you move or rename it outside the Manager, add its destination library in Settings and refresh. The Manager reconnects a unique archive with the same contents. If it finds two identical candidates, keep one in the configured libraries and refresh again. Deleting an archive leaves the installed mod playable. Repairing a lost game file may then require the original download.
+
+On the Installed tab, **Health** checks the selected replacement’s deployed files, counts files supplied by other mods, and shows fixes recorded at install. A previously disabled mod shows **Enable**.
+
+After an SF6 update or a Steam file check, the game-files warning offers **Reapply**. You can also use **Settings → Game files & replacements → Reapply all**. Uninstall restores the original files exactly and keeps no copy, so reinstall from the Mod library to get the mod back.
 
 ## Automatic fixes
 > What the Manager repairs in older mods as they install, and the one fix you turn on yourself.
@@ -115,8 +121,8 @@ Slotsloader repairs extra outfits itself, at every SF6 start where something cha
 
 The Manager doesn't change mods your external mod manager installs; any fixes they get come from that manager. The colour swatch rebuild and the character-swap repair below are only in SLM.
 
-### Character-swap repair (off by default)
-**Settings → Game files & replacements → Try to fix character-swap mods broken by game updates** applies known fixes to old character swaps: the scene signature the Alex update changed, and some Mai and Elena physics files, rebuilt from the current game. Only files that match a verified older version are changed. Replace original and Slotsloader both follow this setting. Turn it on, then install (or reinstall) the swap mod. While it is off, nothing is changed and no swap warnings show.
+### Character-swap repair
+The Manager automatically checks character swaps during installation and reinstallation. It repairs the scene signature changed by the Alex update and certain Mai and Elena physics files when their old versions can be verified against the current game. Slotsloader applies these repairs to extra outfits when it rebuilds them.
 
 ## Extra outfits
 > New costume slots through Slotsloader, with the original outfits left as they are.
@@ -141,6 +147,12 @@ For an archive with several options, **Install all variants** copies the whole a
 
 ### Edit options
 On the Installed page, select an outfit and click **Edit options**. It opens in the Mod library with its options ticked. Change them and click **Install** to update that slot. Two or more slots from one mod show as one row with "N slots"; click its arrow to see each slot.
+
+### Organize a ZIP bundle
+**Suggest layout** works locally. It groups recognizable alternatives and explains which rules came from the author. Review any uncertain groups before saving. **Refine with Assistant** sends option names, rules and descriptions to your configured Claude model. It works on the current draft. Use **Undo suggestion** to return to the previous draft, or **Save ZIP** to apply it.
+In the library, right-click a ZIP and choose **Edit bundle**. Select an option to rename it or change its rule. Use **New group** under the selected item, then drag options into it or use **Move under**. Pick **Choose one** for required alternatives or **Choose up to one** when the base outfit works on its own.
+
+**Save ZIP** updates the original archive. Other Slotsloader Managers with the editor can read the layout. **Restore author layout** lets you preview the original menu and save it again. An installed outfit uses its existing files until you reinstall it.
 
 ## Presets
 > Save your whole setup as a list and bring it back later.
@@ -199,7 +211,7 @@ Select the outfit. Its row says what Slotsloader did with it:
 > Start with the smallest fix you can undo, and go further only if you need to.
 
 ### Step 1: remove this Manager's mods
-**Gear → Restore → Remove this Manager's mods** takes out every replacement and tool mod the Manager installed and restores the original files. **Undo** in the status bar puts them all back. If SF6 starts now, press **Undo**, then on the Installed page **Disable** the replacements one at a time until you find the one that breaks it. Each Disable has its own Undo.
+**Gear → Restore → Remove this Manager's mods** takes out every replacement and tool mod the Manager installed and restores the original files. **Undo** in the status bar puts them all back. If SF6 starts now, reinstall your replacements from the Library one at a time and test after each install to identify the mod that causes the problem.
 
 Keep the Manager open and make no other change before you press Undo: the Undo ends at your next change or when you close the Manager. While your external mod manager has mods installed, Undo waits ("Can't undo yet: …").
 
@@ -209,7 +221,7 @@ This also removes REFramework and Slotsloader if the Manager installed them, so 
 - A PAK mod made for an older game version can stop SF6 from starting. Uninstalling it puts the game back.
 - A **Leftover PAK** row on the Installed page: a patch PAK no mod manager lists, which SF6 still loads. See [[Leftover PAKs]].
 - A missing number in the patch PAKs (`re_chunk_000.pak.patch_NNN.pak`) can stop the game at a black screen. The Manager fills such a gap with an empty placeholder at start-up and on refresh, while SF6 and the external mod manager are closed, and says so in the status line.
-- Loading never finishes on the character select screen: an extra outfit may be the cause. Select it on the Installed page, click **Disable outfit**, and check `SF6_CostumeLoader.log` in the game folder.
+- If loading stalls on the character select screen, select the extra outfit on the Installed page and click **Health** to check its installed files and last Slotsloader result. Check `SF6_CostumeLoader.log` in the game folder for loader warnings.
 - SF6 was just updated: see [[After an SF6 update]] first.
 
 ### Step 2: restore the game to vanilla
@@ -236,7 +248,7 @@ An SF6 update or a Steam file check puts the game's original files back, so your
 
 ### Other notices
 - "N game entries left invalidated by another tool" with **Repair**: game entries that no installed mod owns were left invalidated. **Repair** restores the ones it can prove. For the rest, verify SF6's files in Steam.
-- Character swaps broken by the update: try **Try to fix character-swap mods broken by game updates** (see [[Automatic fixes#Character-swap repair (off by default)|Character-swap repair]]).
+- Character swaps broken by the update: reinstall the affected mod to apply [[Automatic fixes#Character-swap repair|character-swap repair]].
 - The game won't start after the update: see [[Game won't start or a black screen]].
 
 ## Replace original is off
@@ -322,7 +334,7 @@ The install then stops before anything changes, with "This path is too long for 
 > What each undo and restore option does, from the lightest to the full reset.
 
 ### Undo
-Many actions happen at once and show **Undo** in the status bar: **Disable** and **Enable** of a replacement or tool mod, **Move up** and **Move down**, **Remove this Manager's mods**, changing the replacement method, turning the loose file loader on or off, **Remove PAK**, and turning a variant on or off. An Undo lasts until your next change or until you close the Manager. If it can't run yet, it says why ("Can't undo yet: …") and stays.
+Many actions happen at once and show **Undo** in the status bar: enabling a previously disabled replacement or tool mod, **Move up** and **Move down**, **Remove this Manager's mods**, changing the replacement method, turning the loose file loader on or off, **Remove PAK**, and turning a variant on or off. An Undo lasts until your next change or until you close the Manager. If it can't run yet, it says why ("Can't undo yet: …") and stays.
 
 **Uninstall has no Undo.** It keeps no copy, so reinstall the mod from the Mod library. An outfit or replacement with no library source (a manual drop) goes to the Recycle Bin instead. If the Recycle Bin can't take it, an outfit stays installed and a replacement's files are deleted; the status line says which. Deleting a mod in the Mod library also moves it to the Recycle Bin.
 

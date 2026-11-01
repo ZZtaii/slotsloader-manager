@@ -18,7 +18,6 @@ This repo also includes **Slotsloader**, the SF6 loader that allows mods to be i
 - **Handles mod variants.** Install a few variants of one mod as separate slots, or switch the variants of a bundle on and off.
 - **Gets along with other mod managers.** Use it next to them, or import their presets.
 - **Has an optional Assistant.** Ask it to find, install or explain mods. It runs on Claude by Anthropic with your own API key, and every change waits for your OK.
-- **Has a command line tool.** `Slotsloader CLI.exe` checks mods and manages installs without opening the app.
 
 ## What Slotsloader does (SF6)
 

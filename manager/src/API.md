@@ -61,7 +61,7 @@ All types in this section are internal unless noted.
 - `FluffyPresets.Parse(text)` → `List<FluffyPresetEntry>`.
 - `Map(entries, library, sevenZip) → List<PresetMapping>`: one mapping per section, matched by folder/archive and modinfo names and verified against the package.
 - `Group(mappings)` merges sections that map to the same library entry; `PresetFiles(roots)` lists preset files.
-- `PresetInstaller.Install(config, engine, mappings) → summary` installs each mapping in its `Mode`; tool mods always install as Replace.
+- `PresetInstaller.Install(config, engine, mappings) → summary` installs selected replacements together in original section order through `ReplaceEngine.ImportLayers`. Extra outfits use the composed archive row. Tied mappings are excluded.
 
 **Assistant additions**
 - Four tools, for 16 in total: `list_game_mods`, `install_replacement`, `change_game_mod`, `import_external_preset` (2.5.1; the old name is still accepted for older transcripts).

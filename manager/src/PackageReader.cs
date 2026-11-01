@@ -21,7 +21,7 @@ namespace SlotsInstaller
         {
             using (InstallMetrics.Measure("package parse")) return LoadCore(sourcePath, r, preloadPreviews);
         }
-        private static ModPackage LoadCore(string sourcePath, SourceReader r, bool preloadPreviews)
+        private static ModPackage LoadCore(string sourcePath, SourceReader r, bool preloadPreviews, bool readLayout = true)
         {
             var p = new ModPackage { SourcePath=Path.GetFullPath(sourcePath),Name=Path.GetFileNameWithoutExtension(sourcePath),Character=Characters.Guess(Path.GetFileName(sourcePath)) };
             var componentsById = new Dictionary<string,ModComponent>(StringComparer.OrdinalIgnoreCase);
@@ -41,7 +41,7 @@ namespace SlotsInstaller
                 {
                     string id = Dir(e.Path);
                     Dictionary<string,string> meta = ParseIni(smallFiles[e.Path]);
-                    var c = new ModComponent { Id=id,Metadata=meta,Name=Get(meta,"name",Last(id,p.Name)),Description=Get(meta,"description",""),Author=Get(meta,"author",""),Version=Get(meta,"version",""),AddonFor=Get(meta,"addonfor",""),IsDummy=Get(meta,"dummymod","").Equals("true",StringComparison.OrdinalIgnoreCase) };
+                    var c = new ModComponent { Id=id,Metadata=meta,Name=Get(meta,"name",Last(id,p.Name)),Description=Get(meta,"description",""),Author=Get(meta,"author",""),Version=Get(meta,"version",""),AddonFor=Get(meta,"addonfor",""),IsDummy=Regex.IsMatch(Get(meta,"dummymod","").Trim(), @"^(true|yes|on|1)$", RegexOptions.IgnoreCase) };
                     p.Components.Add(c);
                     componentsById.Add(c.Id,c);
                 }
@@ -104,6 +104,7 @@ namespace SlotsInstaller
                 int extras=r.Entries.Keys.Count(x=>!x.Split('/').Any(s=>s.Equals("natives",StringComparison.OrdinalIgnoreCase)) && Regex.IsMatch(x,@"\.(lua|dll|pak|exe)$",RegexOptions.IgnoreCase));
                 if (extras>0) p.Warnings.Add(extras+" script/plugin/archive files are outside natives and will not be installed; install them separately if the mod needs them.");
             }
+            AddHairChoices(p);
             OptionOrder.Apply(p,r);   // 1.0.4: MenuPriority, default choice, plain before groups, tweaks after their option, name
             ModComponent root=p.Components.FirstOrDefault(x=>x.ParentId==null && x.IsDummy) ?? p.Components.FirstOrDefault(x=>x.ParentId==null);
             // 2.3.1: sibling options without a dummy root that name their bundle (Fluffy's NameAsBundle) are that
@@ -115,7 +116,12 @@ namespace SlotsInstaller
             if (p.Components.Sum(x=>x.Assets.Count)==0) p.Warnings.Add("This mod has no loose natives files, so it can't be an extra outfit.");
             RootOptionChoices.Add(p); // after original package naming and source option ordering
             p.PrepareChoices();
+            if (readLayout) BundleLayout.Read(p,r.ZipComment);
             return p;
+        }
+        internal static ModPackage AuthorPackage(string path)
+        {
+            using (var reader = new SourceReader(path,"")) return LoadCore(path,reader,false,false);
         }
         // Fluffy layout: files beside a modinfo.ini go to the game root relative to that
         // folder. Without any modinfo.ini, single wrapper folders are stripped. Previews,
@@ -195,6 +201,22 @@ namespace SlotsInstaller
         private static string Get(Dictionary<string,string> d,string key,string def) { string v; return d.TryGetValue(key,out v) ? v : def; }
         private static string Dir(string path) { int i=path.LastIndexOf('/'); return i<0 ? "" : path.Substring(0,i); }
         private static string Last(string path,string fallback) { return path.Length==0 ? fallback : path.Split('/').Last(); }
+        // Authors sometimes describe a hair choice on each add-on while the main
+        // component also owns independent body toggles. Keep source component IDs.
+        private static void AddHairChoices(ModPackage package)
+        {
+            var sets = package.Components.Where(c => c.ParentId != null && !c.IsDummy &&
+                c.Assets.Count > 0 && Regex.IsMatch(c.Description ?? "", @"\b(choose one hairstyle|disable other hair (options|choices))\b", RegexOptions.IgnoreCase))
+                .GroupBy(c => c.ParentId, StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var set in sets)
+            {
+                if (set.Count() < 2 || package.Find(set.Key).IsDummy) continue;
+                var group = new ModComponent { Id = ":hair-choice:" + set.Key, ParentId = set.Key,
+                    Name = "Hairstyle", Description = "Optional. Choose one hairstyle, or keep the main outfit's hair.", IsDummy = true };
+                package.Components.Add(group);
+                foreach (var child in set) child.ParentId = group.Id;
+            }
+        }
         private static ModComponent PhysicalParent(string id,Dictionary<string,ModComponent> components)
         {
             if (id.Length==0) return null;

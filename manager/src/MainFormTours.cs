@@ -181,11 +181,11 @@ namespace SlotsInstaller
                 delegate { var rows = installedList.Items.Cast<ListViewItem>().Where(r => !TourElsewhere(r)).Take(3).ToList(); return rows.Count == 0 ? TourRect(installedList) : TourRows(rows); }));
             tour.Steps.Add(step("Rows from elsewhere", new[] { "- A Leftover PAK is a patch PAK no mod manager lists, but SF6 still loads it. Remove PAK takes it out, with Undo.", "- External mod manager rows are that manager's mods. Uninstall them there." }, show,
                 delegate { return TourRows(installedList.Items.Cast<ListViewItem>().Where(TourElsewhere).Take(3)); }));
-            tour.Steps.Add(step("Change what's installed", new[] { "- Disable keeps a mod but takes it out of the game; Enable brings it back.", "- Uninstall removes it and puts the original files back.", "- Move up and Move down set which mod wins shared files.", "Every change has Undo in the status bar." },
+            tour.Steps.Add(step("Change what's installed", new[] { "- Health checks the selected mod’s installed files. Enable brings a disabled mod back.", "- Uninstall removes it and puts the original files back.", "- Move up and Move down set which mod wins shared files.", "Look in the status bar for available Undo actions." },
                 delegate { show(); SelectRowForTour(); },
                 delegate { return TourUnion(openInstalledButton, editInstalledButton, toggleInstalledButton, removeInstalledButton, moveUpButton, moveDownButton); }));
-            tour.Steps.Add(step("After an SF6 update", new[] { "An update or a Steam file check puts the game's own files back. Close SF6, then click Reapply all to put your replacements back. A banner on this page tells you when." },
-                delegate { show(); SelectRowForTour(); }, delegate { return TourRect(reapplyButton); }));
+            tour.Steps.Add(step("After an SF6 update", new[] { "An update or a Steam file check puts the game's own files back. If the Manager detects changed game files, use Reapply in the warning banner to restore your replacements." },
+                delegate { show(); SelectRowForTour(); }, delegate { return gameBanner.Visible ? TourRect(gameBanner) : TourRect(refreshInstalledButton); }));
             tour.Steps.Add(step("Refresh, History, Presets", new[] { "- Refresh reads the game folder again.", "- History lists every install and change.", "- Presets save your whole setup and bring it back later." }, show,
                 delegate { return TourUnion(refreshInstalledButton, historyButton, presetsButton); }));
             return tour;

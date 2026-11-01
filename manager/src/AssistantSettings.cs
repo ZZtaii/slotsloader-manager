@@ -148,6 +148,7 @@ namespace SlotsInstaller
         }
 
         internal bool HasSavedKey { get { return File.Exists(KeyPath); } }
+        internal bool HasConfiguredKey { get { return HasSavedKey || !String.IsNullOrWhiteSpace(environment()); } }
 
         internal void Remove()
         {

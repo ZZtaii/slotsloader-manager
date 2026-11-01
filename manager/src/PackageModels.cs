@@ -12,6 +12,8 @@ namespace SlotsInstaller
         public string Id, Name, Description, Author, Version, AddonFor, ParentId, PreviewEntry;
         public bool IsDummy;
         internal bool InferredChoice;
+        internal string BundleRule;
+        internal bool? AuthorBase, AuthorChoiceRequired;
         internal bool IsDefaultChoice;   // 1.0.4: a choose-one option identical to the main files' copy (OptionOrder)
         public Dictionary<string,string> Metadata = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         public List<NativeAsset> Assets = new List<NativeAsset>();
@@ -19,7 +21,8 @@ namespace SlotsInstaller
         // Only Replace-original installs use them; DestinationPath is game-root relative.
         public List<NativeAsset> RootAssets = new List<NativeAsset>();
         internal bool HasFiles(bool includeRoot) { return Assets.Count > 0 || (includeRoot && RootAssets.Count > 0); }
-        public bool IsChoiceGroup { get { return IsDummy && Regex.IsMatch(Description ?? "", @"(select|choose|pick)\s+(only\s+)?one", RegexOptions.IgnoreCase); } }
+        public bool IsChoiceGroup { get { return IsDummy && (BundleRule == "Choose one" || BundleRule == "Choose up to one" || ((BundleRule == null || BundleRule == "Original") && Regex.IsMatch(Description ?? "", @"(select|choose|pick)\s+(only\s+)?one", RegexOptions.IgnoreCase))); } }
+        internal bool RequiresChoice { get { return IsChoiceGroup && (BundleRule == "Choose one" || (BundleRule != "Choose up to one" && (AuthorChoiceRequired ?? !Regex.IsMatch(Name+" "+Description,@"\boptional\b",RegexOptions.IgnoreCase)))); } }
     }
     public sealed class ModPackage
     {
@@ -28,6 +31,9 @@ namespace SlotsInstaller
         public List<ModComponent> Components = new List<ModComponent>();
         public List<string> Warnings = new List<string>();
         internal int RootFilesIgnored;
+        internal bool HasBundleLayout;
+        internal List<BundleOption> AuthorOptions;
+        internal List<string> AuthorSlotDefaults, AuthorReplaceDefaults;
         internal readonly Dictionary<string,byte[]> PreloadedPreviews = new Dictionary<string,byte[]>(StringComparer.OrdinalIgnoreCase);
         internal Dictionary<string,SourceEntry> PreviewEntries;
         internal string PreviewSourceStamp;
@@ -82,7 +88,7 @@ namespace SlotsInstaller
                 if (!index.Children.TryGetValue(group.Id,out directChildren)) directChildren = new List<ModComponent>();
                 if (group.IsChoiceGroup)
                     choices[group.Id] = new HashSet<string>(directChildren.Select(c=>c.Id),StringComparer.OrdinalIgnoreCase);
-                else
+                else if (group.BundleRule != "Choose any")
                 {
                     // A shared file between main files and an overlay is expected.
                     // Only peer variants participate in inferred exclusivity.

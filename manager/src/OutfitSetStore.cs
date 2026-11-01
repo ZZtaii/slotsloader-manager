@@ -170,7 +170,7 @@ namespace SlotsInstaller
                 {
                     if (scope==PresetScope.Replacements && mods.Count==0) throw new IOException("No enabled replacements to save.");
                     if (enabled.Count==0 && mods.Count==0) throw new IOException("Nothing enabled to save.");
-                    Func<ReplaceMod,ModFile,string> storeFile=delegate(ReplaceMod m,ModFile f) { return engine.StoreFile(state,m,f); };
+                    Func<ReplaceMod,ModFile,string> storeFile=delegate(ReplaceMod m,ModFile f) { return engine.ReadPayload(state,m,f); };
                     return pointers ? SavePointerPreset(root,name,enabled,mods,storeFile,method,library) : SavePreset(root,name,enabled,mods,storeFile,method,null);
                 });
             }
@@ -241,7 +241,7 @@ namespace SlotsInstaller
         // The record keeps what a restore needs, nothing from the test-install era.
         private static ReplaceMod SavedCopy(ReplaceMod m)
         {
-            return new ReplaceMod {Id=m.Id,Name=m.Name,SourcePath=m.SourcePath ?? "",Kind=m.Kind ?? "",InstalledUtc=m.InstalledUtc ?? "",Description=m.Description ?? "",SelectedIds=(m.SelectedIds ?? new List<string>()).ToList(),Enabled=m.Enabled,Test=false,
+            return new ReplaceMod {PresetLayer=m.PresetLayer,Id=m.Id,Name=m.Name,SourcePath=m.SourcePath ?? "",Kind=m.Kind ?? "",InstalledUtc=m.InstalledUtc ?? "",Description=m.Description ?? "",SelectedIds=(m.SelectedIds ?? new List<string>()).ToList(),Enabled=m.Enabled,Test=false,
                 Files=m.Files.Select(f=>new ModFile {Path=f.Path,Sha256=(f.Sha256 ?? "").ToLowerInvariant(),Size=f.Size,Fixes=f.Fixes ?? ""}).ToList(),Notes=(m.Notes ?? new List<string>()).ToList(),Affects=m.Affects ?? ""};
         }
         // A saved replacement as a directory inventory (its files and their parent folders).
