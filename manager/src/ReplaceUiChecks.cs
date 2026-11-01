@@ -593,6 +593,17 @@ namespace SlotsInstaller
                 Require(enable.Enabled && enable.Text == "Enable", "disabled replacement lost its Enable action");
                 enable.PerformClick(); WaitIdle(form);
                 Require(restoredEngine.LoadState().Find(id).Enabled, "Enable did not restore the replacement");
+                // Health took the toggle's place; Disable is its own action, with Undo.
+                foreach (ListViewItem item in Get<ListView>(form, "installedList").Items)
+                {
+                    var row = item.Tag as GameModRow;
+                    item.Selected = row != null && row.Mod != null && row.Mod.Id == id;
+                }
+                Application.DoEvents(); Call(form, "ShowInstalledSelection");
+                var disable = Get<FlatButton>(form, "disableInstalledButton");
+                Require(disable.Visible && disable.Enabled && disable.Text == "Disable" && enable.Text == "Health", "enabled replacement actions: " + disable.Text + " / " + enable.Text);
+                disable.PerformClick(); WaitIdle(form);
+                Require(!restoredEngine.LoadState().Find(id).Enabled && form.UndoAvailable, "Disable did not disable the replacement with Undo");
             }
             finally { if (!restoredEngine.LoadState().Find(id).Enabled) restoredEngine.SetEnabled(id, true); }
         }
@@ -733,6 +744,13 @@ namespace SlotsInstaller
                     Application.DoEvents();
                     var button = Get<FlatButton>(form, library ? "batchUninstallButton" : "removeInstalledButton");
                     Require(button.Visible && button.Enabled, "uninstall selection unavailable on " + (library ? "library" : "installed"));
+                    if (library)
+                    {
+                        // 1.0.15: Ctrl is held to pick the queue's rows, so a lone tap never uninstalls the selection.
+                        int taps = form.CtrlUninstalls;
+                        TapCtrl(form, Get<ListView>(form, "modList")); WaitIdle(form);
+                        Require(form.CtrlUninstalls == taps && engine.LoadState().Mods.Count == 2 && String.IsNullOrEmpty(button.KeyHint), "a Ctrl tap under the library queue uninstalled the selection");
+                    }
                     Render(form, Path.Combine(root, library ? "library-uninstall.png" : "installed-uninstall.png"));
                     button.PerformClick(); WaitIdle(form);
                     Require(engine.LoadState().Mods.Count == 0 && Directory.Exists(f.Mod("modA")) && Directory.Exists(f.Mod("modB")), "selection or sources after uninstall");
@@ -750,7 +768,9 @@ namespace SlotsInstaller
             Call(form, "InstallCurrent"); WaitReview(form);
             ReplaceMod mod = engine.LoadState().Mods.Single();
             ListView list = Get<ListView>(form, "modList"); ContextMenuStrip menu = list.ContextMenuStrip;
-            var outfitItem = (ToolStripMenuItem)menu.Items[4]; var replacementItem = (ToolStripMenuItem)menu.Items[5];   // 1.0.5: Rename is item 2
+            // The uninstall items follow the menu's first separator (Open, Open in Explorer, Rename, Edit bundle… come before it).
+            int uninstalls = menu.Items.IndexOf(menu.Items.OfType<ToolStripSeparator>().First()) + 1;
+            var outfitItem = (ToolStripMenuItem)menu.Items[uninstalls]; var replacementItem = (ToolStripMenuItem)menu.Items[uninstalls + 1];
             FlatButton button = Get<FlatButton>(form, "libraryUninstallButton");
 
 
@@ -824,7 +844,7 @@ namespace SlotsInstaller
                 }
                 Require(!AllControls(panel).OfType<Label>().Any(l => l.Text == "Default install mode") && !AllControls(panel).OfType<ComboBox>().Any(c => c.Items.Cast<object>().Any(i => Convert.ToString(i).Contains("Extra outfit"))), "Settings still shows Default install mode at " + logical);
                 Require(Get<FlatButton>(form,"migrateModsButton").Visible, "migration button missing from Settings");
-                foreach (Button b in AllControls(panel).OfType<Button>().Where(button => button.Visible)) Require(b.Parent.ClientRectangle.Contains(b.Bounds) && page.ClientRectangle.Contains(BoundsIn(b, page)), "button clipped: " + b.Text + " at " + logical);
+                foreach (Button b in AllControls(panel).OfType<Button>().Where(x => x.Visible)) Require(b.Parent.ClientRectangle.Contains(b.Bounds) && page.ClientRectangle.Contains(BoundsIn(b, page)), "button clipped: " + b.Text + " at " + logical);
                 Require(Get<Label>(form, "settingsFluffyStatus").Text.Contains("0 mods installed by an external mod manager"), "Fluffy summary (the fixture's external manager is empty since 1.0.1): " + Get<Label>(form, "settingsFluffyStatus").Text);
                 Require(Get<Label>(form, "settingsMethodStatus").Text.Contains("PAK method"), "method status: " + Get<Label>(form, "settingsMethodStatus").Text);
                 Render(form, Path.Combine(root, "settings-replace-" + logical.Width + "x" + logical.Height + "-" + form.DeviceDpi + ".png"));

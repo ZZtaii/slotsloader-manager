@@ -71,7 +71,8 @@ namespace SlotsInstaller
         private Label settingsMethodStatus, settingsToolStatus, settingsGameFiles, settingsStoreStatus, settingsFluffyStatus;
         private PaddedTextField settingsStore;
         private FlatButton reclaimSpaceButton;
-        private ColumnStyle reclaimSpaceColumn;
+        private Control reclaimSpaceRow;
+        private bool reclaimShown;   // the row's requested state (Visible reads false while Settings is hidden)
         private FlatButton loaderOnButton, loaderOffButton, installSlotsLoaderButton, installReFrameworkButton;
         private bool loadingReplaceSettings;
         private string gameMethod = "";
@@ -1128,24 +1129,24 @@ namespace SlotsInstaller
             // 1.0.11 (the user): what the store is, under its caption like Mod libraries; gives way on short windows.
             var storeHint = new Label { UseMnemonic = false, Name = "settingsStoreNote", Text = "Archives supply active files. Disabled, overridden and repaired files stay here.", ForeColor = Palette.Muted, Font = Palette.Small, Height = 20 + Rhythm.Related, Margin = Padding.Empty, AutoEllipsis = true };
             add(right, storeHint);
-            right.Resize += delegate { storeHint.Visible = right.Height >= right.Controls.Cast<Control>().Where(c => c != storeHint).Sum(c => c.Height) + storeHint.Height; };
-            var storeRow = new TableLayoutPanel { Height = 32, ColumnCount = 4, RowCount = 1, Margin = Padding.Empty };
-            storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92)); storeRow.ColumnStyles.Add(reclaimSpaceColumn = new ColumnStyle(SizeType.Absolute, 0)); storeRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            right.Resize += delegate { storeHint.Visible = right.Height >= right.Controls.Cast<Control>().Where(c => c != storeHint && (c != reclaimSpaceRow || reclaimShown)).Sum(c => c.Height) + storeHint.Height; };
+            var storeRow = new TableLayoutPanel { Height = 32, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+            storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92)); storeRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             settingsStore = TextField(); settingsStore.Dock = DockStyle.Fill; settingsStore.Margin = new Padding(0, 0, 8, 0); settingsStore.AccessibleName = "Replacement store folder"; settingsStore.PlaceholderText = "Default: Data\\replace-store";
             FlatButton browse = Button("Browse…", false, 100, delegate { using (var d = new FolderBrowserDialog { Description = "Choose a folder for the replacement store" }) if (d.ShowDialog(this) == DialogResult.OK) settingsStore.Text = d.SelectedPath; });
             browse.Dock = DockStyle.Fill; browse.Margin = new Padding(0, 0, 8, 0); browse.Font = Palette.Small;
             FlatButton save = Button("Save", true, 84, delegate { SaveReplacePreferences(); }); save.Dock = DockStyle.Fill; save.Margin = Padding.Empty; save.Font = Palette.Small;
             save.AccessibleName = "Save the replacement store folder";
             storeRow.Controls.Add(settingsStore, 0, 0); storeRow.Controls.Add(browse, 1, 0); storeRow.Controls.Add(save, 2, 0);
-            reclaimSpaceButton = Button("Reclaim space", false, 132, delegate {
-                ReplaceEngine target = Engine();
-                Work("Verifying installed files against the mod archives…", target.CompactArchiveStore,
-                    delegate(string message) { LoadReplaceSettingsFields(); SetPageStatus(settingsPage, message, Palette.Green); });
-            });
-            reclaimSpaceButton.Visible = false; reclaimSpaceButton.Dock = DockStyle.Fill; reclaimSpaceButton.Margin = new Padding(8, 0, 0, 0);
-            storeRow.Controls.Add(reclaimSpaceButton, 3, 0);
             add(right, storeRow);
             settingsStoreStatus = note("", 52); add(right, settingsStoreStatus);
+            // 1.0.15: its own row under the store's status (only while older installs hold full copies), so the folder
+            // field keeps its width.
+            var reclaimRow = buttonRow(0); reclaimRow.Name = "reclaimSpaceRow"; reclaimRow.Visible = false;
+            reclaimSpaceButton = Button("Reclaim space…", false, 150, delegate { ConfirmReclaimSpace(); });
+            reclaimSpaceButton.Margin = Padding.Empty; reclaimSpaceButton.Height = 32; reclaimSpaceButton.Font = Palette.Small;
+            reclaimRow.Controls.Add(reclaimSpaceButton); reclaimSpaceRow = reclaimRow;
+            add(right, reclaimRow);
             add(right, Rhythm.Gap(Rhythm.Group));
             add(right, Caption("External mod manager"));
             settingsFluffyStatus = note("", 52); add(right, settingsFluffyStatus);
@@ -1177,9 +1178,7 @@ namespace SlotsInstaller
                 settingsStore.Text = replaceSettings.StoreLocation ?? "";
                 ReplaceEngine engine = Engine(); ReplaceState state = null;
                 try { state = engine.LoadState(); } catch (Exception ex) { settingsGameFiles.Text = ex.Message; }
-                bool canReclaim = engine.CanReclaimArchiveStore(state);
-                reclaimSpaceColumn.Width = canReclaim ? Px(132) : 0;
-                reclaimSpaceButton.Visible = canReclaim;
+                reclaimShown = engine.CanReclaimArchiveStore(state); reclaimSpaceRow.Visible = reclaimShown;
                 string detail; LooseLoaderState loader = LooseLoader.State(config.GameRoot, out detail);
                 string current = state == null ? "" : ReplaceMethods.Label(engine.CurrentMethod(state));
                 settingsMethodStatus.Text = "In use: " + current + (state != null && state.Mods.Count > 0 && engine.DesiredMethod() != engine.CurrentMethod(state) ? " · changing it converts installed replacements" : "") + Environment.NewLine + detail;
@@ -1211,6 +1210,25 @@ namespace SlotsInstaller
             }
             catch (Exception ex) { Program.Log(ex); settingsGameFiles.Text = ex.Message; }
             finally { loadingReplaceSettings = false; }
+        }
+
+        // Reclaim space deletes stored copies the mod archives still hold: after it, repairing those files needs the
+        // archives, so the user decides (no Undo).
+        private void ConfirmReclaimSpace()
+        {
+            if (busy) return;
+            ReplaceEngine target = Engine();
+            long bytes = 0;
+            try { bytes = target.ReclaimableBytes(target.LoadState()); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            bool ignored;
+            int choice = ThemedMessageBox.Ask(this, "This deletes the stored copies of installed replacement files that their mod archives still hold" +
+                (bytes > 0 ? " (up to " + Utilities.FriendlyBytes(bytes) + ")" : "") + ". Each file is checked against its archive first, and copies of disabled, overridden or repaired files stay.\r\n\r\n" +
+                "Afterwards, if a game file of one of these mods is changed or deleted, repairing it needs the mod's archive in your Mod libraries.",
+                "Reclaim space", MessageBoxIcon.Question, new[] { "Reclaim space", "Cancel" }, 1, null, out ignored);
+            if (choice != 0) return;
+            Work("Verifying installed files against the mod archives…", target.CompactArchiveStore,
+                delegate(string message) { LoadReplaceSettingsFields(); SetPageStatus(settingsPage, message, Palette.Green); });
         }
 
         private void SaveReplacePreferences()
@@ -1284,7 +1302,8 @@ namespace SlotsInstaller
                 file = d.FileName;
             }
             List<LibraryEntry> entries = library; string sevenZip = config.SevenZipPath;
-            Work("Matching the preset to your libraries…", delegate { return FluffyPresets.Group(FluffyPresets.Map(FluffyPresets.Parse(File.ReadAllText(file)), entries, sevenZip)); }, delegate(List<PresetMapping> mappings)
+            // One row per preset entry, so each entry can be left out (PresetInstaller groups an archive's rows itself).
+            Work("Matching the preset to your libraries…", delegate { return FluffyPresets.Map(FluffyPresets.Parse(File.ReadAllText(file)), entries, sevenZip); }, delegate(List<PresetMapping> mappings)
             {
                 if (FluffyPresetForm.Review(this, Path.GetFileNameWithoutExtension(file), mappings))
                 {

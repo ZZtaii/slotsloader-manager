@@ -58,6 +58,11 @@ namespace SlotsInstaller
             if (plugin != null && plugin.Component != null && !LoaderCostumePak.HonoursContract(plugin.Component) && LoaderCostumePak.IsUpstreamBuild(plugin.Component.Name, plugin.Component.Version, plugin.Component.Author))
                 plan.Items.Add(new HealthItem("error", "This is upstream's Slots Loader" + (String.IsNullOrEmpty(plugin.Component.Version) ? "" : " " + plugin.Component.Version) + ", not the Manager's Slotsloader Fork. Install the fork instead: Settings → Install Slotsloader " + UpdateCheck.ShortVersion(LoaderRelease.Pin.Version) + "."));
             ReplaceState state = presetState ?? engine.LoadState();
+            if (presetState == null)
+            {
+                string block = OrderedPresetBlock(state, composition, updateId);
+                if (block != null) plan.Items.Add(new HealthItem("error", block));
+            }
             // This state is read-only throughout Prepare. Build the lookup once
             // per review, never retain it across an install or state mutation.
             var deployed = new Dictionary<string, DeployedFile>(StringComparer.OrdinalIgnoreCase);
@@ -353,6 +358,19 @@ namespace SlotsInstaller
         }
 
         // Install: prepare inside the store, then publish through the engine.
+        // Options of this archive installed from an ordered preset (ReplaceEngine.ImportLayers) are separate records in
+        // preset order: a library install can't fold them into one. The health check says so before Install.
+        internal static string OrderedPresetBlock(ReplaceState current, CompositionPlan composition, string replaceId)
+        {
+            List<ReplaceMod> same = current.Mods.Where(m => !m.Test && SameSource(m.SourcePath, composition.Package.SourcePath)).ToList();
+            var ordered = same.Where(m => m.PresetLayer).ToList();
+            ReplaceMod target = String.IsNullOrEmpty(replaceId) ? null : current.Find(replaceId);
+            if (ordered.Count == 0 && (target == null || !target.PresetLayer)) return null;
+            bool wholeMod = ordered.Count == 1 && same.Count == 1 && (String.IsNullOrEmpty(replaceId) || replaceId == ordered[0].Id) &&
+                composition.Package.Components.Count(c => !c.IsDummy && c.HasFiles(true)) == 1 &&
+                ordered[0].SelectedIds.SequenceEqual(composition.Layers.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+            return wholeMod ? null : "This archive has options installed from an ordered preset. Reimport the preset to update them, or uninstall the archive from the library before switching options.";
+        }
         internal static ReplaceMod PrepareAndInstall(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string name, bool test, string replaceId, out ReplacePlan plan)
         {
             string root = engine.StoreRoot(engine.LoadState());
@@ -367,14 +385,8 @@ namespace SlotsInstaller
             {
                 ReplaceState current = engine.LoadState();
                 List<ReplaceMod> same = current.Mods.Where(m => SameSource(m.SourcePath, composition.Package.SourcePath)).ToList();
-                var ordered = same.Where(m => m.PresetLayer).ToList();
-                if (ordered.Count > 0 || (current.Find(replaceId) != null && current.Find(replaceId).PresetLayer))
-                {
-                    bool wholeMod = ordered.Count == 1 && same.Count == 1 && (String.IsNullOrEmpty(replaceId) || replaceId == ordered[0].Id) &&
-                        composition.Package.Components.Count(c => !c.IsDummy && c.HasFiles(true)) == 1 &&
-                        ordered[0].SelectedIds.SequenceEqual(composition.Layers.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
-                    if (!wholeMod) throw new IOException("This archive has options installed from an ordered preset. Reimport the preset to update them, or uninstall the archive from the library before switching options.");
-                }
+                string block = OrderedPresetBlock(current, composition, replaceId);
+                if (block != null) throw new IOException(block);
                 if (String.IsNullOrEmpty(replaceId) && same.Count > 0) replaceId = same[0].Id;
                 // SlotsLoader from another zip (a newer build, a renamed copy) updates the installed SlotsLoader in place:
                 // one loader record, and the backup of the game's own amd_ags_x64.dll stays with it.

@@ -112,7 +112,7 @@ namespace SlotsInstaller
         {
             var plan=new CompositionPlan();plan.Errors.Add("Choose an option in Skin options.");plan.Warnings.Add("This is a synthetic layout fixture; no mod files were read or written.");
             plan.Layers.Add(new ModComponent {Name="Main & shared files"});Field("plan").SetValue(owner,plan);
-            using(var report=(Form)typeof(MainForm).GetMethod("CreateCompositionReport",PrivateInstance).Invoke(owner,null))
+            using(var report=(Form)typeof(MainForm).GetMethod("CreateCompositionReport",PrivateInstance).Invoke(owner,new object[]{null,null}))   // 1.0.15: (health, installed), both optional
             {
                 report.Opacity=0;report.Show();Application.DoEvents();
                 Require(report.ClientSize.Width>=DpiMetrics.Px(report,750) && report.ClientSize.Height>=DpiMetrics.Px(report,580),"Composition dialog lost logical design size at native DPI: "+report.ClientSize);

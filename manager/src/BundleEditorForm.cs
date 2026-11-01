@@ -23,10 +23,15 @@ namespace SlotsInstaller
         private readonly Label noteHeading=Caption("LAYOUT GUIDE");
         private readonly FlatButton details;
         private string assistantNote;
-        private readonly FlatButton undo;
+        private readonly FlatButton undo, refine;
         private List<BundleOption> beforeSuggestion;
-        private bool wasDirty, wasRestore;
+        private bool wasRestore;
         private CancellationTokenSource refining;
+        private readonly List<Control> editing = new List<Control>();   // disabled while the Assistant refines (Close and Cancel stay)
+        private string savedLayout;   // the layout in the ZIP, to tell a real change from an edit that was undone
+        private Panel confirmPanel;   // "Discard unsaved changes?" in the footer
+        private TreeNode dropTarget;
+        private int dropPlace;        // where a drag lands on dropTarget: -1 above it, 0 inside it, 1 below it
         internal Func<string,ClaudeClient> ClientFactory = key=>new ClaudeClient(key);
         private bool filling, dirty, restore, saving;
         private readonly List<BundleOption> author;
@@ -49,17 +54,23 @@ namespace SlotsInstaller
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute,44)); grid.RowStyles.Add(new RowStyle(SizeType.Percent,100));
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute,42)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
             var suggestions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
-            suggestions.Controls.Add(Action("Suggest layout",140,delegate {
+            var suggest=Action("Suggest layout",140,delegate {
                 TrySuggestLocal();
-            }));
+            });
+            suggestions.Controls.Add(suggest); editing.Add(suggest);
             bool hasKey=keys.HasConfiguredKey;
             if(assistantShown || hasKey)
-                suggestions.Controls.Add(Action("Refine with Assistant",180,delegate {
+            {
+                // While a refinement runs this button cancels it; the rest of the editor waits.
+                refine=Action("Refine with Assistant",180,delegate {
+                    if(refining!=null) {refining.Cancel(); return;}
                     if(!hasKey) {SetNote("ASSISTANT","Add your Claude API key in Settings to use refinement."); return;}
                     Refine(keys,settings);
-                }));
+                });
+                suggestions.Controls.Add(refine);
+            }
             undo=Action("Undo suggestion",150,UndoSuggestion); undo.Visible=false;
-            suggestions.Controls.Add(undo);
+            suggestions.Controls.Add(undo); editing.Add(undo);
             var toolbar=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -83,16 +94,26 @@ namespace SlotsInstaller
             tree.DpiChangedAfterParent+=delegate {tree.ItemHeight=DpiMetrics.Px(tree,28);};
             tree.AfterSelect+=delegate { tree.Invalidate(); ShowSelected(); };
             tree.ItemDrag+=delegate(object sender,ItemDragEventArgs e) { tree.DoDragDrop(e.Item,DragDropEffects.Move); };
+            // The top or bottom quarter of a row places the option above or below it; the middle moves it inside.
+            // Below the last row: the end of the top level. The target row shows where it lands.
             tree.DragOver+=delegate(object sender,DragEventArgs e) {
                 var source=e.Data.GetData(typeof(TreeNode)) as TreeNode;
-                var dest=tree.GetNodeAt(tree.PointToClient(new Point(e.X,e.Y)));
-                e.Effect=source!=null && source.TreeView==tree && CanMove(source,dest) ? DragDropEffects.Move : DragDropEffects.None;
+                TreeNode target=null; int place=0;
+                bool ok=source!=null && source.TreeView==tree && DropAt(source,tree.PointToClient(new Point(e.X,e.Y)),out target,out place);
+                e.Effect=ok ? DragDropEffects.Move : DragDropEffects.None;
+                ShowDrop(ok ? target : null,place);
             };
+            tree.DragLeave+=delegate { ShowDrop(null,0); };
             tree.DragDrop+=delegate(object sender,DragEventArgs e) {
                 var source=e.Data.GetData(typeof(TreeNode)) as TreeNode;
-                if (source!=null && source.TreeView==tree) MoveNode(source,tree.GetNodeAt(tree.PointToClient(new Point(e.X,e.Y))));
+                TreeNode target=null; int place=0;
+                bool ok=source!=null && source.TreeView==tree && DropAt(source,tree.PointToClient(new Point(e.X,e.Y)),out target,out place);
+                ShowDrop(null,0);
+                if(!ok) return;
+                if(place==0) MoveNode(source,target);
+                else PlaceBeside(source,target,place);
             };
-            grid.Controls.Add(tree,0,1);
+            grid.Controls.Add(tree,0,1); editing.Add(tree);
             var fields=new TableLayoutPanel { Dock=DockStyle.Fill, Padding=new Padding(10,0,0,0), ColumnCount=1, RowCount=8 };
             foreach(int h in new[]{26,38,26,38,26,38}) fields.RowStyles.Add(new RowStyle(SizeType.Absolute,h));
             fields.RowStyles.Add(new RowStyle(SizeType.Absolute,62)); fields.RowStyles.Add(new RowStyle(SizeType.Percent,100));
@@ -108,8 +129,9 @@ namespace SlotsInstaller
             };
             hint.Dock=DockStyle.Fill; hint.ForeColor=Palette.Muted; hint.Padding=new Padding(0,8,0,0);
             fields.Controls.Add(hint,0,6); grid.Controls.Add(fields,1,1);
+            foreach(Control field in new Control[]{name,parent,rule}) editing.Add(field);
             suggestionNote.AutoSize=true; suggestionNote.Dock=DockStyle.Top; suggestionNote.TextAlign=ContentAlignment.TopLeft;
-            suggestionNote.Text="Drag an option into a group, or use Suggest layout to get started.";
+            suggestionNote.Text="Drag an option onto a group to move it inside, or near a row's top or bottom edge to place it above or below. Suggest layout can get you started.";
             suggestionNote.Font=Palette.Small;
             var notes=new Panel {Dock=DockStyle.Fill,AutoScroll=true};
             var noteBody=new TableLayoutPanel {Dock=DockStyle.Top,AutoSize=true,ColumnCount=1,RowCount=3,Margin=Padding.Empty};
@@ -129,15 +151,14 @@ namespace SlotsInstaller
             moveUp=Action("Up",54,delegate { Reorder(-1); });
             moveDown=Action("Down",66,delegate { Reorder(1); });
             actions.Controls.Add(moveUp); actions.Controls.Add(moveDown);
-            grid.Controls.Add(actions,0,2);
+            grid.Controls.Add(actions,0,2); editing.Add(actions);
             var reset=Action("Restore author layout",180,delegate {
-                LoadTree(author); Changed(); restore=true;
+                LoadTree(author); Changed(true);
                 SetNote("AUTHOR LAYOUT","The original groups and selection rules are ready to review.");
-                status.Text="Author layout preview. Choose Save ZIP to apply.";
             });
             reset.Anchor=AnchorStyles.Top|AnchorStyles.Right;
             reset.Margin=new Padding(6,6,3,0);
-            toolbar.Controls.Add(reset,1,0);
+            toolbar.Controls.Add(reset,1,0); editing.Add(reset);
             var footer=new Panel { Dock=DockStyle.Fill };
             status.Dock=DockStyle.Fill; status.TextAlign=ContentAlignment.MiddleLeft; status.ForeColor=Palette.Muted;
             status.Text="Changes apply to this ZIP when you save.";
@@ -148,7 +169,7 @@ namespace SlotsInstaller
             footer.Controls.Add(gap); footer.Controls.Add(save);
             grid.Controls.Add(footer,0,3); grid.SetColumnSpan(footer,2); Controls.Add(grid);
             CancelButton=cancel;
-            var confirm=new Panel {Dock=DockStyle.Fill,BackColor=Palette.Sidebar,Visible=false};
+            var confirm=confirmPanel=new Panel {Dock=DockStyle.Fill,BackColor=Palette.Sidebar,Visible=false};
             var question=Caption("Discard unsaved changes?"); question.Font=Palette.Strong;
             var discard=Action("Discard changes",150,delegate {dirty=false; DialogResult=DialogResult.Cancel; Close();});
             discard.Dock=DockStyle.Right; discard.Danger=true;
@@ -183,6 +204,13 @@ namespace SlotsInstaller
             });
             DpiChanged+=delegate {BeginInvoke((MethodInvoker)ApplyEditorMetrics);};
             DarkTheme.Apply(this); LoadTree(BundleLayout.Options(package));
+            savedLayout=Signature(Draft());
+            if(package.LayoutError!=null)
+            {
+                // The ZIP's saved layout was ignored on reading: saving this draft replaces it.
+                SetNote("SAVED LAYOUT IGNORED",package.LayoutError);
+                UpdateDirty();
+            }
             ResumeLayout(true); PerformAutoScale();
         }
 
@@ -252,6 +280,42 @@ namespace SlotsInstaller
             TextRenderer.DrawText(e.Graphics,String.IsNullOrWhiteSpace(item.Name) ? "(unnamed)" : item.Name,
                 e.Node.Nodes.Count>0 ? Palette.Strong : tree.Font,new Rectangle(x,row.Top,Math.Max(1,right-x),row.Height),
                 !tree.Enabled ? Palette.Muted : selected ? Palette.Accent : Palette.Text,flags);
+            if(e.Node!=dropTarget) return;
+            // Where a dragged option lands: a frame around the row for inside it, a line for above or below it.
+            int inset=DpiMetrics.Px(tree,4);
+            using(var pen=new Pen(Palette.Accent,Math.Max(2,DpiMetrics.Px(tree,2))))
+            {
+                if(dropPlace==0) e.Graphics.DrawRectangle(pen,new Rectangle(x-inset,row.Top+1,Math.Max(1,row.Right-inset-(x-inset)),row.Height-3));
+                else { int y=dropPlace<0 ? row.Top+1 : row.Bottom-2; e.Graphics.DrawLine(pen,x-inset,y,row.Right-inset,y); }
+            }
+        }
+        private bool DropAt(TreeNode source,Point point,out TreeNode target,out int place)
+        {
+            target=tree.GetNodeAt(point); place=0;
+            if(target==null)
+            {
+                if(tree.Nodes.Count==0) return false;
+                target=tree.Nodes[tree.Nodes.Count-1]; place=1;   // below the last row: the end of the top level
+                return target!=source;
+            }
+            int band=Math.Max(1,target.Bounds.Height/4);
+            place=point.Y<target.Bounds.Top+band ? -1 : point.Y>=target.Bounds.Bottom-band ? 1 : 0;
+            if(place==0) return CanMove(source,target);
+            for(var n=target;n!=null;n=n.Parent) if(n==source) return false;   // never beside its own child
+            return true;
+        }
+        private void ShowDrop(TreeNode target,int place)
+        {
+            if(target==dropTarget && place==dropPlace) return;
+            dropTarget=target; dropPlace=place; tree.Invalidate();
+        }
+        private void PlaceBeside(TreeNode node,TreeNode target,int place)
+        {
+            if(node==null || target==null || node==target) return;
+            node.Remove();
+            var siblings=target.Parent==null ? tree.Nodes : target.Parent.Nodes;
+            siblings.Insert(target.Index+(place>0 ? 1 : 0),node);
+            tree.SelectedNode=node; ShowSelected(); Changed();
         }
         private bool Group(BundleOption item) {return groupIds.Contains(item.Id) || item.Id.StartsWith(BundleLayout.GroupPrefix,StringComparison.Ordinal);}
         private static IEnumerable<TreeNode> Walk(TreeNodeCollection nodes)
@@ -328,10 +392,56 @@ namespace SlotsInstaller
                 remove.Enabled=item.Id.StartsWith(BundleLayout.GroupPrefix,StringComparison.Ordinal);
             } finally { filling=false; }
         }
-        private void Changed()
+        // restoring: Restore author layout, which saves no layout at all.
+        private void Changed(bool restoring=false)
         {
             beforeSuggestion=null; undo.Visible=false;
-            dirty=true; restore=false; save.Enabled=true; status.Text="Unsaved changes";
+            restore=restoring; UpdateDirty();
+        }
+        // Save is offered only for a real change: an edit that was undone, or the author layout on a ZIP without a
+        // saved one, rewrites nothing. A ZIP whose saved layout was ignored always needs a save.
+        private void UpdateDirty()
+        {
+            dirty=package.LayoutError!=null || (restore ? package.HasBundleLayout : Signature(Draft())!=savedLayout);
+            save.Enabled=dirty && !saving && refining==null;
+            string problem=dirty ? DraftProblem() : null;
+            status.ForeColor=problem!=null ? Palette.Accent : Palette.Muted;
+            status.Text=problem ?? (!dirty ? (restore ? "This ZIP already uses the author layout." : "Changes apply to this ZIP when you save.")
+                : restore ? "Author layout preview. Choose Save ZIP to apply." : "Unsaved changes");
+        }
+        private static string Signature(List<BundleOption> items)
+        {
+            return String.Join("\n",items.Select(o=>o.Id+"\t"+(o.Parent ?? "")+"\t"+o.Name+"\t"+o.Rule));
+        }
+        // The rules Save enforces (BundleLayout.Materialize), shown while editing instead of only at Save.
+        private string DraftProblem()
+        {
+            if(restore) return null;
+            foreach(TreeNode node in Walk(tree.Nodes))
+            {
+                var item=Item(node);
+                if(String.IsNullOrWhiteSpace(item.Name)) return "Name every option and group before saving.";
+                if(!Group(item) || (item.Rule!="Choose one" && item.Rule!="Choose up to one")) continue;
+                if(item.Rule=="Choose one" && node.Nodes.Count==0) return "Move at least one option into '"+item.Name.Trim()+"' or change its rule to Choose any.";
+                if(node.Nodes.Count>1 && node.Nodes.Cast<TreeNode>().Any(child=>Required(Item(child))))
+                    return "A required option in '"+item.Name.Trim()+"' would block its alternatives. Move it outside the group or mark it Optional.";
+            }
+            return null;
+        }
+        private bool Required(BundleOption item)
+        {
+            if(Group(item) || item.Rule=="Optional") return false;
+            if(item.Rule=="Required") return true;
+            ModComponent c=package.Find(item.Id);
+            return c!=null && Composer.IsBase(new ModComponent {Name=c.Name,AuthorBase=c.AuthorBase});
+        }
+        // Selects the row a save problem names ('Name' in quotes), or the first unnamed row.
+        private void SelectProblem(string message)
+        {
+            int a=message.IndexOf('\''), b=a<0 ? -1 : message.IndexOf('\'',a+1);
+            TreeNode node=b>a+1 ? Walk(tree.Nodes).FirstOrDefault(n=>String.Equals(Item(n).Name.Trim(),message.Substring(a+1,b-a-1),StringComparison.OrdinalIgnoreCase))
+                : Walk(tree.Nodes).FirstOrDefault(n=>String.IsNullOrWhiteSpace(Item(n).Name));
+            if(node!=null) {node.EnsureVisible(); tree.SelectedNode=node;}
         }
         private List<BundleOption> Draft()
         {
@@ -346,7 +456,7 @@ namespace SlotsInstaller
         {
             if(result.Changed)
             {
-                wasDirty=dirty; wasRestore=restore;
+                wasRestore=restore;
                 LoadTree(result.Items); Changed(); beforeSuggestion=previous; undo.Visible=true;
             }
             SetNote(assistant ? "ASSISTANT REVIEW" : "LOCAL SUGGESTION",result.Note);
@@ -364,16 +474,15 @@ namespace SlotsInstaller
         }
         private void UndoSuggestion()
         {
-            LoadTree(beforeSuggestion); dirty=wasDirty; restore=wasRestore; save.Enabled=dirty;
-            status.Text=dirty ? "Unsaved changes" : "Changes apply to this ZIP when you save.";
-            SetNote("LAYOUT GUIDE","Previous draft restored."); undo.Visible=false; beforeSuggestion=null;
+            LoadTree(beforeSuggestion); restore=wasRestore; undo.Visible=false; beforeSuggestion=null; UpdateDirty();
+            SetNote("LAYOUT GUIDE","Previous draft restored.");
         }
         private void Refine(AssistantKeyStore keys,AssistantSettings settings)
         {
             if(refining!=null) return;
             var draft=Draft();
             var cancel=new CancellationTokenSource(); refining=cancel;
-            Controls[0].Enabled=false; UseWaitCursor=true; SetNote("ASSISTANT REVIEW","Reviewing the current layout…");
+            SetEditing(false); SetNote("ASSISTANT REVIEW","Reviewing the current layout… Cancel refinement stops it and keeps your draft.");
             Task.Run(delegate {
                 BundleSuggestion result=null;
                 string error=null;
@@ -388,7 +497,7 @@ namespace SlotsInstaller
                     BeginInvoke((Action)delegate {
                         refining=null;
                         bool cancelled=cancel.IsCancellationRequested; cancel.Dispose();
-                        Controls[0].Enabled=true; UseWaitCursor=false;
+                        if(!confirmPanel.Visible) SetEditing(true);   // closing with unsaved changes: the question stays in charge
                         if(cancelled) suggestionNote.Text="Refinement cancelled. Your draft is intact.";
                         else if(error!=null) suggestionNote.Text=error;
                         else Preview(draft,result,true);
@@ -396,6 +505,13 @@ namespace SlotsInstaller
                 }
                 catch(InvalidOperationException) {cancel.Dispose();} // The editor closed during the request.
             });
+        }
+        // While the Assistant refines, only Close and Cancel refinement work.
+        private void SetEditing(bool enabled)
+        {
+            foreach(Control c in editing) c.Enabled=enabled;
+            if(refine!=null) refine.Text=enabled ? "Refine with Assistant" : "Cancel refinement";
+            save.Enabled=enabled && dirty;
         }
         private void MoveNode(TreeNode node,TreeNode target)
         {
@@ -428,14 +544,28 @@ namespace SlotsInstaller
         {
             if(saving || !dirty) return;
             var items=Draft();
-            saving=true; Controls[0].Enabled=false; UseWaitCursor=true; status.Text="Saving ZIP…";
+            string problem=DraftProblem();
+            if(problem!=null) {SelectProblem(problem); status.ForeColor=Palette.Red; status.Text=problem; return;}
+            saving=true; Controls[0].Enabled=false; UseWaitCursor=true; status.ForeColor=Palette.Muted; status.Text="Saving ZIP…";
             try
             {
                 var layout=restore ? null : items;
                 await Task.Run(delegate {BundleLayout.Save(package.SourcePath,stamp,layout);});
                 saving=false; dirty=false; DialogResult=DialogResult.OK; Close();
             }
-            catch(Exception ex) { saving=false; Controls[0].Enabled=true; UseWaitCursor=false; status.Text="Changes are still in the editor."; ThemedMessageBox.Show(this,ex.Message,"Could not save bundle",MessageBoxButtons.OK,MessageBoxIcon.Warning); }
+            catch(InvalidDataException ex)
+            {
+                // A layout rule: shown on the row it concerns, not in a dialog.
+                saving=false; Controls[0].Enabled=true; UseWaitCursor=false;
+                SelectProblem(ex.Message); status.ForeColor=Palette.Red; status.Text=ex.Message;
+            }
+            catch(Exception ex)
+            {
+                // No popup (PolishChecks): the reason stays in the status line, and the draft stays in the editor.
+                if(ex is OutOfMemoryException) throw;
+                saving=false; Controls[0].Enabled=true; UseWaitCursor=false;
+                status.ForeColor=Palette.Red; status.Text="Could not save the ZIP: "+ex.Message.TrimEnd('.')+". Your changes are still here.";
+            }
         }
     }
 }

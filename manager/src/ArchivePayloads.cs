@@ -103,17 +103,27 @@ namespace SlotsInstaller
         {
             if (IsLibraryArchive(m.SourcePath) && MatchesArchive(m.SourcePath,m)) return m.SourcePath;
             if (SourceConfig == null) return null;
-            return MovedArchive(m, Library.ListEntries(SourceConfig.Libraries));
+            return MovedArchive(m, Library.ListEntries(SourceConfig.Libraries), false);
         }
 
-        internal static string MovedArchive(ReplaceMod m, IEnumerable<LibraryEntry> library)
+        // Library archives that can be this record's archive: the same size, or a ZIP up to a ZIP comment's 64 KB
+        // larger (an Edit bundle layout).
+        private static IEnumerable<LibraryEntry> Candidates(ReplaceMod m, IEnumerable<LibraryEntry> library)
+        {
+            return library.Where(e => (e.Size == m.ArchiveSize || (BundleLayout.IsZip(e.SourcePath) && e.Size > m.ArchiveSize && e.Size - m.ArchiveSize <= UInt16.MaxValue)) && IsLibraryArchive(e.SourcePath));
+        }
+
+        // unique: relinking a record needs the one archive. Recovery reads any byte-identical copy (the first found),
+        // so a duplicate download never makes the files unrecoverable.
+        internal static string MovedArchive(ReplaceMod m, IEnumerable<LibraryEntry> library, bool unique = true)
         {
             string match = null;
-            foreach (LibraryEntry entry in library.Where(e => (e.Size == m.ArchiveSize || (BundleLayout.IsZip(e.SourcePath) && e.Size > m.ArchiveSize && e.Size - m.ArchiveSize <= UInt16.MaxValue)) && IsLibraryArchive(e.SourcePath)))
+            foreach (LibraryEntry entry in Candidates(m, library))
             {
                 OperationContext.ThrowIfCancellationRequested();
                 Safety.NoReparseChain(entry.SourcePath);
                 if (!MatchesArchive(entry.SourcePath,m)) continue;
+                if (!unique) return entry.SourcePath;
                 if (match != null) return null;
                 match = entry.SourcePath;
             }
@@ -154,6 +164,16 @@ namespace SlotsInstaller
             }
         }
 
+        // Records whose archive was not found, with the candidates' paths and stamps at that time: a source that
+        // stays missing is not hashed again at every refresh, only after a candidate changes.
+        private static readonly Dictionary<string, string> relinkMisses = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static string StampOrNone(string path)
+        {
+            try { return SourceReader.Stamp(path); }
+            catch (IOException) { return ""; }
+            catch (UnauthorizedAccessException) { return ""; }
+        }
+
         internal void RelinkArchives()
         {
             if (SourceConfig == null || !File.Exists(StatePath)) return;
@@ -163,16 +183,23 @@ namespace SlotsInstaller
                 ReplaceState state = LoadState();
                 List<LibraryEntry> entries = null;
                 var moves = new List<KeyValuePair<string,string>>();
+                bool updated = false;
                 foreach (ReplaceMod m in state.Mods.Where(m => m.ArchiveSha != null))
                 {
-                    if (IsLibraryArchive(m.SourcePath) && SourceReader.Stamp(m.SourcePath) == m.ArchiveStamp) continue;
+                    string current = IsLibraryArchive(m.SourcePath) ? StampOrNone(m.SourcePath) : null;
+                    if (current != null && current == m.ArchiveStamp) continue;
                     if (entries == null) entries = Library.ListEntries(SourceConfig.Libraries);
-                    string path = MovedArchive(m, entries);
+                    string signature = m.ArchiveSha + "|" + current + "|" + String.Join("|", Candidates(m, entries).Select(e => e.SourcePath + ">" + StampOrNone(e.SourcePath)));
+                    string missed;
+                    lock (relinkMisses) if (relinkMisses.TryGetValue(m.Id, out missed) && missed == signature) continue;
+                    // Rewritten in place (an Edit bundle save keeps the files): only the stamp is new.
+                    string path = current != null && MatchesArchive(m.SourcePath, m) ? m.SourcePath : MovedArchive(m, entries);
+                    lock (relinkMisses) { if (path == null) relinkMisses[m.Id] = signature; else relinkMisses.Remove(m.Id); }
                     if (path == null) continue;
-                    moves.Add(new KeyValuePair<string,string>(m.SourcePath, path));
-                    m.SourcePath = path; m.ArchiveStamp = SourceReader.Stamp(path);
+                    if (!ReplacePlanner.SameSource(path, m.SourcePath)) moves.Add(new KeyValuePair<string,string>(m.SourcePath, path));
+                    m.SourcePath = path; m.ArchiveStamp = SourceReader.Stamp(path); updated = true;
                 }
-                if (moves.Count == 0) return;
+                if (!updated) return;
                 state.Generation++;
                 DurableFile.WriteJson(StatePath, state);
                 foreach (var move in moves.Distinct())
@@ -192,6 +219,23 @@ namespace SlotsInstaller
                 string owner;
                 return String.IsNullOrEmpty(f.Fixes) && owners.TryGetValue(f.Path, out owner) && owner == m.Id && File.Exists(StoreFile(state, m, f));
             }));
+        }
+
+        // At most what Reclaim space frees: the stored copies CompactArchiveStore checks (files it can't verify stay).
+        internal long ReclaimableBytes(ReplaceState state)
+        {
+            if (state == null) return 0;
+            var owners = state.Deployed.ToDictionary(d => d.Path, d => d.Owner, StringComparer.OrdinalIgnoreCase);
+            long total = 0;
+            foreach (ReplaceMod m in state.Mods.Where(m => IsLibraryArchive(m.SourcePath)))
+                foreach (ModFile f in m.Files)
+                {
+                    string owner;
+                    if (!String.IsNullOrEmpty(f.Fixes) || !owners.TryGetValue(f.Path, out owner) || owner != m.Id) continue;
+                    try { if (File.Exists(StoreFile(state, m, f))) total += f.Size; }
+                    catch (IOException) { }
+                }
+            return total;
         }
 
         // Older records have only deployment paths and hashes. Bind an entry only after verifying the

@@ -12,8 +12,9 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 - 1.0.15:
   - Edit a ZIP bundle in the Library to group its options and set selection rules. Suggest layout runs locally. Refine with Assistant is optional. Save ZIP writes the reviewed layout to the archive.
-  - Uninstall selected replacements from the Library or Installed tab. Health checks installed files and shows recorded fixes. Extra outfit previews group common colour repairs.
-  - Presets preserve install order across archives and flag ambiguous library matches. Eligible archive installs can use their library source to save disk space.
+  - Uninstall selected replacements from the Library or Installed tab. Health checks installed files, names the mods that supply shared files and shows recorded fixes; it changes nothing. Disable and Enable stay on the Installed page. Extra outfit previews group common colour repairs.
+  - Presets install in entry order across archives. Each entry can be left out, and an entry several archives match is chosen in the review. Eligible archive installs can use their library source to save disk space.
+  - Character-swap repairs now always run during installation (the Settings switch is gone).
   - Includes Slotsloader Fork 1.10.7 with character-swap resource fixes and a fix for opening Opponent Outfit Settings on fighters with many extra outfits. The Manager also accepts compatible upstream loader packages declaring contract 2 or later.
   - The Windows portable ZIP contains the Manager, its configuration, this README and the loader ZIP. Manager 1.0.13 and later can update in the app. On 1.0.12 or earlier, close the Manager and extract the new ZIP over the existing app folder. Keep your `Data` folder.
 

@@ -32,6 +32,7 @@ namespace SlotsInstaller
         public List<string> Warnings = new List<string>();
         internal int RootFilesIgnored;
         internal bool HasBundleLayout;
+        internal string LayoutError;   // the saved layout was ignored (BundleLayout.Read); Edit bundle saves a new one
         internal List<BundleOption> AuthorOptions;
         internal List<string> AuthorSlotDefaults, AuthorReplaceDefaults;
         internal readonly Dictionary<string,byte[]> PreloadedPreviews = new Dictionary<string,byte[]>(StringComparer.OrdinalIgnoreCase);

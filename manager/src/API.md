@@ -60,8 +60,8 @@ All types in this section are internal unless noted.
 **External presets: `FluffyPresets.cs`**
 - `FluffyPresets.Parse(text)` → `List<FluffyPresetEntry>`.
 - `Map(entries, library, sevenZip) → List<PresetMapping>`: one mapping per section, matched by folder/archive and modinfo names and verified against the package.
-- `Group(mappings)` merges sections that map to the same library entry; `PresetFiles(roots)` lists preset files.
-- `PresetInstaller.Install(config, engine, mappings) → summary` installs selected replacements together in original section order through `ReplaceEngine.ImportLayers`. Extra outfits use the composed archive row. Tied mappings are excluded.
+- `Group(mappings)` merges sections that map to the same library entry; `PresetFiles(roots)` lists preset files. An entry several archives match is `Ambiguous` with its `Choices` (byte-identical copies count once); `Resolve(mapping, choice)` applies the one the review picks.
+- `PresetInstaller.Install(config, engine, mappings) → summary` takes one mapping per section (the review shows them ungrouped, so each can be left out) and groups them itself: selected replacements go in together, in section order, through `ReplaceEngine.ImportLayers` (all or none, reported in the summary), and an archive's Extra outfit rows become one outfit. Ambiguous mappings are excluded until resolved.
 
 **Assistant additions**
 - Four tools, for 16 in total: `list_game_mods`, `install_replacement`, `change_game_mod`, `import_external_preset` (2.5.1; the old name is still accepted for older transcripts).

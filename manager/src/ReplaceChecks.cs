@@ -1281,6 +1281,9 @@ namespace SlotsInstaller
             File.Move(renamed.To, moved); File.Copy(moved, zip);
             f.Engine.RelinkArchives();
             Require(f.Engine.LoadState().Find(mod.Id).SourcePath == renamed.To, "identical twins were silently rebound");
+            // 1.0.15: a repair reads either identical copy (only the relink needs one).
+            File.Delete(live); f.Engine.Reapply();
+            Require(ReplaceEngine.Sha(live) == file.Sha256, "repair from one of two identical copies");
             File.Delete(zip); System.IO.Compression.ZipFile.CreateFromDirectory(f.Mod("modA"), renamed.To);
             f.Engine.RelinkArchives();
             Require(f.Engine.LoadState().Find(mod.Id).SourcePath == moved, "renamed move with an impostor at the old path");
@@ -1490,9 +1493,9 @@ namespace SlotsInstaller
             Require(groups.Count == 2 && groups[0].Sections.Count == 2, "fixture did not resolve interleaved sections");
             // A late staging error and an interrupted publication must leave earlier layers uninstalled.
             Put(lib, "Between/modinfo.ini", Bytes("name=Main\n; changed after review"));
-            bool failed = false;
-            try { PresetInstaller.Install(cfg, f.Engine, groups); } catch (IOException) { failed = true; }
-            Require(failed && f.Engine.LoadState().Mods.Count == 0, "stale source accepted");
+            // 1.0.15: the block fails as a whole and the summary says so (extra outfits would still install).
+            string stale = PresetInstaller.Install(cfg, f.Engine, groups);
+            Require(stale.Contains("replacements, none installed") && f.Engine.LoadState().Mods.Count == 0, "stale source accepted: " + stale);
             ReplaceEngine.CrashAfterStep = 1;
             try { apply(); } catch (ReplaceEngine.SimulatedCrashException) { } finally { ReplaceEngine.CrashAfterStep = -1; }
             Require(f.Engine.JournalPending, "crash fixture missed journal");
@@ -1500,6 +1503,8 @@ namespace SlotsInstaller
             apply();
             var mods = f.Engine.LoadState().Mods;
             Require(mods.Count == 3 && mods.Count(m => m.Name == "Main") == 2 && game(V5) == "Between" && game(V6) == "Last" && game(unique) == "Main", "incorrect winners");
+            var health = f.Engine.CheckInstalledFiles(mods[2].Id);
+            Require(health.Any(i => i.Text.StartsWith("Supplied by 'Last'")) && health[0].Text.Contains("supplied by other mods"), "Health did not name the mods that win the overridden files: " + String.Join(" | ", health.Select(i => i.Text)));
             string outfits = Path.Combine(root, "preset-game", "reframework", "costume_mods"); Directory.CreateDirectory(outfits);
             OutfitSetInfo saved = OutfitSetStore.CreatePreset(outfits, "Ordered", PresetScope.Replacements, f.Engine);
             f.Engine.Move(mods[0].Id, 1); f.Engine.SetEnabled(mods[2].Id, false);
@@ -1511,12 +1516,31 @@ namespace SlotsInstaller
             Require(game(V6) == "Main" && game(V5) == "Main", "removing middle did not reveal base");
             f.Engine.UninstallForGood(mods[2].Id, DriftChoice.Ask, null);
             SameSnapshot(baseline, Snapshot(f.Game), "ordered preset full uninstall");
+            // One row per preset entry (1.0.15): leaving out Last makes the middle archive win, with Main below it.
+            var rows = FluffyPresets.Map(FluffyPresets.Parse("[Main]\nModName=Main\n[Between]\nModName=Main\n[Last]\nModName=Last"), library, "");
+            Require(rows.Count == 3 && rows.All(r => r.Entry != null), "preset rows per entry");
+            rows[2].Include = false;
+            PresetInstaller.Install(cfg, f.Engine, rows);
+            Require(f.Engine.LoadState().Mods.Count == 2 && game(V6) == "Between" && game(V5) == "Between" && game(unique) == "Main", "Between must win with Last left out");
+            foreach (ReplaceMod m in f.Engine.LoadState().Mods.ToList()) f.Engine.UninstallForGood(m.Id, DriftChoice.Ask, null);
+            SameSnapshot(baseline, Snapshot(f.Game), "uninstall after a preset with an entry left out");
             var restored = OutfitSetStore.Restore(outfits, saved, PresetScope.Replacements, f.Engine);
             Require(restored.ReplacementsRestored == 3 && game(V5) == "Between" && game(V6) == "Last" && game(unique) == "Main", "native list did not restore layer order: " + String.Join(" ", restored.Notes));
             var twin = Path.Combine(root, "other", "Between");
             Put(twin, "modinfo.ini", Bytes("name=Main")); Put(twin, V5, Bytes("different"));
             library.Add(new LibraryEntry { SourcePath = twin, Name = "Between" });
-            for (int i = 0; i < 2; i++) { Require(mapped().Any(m => m.Ambiguous && m.Entry == null && !m.Include), "twin silently selected"); library.Reverse(); }
+            for (int i = 0; i < 2; i++) { Require(mapped().Any(m => m.Ambiguous && m.Entry == null && !m.Include && m.Choices.Count == 2), "twin silently selected"); library.Reverse(); }
+            // The review resolves an ambiguous entry with the archive the user picks.
+            var ambiguous = mapped().First(m => m.Ambiguous);
+            FluffyPresets.Resolve(ambiguous, ambiguous.Choices.First(c => c.Entry.SourcePath == twin));
+            Require(ambiguous.Entry.SourcePath == twin && ambiguous.Include && !ambiguous.Ambiguous && ambiguous.Stamp != null, "picked archive not used");
+            // The same download in two libraries is one match.
+            string zipA = Path.Combine(root, "zips-a", "Between.zip"), zipB = Path.Combine(root, "zips-b", "Between.zip");
+            Directory.CreateDirectory(Path.GetDirectoryName(zipA)); Directory.CreateDirectory(Path.GetDirectoryName(zipB));
+            System.IO.Compression.ZipFile.CreateFromDirectory(Path.Combine(lib, "Between"), zipA); File.Copy(zipA, zipB);
+            var copies = new List<LibraryEntry> { new LibraryEntry { SourcePath = zipA, Name = "Between" }, new LibraryEntry { SourcePath = zipB, Name = "Between" } };
+            var one = FluffyPresets.Map(FluffyPresets.Parse("[Between]\nModName=Main"), copies, "");
+            Require(one.Single().Entry != null && !one.Single().Ambiguous, "identical copies were reported as ambiguous: " + one.Single().Message);
         }
 
         private static void OrderedPatchPaks(string root)

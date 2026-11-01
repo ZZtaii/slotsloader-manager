@@ -114,8 +114,9 @@ namespace SlotsInstaller
             batchInstallButton = Button("Install", true, 154, delegate { RunBatchInstall(); });
             batchInstallButton.KeyHint = "Space"; batchInstallButton.AccessibleDescription = "Shortcut: Space";
             batchDeleteButton = Button("Delete", false, 99, delegate { RunBatchDelete(); }); batchDeleteButton.Danger = true;
+            // No Ctrl tap here (MainFormKeys): Ctrl is held to pick the queue's rows.
             batchUninstallButton = Button("Uninstall", false, 128, UninstallLibrarySelection);
-            batchUninstallButton.KeyHint = "Ctrl"; batchUninstallButton.AccessibleDescription = "Shortcut: tap Ctrl";
+            batchUninstallButton.Name = "batchUninstallButton"; batchUninstallButton.AccessibleDescription = "Uninstalls the installed copies of the selected mods. Their library sources stay.";
             batchUninstallButton.Danger = true;
             batchCloseButton = Button("Close", false, 90, delegate { CloseBatch(); });
             foreach (FlatButton button in new[] { batchInstallButton, batchUninstallButton, batchDeleteButton, batchCloseButton }) { button.Height = 38; button.Margin = new Padding(5, 0, 0, 0); button.Font = Palette.Small; }
