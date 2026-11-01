@@ -823,7 +823,8 @@ namespace SlotsInstaller
                     Require(label != null && page.ClientRectangle.Contains(BoundsIn(label, page)), "caption missing or clipped: " + caption + " at " + logical);
                 }
                 Require(!AllControls(panel).OfType<Label>().Any(l => l.Text == "Default install mode") && !AllControls(panel).OfType<ComboBox>().Any(c => c.Items.Cast<object>().Any(i => Convert.ToString(i).Contains("Extra outfit"))), "Settings still shows Default install mode at " + logical);
-                foreach (Button b in AllControls(panel).OfType<Button>()) Require(b.Parent.ClientRectangle.Contains(b.Bounds) && page.ClientRectangle.Contains(BoundsIn(b, page)), "button clipped: " + b.Text + " at " + logical);
+                Require(Get<FlatButton>(form,"migrateModsButton").Visible, "migration button missing from Settings");
+                foreach (Button b in AllControls(panel).OfType<Button>().Where(button => button.Visible)) Require(b.Parent.ClientRectangle.Contains(b.Bounds) && page.ClientRectangle.Contains(BoundsIn(b, page)), "button clipped: " + b.Text + " at " + logical);
                 Require(Get<Label>(form, "settingsFluffyStatus").Text.Contains("0 mods installed by an external mod manager"), "Fluffy summary (the fixture's external manager is empty since 1.0.1): " + Get<Label>(form, "settingsFluffyStatus").Text);
                 Require(Get<Label>(form, "settingsMethodStatus").Text.Contains("PAK method"), "method status: " + Get<Label>(form, "settingsMethodStatus").Text);
                 Render(form, Path.Combine(root, "settings-replace-" + logical.Width + "x" + logical.Height + "-" + form.DeviceDpi + ".png"));
