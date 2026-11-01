@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -34,13 +35,13 @@ namespace SlotsInstaller
             ModMigration.Match(preview.Rows[1],PackageReader.Load(Path.Combine(lib,"Beta"),null),null);
             ReplaceChecks.Require(preview.SharedDetails(preview.Rows[0]).Contains("Beta"),"lost conflict winner");
             put(f.Game,file,"drift");
-            ReplaceChecks.Refused(delegate { preview.SaveHandoff(f.Engine,null); },"differs");
+            ReplaceChecks.Refused(delegate { preview.SaveHandoff(f.Engine,null); },"doesn't match the file in the game");
             put(f.Game,file,"final");
             string copy = Path.Combine(root,"other-copy");
             put(copy,"modinfo.ini","name=Alternative");
             put(copy,file,"different download");
             ModMigration.Match(preview.Rows[0],PackageReader.Load(copy,null),null);
-            ReplaceChecks.Refused(delegate { preview.SaveHandoff(f.Engine,null); },"covered file");
+            ReplaceChecks.Refused(delegate { preview.SaveHandoff(f.Engine,null); },"Mods folder");
             ReplaceChecks.Require(!File.Exists(ModMigration.Pending(f.Engine)),"saved a mismatched covered layer");
             put(copy,file,"first");
             ModMigration.Match(preview.Rows[0],PackageReader.Load(copy,null),null);
@@ -58,8 +59,8 @@ namespace SlotsInstaller
             ReplaceChecks.Refused(delegate { plan.Restore(f.Engine,null); },"unreadable");
             File.WriteAllText(ini,"");
             probe.Fluffy = true;
-            ReplaceChecks.Refused(delegate { plan.Restore(f.Engine,null); },"Close the other mod manager"); probe.Fluffy = false;
-            ReplaceChecks.Refused(delegate { plan.Restore(f.Engine,null); },"original game file");
+            ReplaceChecks.Refused(delegate { plan.Restore(f.Engine,null); },"Close your other mod manager"); probe.Fluffy = false;
+            ReplaceChecks.Refused(delegate { plan.Restore(f.Engine,null); },"back to its original");
             put(f.Game,file,"stock");
             string first = Path.Combine(lib,"Alpha",file);
             var stamp = File.GetLastWriteTimeUtc(first);
@@ -134,6 +135,65 @@ namespace SlotsInstaller
                     state.Mods.Count == 2 && File.ReadAllBytes(fw.Engine.GamePath("dinput8.dll")).SequenceEqual(dll) &&
                     File.ReadAllBytes(fw.Engine.GamePath(ReplaceChecks.V5)).SequenceEqual(mesh),"failed to restore the framework and outfit together with the loose method");
             }
+        }
+
+        // 1.0.15 review: the other manager lists old suffixes under their current names and may have repaired a
+        // file the way this Manager does; a path this Manager had let go of ("Keep current file") is taken back.
+        internal static void Recorded(string root)
+        {
+            var reference = ReplaceChecks.Create(Path.Combine(root,"reference"),false,ReplaceMethods.Pak);
+            var repaired = ReplaceChecks.Install(reference,"modA","Reference");
+            var f = ReplaceChecks.Create(Path.Combine(root,"renamed"),false,ReplaceMethods.Pak);
+            string setup = Path.Combine(f.Root,"External"), lib = Path.Combine(setup,"Mods"), ini = Path.Combine(setup,"installed.ini");
+            f.Engine.FluffyProvider = delegate { return FluffyInstalls.Load(new[] {setup}); };
+            string source = f.Mod("modA");
+            var listed = new List<string>();
+            foreach (string file in Directory.GetFiles(source,"*",SearchOption.AllDirectories))
+            {
+                string rel = file.Substring(source.Length + 1).Replace('\\','/');
+                ReplaceChecks.Put(lib,"Colors/" + rel,File.ReadAllBytes(file));
+                if (rel.StartsWith("natives/",StringComparison.OrdinalIgnoreCase)) listed.Add(rel.Replace(".tex.143230113",".tex.241101895"));
+            }
+            bool changed = false;
+            foreach (string rel in listed)
+            {
+                ModFile ours = repaired.Files.Single(x => String.Equals(x.Path,rel,StringComparison.OrdinalIgnoreCase));
+                byte[] bytes = File.ReadAllBytes(reference.Engine.GamePath(ours.Path));
+                ReplaceChecks.Put(f.Game,rel,bytes);
+                string raw = Path.Combine(source,rel.Replace(".tex.241101895",".tex.143230113").Replace('/','\\'));
+                if (!File.Exists(raw)) raw = Path.Combine(source,rel.Replace('/','\\'));
+                changed |= !File.ReadAllBytes(raw).SequenceEqual(bytes);
+            }
+            ReplaceChecks.Require(changed && listed.Any(p => p.EndsWith(".tex.241101895") && p.Contains("_albd")),"fixture: no renamed or repaired file to compare");
+            File.WriteAllText(ini,"[Colors]\r\ninstalltype=normal\r\n" + String.Concat(listed.Select(p => "file=" + p.Replace('/','\\') + "\r\n")));
+            var preview = ModMigration.Scan(f.Engine,Library.Scan(new[] {lib},null),null);
+            ReplaceChecks.Require(preview.Rows.Count == 1 && preview.Rows[0].Problem == null,"renamed suffixes did not match their download: " + preview.Rows[0].Problem);
+            preview.SaveHandoff(f.Engine,null);
+            File.Delete(ini); foreach (string rel in listed) File.Delete(f.Engine.GamePath(rel));
+            ReplaceEngine.ReadJsonShared<ModMigration>(ModMigration.Pending(f.Engine)).Restore(f.Engine,null);
+            ReplaceChecks.Require(f.Engine.LoadState().Mods.Count == 1 && listed.All(rel => File.Exists(f.Engine.GamePath(rel))),"repaired download not migrated");
+
+            // A kept path: the Manager's Upper over Lower, then the other manager's Outside over both, then Upper uninstalled
+            // with "Keep current file". Outside wins the path in the other manager, so it must win it after migration too.
+            var k = ReplaceChecks.Create(Path.Combine(root,"kept"),false,ReplaceMethods.Pak);
+            string kept = "reframework/autorun/kept.lua", keptSetup = Path.Combine(k.Root,"External"), keptLib = Path.Combine(keptSetup,"Mods");
+            k.Engine.FluffyProvider = delegate { return FluffyInstalls.Load(new[] {keptSetup}); };
+            ReplaceChecks.Put(k.Mods,"Lower/"+kept,Encoding.UTF8.GetBytes("lower")); ReplaceChecks.Put(k.Mods,"Upper/"+kept,Encoding.UTF8.GetBytes("upper"));
+            ReplaceChecks.Install(k,"Lower","Lower"); var upper = ReplaceChecks.Install(k,"Upper","Upper");
+            ReplaceChecks.Put(keptSetup,"Backup/"+kept,Encoding.UTF8.GetBytes("upper"));
+            ReplaceChecks.Put(keptLib,"Outside/modinfo.ini",Encoding.UTF8.GetBytes("name=Outside")); ReplaceChecks.Put(keptLib,"Outside/"+kept,Encoding.UTF8.GetBytes("outside"));
+            ReplaceChecks.Put(k.Game,kept,Encoding.UTF8.GetBytes("outside"));
+            File.WriteAllText(Path.Combine(keptSetup,"installed.ini"),"[Outside]\nfile="+kept);
+            k.Engine.Uninstall(upper.Id,DriftChoice.KeepCurrent);
+            ReplaceChecks.Require(k.Engine.LoadState().Released.Any(r => r.Path == kept),"fixture: the path was not kept");
+            ModMigration.Scan(k.Engine,Library.Scan(new[] {keptLib},null),null).SaveHandoff(k.Engine,null);
+            File.Delete(Path.Combine(keptSetup,"installed.ini")); ReplaceChecks.Put(k.Game,kept,Encoding.UTF8.GetBytes("upper"));   // its uninstall puts back its backup
+            ReplaceEngine.ReadJsonShared<ModMigration>(ModMigration.Pending(k.Engine)).Restore(k.Engine,null);
+            var state = k.Engine.LoadState();
+            ReplaceChecks.Require(File.ReadAllText(k.Engine.GamePath(kept)) == "outside" && state.Mods[0].Name == "Outside" && !state.Released.Any(r => r.Path == kept),
+                "the other manager's winner stayed hidden under a kept file: " + File.ReadAllText(k.Engine.GamePath(kept)));
+            k.Engine.UninstallForGood(state.Mods[0].Id,DriftChoice.Refuse,null);
+            ReplaceChecks.Require(File.ReadAllText(k.Engine.GamePath(kept)) == "lower","the Manager's own layer lost the path after the migrated one left");
         }
     }
 }

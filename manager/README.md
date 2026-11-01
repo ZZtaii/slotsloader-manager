@@ -14,6 +14,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
   - Edit a ZIP bundle in the Library to group its options and set selection rules. Suggest layout runs locally. Refine with Assistant is optional. Save ZIP writes the reviewed layout to the archive.
   - Uninstall selected replacements from the Library or Installed tab. Health checks installed files, names the mods that supply shared files and shows recorded fixes; it changes nothing. Disable and Enable stay on the Installed page. Extra outfit previews group common colour repairs.
   - Presets install in entry order across archives. Each entry can be left out, and an entry several archives match is chosen in the review. Eligible archive installs can use their library source to save disk space.
+  - **Migrate installed mods** in Settings moves your external mod manager's active mods here, in the same order.
   - Character-swap repairs now always run during installation (the Settings switch is gone).
   - Includes Slotsloader Fork 1.10.7 with character-swap resource fixes and a fix for opening Opponent Outfit Settings on fighters with many extra outfits. The Manager also accepts compatible upstream loader packages declaring contract 2 or later.
   - The Windows portable ZIP contains the Manager, its configuration, this README and the loader ZIP. Manager 1.0.13 and later can update in the app. On 1.0.12 or earlier, close the Manager and extract the new ZIP over the existing app folder. Keep your `Data` folder.
@@ -146,7 +147,7 @@ If another tool replaced or deleted a file this app installed, the banner says w
 ## Switching from another mod manager
 
 - **While the external mod manager has any mod installed, only Extra outfit, Slotsloader and REFramework install here.** Replace original, PAK mods and other tool mods wait until it is empty, so two managers never change the same game files. REFramework that the external mod manager installed is updated there. Uninstalling, disabling and Restore original game files still work for this app's own mods.
-- **Moving over**: uninstall your mods in the external mod manager (this app no longer uninstalls them), then install them here with Replace original, or import its preset.
+- **Moving over**: **Migrate installed mods…** (Settings → Game files & replacements) reviews that manager's mods, waits while you uninstall them there, then installs them here in the same order. Or install them yourself with Replace original, or import its preset.
 - Close the external mod manager before changing game files here. Don't install the same mod in both managers.
 - External mod manager features this app does not reproduce:
   - the `pak_mods` folder (a PAK mod installs here as the next patch PAK instead);

@@ -150,6 +150,8 @@ namespace SlotsInstaller
                         string wait = migration.Waiting(this);
                         if (wait != null) throw new IOException(wait);
                         state.LastMigration = migration.Id;
+                        // The other manager's winner for a path this Manager had let go of is deployed, not left as kept.
+                        options.RetakeReleasedFor = new HashSet<string>(imported.Select(m => m.Id), StringComparer.OrdinalIgnoreCase);
                     }
                     return state;
                 }, options, method, null);

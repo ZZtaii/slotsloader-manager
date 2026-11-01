@@ -618,7 +618,9 @@ namespace SlotsInstaller
                 ReleasedFile rel = current.Release(path);
                 if (rel != null)
                 {
-                    bool retake = wanted && options.Choice == DriftChoice.Repair && fluffy.Owner(path) == null && !IsPatchPakPath(path);   // 1.0.1: never over another tool's PAK
+                    // 1.0.15: a migrated layer takes the path back like Reapply: it won it in the other manager.
+                    bool retakeFor = wanted && options.RetakeReleasedFor != null && options.RetakeReleasedFor.Contains(want.Key.Id);
+                    bool retake = wanted && (options.Choice == DriftChoice.Repair || retakeFor) && fluffy.Owner(path) == null && !IsPatchPakPath(path);   // 1.0.1: never over another tool's PAK
                     bool askedOriginal = options.RestoreReleased != null && options.RestoreReleased.Contains(path);
                     bool restore = !wanted && rel.Original != null && (askedOriginal || (options.IncludeReleased && options.Choice == DriftChoice.RestoreOriginal));
                     if (!wanted && rel.Original != null && options.IncludeReleased && options.Choice == DriftChoice.Ask && actual != rel.Original.Sha256 && !askedOriginal)
@@ -799,6 +801,7 @@ namespace SlotsInstaller
         {
             internal DriftChoice Choice = DriftChoice.Refuse;
             internal Dictionary<string,string> MigrationOriginals;
+            internal HashSet<string> RetakeReleasedFor;   // mod IDs whose files take back paths kept with "Keep current file"
             internal HashSet<string> RestoreReleased;   // "Restore original game file" for these kept paths
             internal bool RecycleSurvivingFiles;
             internal bool IncludeReleased;              // restore-all: kept files are part of the question

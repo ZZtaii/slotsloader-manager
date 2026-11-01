@@ -177,8 +177,10 @@ namespace SlotsInstaller
                     dialog.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));
                     image.Save(Path.Combine(root,"migration-preview.png"));
                 }
+                Require(Get<MigrationSteps>(dialog,"steps").Step == 0 && !Get<FlatButton>(dialog,"forget").Visible,"step 1 shows Review without Forget plan");
                 start.PerformClick();
                 wait(delegate { return start.Text == "Check now" && start.Enabled; });
+                Require(Get<MigrationSteps>(dialog,"steps").Step == 1 && Get<Label>(dialog,"title").Text == "Your setup is saved","saved plan moves to step 2");
                 dialog.Close();
             }
             using (var dialog = new MigrationForm(f.Engine,entries,null))
@@ -186,12 +188,24 @@ namespace SlotsInstaller
                 dialog.Opacity = 0; dialog.Show();
                 var next = Get<FlatButton>(dialog,"action");
                 wait(delegate { return next.Enabled && next.Text == "Check now"; });
-                var forget = Get<FlatButton>(dialog,"folder");
-                forget.PerformClick(); Require(next.Text == "Forget saved plan","forget needs a deliberate confirmation");
-                forget.PerformClick();
+                var forget = Get<FlatButton>(dialog,"forget"); var close = Get<FlatButton>(dialog,"close");
+                forget.PerformClick(); Require(next.Text == "Forget plan" && next.Danger && close.Text == "Keep plan" && !forget.Visible,"forget needs a deliberate confirmation");
+                close.PerformClick(); Require(next.Text == "Check now" && next.Primary && close.Text == "Close","Keep plan returns to waiting");
                 File.Delete(ini); File.Delete(f.Engine.GamePath(file));
                 wait(delegate { return next.Enabled && dialog.Completed; });
-                Require(next.Text == "View installed mods" && f.Engine.LoadState().Mods.Count == 1,"missing completed migration");
+                Require(next.Text == "View installed mods" && f.Engine.LoadState().Mods.Count == 1 && Get<MigrationSteps>(dialog,"steps").Step == 3,"missing completed migration");
+                dialog.Close();
+            }
+            // A damaged saved plan is never a dead end: Forget plan deletes it without reading it.
+            File.WriteAllText(ModMigration.Pending(f.Engine),"{ damaged");
+            using (var dialog = new MigrationForm(f.Engine,entries,null))
+            {
+                dialog.Opacity = 0; dialog.Show();
+                var next = Get<FlatButton>(dialog,"action"); var forget = Get<FlatButton>(dialog,"forget");
+                wait(delegate { return next.Enabled && forget.Visible; });
+                Require(Get<Label>(dialog,"title").Text == "Can't read the saved migration plan","damaged plan title: " + Get<Label>(dialog,"title").Text);
+                forget.PerformClick(); next.PerformClick();
+                wait(delegate { return !File.Exists(ModMigration.Pending(f.Engine)); });
                 dialog.Close();
             }
         }
