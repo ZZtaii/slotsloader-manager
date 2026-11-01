@@ -13,11 +13,11 @@ Updates preserve your settings, mod libraries, recovery records and compatibilit
 
 ## Automatic updates
 
-Starting with this build, the Linux launcher checks GitHub once a day and offers newer **complete Linux packages**. Click Yes to download, verify and install an update before Manager opens. Nothing installs without your approval. Offline checks fail quietly so you can still use the app.
+The Linux launcher checks GitHub once a day and offers newer **complete Linux packages**. Click Yes to download, verify and install an update before Manager opens. Nothing installs without your approval. Offline checks fail quietly so you can still use the app.
 
 For an immediate check, use **Settings → Updates → Check Linux app updates**, or right-click the application-menu entry and choose **Check for Linux app updates**. Manager closes safely and reopens after the check. The daily-check checkbox in Settings controls automatic checks. The Linux beta follows its own beta-release channel; Windows packages cannot overwrite it.
 
-Coming from 1.0.12 beta2, install this ZIP once using the graphical installer. Later Linux releases can be offered automatically. An interrupted program-file update is rolled back on the next launch. Do not use a Windows portable ZIP to update this installation.
+Coming from 1.0.12 beta2 or earlier, install this ZIP once using the graphical installer. Later Linux releases can be offered automatically. An interrupted program-file update is rolled back on the next launch. Do not use a Windows portable ZIP to update this installation.
 
 ## Playing SF6
 
@@ -26,6 +26,8 @@ Manage mods in Desktop Mode, close Manager, and launch SF6 through Steam. Keep y
 Your game and mod folders can be on internal storage or a mounted microSD card. Reconnect missing drives before opening Manager. Use **Choose game and mod folders** from the application menu when adding a library on another drive. Access is granted to selected folders for this session, without global Flatpak permission changes.
 
 **Repair compatibility runtime** prepares a new dedicated runtime while keeping your Data and the old runtime. Storage inside a private Wine C: drive must first be moved to stable Linux folders. **Save diagnostic report** creates a small report without keys, private paths, mod names or contents.
+
+**Migrate installed mods** from the Windows version is not included, because other mod managers run on Linux only through workarounds. Use **Import external preset** in Settings, or reinstall those mods here with Replace original.
 
 Assistant keys are session-only on Linux. Windows encrypted keys are not imported. Desktop Mode with a mouse or trackpad is the supported workflow; controller-only use and running Manager in Gaming Mode are not established.
 
