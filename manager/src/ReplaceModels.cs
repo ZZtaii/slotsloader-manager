@@ -59,6 +59,7 @@ namespace SlotsInstaller
     {
         public string Format = "sf6-replace-state-v1";
         public int Generation;
+        public string LastMigration;
         public bool? ArchiveStoreReclaimed; // null before the first pass, false while a pass still needs to finish
         public string GameRoot = "";
         public string Method = "";

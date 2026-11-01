@@ -60,6 +60,7 @@ namespace SlotsInstaller
                             try { action(); report.Add("PASS " + name); }
                             catch (Exception ex) { failures++; report.Add("FAIL " + name + ": " + ex); }
                         };
+                        check("Migration wizard previews, pauses, resumes and completes a fixture handoff", delegate { MigrationWizard(Path.Combine(root,"migration")); });
                         check("Ctrl tap listener (2.5.5): registered as soon as the window is built, not on a later handle creation that the real app never has", delegate { Require(ctrlTapAtStart, "the Ctrl tap filter was not registered when the constructor returned"); });
                         check("install-mode toggle: Extra outfit by default, switches the inspector and footer, remembers the last mode", delegate { Toggle(form); });
                         check("INSTALL AS (2.3.0): one joined toggle, the selected half accent-filled with a check, radio-group accessibility, Left/Right keys, the choice remembered across a restart (no '· remembered' hint since 2.3.1), a tool mod forces Replace ('· locked for this mod', reason shown, remembered choice kept) and the next costume returns to it; no Default install mode in Settings", delegate { ModeToggle(form, f, root); });
@@ -150,6 +151,65 @@ namespace SlotsInstaller
             return new Rectangle(location, control.Size);
         }
         private static IEnumerable<Control> AllControls(Control root) { foreach (Control child in root.Controls) { yield return child; foreach (Control d in AllControls(child)) yield return d; } }
+        private static void MigrationWizard(string root)
+        {
+            var f = ReplaceChecks.Create(root,false,ReplaceMethods.Pak);
+            string setup = Path.Combine(root,"Games","SF6"), lib = Path.Combine(setup,"Mods");
+            string file = "reframework/autorun/example.lua", ini = Path.Combine(setup,"installed.ini");
+            ReplaceChecks.Put(lib,"Example/modinfo.ini",Encoding.UTF8.GetBytes("name=Example"));
+            ReplaceChecks.Put(lib,"Example/"+file,Encoding.UTF8.GetBytes("-- example"));
+            ReplaceChecks.Put(f.Game,file,Encoding.UTF8.GetBytes("-- example"));
+            File.WriteAllText(ini,"[Example]\nfile="+file);
+            f.Engine.FluffyProvider = delegate { return FluffyInstalls.Load(new[] {setup}); };
+            var entries = Library.Scan(new[] {lib},null);
+            Action<Func<bool>> wait = delegate(Func<bool> ready) {
+                var deadline = DateTime.UtcNow.AddSeconds(20);
+                do { Application.DoEvents(); if (ready()) return; Thread.Sleep(15); } while (DateTime.UtcNow < deadline);
+                throw new InvalidOperationException("Migration wizard did not reach the expected state.");
+            };
+            using (var dialog = new MigrationForm(f.Engine,entries,null))
+            {
+                dialog.Opacity = 0; dialog.Show();
+                var start = Get<FlatButton>(dialog,"action");
+                wait(delegate { return Get<ListBox>(dialog,"rows").Items.Count == 1 && start.Enabled; });
+                using (var image = new Bitmap(dialog.Width,dialog.Height))
+                {
+                    dialog.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));
+                    image.Save(Path.Combine(root,"migration-preview.png"));
+                }
+                Require(Get<MigrationSteps>(dialog,"steps").Step == 0 && !Get<FlatButton>(dialog,"forget").Visible,"step 1 shows Review without Forget plan");
+                start.PerformClick();
+                wait(delegate { return start.Text == "Check now" && start.Enabled; });
+                Require(Get<MigrationSteps>(dialog,"steps").Step == 1 && Get<Label>(dialog,"title").Text == "Your setup is saved","saved plan moves to step 2");
+                dialog.Close();
+            }
+            using (var dialog = new MigrationForm(f.Engine,entries,null))
+            {
+                dialog.Opacity = 0; dialog.Show();
+                var next = Get<FlatButton>(dialog,"action");
+                wait(delegate { return next.Enabled && next.Text == "Check now"; });
+                var forget = Get<FlatButton>(dialog,"forget"); var close = Get<FlatButton>(dialog,"close");
+                forget.PerformClick(); Require(next.Text == "Forget plan" && next.Danger && close.Text == "Keep plan" && !forget.Visible,"forget needs a deliberate confirmation");
+                close.PerformClick(); Require(next.Text == "Check now" && next.Primary && close.Text == "Close","Keep plan returns to waiting");
+                File.Delete(ini); File.Delete(f.Engine.GamePath(file));
+                wait(delegate { return next.Enabled && dialog.Completed; });
+                Require(next.Text == "View installed mods" && f.Engine.LoadState().Mods.Count == 1 && Get<MigrationSteps>(dialog,"steps").Step == 3,"missing completed migration");
+                dialog.Close();
+            }
+            // A damaged saved plan is never a dead end: Forget plan deletes it without reading it.
+            File.WriteAllText(ModMigration.Pending(f.Engine),"{ damaged");
+            using (var dialog = new MigrationForm(f.Engine,entries,null))
+            {
+                dialog.Opacity = 0; dialog.Show();
+                var next = Get<FlatButton>(dialog,"action"); var forget = Get<FlatButton>(dialog,"forget");
+                wait(delegate { return next.Enabled && forget.Visible; });
+                Require(Get<Label>(dialog,"title").Text == "Can't read the saved migration plan","damaged plan title: " + Get<Label>(dialog,"title").Text);
+                forget.PerformClick(); next.PerformClick();
+                wait(delegate { return !File.Exists(ModMigration.Pending(f.Engine)); });
+                dialog.Close();
+            }
+        }
+
         private static void Render(MainForm form, string file)
         {
             using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(file, ImageFormat.Png); }
@@ -797,6 +857,7 @@ namespace SlotsInstaller
                     Require(label != null && page.ClientRectangle.Contains(BoundsIn(label, page)), "caption missing or clipped: " + caption + " at " + logical);
                 }
                 Require(!AllControls(panel).OfType<Label>().Any(l => l.Text == "Default install mode") && !AllControls(panel).OfType<ComboBox>().Any(c => c.Items.Cast<object>().Any(i => Convert.ToString(i).Contains("Extra outfit"))), "Settings still shows Default install mode at " + logical);
+                Require(Get<FlatButton>(form,"migrateModsButton").Visible, "migration button missing from Settings");
                 foreach (Button b in AllControls(panel).OfType<Button>().Where(x => x.Visible)) Require(b.Parent.ClientRectangle.Contains(b.Bounds) && page.ClientRectangle.Contains(BoundsIn(b, page)), "button clipped: " + b.Text + " at " + logical);
                 Require(Get<Label>(form, "settingsFluffyStatus").Text.Contains("0 mods installed by an external mod manager"), "Fluffy summary (the fixture's external manager is empty since 1.0.1): " + Get<Label>(form, "settingsFluffyStatus").Text);
                 Require(Get<Label>(form, "settingsMethodStatus").Text.Contains("PAK method"), "method status: " + Get<Label>(form, "settingsMethodStatus").Text);

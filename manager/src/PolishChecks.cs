@@ -423,6 +423,7 @@ namespace SlotsInstaller
             "TourForm.Run",                 // 1.0.15 the tours: once per page at first use, then gear → Take the tour (Esc / Skip tour)
             "AddPartsForm.Choose",          // 1.0.6 Add to outfit…: pick the installed outfit and the parts (Cancel changes nothing)
             "FluffyPresetForm.Review",      // Import Fluffy preset: map each entry before anything installs (Cancel installs nothing)
+            "MainForm.ShowMigration",       // Migrate installed mods…: review, then wait while the user uninstalls there (Close keeps the saved plan)
             "MainForm.EnlargePreview",      // the preview image, enlarged (click the preview)
             "MainForm.ShowCompositionReport", // Health (Extra outfit mode): the compatibility report
             "MainForm.BuildLibraryPage",    // 1.0.15 right-click → Edit bundle…: the editor (Close / Discard changes)

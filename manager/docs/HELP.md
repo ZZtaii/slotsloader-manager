@@ -58,9 +58,17 @@ The header shows "● Mod manager running". While your replacements use the PAK 
 - **Settings → Game files & replacements → Import external preset (.prt)…** brings over a preset from your mod manager. Each row is a preset entry, numbered in preset order; untick a row to leave that entry out. Later entries win shared replacement files. Importing enables the selected replacements at the top of Installed. When several archives match an entry, double-click the row to choose one; until then it is skipped. The same download in two libraries counts as one match.
 
 ### Moving everything to the Manager
-- Uninstall every mod in your external mod manager first. Replace original stays off until that manager lists no mods.
-- Install them again here with **Replace original**, or import your mod manager's preset.
-- If an uninstalled mod still shows in game after that, see [[Leftover PAKs]].
+**Settings → Game files & replacements → Migrate installed mods…** moves your mod manager's active mods here as replacements, in the same order. Its mod folder must be one of your **Mod libraries**.
+
+**1. Review.** Mods are listed in install order: a later mod wins shared files. For **Needs attention**, use **Locate archive…** or **Locate folder…** to pick its download. Then choose **Start migration**: the Manager checks every file against the game and saves the plan. Nothing is uninstalled yet.
+
+**2. Uninstall there.** When it says **Your setup is saved**, choose **Uninstall all mods** in your mod manager and close it. Close SF6 too.
+
+**3. Install here.** The Manager continues on its own: it checks that the game's original files are back, then installs the mods. The last one in the list goes on top of Installed.
+
+- Closed the window? Use **Resume migration…** there. Keep the downloads until it's done.
+- **Forget plan…** deletes the saved plan. Mods already uninstalled there aren't installed again.
+- **Can't migrate**: a mod installed as a numbered patch PAK, or with another install method. Uninstall it there first and install it here yourself.
 
 # In depth
 
@@ -264,7 +272,7 @@ This keeps two managers from changing the same game files. While it lasts:
 - Replace original, PAK mods and other tool mods wait. So do enabling, moving and **Reapply**.
 - Disabling, uninstalling and **Remove this Manager's mods** still work for the Manager's own mods, but the Undo of Remove this Manager's mods waits until that manager's list is empty.
 
-To turn it back on, uninstall every mod in your external mod manager. The Manager doesn't uninstall them one by one (only **Restore game to vanilla** removes them all). Once that manager's list is empty, Replace original comes back on its own. If a mod still shows in game afterwards, see [[Leftover PAKs]].
+To turn it back on, uninstall every mod in your external mod manager. The Manager doesn't uninstall them one by one (only **Restore game to vanilla** removes them all). Once that manager's list is empty, Replace original comes back on its own. If a mod still shows in game afterwards, see [[Leftover PAKs]]. Or move them here: [[Using it with your mod manager#Moving everything to the Manager|Moving everything to the Manager]].
 
 ### Your external mod manager is open
 The header shows "● Mod manager running". While your replacements use the PAK method, PAK installs and every change on the Installed page wait: "Close the external mod manager first: with the PAK method, both apps edit the same PAK." Extra outfits, loose-file replacements and new tool-mod installs go ahead. Close it and try again.

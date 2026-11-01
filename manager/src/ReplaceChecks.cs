@@ -44,6 +44,9 @@ namespace SlotsInstaller
             };
             try
             {
+                check("migration: verified handoff, saved plan, original priority, rollback and idempotent resume", delegate { ModMigrationChecks.Run(Path.Combine(run,"migration"),probe); });
+                check("migration: compatibility before uninstall and restoring REFramework with loose outfits", delegate { ModMigrationChecks.Compatibility(Path.Combine(run,"migration-ready")); });
+                check("migration (1.0.15 review): renamed old suffixes and repaired files match their download; a kept path goes to the migrated winner", delegate { ModMigrationChecks.Recorded(Path.Combine(run,"migration-recorded")); });
                 check("loader contract (1.0.14): upstream contract 2+ accepted without an extension; missing, old or malformed contracts refused; fork unchanged", delegate { LoaderContractChecks.Run(Path.Combine(run, "loader-contract")); });
                 check("swap repairs (automatic for recognized files, including the Slotsloader marker): typed Alex scene signatures, fingerprinted physics recipes, malformed/customized refusals, idempotence and game-aware preparation cache", delegate { SwapRepairChecks.Run(Path.Combine(run, "swap-repairs")); });
                 check("murmur3 path hash matches the game's index (two real vanilla paths)", HashVectors);

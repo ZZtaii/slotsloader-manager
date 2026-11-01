@@ -67,6 +67,7 @@ namespace SlotsInstaller
         private Label settingsSubtitle;   // 2.4.0: shown on the General tab only
         private ComboBox settingsMethod;
         private CheckBox settingsCrashReporter;
+        private FlatButton migrateModsButton;
         private Label settingsMethodStatus, settingsToolStatus, settingsGameFiles, settingsStoreStatus, settingsFluffyStatus;
         private PaddedTextField settingsStore;
         private FlatButton reclaimSpaceButton;
@@ -1150,8 +1151,12 @@ namespace SlotsInstaller
             add(right, Caption("External mod manager"));
             settingsFluffyStatus = note("", 52); add(right, settingsFluffyStatus);
             var fluffyRow = buttonRow(8);
-            FlatButton import = Button("Import external preset (.prt)…", false, 190, delegate { ImportFluffyPreset(); }); import.Height = 32; import.Font = Palette.Small; import.Margin = Padding.Empty;
-            fluffyRow.Controls.Add(import);
+            FlatButton import = Button("Import external preset (.prt)…", false, 190, delegate { ImportFluffyPreset(); });
+            // 1.0.15: moves that manager's active mods here (MigrationForm); "Resume migration…" while a plan is saved.
+            migrateModsButton = Button("Migrate installed mods…", false, 180, ShowMigration);
+            foreach (FlatButton b in new[] { import, migrateModsButton }) { b.Height = 32; b.Font = Palette.Small; b.Margin = new Padding(0, 0, 8, 6); fluffyRow.Controls.Add(b); }
+            // The two buttons wrap onto a second line in a narrow column.
+            fluffyRow.WrapContents = true; fluffyRow.AutoSize = true; fluffyRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             add(right, fluffyRow);
             columns.Controls.Add(left, 0, 0); columns.Controls.Add(right, 2, 0);
             panel.Controls.Add(columns);
@@ -1197,6 +1202,9 @@ namespace SlotsInstaller
                     string store = engine.StoreRoot(state);
                     settingsStoreStatus.Text = StoreStatusText(InstalledStoreBytes(store), state.Mods.Count, engine.ListRemoved(), store);
                 }
+                bool pendingMigration = File.Exists(ModMigration.Pending(engine));
+                migrateModsButton.Text = pendingMigration ? "Resume migration…" : "Migrate installed mods…";
+                migrateModsButton.Enabled = pendingMigration || fluffy.Mods.Count > 0;
                 settingsFluffyStatus.Text = ReplacePlanner.N(fluffy.Mods.Count, "mod") + " installed by an external mod manager (protected) · " + (fluffyRunning ? "it is running" : "it is closed") + " · " + ReplacePlanner.N(FluffyPresets.PresetFiles(fluffy.Roots).Count, "preset") + (fluffy.Roots.Count == 0 ? Environment.NewLine + "No external mod manager found next to your libraries." : String.Concat(fluffy.Roots.Select(r => Environment.NewLine + r)));
             }
             catch (Exception ex) { Program.Log(ex); settingsGameFiles.Text = ex.Message; }
@@ -1261,6 +1269,28 @@ namespace SlotsInstaller
                 if (IsReplaceMode && package != null) RequestReview(ReviewDelay);
             }
             catch (Exception ex) { Error(ex); LoadReplaceSettingsFields(); }
+        }
+
+        private void ShowMigration()
+        {
+            if (busy) return;
+            using (var dialog = new MigrationForm(Engine(), library.ToList(), config.SevenZipPath))
+            {
+                // The user uninstalls in the other manager while this waits: its installed.ini changes must not start a
+                // refresh here, whose journal recovery could run during the migration's own import. They wait for the close.
+                bool view;
+                busy = true;
+                try { view = dialog.ShowDialog(this) == DialogResult.OK; }
+                finally { busy = false; }
+                string folder = dialog.LibraryFolder;
+                if (dialog.Completed && Directory.Exists(folder) && !config.Libraries.Contains(folder,StringComparer.OrdinalIgnoreCase))
+                {
+                    config.Libraries.Add(folder); config.Save(); LoadSettingsFields(); RefreshLibrary();
+                }
+                if (view) ShowPage(installedPage);
+            }
+            LoadReplaceSettingsFields();
+            RefreshInstalled();
         }
 
         private void ImportFluffyPreset()

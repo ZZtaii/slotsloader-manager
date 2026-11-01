@@ -45,7 +45,7 @@ namespace SlotsInstaller
         {
             using (InstallMetrics.Measure("prepare extraction and fixes")) return PrepareCore(composition, sevenZip, engine, staging, cache, updateId, null, null);
         }
-        internal static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId, ReplaceState presetState, Func<string> reservePatch)
+        internal static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId, ReplaceState presetState, Func<string> reservePatch, MigrationRow migrationRow = null, string methodOverride = null, bool handoffPreview = false)
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
             if (composition == null) throw new ArgumentNullException("composition");
@@ -72,10 +72,14 @@ namespace SlotsInstaller
             {
                 DeployedFile file; return deployed.TryGetValue(path, out file) ? file : null;
             };
-            plan.Method = engine.CurrentMethod(state);
+            plan.Method = methodOverride ?? engine.CurrentMethod(state);
             GamePaks paks = GamePaks.Load(engine.GameRoot);
             GameReference reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc);
-            FluffyInstalls fluffy = engine.Fluffy();
+            // The read-only handoff preview projects the verified external setup after uninstall.
+            // Actual deployment always reads ownership again.
+            FluffyInstalls fluffy = handoffPreview ? new FluffyInstalls() : engine.Fluffy();
+            if (handoffPreview && plan.Method == ReplaceMethods.Pak && paks.Base == null && composition.Files.Keys.Any(p => p.StartsWith("natives/",StringComparison.OrdinalIgnoreCase)))
+                plan.Items.Add(new HealthItem("error","The PAK method requires re_chunk_000.pak in the game folder."));
             // 1.0.1: Slotsloader still installs; 1.0.10: plain REFramework too, unless the external manager installed it.
             string externalLock = ReplaceEngine.ExternalLockReason(fluffy, composition.Files.Values.Select(f => f.Asset.DestinationPath));
             if (externalLock != null) plan.Items.Add(new HealthItem("error", externalLock));
@@ -150,6 +154,7 @@ namespace SlotsInstaller
                     Directory.CreateDirectory(scratch);
                     try { hashes = reader.CopyFiles(chosen.Values, staging, scratch); }
                     finally { try { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); } catch { } }
+                    if (migrationRow != null) migrationRow.CheckSourceBytes(composition,chosen,hashes,reader,staging,handoffPreview);
                 }
             }
             int fixedFiles = 0;
