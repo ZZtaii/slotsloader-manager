@@ -57,6 +57,12 @@ namespace SlotsInstaller
             try
             {
                 LinuxPlatform.TestLinux = true;
+                check("Migrate installed mods is not offered on Linux", delegate
+                {
+                    Require(!MainForm.MigrationOffered, "migration offered on Linux");
+                    LinuxPlatform.TestLinux = false; bool windows = MainForm.MigrationOffered; LinuxPlatform.TestLinux = true;
+                    Require(windows, "migration not offered on Windows");
+                });
                 check("fresh native process state blocks both game and external manager across calls", delegate
                 {
                     int calls = 0;
@@ -107,7 +113,7 @@ namespace SlotsInstaller
                     string game = Path.Combine(root, "metadata-game"); Directory.CreateDirectory(ManagerInstalls.Folder(game));
                     LinuxPlatform.TestRequest = delegate { throw new IOException("Host unavailable"); };
                     Require(!ManagerInstalls.Write(game, new ReplaceState { GameRoot = game }), "metadata sync succeeded without host");
-                    SwapRepairFlag.Sync(game, true);
+                    SwapRepairFlag.Ensure(game);
                     Require(!File.Exists(ManagerInstalls.FilePath(game)) && !File.Exists(SwapRepairFlag.FilePath(game)), "background metadata was written");
                 });
                 check("native discovery and Unix Steam library paths retain spaces and removable-storage paths", delegate

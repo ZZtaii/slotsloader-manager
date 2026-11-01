@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory = $true)][string]$SevenZipZip,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [string]$Python = 'python',
-    [string]$BetaLabel = 'linux-beta3'
+    [Parameter(Mandatory = $true)][string]$BetaLabel
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent (Split-Path -Parent $PSCommandPath)

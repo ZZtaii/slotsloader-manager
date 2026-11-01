@@ -403,15 +403,13 @@ namespace SlotsInstaller
         internal static List<FixResult> UpgradeModFile(ref byte[] data, GameReference reference, string path)
         {
             var results = new List<FixResult>();
-            // 1.0.5: swap repairs only when Settings turns them on (GameReference.SwapRepairs); off, scenes are untouched.
-            bool swaps = reference != null && reference.SwapRepairs;
             if (path != null && path.EndsWith(".scn.20", StringComparison.OrdinalIgnoreCase))
             {
-                FixResult scene = swaps ? SwapRepairs.RepairScene(ref data, reference, ModFixes.NormalizeNativePath(path)) : null;
+                FixResult scene = reference != null ? SwapRepairs.RepairScene(ref data, reference, ModFixes.NormalizeNativePath(path)) : null;
                 if (scene != null) results.Add(scene);
                 return results;
             }
-            FixResult swap = path == null || !swaps ? null : SwapRepairs.RepairUser(ref data, reference, path);
+            FixResult swap = path == null || reference == null ? null : SwapRepairs.RepairUser(ref data, reference, path);
             if (swap != null) { results.Add(swap); return results; }
             if (path != null && reference != null && Magic(data, "USR") && SwatchPath.IsMatch(ModFixes.NormalizeNativePath(path)))
             {
@@ -474,7 +472,6 @@ namespace SlotsInstaller
         internal string SuffixSource = "built-in table (October 2026)";
         internal string CrcSource = "unavailable";
         internal string OfficialStamp = "";   // scene/physics recipes depend on files beyond the reference CMD
-        internal bool SwapRepairs;            // 1.0.5: ReplaceSettings.SwapRepairs (off by default)
         internal string TexVersion { get { string v; return Suffixes.TryGetValue("tex", out v) ? v : "241101895"; } }
         // 2.5.5: a game file by its natives path (base PAK, then DLC), for the swatch repair; null when unreadable.
         internal Func<string, byte[]> GameFile;

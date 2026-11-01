@@ -152,6 +152,7 @@ namespace SlotsInstaller
         }
 
         internal bool HasSavedKey { get { return LinuxPlatform.IsLinux ? sessionKey != null : File.Exists(KeyPath); } }
+        internal bool HasConfiguredKey { get { return HasSavedKey || !String.IsNullOrWhiteSpace(environment()); } }
 
         internal void Remove()
         {

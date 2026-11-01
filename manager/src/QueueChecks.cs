@@ -355,9 +355,20 @@ namespace SlotsInstaller
                 PaddedTextField search = Get<PaddedTextField>(form, "search");
                 search.Text = "juri, barefoot"; Call(form, "FlushLibraryFilter"); Application.DoEvents();
                 Require(list.Items.Count == 0, "plain juri, barefoot: " + list.Items.Count);
-                Get<CheckBox>(form, "deepSearch").Checked = true; Application.DoEvents();
+                var deep = Get<CheckBox>(form, "deepSearch");
+                deep.Checked = true; Application.DoEvents();
                 Require(list.Items.Count == 1 && ((LibraryEntry)list.Items[0].Tag).Name == "Juri Bundle", "deep juri, barefoot: " + list.Items.Count);
-                Get<CheckBox>(form, "deepSearch").Checked = false;
+                if (!SystemInformation.HighContrast)
+                {
+                    using (var buffer = new Bitmap(deep.Width, deep.Height))
+                    using (var graphics = Graphics.FromImage(buffer))
+                    {
+                        graphics.Clear(Color.Black);
+                        Call(deep, "OnPaint", new PaintEventArgs(graphics, deep.ClientRectangle));
+                        Require(buffer.GetPixel(deep.Width - 2, 1).ToArgb() == deep.Parent.BackColor.ToArgb(), "Deep search left its paint buffer black");
+                    }
+                }
+                deep.Checked = false;
                 search.Text = ""; Call(form, "FlushLibraryFilter"); Application.DoEvents();
                 // A filter change goes back to the top.
                 list.Items[list.Items.Count - 1].EnsureVisible(); Application.DoEvents();

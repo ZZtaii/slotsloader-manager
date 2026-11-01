@@ -370,8 +370,8 @@ namespace SlotsInstaller
             AppConfig config = File.Exists(Path.Combine(AppConfig.DataDir, "settings.json")) ? AppConfig.Load() : AppConfig.Detected();
             var library = Library.Scan(config.Libraries, a.SevenZip);
             var map = FluffyPresets.Map(FluffyPresets.Parse(File.ReadAllText(a.Source)), library, a.SevenZip);
-            foreach (PresetMapping m in map) Console.WriteLine((m.Entry == null ? "UNMATCHED " : "ok        ") + m.Sections[0].Section + " -> " + m.Message + (m.Entry == null ? "" : " [" + m.Kind + "]"));
-            Console.WriteLine(map.Count(m => m.Entry != null) + " of " + map.Count + " sections mapped; " + FluffyPresets.Group(map).Count(g => g.Entry != null) + " installs. Read-only.");
+            foreach (PresetMapping m in map) Console.WriteLine((m.Ambiguous ? "AMBIGUOUS " : m.Entry == null ? "UNMATCHED " : "ok        ") + m.Sections[0].Section + " -> " + m.Message + (m.Entry == null ? "" : " [" + m.Kind + "]"));
+            Console.WriteLine(map.Count(m => m.Entry != null) + " of " + map.Count + " sections mapped; " + FluffyPresets.Group(map).Count(g => g.Entry != null) + " matched archives. Read-only.");
             return 0;
         }
 

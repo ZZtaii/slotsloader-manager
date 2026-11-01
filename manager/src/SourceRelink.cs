@@ -25,6 +25,7 @@ namespace SlotsInstaller
         private sealed class Wanted
         {
             internal string Name = "", OldSource = "";
+            internal bool PresetLayer;
             internal List<string> SelectedIds = new List<string>();
             internal bool Replace;
             internal Func<GameReference> Reference;   // replacements: the game reference fixed files are checked with (null: none)
@@ -42,14 +43,20 @@ namespace SlotsInstaller
             {
                 if (referenceRead) return reference;
                 referenceRead = true;
-                try { GamePaks paks = GamePaks.Load(engine.GameRoot); reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc); reference.SwapRepairs = engine.Settings.SwapRepairs; }
+                try { GamePaks paks = GamePaks.Load(engine.GameRoot); reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc); }
                 catch (Exception ex) { if (Fatal(ex)) throw; Program.Log(ex); reference = null; }
                 return reference;
             };
             foreach (ReplaceMod m in engine.LoadState().Mods)
             {
                 if (m == null || m.Test || LoaderCostumePak.IsLoaderMod(m) || String.IsNullOrWhiteSpace(m.SourcePath) || Exists(m.SourcePath) || m.Files == null || m.Files.Count == 0) continue;
-                var want = new Wanted { Name = m.Name ?? "", OldSource = m.SourcePath, SelectedIds = (m.SelectedIds ?? new List<string>()).ToList(), Replace = true, Reference = game };
+                if (m.ArchiveSha != null)
+                {
+                    string exact = ReplaceEngine.MovedArchive(m, library.Select(c => new LibraryEntry { SourcePath = c.Path, Size = c.Size }));
+                    if (exact != null) found[m.Id] = exact;
+                    continue;
+                }
+                var want = new Wanted { Name = m.Name ?? "", OldSource = m.SourcePath, SelectedIds = (m.SelectedIds ?? new List<string>()).ToList(), Replace = true, PresetLayer = m.PresetLayer, Reference = game };
                 foreach (ModFile f in m.Files) want.Files.Add(new WantedFile { Path = Key(f.Path, true), Recorded = f.Path ?? "", Sha256 = f.Sha256 ?? "", Size = f.Size, Fixed = !String.IsNullOrEmpty(f.Fixes), Pak = ReplaceEngine.IsPatchPakPath(f.Path) });
                 string to = Find(want, library, sevenZip);
                 if (to != null) found[m.Id] = to;
@@ -66,6 +73,7 @@ namespace SlotsInstaller
                     if (m == null || !found.TryGetValue(m.Id, out to) || Exists(m.SourcePath)) continue;
                     events.Add(Renamed(m.SourcePath, to));
                     m.SourcePath = to;
+                    if (m.ArchiveSha != null) m.ArchiveStamp = SourceReader.Stamp(to);
                 }
                 if (events.Count > 0) { state.Generation++; DurableFile.WriteJson(engine.StatePath, state); }   // like every direct state write
             }
@@ -163,7 +171,7 @@ namespace SlotsInstaller
                     ids = MainForm.MapSelection(package, want.SelectedIds.Select(id => new KeyValuePair<string, string>(id, "")).ToList(), out dropped);
                     if (dropped.Count > 0) return false;
                 }
-                CompositionPlan plan = Composer.SavedPlan(package, ids, want.Replace);
+                CompositionPlan plan = want.PresetLayer && ids.Count == 1 ? new PresetLayer { Package = package, Id = ids[0], Name = want.Name }.Payload() : Composer.SavedPlan(package, ids, want.Replace);
                 if (!plan.CanInstall) return false;
                 var byPath = new Dictionary<string, PlannedFile>(StringComparer.OrdinalIgnoreCase);
                 var byStem = new Dictionary<string, List<PlannedFile>>(StringComparer.OrdinalIgnoreCase);

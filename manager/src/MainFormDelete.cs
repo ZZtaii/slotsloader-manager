@@ -310,6 +310,18 @@ namespace SlotsInstaller
             catch (ArgumentException) { return source; }
         }
 
+        private bool ArchiveDeleteChoice(IEnumerable<string> paths, out bool keepFiles)
+        {
+            keepFiles = false;
+            var sources = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+            if (!Directory.Exists(config.GameRoot) || !Engine().LoadState().Mods.Any(m => sources.Contains(m.SourcePath) && m.Files.Any(f => f.ArchiveEntry != null))) return true;
+            bool ignored;
+            int choice = ThemedMessageBox.Ask(this, "Installed replacements use the selected archives for repair. Keep their files in the replacement store before deleting the archives?",
+                "Delete library source", MessageBoxIcon.Question, new[] { "Delete archive only", "Keep recovery files", "Cancel" }, 2, null, out ignored);
+            keepFiles = choice == 1;
+            return choice == 0 || keepFiles;
+        }
+
         internal void DeleteLibrarySource(LibraryEntry entry)
         {
             if (entry == null || busy || String.IsNullOrEmpty(entry.SourcePath) || entry.Kind == "Library") return;
@@ -323,8 +335,10 @@ namespace SlotsInstaller
             // The open mod's check may be reading the archive: stop it so its handle doesn't count as "in use".
             if (package != null && reviewCancel != null && SamePath(package.SourcePath, full)) try { reviewCancel.Cancel(); } catch (ObjectDisposedException) { }
             IRecycleBin bin = RecycleBin.Current;
+            bool keepFiles;
+            if (!ArchiveDeleteChoice(new[] { source }, out keepFiles)) return;
             DeleteRuns++;
-            Work("Moving " + label + " to the Recycle Bin\u2026", delegate { return LibraryDelete.Run(source, libraries, kept, bin, false); },
+            Work("Moving " + label + " to the Recycle Bin\u2026", delegate { if (keepFiles) Engine().KeepArchivePayloads(new[] { source }); return LibraryDelete.Run(source, libraries, kept, bin, false); },
                 delegate(LibraryDelete.Outcome outcome) { LibraryDeleteDone(group, label, source, libraries, kept, bin, outcome); });
         }
         private static bool SamePath(string a, string b)

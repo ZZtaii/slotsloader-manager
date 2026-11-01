@@ -21,12 +21,32 @@ namespace SlotsInstaller
     }
     public static partial class Composer
     {
-        internal static bool IsBase(ModComponent c) { return Regex.IsMatch(c.Name ?? "",@"\b(main\s*(files?)?|base|mandatory|required)\b",RegexOptions.IgnoreCase); }
+        internal static bool IsBase(ModComponent c) { return c.BundleRule == "Required" || (c.BundleRule != "Optional" && (c.AuthorBase ?? Regex.IsMatch(c.Name ?? "",@"\b(main\s*(files?)?|base|mandatory|required)\b",RegexOptions.IgnoreCase))); }
         public static List<string> DefaultSelection(ModPackage package) { return DefaultSelection(package,false); }
         // replaceMode also counts files outside natives (Fluffy-style game-root files).
         public static List<string> DefaultSelection(ModPackage package,bool replaceMode)
         {
             var real=package.Components.Where(c=>!c.IsDummy && c.HasFiles(replaceMode)).ToList();
+            if (package.HasBundleLayout)
+            {
+                var original = replaceMode ? package.AuthorReplaceDefaults : package.AuthorSlotDefaults;
+                var selected = real.Where(c => c.BundleRule=="Original" && original.Contains(c.Id,StringComparer.OrdinalIgnoreCase)).ToList();
+                // A moved default must not pick a branch on the user's behalf or require an unchecked parent.
+                var authors = package.AuthorOptions.ToDictionary(o=>o.Id,StringComparer.OrdinalIgnoreCase);
+                selected.RemoveAll(c => {
+                    for (var child=c; child!=null; child=package.Find(child.ParentId))
+                    {
+                        BundleOption old;
+                        if (!authors.TryGetValue(child.Id,out old) || !String.Equals(child.ParentId,old.Parent,StringComparison.OrdinalIgnoreCase)) return true;
+                        var parent=package.Find(child.ParentId);
+                        if (parent!=null && (parent.BundleRule=="Choose one" || parent.BundleRule=="Choose up to one" || parent.BundleRule=="Optional")) return true;
+                    }
+                    return false;
+                });
+                foreach (var c in real.Where(c => c.BundleRule=="Required").OrderBy(c=>Depth(package,c)))
+                    if (!selected.Contains(c) && ScopeIsActive(package,c.ParentId,selected,true)) selected.Add(c);
+                return selected.Select(c=>c.Id).ToList();
+            }
             var bases=real.Where(IsBase).ToList();
             if (bases.Count>0) return bases.Where(c=>String.Equals(c.ParentId,bases[0].ParentId,StringComparison.OrdinalIgnoreCase)).Select(c=>c.Id).ToList();
             return real.Count==1 ? new List<string>{real[0].Id} : real.Where(c=>c.ParentId==null).Select(c=>c.Id).ToList();
@@ -46,9 +66,23 @@ namespace SlotsInstaller
             var selected=selectedIds.Distinct(StringComparer.OrdinalIgnoreCase).Select(id=>package.Find(id)).ToList();
             if (selected.Any(c=>c==null)) p.Errors.Add("An option no longer exists in this mod. Reload it.");
             p.Layers=selected.Where(c=>c!=null && !c.IsDummy && c.HasFiles(replaceMode)).OrderBy(c=>IsBase(c) ? 0 : 1).ToList();
+            if (package.HasBundleLayout)
+            {
+                var byId = p.Layers.ToDictionary(c=>c.Id,StringComparer.OrdinalIgnoreCase);
+                var ordered = new List<ModComponent>();
+                var emitted = new HashSet<ModComponent>();
+                foreach (var layer in p.Layers)
+                {
+                    var branch = new Stack<ModComponent>();
+                    for (var c=layer; c!=null; c=package.Find(c.ParentId))
+                        if (byId.ContainsKey(c.Id) && emitted.Add(c)) branch.Push(c);
+                    ordered.AddRange(branch);
+                }
+                p.Layers=ordered;
+            }
             if (p.Layers.Count==0)
             {
-                var choices = package.Components.Where(c => c.InferredChoice && package.Components.Any(m => m.ParentId == c.Id && m.HasFiles(replaceMode))).ToList();
+                var choices = UnresolvedChoiceGroups(package,new string[0],replaceMode);
                 p.Errors.Add(choices.Count == 0 ? "Select main files and any required options." : "Choose an option in '" + String.Join("' or '", choices.Select(c => c.Name)) + "'.");
                 return p;
             }
@@ -61,6 +95,7 @@ namespace SlotsInstaller
                     p.Files[f.DestinationPath]=new PlannedFile {Asset=f,Component=c};
                 }
                 ModComponent parent=c.ParentId==null ? null : package.Find(c.ParentId);
+                while (parent != null && parent.IsDummy && (package.HasBundleLayout || parent.Id.StartsWith(":hair-choice:", StringComparison.Ordinal)) && parent.ParentId != null) parent = package.Find(parent.ParentId);
                 if (parent!=null && !parent.IsDummy && parent.HasFiles(replaceMode) && !p.Layers.Contains(parent)) p.Errors.Add("'"+c.Name+"' needs its parent '"+parent.Name+"'.");
             }
             foreach (ModComponent main in package.Components.Where(c=>!c.IsDummy && c.HasFiles(replaceMode) && IsBase(c) && ScopeIsActive(package,c.ParentId,p.Layers)))
@@ -71,7 +106,7 @@ namespace SlotsInstaller
                 int count=p.Layers.Where(c=>IsDescendant(package,c,group)).Select(c=>ChoiceBranch(package,c,group))
                     .Where(id=>package.IsChoiceBranch(group,package.Find(id))).Distinct(StringComparer.OrdinalIgnoreCase).Count();
                 if (count>1 && !(savedWinnerCheck && group.InferredChoice)) p.Errors.Add("Choose one option in '"+group.Name+"'.");
-                if (count==0 && group.IsChoiceGroup && !Regex.IsMatch(group.Name+" "+group.Description,@"\boptional\b",RegexOptions.IgnoreCase)) p.Errors.Add("Choose an option in '"+group.Name+"'.");
+                if (count==0 && group.RequiresChoice) p.Errors.Add("Choose an option in '"+group.Name+"'.");
             }
             if (replaceMode)
             {
@@ -110,13 +145,15 @@ namespace SlotsInstaller
             var result=new List<ModComponent>();
             if (package==null) return result;
             var layers=selectedIds.Distinct(StringComparer.OrdinalIgnoreCase).Select(id=>package.Find(id)).Where(c=>c!=null && !c.IsDummy && c.HasFiles(replaceMode)).ToList();
-            if (layers.Count==0) return package.Components.Where(c => c.InferredChoice && package.Components.Any(m => m.ParentId == c.Id && m.HasFiles(replaceMode))).ToList();
+            if (layers.Count==0) return package.Components.Where(c =>
+                (c.InferredChoice && package.Components.Any(m => m.ParentId == c.Id && m.HasFiles(replaceMode))) ||
+                (package.HasBundleLayout && c.RequiresChoice && ScopeIsActive(package,c.ParentId,layers,true))).ToList();
             foreach (ModComponent group in package.Components.Where(package.IsChoice))
             {
                 if (!ScopeIsActive(package,group.ParentId,layers) && !layers.Any(c=>IsDescendant(package,c,group))) continue;
                 int count=layers.Where(c=>IsDescendant(package,c,group)).Select(c=>ChoiceBranch(package,c,group))
                     .Where(id=>package.IsChoiceBranch(group,package.Find(id))).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-                if (count==0 && group.IsChoiceGroup && !Regex.IsMatch(group.Name+" "+group.Description,@"\boptional\b",RegexOptions.IgnoreCase)) result.Add(group);
+                if (count==0 && group.RequiresChoice) result.Add(group);
             }
             return result;
         }
@@ -136,14 +173,31 @@ namespace SlotsInstaller
             while (child!=null && seen.Add(child.Id)) { if (String.Equals(child.ParentId,group.Id,StringComparison.OrdinalIgnoreCase)) return true; child=child.ParentId==null ? null : p.Find(child.ParentId); }
             return false;
         }
-        private static bool ScopeIsActive(ModPackage p,string parentId,List<ModComponent> layers)
+        private static bool ScopeIsActive(ModPackage p,string parentId,List<ModComponent> layers,bool starting=false)
         {
             // A null parent is the package's implicit root. Nested selections still
             // activate its main files and required groups. Explicit bundle headers
             // retain their own scope through the ancestor check below.
-            if (parentId==null) return layers.Count>0;
+            if (parentId==null) return starting || layers.Count>0;
             ModComponent parent=p.Find(parentId);
+            if (parent != null && p.HasBundleLayout && parent.IsDummy && !p.IsChoice(parent)) return ScopeIsActive(p,parent.ParentId,layers,starting);
             return parent!=null && layers.Any(c=>String.Equals(c.Id,parent.Id,StringComparison.OrdinalIgnoreCase) || IsDescendant(p,c,parent));
+        }
+        private static int Depth(ModPackage package,ModComponent c)
+        {
+            int depth=0;
+            while ((c=package.Find(c.ParentId))!=null) depth++;
+            return depth;
+        }
+        internal static IEnumerable<ModComponent> RequiredForSelection(ModPackage package,List<string> ids,bool replace)
+        {
+            var layers=ids.Select(package.Find).Where(c=>c!=null).ToList();
+            foreach (var item in package.Components.Where(c=>c.BundleRule=="Required" && c.HasFiles(replace)).OrderBy(c=>Depth(package,c)))
+                if (!layers.Contains(item) && ScopeIsActive(package,item.ParentId,layers))
+                {
+                    layers.Add(item);
+                    yield return item;
+                }
         }
         private static bool KnownLoaderRoute(string path)
         {

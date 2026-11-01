@@ -95,15 +95,47 @@ namespace SlotsInstaller
             IRecycleBin bin = RecycleBin.Current;
             ChangeWithDriftChoice(label, delegate(ReplaceEngine e, DriftChoice choice)
             {
-                var messages = new List<string>();
-                foreach (string id in ids)
-                {
-                    if (e.LoadState().Find(id) == null) continue;   // already removed by an earlier attempt (drift retry)
-                    string message = e.UninstallForGood(id, choice, bin);
-                    if (!String.IsNullOrEmpty(message) && !messages.Contains(message)) messages.Add(message);
-                }
-                return String.Join(" ", messages.Where(m => m.Contains("costume pak") || m.Contains("source is gone")));
+                return e.UninstallSelection(ids, choice, bin);
             }, done + ".");
+        }
+        private List<GameModRow> SelectedGameRows()
+        {
+            return installedList.SelectedItems.Cast<System.Windows.Forms.ListViewItem>().Select(item => item.Tag).OfType<GameModRow>().ToList();
+        }
+        private HashSet<string> BatchSourcePaths()
+        {
+            return new HashSet<string>(batchItems.Select(item => item.Entry.SourcePath).Where(p => !String.IsNullOrEmpty(p)), StringComparer.OrdinalIgnoreCase);
+        }
+        private void UninstallLibrarySelection()
+        {
+            var sources = BatchSourcePaths();
+            UninstallSelection(installed.Where(o => (o.Managed || o.WholeArchive) && sources.Contains(o.SourcePath)).ToList(),
+                gameRows.Where(r => r.Mod != null && sources.Contains(r.Mod.SourcePath)).ToList());
+        }
+        private void UninstallSelection(List<InstalledOutfit> outfits, List<GameModRow> rows)
+        {
+            if (busy || rows.Any(r => r.Mod == null)) return;
+            if (rows.Count == 0)
+            {
+                if (outfits.Count > 0) RemoveOutfitsWithUndo(outfits, "Uninstalled " + ReplacePlanner.N(outfits.Count, "outfit"));
+                return;
+            }
+            string blocker = ReplacementUninstallBlocker(rows);
+            if (blocker != null) { SetPageStatus(currentPage, blocker, Palette.Accent); return; }
+            string root = config.CostumeRoot;
+            IRecycleBin bin = RecycleBin.Current;
+            var ids = rows.Select(r => r.Mod.Id).Distinct().ToList();
+            ChangeWithDriftChoice("Uninstalling selection", delegate(ReplaceEngine engine, DriftChoice choice)
+            {
+                string message = engine.UninstallSelection(ids, choice, bin);
+                if (outfits.Count == 0) return message;
+                try
+                {
+                    var result = OutfitSetStore.UninstallOutfits(root, outfits, bin);
+                    return message + " " + ReplacePlanner.N(result.Deleted + result.Recycled, "outfit") + " removed. " + String.Join("; ", result.Kept);
+                }
+                catch (IOException ex) { return message + " Check remaining extra outfits: " + ex.Message; }
+            }, "Uninstalled " + ReplacePlanner.N(ids.Count, "replacement") + ".");
         }
         internal static string UndoMissingText(int missing) { return "Not restored: " + ReplacePlanner.N(missing, "mod") + " (copy not saved). The Manager tries again at the next start."; }
         private static string RestoreFolders(ReplaceEngine engine, List<string> folders)

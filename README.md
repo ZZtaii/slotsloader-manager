@@ -2,10 +2,7 @@
 
 A Windows mod manager with faster search, more utility and safer installs. Currently optimized for Street Fighter 6.
 
-An **experimental Linux / Steam Deck Desktop Mode build** uses the same interface
-through a dedicated Bottles runtime. See the [Linux setup guide](manager/linux/README.md).
-Real Steam Deck and SF6 gameplay acceptance remain volunteer checks; use the
-complete Linux test package and its [validation notes](manager/docs/LINUX-VALIDATION.md).
+An **experimental Linux / Steam Deck build** runs the same interface through Bottles: see the [Linux setup guide](manager/linux/README.md).
 
 ![Slotsloader Manager: the mod library filtered to Cammy, with a mod's preview, author and install options](docs/images/slotsloader-manager.webp)
 
@@ -23,7 +20,6 @@ This repo also includes **Slotsloader**, the SF6 loader that allows mods to be i
 - **Handles mod variants.** Install a few variants of one mod as separate slots, or switch the variants of a bundle on and off.
 - **Gets along with other mod managers.** Use it next to them, or import their presets.
 - **Has an optional Assistant.** Ask it to find, install or explain mods. It runs on Claude by Anthropic with your own API key, and every change waits for your OK.
-- **Has a command line tool.** `Slotsloader CLI.exe` checks mods and manages installs without opening the app.
 
 ## What Slotsloader does (SF6)
 
@@ -50,7 +46,7 @@ When there's an update, a small notice shows up in the app. Nothing installs unt
 
 - **Slotsloader:** Visual Studio 2022 (or Build Tools) with the C++ workload, then run `build.bat`. There's also a Linux cross-build with llvm-mingw in [docs/BUILD-CUSTOM.md](docs/BUILD-CUSTOM.md). Tests are in [tests/README.md](tests/README.md).
 - **Slotsloader Manager:** .NET Framework 4.8 (C# 5, no NuGet). Build with `manager\build.ps1` and test with `manager\test.ps1`. `manager\tools\Package-Release.ps1` builds the release zip with the newest published loader inside.
-- **Linux test package:** after building and testing Manager, use `manager/tools/Package-Linux.ps1` with the tested build, pinned loader and 7-Zip archives, and a validation report. See the [implementation plan](manager/docs/LINUX-IMPLEMENTATION-PLAN.md) and [native checks](manager/linux/README.md#advanced-testing).
+- **Linux package:** `manager/tools/Package-Linux.ps1` packs a tested build; see [native checks](manager/linux/README.md#advanced-testing).
 
 ## Community
 

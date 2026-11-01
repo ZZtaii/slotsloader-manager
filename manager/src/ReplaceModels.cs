@@ -28,7 +28,6 @@ namespace SlotsInstaller
         public bool LooseLoaderConsent;           // asked once before turning the loader on
         public bool SkipLooseLoaderPrompt;        // 2.1.0: "Don't ask again" for installing with the loader off (older files: false)
         public bool RenameCrashReporter = true;
-        public bool SwapRepairs;                  // 1.0.5: off by default; known fixes for character-swap mods (SwapRepairs.cs, SwapRepairFlag)
         public List<string> FluffyRoots = new List<string>();
         internal bool Relocated;                  // StoreLocation was read from a moved Data folder (not serialized)
 
@@ -60,6 +59,8 @@ namespace SlotsInstaller
     {
         public string Format = "sf6-replace-state-v1";
         public int Generation;
+        public string LastMigration;
+        public bool? ArchiveStoreReclaimed; // null before the first pass, false while a pass still needs to finish
         public string GameRoot = "";
         public string Method = "";
         public string StoreRoot = "";
@@ -124,7 +125,9 @@ namespace SlotsInstaller
     {
         public string Id = "", Name = "", SourcePath = "", Kind = "", InstalledUtc = "", Description = "";
         public List<string> SelectedIds = new List<string>();
-        public bool Enabled = true, Test;
+        public bool Enabled = true, Test, PresetLayer;
+        public string ArchiveSha, ArchiveStamp;
+        public long ArchiveSize;
         public List<ModFile> Files = new List<ModFile>();
         public List<string> Notes = new List<string>();
         public string Affects = "";
@@ -133,6 +136,7 @@ namespace SlotsInstaller
     public sealed class ModFile
     {
         public string Path = "", Sha256 = "", Fixes = "";
+        public string ArchiveEntry;
         public long Size;
     }
 
@@ -238,6 +242,8 @@ namespace SlotsInstaller
         internal List<ReplaceConflict> ConflictList = new List<ReplaceConflict>();
         internal List<string> UnknownLoose = new List<string>();     // natives files already in the game folder, not installed by this app
         internal string StagingFolder;
+        internal string ArchiveSha, ArchiveStamp;
+        internal long ArchiveSize;
         internal long Milliseconds;
         internal bool CanInstall { get { return Files.Count > 0 && !Items.Any(i => i.Level == "error"); } }
         internal IEnumerable<string> Errors { get { return Items.Where(i => i.Level == "error").Select(i => i.Text); } }

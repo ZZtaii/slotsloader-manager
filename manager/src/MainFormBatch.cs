@@ -82,7 +82,7 @@ namespace SlotsInstaller
         private Panel batchPanel, detailPanel;
         private Label batchTitle, batchNote, batchSummary;
         private ListView batchList;
-        private FlatButton batchInstallButton, batchDeleteButton, batchCloseButton;
+        private FlatButton batchInstallButton, batchDeleteButton, batchCloseButton, batchUninstallButton;
         private SegmentedChoice batchMode;
         private readonly List<BatchItem> batchItems = new List<BatchItem>();
         private bool batchRunning, selectionQueued, selectionPicking;
@@ -110,14 +110,19 @@ namespace SlotsInstaller
             batchList.Resize += delegate { sizeBatch(); }; dpiLayouts.Add(sizeBatch);
 
             Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 64, BackColor = Palette.Background, Padding = new Padding(10, 6, 8, 5) };
-            FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 444, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 7, 0, 0) };
-            batchInstallButton = Button("Install", true, 150, delegate { RunBatchInstall(); });
-            batchDeleteButton = Button("Delete", false, 140, delegate { RunBatchDelete(); }); batchDeleteButton.Danger = true;
+            FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 510, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 7, 0, 0) };
+            batchInstallButton = Button("Install", true, 154, delegate { RunBatchInstall(); });
+            batchInstallButton.KeyHint = "Space"; batchInstallButton.AccessibleDescription = "Shortcut: Space";
+            batchDeleteButton = Button("Delete", false, 99, delegate { RunBatchDelete(); }); batchDeleteButton.Danger = true;
+            // No Ctrl tap here (MainFormKeys): Ctrl is held to pick the queue's rows.
+            batchUninstallButton = Button("Uninstall", false, 128, UninstallLibrarySelection);
+            batchUninstallButton.Name = "batchUninstallButton"; batchUninstallButton.AccessibleDescription = "Uninstalls the installed copies of the selected mods. Their library sources stay.";
+            batchUninstallButton.Danger = true;
             batchCloseButton = Button("Close", false, 90, delegate { CloseBatch(); });
-            foreach (FlatButton button in new[] { batchInstallButton, batchDeleteButton, batchCloseButton }) { button.Height = 38; button.Margin = new Padding(5, 0, 0, 0); button.Font = Palette.Small; }
+            foreach (FlatButton button in new[] { batchInstallButton, batchUninstallButton, batchDeleteButton, batchCloseButton }) { button.Height = 38; button.Margin = new Padding(5, 0, 0, 0); button.Font = Palette.Small; }
             batchInstallButton.Name = "batchInstallButton"; batchDeleteButton.Name = "batchDeleteButton"; batchCloseButton.Name = "batchCloseButton";
             batchDeleteButton.AccessibleDescription = "Moves the selected mods to the Recycle Bin. Installed copies stay installed.";
-            actions.Controls.Add(batchInstallButton); actions.Controls.Add(batchDeleteButton); actions.Controls.Add(batchCloseButton);
+            actions.Controls.Add(batchInstallButton); actions.Controls.Add(batchUninstallButton); actions.Controls.Add(batchDeleteButton); actions.Controls.Add(batchCloseButton);
             batchSummary = new Label { UseMnemonic = false, Text = "", Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
             footer.Controls.Add(batchSummary); footer.Controls.Add(actions);
 
@@ -256,6 +261,9 @@ namespace SlotsInstaller
             batchTitle.Text = ReplacePlanner.N(n, "mod") + " selected";
             batchInstallButton.Text = "Install " + n; batchDeleteButton.Text = "Delete " + n;
             batchInstallButton.Enabled = batchDeleteButton.Enabled = !busy && n > 0 && !finished;
+            var sources = BatchSourcePaths();
+            batchUninstallButton.Enabled = !busy && !batchRunning && (installed.Any(o => (o.Managed || o.WholeArchive) && sources.Contains(o.SourcePath)) ||
+                gameRows.Any(r => r.Mod != null && sources.Contains(r.Mod.SourcePath)));
             batchCloseButton.Enabled = !busy;
             batchMode.Locked = busy || finished;
             if (!batchRunning && !finished) batchSummary.Text = "Ctrl+click or Shift+click to change the selection";
@@ -309,7 +317,7 @@ namespace SlotsInstaller
                 ctx.UsePak = usePak;
                 ctx.Convert = usePak && engine.LoadState().Mods.Count > 0 && engine.CurrentMethod(engine.LoadState()) == ReplaceMethods.Loose;
                 ctx.Overridden = usePak && engine.Settings.Method == ReplaceMethods.Loose;
-                if (ctx.Overridden) { ReplaceSettings pakSettings = ReplaceSettings.Load(); pakSettings.Method = ReplaceMethods.Pak; engine = new ReplaceEngine(config.GameRoot, AppConfig.DataDir, pakSettings) { FluffyProvider = engine.FluffyProvider }; }
+                if (ctx.Overridden) { ReplaceSettings pakSettings = ReplaceSettings.Load(); pakSettings.Method = ReplaceMethods.Pak; engine = new ReplaceEngine(config.GameRoot, AppConfig.DataDir, pakSettings) { FluffyProvider = engine.FluffyProvider, SourceConfig = config }; }
                 ctx.Engine = engine;
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); ctx.Engine = null; }
@@ -416,16 +424,19 @@ namespace SlotsInstaller
             }
             if (work.Count == 0) { UpdateBatchUi(); batchSummary.Text = "Nothing was deleted."; return; }
             IRecycleBin bin = RecycleBin.Current;
+            var paths = work.Select(i => i.Entry.SourcePath).ToList();
+            bool keepFiles;
+            if (!ArchiveDeleteChoice(paths, out keepFiles)) return;
             DeleteRuns++;
             batchRunning = true; UpdateBatchUi();
-            Work("Moving " + ReplacePlanner.N(work.Count, "mod") + " to the Recycle Bin…", delegate { return DeleteQueue(work, libraries, kept, bin, false); }, delegate(List<KeyValuePair<BatchItem, LibraryDelete.Outcome>> outcomes)
+            Work("Moving " + ReplacePlanner.N(work.Count, "mod") + " to the Recycle Bin…", delegate { return DeleteQueue(work, libraries, kept, bin, false, keepFiles); }, delegate(List<KeyValuePair<BatchItem, LibraryDelete.Outcome>> outcomes)
             {
                 batchRunning = false;
                 BatchDeleteDone(outcomes, libraries, kept, bin);
             });
             if (!busy) { batchRunning = false; UpdateBatchUi(); }
         }
-        private List<KeyValuePair<BatchItem, LibraryDelete.Outcome>> DeleteQueue(List<BatchItem> items, string[] libraries, List<KeyValuePair<string, string>> kept, IRecycleBin bin, bool permanent)
+        private List<KeyValuePair<BatchItem, LibraryDelete.Outcome>> DeleteQueue(List<BatchItem> items, string[] libraries, List<KeyValuePair<string, string>> kept, IRecycleBin bin, bool permanent, bool keepFiles = false)
         {
             var outcomes = new List<KeyValuePair<BatchItem, LibraryDelete.Outcome>>();
             CancellationToken token = OperationContext.Token;
@@ -436,7 +447,11 @@ namespace SlotsInstaller
                 PostToUi(delegate { SetBatchItem(item, BatchStates.Working, permanent ? "Deleting…" : "Moving to the Recycle Bin…"); });
                 OperationContext.Report((permanent ? "Deleting " : "Recycling ") + item.Entry.ShownName(false) + " (" + (i + 1) + "/" + items.Count + ")", i, items.Count);
                 LibraryDelete.Outcome outcome;
-                try { outcome = LibraryDelete.Run(item.Entry.SourcePath, libraries, kept, bin, permanent); }
+                try
+                {
+                    if (keepFiles) Engine().KeepArchivePayloads(new[] { item.Entry.SourcePath });
+                    outcome = LibraryDelete.Run(item.Entry.SourcePath, libraries, kept, bin, permanent);
+                }
                 catch (OperationCanceledException) { outcome = new LibraryDelete.Outcome { Error = "Cancelled" }; }
                 catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); outcome = new LibraryDelete.Outcome { Error = ex.Message }; }
                 outcomes.Add(new KeyValuePair<BatchItem, LibraryDelete.Outcome>(item, outcome));

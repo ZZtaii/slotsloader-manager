@@ -57,12 +57,37 @@ namespace SlotsInstaller
             try { return File.Exists(source) || Directory.Exists(source); }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; return false; }
         }
+        internal string UninstallSelection(List<string> ids, DriftChoice choice, IRecycleBin bin)
+        {
+            if (ids.Count == 0) return "";
+            var trash = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var kept = new List<ReplaceMod>();
+            bool loader = false;
+            string message = Change("Uninstall selection", true, delegate(ReplaceState state)
+            {
+                foreach (string id in ids.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    ReplaceMod mod = Need(state, id);
+                    if (mod.ArchiveSha == null ? !SourceExists(mod.SourcePath) : !ArchiveAvailable(mod) && ResolveArchive(mod) == null)
+                    {
+                        trash.Add(id, id + "-" + Guid.NewGuid().ToString("N"));
+                        kept.Add(mod);
+                    }
+                    loader |= LoaderCostumePak.IsLoaderMod(mod);
+                    state.Mods.Remove(mod);
+                }
+                return state;
+            }, new ChangeOptions { Choice = choice, RecycleSurvivingFiles = true }, null, trash) ?? "";
+            if (loader) message += " " + AfterLoaderRemoved();
+            foreach (ReplaceMod mod in kept) message = RecycleUninstalled(mod, trash[mod.Id], message, bin);
+            return message.Trim();
+        }
         internal string UninstallForGood(string id, DriftChoice choice, IRecycleBin bin)
         {
-            ReplaceMod mod = LoadState().Mods.FirstOrDefault(m => m.Id == id);
-            bool keep = mod != null && !SourceExists(mod.SourcePath);
-            string folder;
-            string message = Uninstall(id, keep, out folder, choice) ?? "";
+            return UninstallSelection(new List<string> { id }, choice, bin);
+        }
+        private static string RecycleUninstalled(ReplaceMod mod, string folder, string message, IRecycleBin bin)
+        {
             if (folder == null || !Directory.Exists(folder)) return message;
             string name = mod.Name;
             if (LinuxPlatform.IsLinux)
@@ -83,7 +108,7 @@ namespace SlotsInstaller
             {
                 long bytes = new DirectoryInfo(folder).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
                 string why = (bin ?? RecycleBin.Current).Unavailable(folder, true, bytes);
-                if (why == null) { (bin ?? RecycleBin.Current).Recycle(folder, true); if (!Directory.Exists(folder)) return (message + " Its source is gone, so its files went to the Recycle Bin.").Trim(); }
+                if (why == null) { (bin ?? RecycleBin.Current).Recycle(folder, true); if (!Directory.Exists(folder)) return (message + " Its source is gone, so its remaining files went to the Recycle Bin.").Trim(); }
                 return (message + " Its source is gone and the Recycle Bin can't take its files (" + (why ?? "Windows left them in place") + "), so they were deleted.").Trim();
             }
             catch (Exception ex)

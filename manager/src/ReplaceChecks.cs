@@ -44,13 +44,31 @@ namespace SlotsInstaller
             };
             try
             {
+                check("migration: verified handoff, saved plan, original priority, rollback and idempotent resume", delegate { ModMigrationChecks.Run(Path.Combine(run,"migration"),probe); });
+                check("migration: compatibility before uninstall and restoring REFramework with loose outfits", delegate { ModMigrationChecks.Compatibility(Path.Combine(run,"migration-ready")); });
+                check("migration (1.0.15 review): renamed old suffixes and repaired files match their download; a kept path goes to the migrated winner", delegate { ModMigrationChecks.Recorded(Path.Combine(run,"migration-recorded")); });
                 check("loader contract (1.0.14): upstream contract 2+ accepted without an extension; missing, old or malformed contracts refused; fork unchanged", delegate { LoaderContractChecks.Run(Path.Combine(run, "loader-contract")); });
-                check("swap repairs (1.0.5 setting, off by default: nothing touched, Slotsloader marker follows it): typed Alex scene signatures, fingerprinted physics recipes, malformed/customized refusals, idempotence and game-aware preparation cache", delegate { SwapRepairChecks.Run(Path.Combine(run, "swap-repairs")); });
+                check("swap repairs (automatic for recognized files, including the Slotsloader marker): typed Alex scene signatures, fingerprinted physics recipes, malformed/customized refusals, idempotence and game-aware preparation cache", delegate { SwapRepairChecks.Run(Path.Combine(run, "swap-repairs")); });
                 check("murmur3 path hash matches the game's index (two real vanilla paths)", HashVectors);
                 check("KPKA TOC parse, lookups, zero/restore rows with verification, refusal of features != 0 and wrong expected bytes", delegate { PakBasics(Path.Combine(run, "pak")); });
                 check("fixers: allow-listed CRC upgrade, stale types reported, mip pitch repair, old tex suffix and path normalization", delegate { Fixers(); });
+                check("Extra outfit health previews repairs and flags unpatched files, then checks the installed bytes", delegate { ExtraPatchHealth(Path.Combine(run, "outfit-health")); });
                 check("swatch repair (2.5.5): an old select-screen swatch file is rebuilt from the game's current one with the mod's colours per ID (extra current IDs kept); current files, other paths and unknown layouts untouched; another outfit, a missing ID or no game file leave it as it is with a warning; extra outfit installs rebuild the copy and its hash", delegate { Swatches(); });
                 check("install -> conflict/priority -> disable -> uninstall restores every PAK and loose file byte for byte (PAK method)", delegate { Lifecycle(Path.Combine(run, "lifecycle")); });
+                check("selected replacements uninstall in one transaction, validate every ID and restore original files", delegate {
+                    var f = Create(Path.Combine(run, "selected-replacements"), false, ReplaceMethods.Pak);
+                    var clean = Snapshot(f.Game);
+                    var a = Install(f, "modA", "Colors"); var b = Install(f, "modB", "Alternative");
+                    var c = Install(f, "modDlc", "DLC");
+                    var before = f.Engine.LoadState();
+                    Refused(delegate { f.Engine.UninstallSelection(new List<string> { b.Id, "missing" }, DriftChoice.Refuse, null); }, "no longer exists");
+                    Require(f.Engine.LoadState().Generation == before.Generation, "stale selection changed state");
+                    f.Engine.UninstallSelection(new List<string> { b.Id, c.Id, b.Id }, DriftChoice.Refuse, null);
+                    var after = f.Engine.LoadState();
+                    Require(after.Generation == before.Generation + 1 && after.Mods.Count == 1 && after.Deployment(V1).Owner == a.Id, "selection changed priority or committed twice");
+                    f.Engine.UninstallForGood(a.Id, DriftChoice.Refuse, null);
+                    SameSnapshot(clean, Snapshot(f.Game), "after selected replacements");
+                });
                 check("DLC PAK entries are invalidated and restored too", delegate { DlcRows(Path.Combine(run, "dlc")); });
                 check("a path inside a patch PAK is refused with the PAK method; no change is made", delegate { PatchBlock(Path.Combine(run, "patch")); });
                 check("PAK mods (2.5.6): a mod's .pak is added as the next patch PAK (a pre-numbered name too); removing or disabling one below another PAK leaves an empty placeholder, at the top it is deleted; Undo and re-enabling fill the placeholder; a number another PAK took meanwhile is never overwritten; the other mod's patch PAK never changes", delegate { PakMods(Path.Combine(run, "pak-mods")); });
@@ -76,10 +94,15 @@ namespace SlotsInstaller
                 check("leftover Test in game record (feature removed in 2.3.0): kept as a normal install, logging keys restored, record deleted, game files unchanged", delegate { LeftoverTest(Path.Combine(run, "testgame"), probe); });
                 check("crash reporter is renamed while replacements are installed and restored after", delegate { CrashReporterRename(Path.Combine(run, "crashreporter")); });
                 check("TOC backup fallback restores only zeroed rows when the PAK layout still matches", delegate { TocFallback(Path.Combine(run, "tocfallback")); });
+                check("Ordered preset import, reimport, rollback, uninstall and ambiguous sources", delegate {
+                    OrderedPatchPaks(Path.Combine(run, "ordered-paks"));
+                    foreach (string method in new[] { ReplaceMethods.Loose, ReplaceMethods.Pak }) OrderedPresetImport(Path.Combine(run, "ordered-" + method), method);
+                });
                 check("Fluffy preset files parse and map to library entries and options", delegate { PresetImport(Path.Combine(run, "preset")); });
                 check("CLI: replace-plan, replace-install (PAK and loose), replace-status, replace-method, replace-uninstall and replace-restore-all on a fixture game", delegate { CommandLineFlow(Path.Combine(run, "cli")); });
                 check("conflicts (2.0.1): same outfit with shared files names the mod with counts, same outfit without shared files stacks, disabled mods, other-area overrides, unknown loose files, an external mod blocks with the lockout (1.0.1); installs never remove other mods", delegate { Conflicts(Path.Combine(run, "conflicts")); });
                 check("recoverable uninstall (2.0.1): the removed replacement is kept and Undo restores files, enabled state and priority byte for byte; test reverts keep nothing", delegate { RecoverableUninstall(Path.Combine(run, "removed")); });
+                check("Archive storage: compaction, rename, library move, ambiguous copies, impostor, recovery, disable, undo and uninstall", delegate { ArchiveStorage(Path.Combine(run, "archive-storage")); });
                 check("automatic-check cache (2.0.1): a re-check of an archive reuses extracted and fixed files, results identical; a changed archive is read again", delegate { CheckCache(Path.Combine(run, "cache")); });
                 // 2.4.2: the 2.0.1 code-review follow-ups (ReviewFollowupChecks.cs)
                 check("state reads (2.4.2): a reader sharing ReadWrite|Delete never blocks a commit; the 2.4.1 read (Read sharing only) held across a commit fails it and rolls back cleanly; 4 threads reading the state, store roots and Recovery during 42 commits never fail", delegate { ReviewFollowupChecks.SharedStateReads(Path.Combine(run, "shared-reads")); });
@@ -292,6 +315,44 @@ namespace SlotsInstaller
             b.AddRange(BitConverter.GetBytes((uint)n)); for (int i = 1; i <= n; i++) b.AddRange(BitConverter.GetBytes((uint)i));
             return b.ToArray();
         }
+        private static void ExtraPatchHealth(string root)
+        {
+            Fixture f = Create(root, true, ReplaceMethods.Loose);
+            string source = f.Mod("Health");
+            string mesh = "natives/stm/product/model/esf/esf009/001/01/esf009_001_01.mesh.230110883";
+            string tex = Path.ChangeExtension(mesh, null).Replace(".mesh", ".tex.241101895");
+            string bad = tex.Replace("_01.tex", "_bad.tex");
+            string swatch = "natives/stm/product/gui/data/selectfighteruidata/data/009/selectfighteruidata009_01.user.2";
+            Put(source, swatch, Swatch(ModFixes.SwatchCrcOld, 1, 0, 0, 0x10, 0x11));
+            Put(source, mesh, Bytes("fixture mesh"));
+            Put(source, tex, Tex(100));
+            Put(source, bad, Bytes("invalid texture header"));
+            var before = Snapshot(source);
+            var pkg = PackageReader.Load(source, "");
+            var selection = Composer.Plan(pkg, Composer.DefaultSelection(pkg));
+            var preview = OutfitPatchReport.Preview(selection, f.Game, "");
+            Require(preview.Errors.Count == 0 && preview.Patches.Any(p => p.Path == tex) &&
+                preview.Warnings.Any(s => s.Contains(bad)) && preview.Other.Contains(mesh), "preview did not distinguish repair, warning and other file");
+            SameSnapshot(before, Snapshot(source), "read-only extra outfit preview");
+            string costumeRoot = Path.Combine(f.Game, "reframework", "costume_mods");
+            var originalReader = Installer.SwatchGameFile;
+            try
+            {
+                Installer.SwatchGameFile = delegate { return Swatch(ModFixes.SwatchCrcCurrent, 1, 4, 0, 0xA0, 0xA1); };
+                Installer.Install(selection, costumeRoot, Characters.ByCode["009"], "Health", "", false);
+            }
+            finally { Installer.SwatchGameFile = originalReader; }
+            var outfit = Installer.ListInstalled(costumeRoot).Single();
+            string installedTex = Safety.Under(outfit.Folder, tex);
+            var first = Installer.CheckInstalledHealth(outfit, costumeRoot);
+            Require(first.Patches.Any(p => p.Path == tex) && first.Errors.Count == 0 && first.Applied.Any(s => s.Contains(swatch)), "installed file check");
+            File.WriteAllBytes(installedTex, Tex(128));
+            File.Delete(Safety.Under(outfit.Folder, bad));
+            var changed = Installer.CheckInstalledHealth(outfit, costumeRoot);
+            Require(changed.Patches.Count == 0 && changed.Unchanged.Contains(tex) && changed.Errors.Any(s => s.Contains("Changed")) &&
+                changed.Errors.Any(s => s.Contains("Missing")), "installed health ignored current bytes or integrity errors");
+        }
+
         private static void Swatches()
         {
             const string path = "natives/STM/Product/GUI/data/selectfighteruidata/data/002/selectfighteruidata002_02.user.2";
@@ -1205,6 +1266,90 @@ namespace SlotsInstaller
             }
         }
 
+        private static void ArchiveStorage(string root)
+        {
+            var f = Create(root, false, ReplaceMethods.Pak);
+            var clean = Snapshot(f.Game);
+            string lib2 = Path.Combine(root, "second"); Directory.CreateDirectory(lib2);
+            f.Engine.SourceConfig = new AppConfig { GameRoot = f.Game, Libraries = new List<string> { f.Mods, lib2 } };
+            string zip = f.Mod("First.zip");
+            System.IO.Compression.ZipFile.CreateFromDirectory(f.Mod("modB"), zip);
+            ReplaceMod mod = Install(f, "First.zip", "First");
+            var file = mod.Files.Single(x => x.Path == V5);
+            string store = f.Engine.StoreFile(f.Engine.LoadState(), mod, file), live = f.Engine.GamePath(V5);
+            Require(mod.ArchiveSha == ReplaceEngine.Sha(zip) && file.ArchiveEntry != null && !File.Exists(store) && ReplaceEngine.Sha(live) == file.Sha256, "active archive file stored twice");
+            var renamed = SourceRename.Run(zip, "Renamed", f.Engine.SourceConfig.Libraries, new List<KeyValuePair<string,string>>(), "", delegate { return f.Engine; });
+            Require(renamed.Done && f.Engine.LoadState().Find(mod.Id).SourcePath == renamed.To, "rename did not follow archive: " + renamed.Error);
+            string moved = Path.Combine(lib2, "Different.zip");
+            File.Move(renamed.To, moved); File.Copy(moved, zip);
+            f.Engine.RelinkArchives();
+            Require(f.Engine.LoadState().Find(mod.Id).SourcePath == renamed.To, "identical twins were silently rebound");
+            // 1.0.15: a repair reads either identical copy (only the relink needs one).
+            File.Delete(live); f.Engine.Reapply();
+            Require(ReplaceEngine.Sha(live) == file.Sha256, "repair from one of two identical copies");
+            File.Delete(zip); System.IO.Compression.ZipFile.CreateFromDirectory(f.Mod("modA"), renamed.To);
+            f.Engine.RelinkArchives();
+            Require(f.Engine.LoadState().Find(mod.Id).SourcePath == moved, "renamed move with an impostor at the old path");
+            File.Delete(live); f.Engine.Reapply();
+            Require(ReplaceEngine.Sha(live) == file.Sha256 && !File.Exists(store), "repair from moved archive");
+            ReplaceEngine.CrashAfterStep = 1;
+            try { f.Engine.SetEnabled(mod.Id, false); } catch (ReplaceEngine.SimulatedCrashException) { } finally { ReplaceEngine.CrashAfterStep = -1; }
+            Require(f.Engine.JournalPending, "crash probe missed journal");
+            f.Engine.Recover(); Require(ReplaceEngine.Sha(live) == file.Sha256, "archive rollback");
+            f.Engine.SetEnabled(mod.Id, false); Require(ReplaceEngine.Sha(store) == file.Sha256 && !File.Exists(live), "disabled recovery file");
+            f.Engine.SetEnabled(mod.Id, true); Require(!File.Exists(store), "enable left duplicate store file");
+            Require(!f.Engine.CanReclaimArchiveStore(f.Engine.LoadState()), "new install offered legacy cleanup");
+            // Older releases held a full copy and did not record archive member paths.
+            var legacy = f.Engine.LoadState(); var old = legacy.Find(mod.Id);
+            old.ArchiveSha = old.ArchiveStamp = null;
+            foreach (ModFile part in old.Files)
+            {
+                part.ArchiveEntry = null;
+                string stored = f.Engine.StoreFile(legacy, old, part); Directory.CreateDirectory(Path.GetDirectoryName(stored));
+                if (!File.Exists(stored)) File.Copy(f.Engine.GamePath(part.Path), stored);
+            }
+            DurableFile.WriteJson(f.Engine.StatePath, legacy);
+            Require(f.Engine.CanReclaimArchiveStore(legacy), "legacy cleanup unavailable");
+            using (var held = File.Open(moved, FileMode.Open, FileAccess.Read, FileShare.None))
+                f.Engine.CompactArchiveStore();
+            Require(f.Engine.LoadState().ArchiveStoreReclaimed == false && f.Engine.CanReclaimArchiveStore(f.Engine.LoadState()), "failed cleanup cannot retry");
+            f.Engine.CompactArchiveStore();
+            var completed = f.Engine.LoadState();
+            Require(completed.ArchiveStoreReclaimed == true && !f.Engine.CanReclaimArchiveStore(completed), "completed cleanup still offered");
+            f.Engine.CompactArchiveStore();
+            Require(f.Engine.LoadState().Generation == completed.Generation, "repeated cleanup changed state");
+            Require(!File.Exists(store) && f.Engine.LoadState().Find(mod.Id).Files.Single(x => x.Path == V5).ArchiveEntry != null, "legacy migration");
+            mod = f.Engine.LoadState().Find(mod.Id);
+            string costumeRoot = Path.Combine(root, "saved-game", "reframework", "costume_mods");
+            Directory.CreateDirectory(costumeRoot);
+            OutfitSetInfo preset = OutfitSetStore.CreatePreset(costumeRoot, "Archive-backed", PresetScope.Replacements, f.Engine);
+            string removed;
+            f.Engine.Uninstall(mod.Id, false, out removed);
+            string last = f.Mod("Another name.zip"); File.Move(moved, last);
+            var result = OutfitSetStore.Restore(costumeRoot, preset, PresetScope.Replacements, f.Engine);
+            Require(result.ReplacementsRestored == 1 && ReplaceEngine.Sha(live) == file.Sha256, "saved preset did not find moved archive: " + String.Join(" ", result.Notes));
+            mod = f.Engine.LoadState().Mods.Single(); store = f.Engine.StoreFile(f.Engine.LoadState(), mod, file);
+            File.Delete(last);
+            File.Delete(live);
+            Refused(delegate { f.Engine.Reapply(); }, "original archive");
+            Require(!File.Exists(live), "wrong archive was used for a repair");
+            File.WriteAllBytes(live, File.ReadAllBytes(Path.Combine(f.Mod("modB"), V5)));
+            f.Engine.Uninstall(mod.Id, true, out removed);
+            ReplaceMod back; f.Engine.RestoreRemoved(removed, out back);
+            Require(ReplaceEngine.Sha(live) == file.Sha256, "restore without source");
+            f.Engine.Uninstall(back.Id, false, out removed);
+            SameSnapshot(clean, Snapshot(f.Game), "archive storage uninstall");
+            System.IO.Compression.ZipFile.CreateFromDirectory(f.Mod("modB"), last);
+            mod = Install(f, Path.GetFileName(last), "Partial");
+            File.Delete(last); File.Delete(live);
+            f.Engine.UninstallForGood(mod.Id, DriftChoice.RestoreOriginal, new CheckRecycleBin());
+            // Manually deleting the last file in a directory can leave its empty parents in place.
+            var afterLoss = Snapshot(f.Game);
+            Require(f.Engine.LoadState().Mods.Count == 0, "missing archive blocked uninstall");
+            SameSnapshot(clean.Where(x => !x.Key.EndsWith("\\")).ToDictionary(x => x.Key, x => x.Value),
+                afterLoss.Where(x => !x.Key.EndsWith("\\")).ToDictionary(x => x.Key, x => x.Value), "original game files after source and live file were lost");
+        }
+
         private static void CheckCache(string root)
         {
             Fixture f = Create(root, false, ReplaceMethods.Pak);
@@ -1323,6 +1468,115 @@ namespace SlotsInstaller
             SameSnapshot(expected, after, "after the CLI cycle (config aside: the loose loader was turned on with --yes)");
             Require(LooseLoader.Read(f.Game, LooseLoader.EnabledKey) == "true", "loader state");
             var settings = ReplaceSettings.Load(); settings.Method = ""; settings.Save();
+        }
+
+        private static void OrderedPresetImport(string root, string method)
+        {
+            Fixture f = Create(root, method == ReplaceMethods.Loose, method);
+            if (method == ReplaceMethods.Loose) Put(f.Game, LooseLoader.ConfigName, Bytes("LooseFileLoader_Enabled=true"));
+            var baseline = Snapshot(f.Game);
+            const string unique = "natives/stm/product/ui/unique.user.2";
+            string lib = Path.Combine(root, "library");
+            foreach (string item in new[] { "Bundle/Main", "Between", "Bundle/Last" })
+            {
+                string name = Path.GetFileName(item);
+                Put(lib, item + "/modinfo.ini", Bytes("name=" + (name == "Between" ? "Main" : name)));
+                Put(lib, item + "/" + V6, Bytes(name));
+                if (name != "Last") Put(lib, item + "/" + V5, Bytes(name));
+                if (name == "Main") Put(lib, item + "/" + unique, Bytes(name));
+            }
+            var library = new List<LibraryEntry> {
+                new LibraryEntry { SourcePath = Path.Combine(lib, "Bundle"), Name = "Bundle", OptionIds = new List<string> { "Main", "Last" } },
+                new LibraryEntry { SourcePath = Path.Combine(lib, "Between"), Name = "Between" } };
+            Func<List<PresetMapping>> mapped = delegate { return FluffyPresets.Group(FluffyPresets.Map(FluffyPresets.Parse("[Main]\nModName=Main\n[Between]\nModName=Main\n[Last]\nModName=Last"), library, "")); };
+            var cfg = new AppConfig { GameRoot = f.Game };
+            Action apply = delegate { PresetInstaller.Install(cfg, f.Engine, mapped()); };
+            Func<string, string> game = path => File.ReadAllText(f.Engine.GamePath(path));
+            var groups = mapped();
+            Require(groups.Count == 2 && groups[0].Sections.Count == 2, "fixture did not resolve interleaved sections");
+            // A late staging error and an interrupted publication must leave earlier layers uninstalled.
+            Put(lib, "Between/modinfo.ini", Bytes("name=Main\n; changed after review"));
+            // 1.0.15: the block fails as a whole and the summary says so (extra outfits would still install).
+            string stale = PresetInstaller.Install(cfg, f.Engine, groups);
+            Require(stale.Contains("replacements, none installed") && f.Engine.LoadState().Mods.Count == 0, "stale source accepted: " + stale);
+            ReplaceEngine.CrashAfterStep = 1;
+            try { apply(); } catch (ReplaceEngine.SimulatedCrashException) { } finally { ReplaceEngine.CrashAfterStep = -1; }
+            Require(f.Engine.JournalPending, "crash fixture missed journal");
+            f.Engine.Recover(); SameSnapshot(baseline, Snapshot(f.Game), "rollback of ordered import");
+            apply();
+            var mods = f.Engine.LoadState().Mods;
+            Require(mods.Count == 3 && mods.Count(m => m.Name == "Main") == 2 && game(V5) == "Between" && game(V6) == "Last" && game(unique) == "Main", "incorrect winners");
+            var health = f.Engine.CheckInstalledFiles(mods[2].Id);
+            Require(health.Any(i => i.Text.StartsWith("Supplied by 'Last'")) && health[0].Text.Contains("supplied by other mods"), "Health did not name the mods that win the overridden files: " + String.Join(" | ", health.Select(i => i.Text)));
+            string outfits = Path.Combine(root, "preset-game", "reframework", "costume_mods"); Directory.CreateDirectory(outfits);
+            OutfitSetInfo saved = OutfitSetStore.CreatePreset(outfits, "Ordered", PresetScope.Replacements, f.Engine);
+            f.Engine.Move(mods[0].Id, 1); f.Engine.SetEnabled(mods[2].Id, false);
+            apply();
+            Require(f.Engine.LoadState().Mods.Select(m => m.Id).SequenceEqual(mods.Select(m => m.Id)) && game(V6) == "Last" && game(unique) == "Main", "reimport changed IDs, order or enabled state");
+            f.Engine.UninstallForGood(mods[0].Id, DriftChoice.Ask, null);
+            Require(game(V6) == "Between" && game(V5) == "Between", "removing final option did not reveal middle mod");
+            f.Engine.UninstallForGood(mods[1].Id, DriftChoice.Ask, null);
+            Require(game(V6) == "Main" && game(V5) == "Main", "removing middle did not reveal base");
+            f.Engine.UninstallForGood(mods[2].Id, DriftChoice.Ask, null);
+            SameSnapshot(baseline, Snapshot(f.Game), "ordered preset full uninstall");
+            // One row per preset entry (1.0.15): leaving out Last makes the middle archive win, with Main below it.
+            var rows = FluffyPresets.Map(FluffyPresets.Parse("[Main]\nModName=Main\n[Between]\nModName=Main\n[Last]\nModName=Last"), library, "");
+            Require(rows.Count == 3 && rows.All(r => r.Entry != null), "preset rows per entry");
+            rows[2].Include = false;
+            PresetInstaller.Install(cfg, f.Engine, rows);
+            Require(f.Engine.LoadState().Mods.Count == 2 && game(V6) == "Between" && game(V5) == "Between" && game(unique) == "Main", "Between must win with Last left out");
+            foreach (ReplaceMod m in f.Engine.LoadState().Mods.ToList()) f.Engine.UninstallForGood(m.Id, DriftChoice.Ask, null);
+            SameSnapshot(baseline, Snapshot(f.Game), "uninstall after a preset with an entry left out");
+            var restored = OutfitSetStore.Restore(outfits, saved, PresetScope.Replacements, f.Engine);
+            Require(restored.ReplacementsRestored == 3 && game(V5) == "Between" && game(V6) == "Last" && game(unique) == "Main", "native list did not restore layer order: " + String.Join(" ", restored.Notes));
+            var twin = Path.Combine(root, "other", "Between");
+            Put(twin, "modinfo.ini", Bytes("name=Main")); Put(twin, V5, Bytes("different"));
+            library.Add(new LibraryEntry { SourcePath = twin, Name = "Between" });
+            for (int i = 0; i < 2; i++) { Require(mapped().Any(m => m.Ambiguous && m.Entry == null && !m.Include && m.Choices.Count == 2), "twin silently selected"); library.Reverse(); }
+            // The review resolves an ambiguous entry with the archive the user picks.
+            var ambiguous = mapped().First(m => m.Ambiguous);
+            FluffyPresets.Resolve(ambiguous, ambiguous.Choices.First(c => c.Entry.SourcePath == twin));
+            Require(ambiguous.Entry.SourcePath == twin && ambiguous.Include && !ambiguous.Ambiguous && ambiguous.Stamp != null, "picked archive not used");
+            // The same download in two libraries is one match.
+            string zipA = Path.Combine(root, "zips-a", "Between.zip"), zipB = Path.Combine(root, "zips-b", "Between.zip");
+            Directory.CreateDirectory(Path.GetDirectoryName(zipA)); Directory.CreateDirectory(Path.GetDirectoryName(zipB));
+            System.IO.Compression.ZipFile.CreateFromDirectory(Path.Combine(lib, "Between"), zipA); File.Copy(zipA, zipB);
+            var copies = new List<LibraryEntry> { new LibraryEntry { SourcePath = zipA, Name = "Between" }, new LibraryEntry { SourcePath = zipB, Name = "Between" } };
+            var one = FluffyPresets.Map(FluffyPresets.Parse("[Between]\nModName=Main"), copies, "");
+            Require(one.Single().Entry != null && !one.Single().Ambiguous, "identical copies were reported as ambiguous: " + one.Single().Message);
+        }
+
+        private static void OrderedPatchPaks(string root)
+        {
+            Fixture f = Create(root, false, ReplaceMethods.Pak);
+            string lib = Path.Combine(root, "Bundle");
+            foreach (string component in new[] { "First", "Second" })
+            {
+                Put(lib, component + "/modinfo.ini", Bytes("name=" + component));
+                PakWriter.WriteFixture(Path.Combine(lib, component, "payload.pak"), new List<KeyValuePair<string, byte[]>> {
+                    new KeyValuePair<string, byte[]>(P1, Bytes(component)) }, 0, 0);
+            }
+            var library = new[] { new LibraryEntry { SourcePath = lib, Name = "Bundle", OptionIds = new List<string> { "First", "Second" } } };
+            foreach (string[] pair in new[] { new[] { "First", "Second" }, new[] { "Second", "First" } })
+            {
+                bool reimport = pair[0] == "Second";
+                if (reimport)
+                {
+                    // Another tool installs an independent PAK after the first import. It keeps #004.
+                    PakWriter.WriteFixture(f.Engine.GamePath(ReplaceEngine.PatchPakName(4)), new List<KeyValuePair<string, byte[]>> {
+                        new KeyValuePair<string, byte[]>(P1, Bytes("Unrelated")) }, 0, 0);
+                }
+                string text = String.Join("\n", pair.Select(c => "[" + c + "]"));
+                var groups = FluffyPresets.Group(FluffyPresets.Map(FluffyPresets.Parse(text), library, ""));
+                PresetInstaller.Install(new AppConfig(), f.Engine, groups);
+                var mods = f.Engine.LoadState().Mods;
+                Require(mods.Count == 2 && mods[0].Name == pair[1] && mods[1].Name == pair[0], "wrong installed PAK order");
+                for (int i = 0; i < 2; i++)
+                {
+                    string path = ReplaceEngine.PatchPakName((reimport ? 5 : 2) + i);
+                    Require(mods[1-i].Files.Single().Path == path && ReplaceEngine.Sha(f.Engine.GamePath(path)) == ReplaceEngine.Sha(Path.Combine(lib, pair[i], "payload.pak")), "wrong patch number or contents");
+                }
+            }
         }
 
         private static void PresetImport(string root)

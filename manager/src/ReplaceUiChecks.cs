@@ -60,6 +60,7 @@ namespace SlotsInstaller
                             try { action(); report.Add("PASS " + name); }
                             catch (Exception ex) { failures++; report.Add("FAIL " + name + ": " + ex); }
                         };
+                        check("Migration wizard previews, pauses, resumes and completes a fixture handoff", delegate { MigrationWizard(Path.Combine(root,"migration")); });
                         check("Ctrl tap listener (2.5.5): registered as soon as the window is built, not on a later handle creation that the real app never has", delegate { Require(ctrlTapAtStart, "the Ctrl tap filter was not registered when the constructor returned"); });
                         check("install-mode toggle: Extra outfit by default, switches the inspector and footer, remembers the last mode", delegate { Toggle(form); });
                         check("INSTALL AS (2.3.0): one joined toggle, the selected half accent-filled with a check, radio-group accessibility, Left/Right keys, the choice remembered across a restart (no '· remembered' hint since 2.3.1), a tool mod forces Replace ('· locked for this mod', reason shown, remembered choice kept) and the next costume returns to it; no Default install mode in Settings", delegate { ModeToggle(form, f, root); });
@@ -99,6 +100,7 @@ namespace SlotsInstaller
                         check("copy not saved (2.4.2): Restore original game files (1.0.1: uninstall keeps no copy) with a store file open in another program says the copy wasn't saved (never 'kept'); the refresh retries and keeps it; Undo puts it back", delegate { TrashWarningInline(form, f); });
                         check("Undo position (2.4.2): after another program installs a mod over the same files, the window's Undo of Restore original game files puts the removed mods back below it", delegate { UndoBelowNewer(form, f); });
                         check("cleanup: Restore original game files leaves no replacement installed (the next suites share Data)", delegate { var e = new ReplaceEngine(f.Game, AppConfig.DataDir, ReplaceSettings.Load()); e.RestoreAll(); Require(e.LoadState().Mods.Count == 0 && !Directory.Exists(Path.Combine(f.Game, "natives")), "cleanup"); });
+                        check("multi-select Uninstall in Mod library and Installed removes both replacements and keeps both sources", delegate { UninstallSelections(form, f, root); });
                         check("game entries left invalidated and Fluffy PAK installs (2.4.2): the banner says \"2 game entries left invalidated by another tool.\" with Repair (compact row, rendered at the device DPI); SF6 or Fluffy running refuses inline; Repair restores both (the Fluffy-owned entry stays) with the result inline and no popup; both Fluffy instances are watched, also with an unreadable Manager record; an invalidate install uninstalls from the Installed page (entry restored) and Undo zeroes it again", delegate { FluffyPakUiChecks.Run(root, probe); });
                         check("replacement method (2.4.1): Automatic installs with the Fluffy PAK method while the loose file loader is off (entries zeroed) and loose when it is on, with no question; an explicit loose setting is respected and the banner converts it (Use PAK method; refused while SF6 runs); another variant of an installed mod is a switch (one record, no warning, priority kept), duplicates collapse with no copy kept (1.0.1), a different mod still warns; Fluffy open does not block loose or tool installs", delegate { AutomaticMethod(root, probe); });
                         form.Close();
@@ -149,6 +151,65 @@ namespace SlotsInstaller
             return new Rectangle(location, control.Size);
         }
         private static IEnumerable<Control> AllControls(Control root) { foreach (Control child in root.Controls) { yield return child; foreach (Control d in AllControls(child)) yield return d; } }
+        private static void MigrationWizard(string root)
+        {
+            var f = ReplaceChecks.Create(root,false,ReplaceMethods.Pak);
+            string setup = Path.Combine(root,"Games","SF6"), lib = Path.Combine(setup,"Mods");
+            string file = "reframework/autorun/example.lua", ini = Path.Combine(setup,"installed.ini");
+            ReplaceChecks.Put(lib,"Example/modinfo.ini",Encoding.UTF8.GetBytes("name=Example"));
+            ReplaceChecks.Put(lib,"Example/"+file,Encoding.UTF8.GetBytes("-- example"));
+            ReplaceChecks.Put(f.Game,file,Encoding.UTF8.GetBytes("-- example"));
+            File.WriteAllText(ini,"[Example]\nfile="+file);
+            f.Engine.FluffyProvider = delegate { return FluffyInstalls.Load(new[] {setup}); };
+            var entries = Library.Scan(new[] {lib},null);
+            Action<Func<bool>> wait = delegate(Func<bool> ready) {
+                var deadline = DateTime.UtcNow.AddSeconds(20);
+                do { Application.DoEvents(); if (ready()) return; Thread.Sleep(15); } while (DateTime.UtcNow < deadline);
+                throw new InvalidOperationException("Migration wizard did not reach the expected state.");
+            };
+            using (var dialog = new MigrationForm(f.Engine,entries,null))
+            {
+                dialog.Opacity = 0; dialog.Show();
+                var start = Get<FlatButton>(dialog,"action");
+                wait(delegate { return Get<ListBox>(dialog,"rows").Items.Count == 1 && start.Enabled; });
+                using (var image = new Bitmap(dialog.Width,dialog.Height))
+                {
+                    dialog.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));
+                    image.Save(Path.Combine(root,"migration-preview.png"));
+                }
+                Require(Get<MigrationSteps>(dialog,"steps").Step == 0 && !Get<FlatButton>(dialog,"forget").Visible,"step 1 shows Review without Forget plan");
+                start.PerformClick();
+                wait(delegate { return start.Text == "Check now" && start.Enabled; });
+                Require(Get<MigrationSteps>(dialog,"steps").Step == 1 && Get<Label>(dialog,"title").Text == "Your setup is saved","saved plan moves to step 2");
+                dialog.Close();
+            }
+            using (var dialog = new MigrationForm(f.Engine,entries,null))
+            {
+                dialog.Opacity = 0; dialog.Show();
+                var next = Get<FlatButton>(dialog,"action");
+                wait(delegate { return next.Enabled && next.Text == "Check now"; });
+                var forget = Get<FlatButton>(dialog,"forget"); var close = Get<FlatButton>(dialog,"close");
+                forget.PerformClick(); Require(next.Text == "Forget plan" && next.Danger && close.Text == "Keep plan" && !forget.Visible,"forget needs a deliberate confirmation");
+                close.PerformClick(); Require(next.Text == "Check now" && next.Primary && close.Text == "Close","Keep plan returns to waiting");
+                File.Delete(ini); File.Delete(f.Engine.GamePath(file));
+                wait(delegate { return next.Enabled && dialog.Completed; });
+                Require(next.Text == "View installed mods" && f.Engine.LoadState().Mods.Count == 1 && Get<MigrationSteps>(dialog,"steps").Step == 3,"missing completed migration");
+                dialog.Close();
+            }
+            // A damaged saved plan is never a dead end: Forget plan deletes it without reading it.
+            File.WriteAllText(ModMigration.Pending(f.Engine),"{ damaged");
+            using (var dialog = new MigrationForm(f.Engine,entries,null))
+            {
+                dialog.Opacity = 0; dialog.Show();
+                var next = Get<FlatButton>(dialog,"action"); var forget = Get<FlatButton>(dialog,"forget");
+                wait(delegate { return next.Enabled && forget.Visible; });
+                Require(Get<Label>(dialog,"title").Text == "Can't read the saved migration plan","damaged plan title: " + Get<Label>(dialog,"title").Text);
+                forget.PerformClick(); next.PerformClick();
+                wait(delegate { return !File.Exists(ModMigration.Pending(f.Engine)); });
+                dialog.Close();
+            }
+        }
+
         private static void Render(MainForm form, string file)
         {
             using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(file, ImageFormat.Png); }
@@ -501,10 +562,64 @@ namespace SlotsInstaller
             FlatButton remove = Get<FlatButton>(form, "removeInstalledButton");
             Require(remove.Visible && !remove.Enabled && remove.AccessibleDescription == "Uninstall it in the external mod manager." && !Get<FlatButton>(form, "toggleInstalledButton").Visible, "Fluffy PAK row: Uninstall must be shown disabled with the reason");
             pick(r => r.Mod != null);
-            Require(Get<FlatButton>(form, "toggleInstalledButton").Text == "Disable" && Get<FlatButton>(form, "removeInstalledButton").Visible && Get<FlatButton>(form, "moveUpButton").Visible && !Get<FlatButton>(form, "moveUpButton").Enabled, "replacement actions");
+            var action = Get<FlatButton>(form, "toggleInstalledButton");
+            Require(action.Text == "Health" && action.Enabled && remove.Visible && Get<FlatButton>(form, "moveUpButton").Visible && !Get<FlatButton>(form, "moveUpButton").Enabled, "replacement actions");
+            Require(!Get<Panel>(form, "installedActions").Controls.Cast<Control>().Any(c => c.Text.StartsWith("Reapply")), "per-mod Reapply action");
+            var engine = FormEngine(f);
+            ReplaceMod mod = state.Mods.Single();
+            string target = engine.GamePath(mod.Files.First().Path);
+            byte[] original = File.ReadAllBytes(target);
+            try
+            {
+                byte[] changed = (byte[])original.Clone(); changed[0] ^= 1; File.WriteAllBytes(target, changed);
+                string reportText = "";
+                using (var close = new System.Windows.Forms.Timer { Interval = 25 })
+                {
+                    close.Tick += delegate {
+                        Form dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(w => w.Modal && w.Owner == form);
+                        if (dialog == null) return;
+                        reportText = String.Join(" ", AllControls(dialog).Select(c => c.Text));
+                        dialog.Close();
+                    };
+                    close.Start(); action.PerformClick(); WaitIdle(form);
+                }
+                Require(reportText.Contains("Changed · " + mod.Files.First().Path) && engine.LoadState().Find(mod.Id).Enabled && File.ReadAllBytes(target).SequenceEqual(changed), "Health must report changed bytes without changing the mod");
+                File.Delete(target);
+                Require(engine.CheckInstalledFiles(mod.Id).Any(i => i.Text == "Missing · " + mod.Files.First().Path), "missing file unreported");
+            }
+            finally { File.WriteAllBytes(target, original); }
             Require(Get<ChipStrip>(form, "installedChips").Chips.Any(c => c.Text == "#1") && Get<ChipStrip>(form, "installedChips").Chips.Any(c => c.Text == "Enabled"), "replacement chips");
             }
             finally { File.WriteAllText(ini, saved); Kind(form, "All"); Call(form, "RefreshInstalled", (string)null); WaitIdle(form); }
+            var restoredEngine = FormEngine(f);
+            string id = state.Mods.Single().Id;
+            restoredEngine.SetEnabled(id, false);
+            try
+            {
+                Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                foreach (ListViewItem item in Get<ListView>(form, "installedList").Items)
+                {
+                    var row = item.Tag as GameModRow;
+                    item.Selected = row != null && row.Mod != null && row.Mod.Id == id;
+                }
+                Application.DoEvents();
+                var enable = Get<FlatButton>(form, "toggleInstalledButton");
+                Require(enable.Enabled && enable.Text == "Enable", "disabled replacement lost its Enable action");
+                enable.PerformClick(); WaitIdle(form);
+                Require(restoredEngine.LoadState().Find(id).Enabled, "Enable did not restore the replacement");
+                // Health took the toggle's place; Disable is its own action, with Undo.
+                foreach (ListViewItem item in Get<ListView>(form, "installedList").Items)
+                {
+                    var row = item.Tag as GameModRow;
+                    item.Selected = row != null && row.Mod != null && row.Mod.Id == id;
+                }
+                Application.DoEvents(); Call(form, "ShowInstalledSelection");
+                var disable = Get<FlatButton>(form, "disableInstalledButton");
+                Require(disable.Visible && disable.Enabled && disable.Text == "Disable" && enable.Text == "Health", "enabled replacement actions: " + disable.Text + " / " + enable.Text);
+                disable.PerformClick(); WaitIdle(form);
+                Require(!restoredEngine.LoadState().Find(id).Enabled && form.UndoAvailable, "Disable did not disable the replacement with Undo");
+            }
+            finally { if (!restoredEngine.LoadState().Find(id).Enabled) restoredEngine.SetEnabled(id, true); }
         }
 
         private static void Banner(MainForm form, ReplaceChecks.Fixture f)
@@ -603,6 +718,62 @@ namespace SlotsInstaller
             Require(!list.Items.Cast<ListViewItem>().Any(i => i.Tag is GameModRow && ((GameModRow)i.Tag).Mod != null), "row still listed");
         }
 
+        private static void UninstallSelections(MainForm form, ReplaceChecks.Fixture f, string root)
+        {
+            var engine = FormEngine(f);
+            var originalEngine = f.Engine;
+            f.Engine = engine;
+            try
+            {
+                foreach (bool library in new[] { true, false })
+                {
+                    var clean = ReplaceChecks.Snapshot(f.Game);
+                    var linkedExtras = Installer.ListInstalled(new AppConfig { GameRoot = f.Game }.CostumeRoot)
+                        .Where(o => o.SourcePath == f.Mod("modA") || o.SourcePath == f.Mod("modB")).ToList();
+                    if (library)
+                        foreach (var outfit in linkedExtras)
+                        {
+                            string prefix = outfit.Folder.Substring(f.Game.Length + 1).TrimEnd('\\') + "\\";
+                            foreach (string key in clean.Keys.Where(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray()) clean.Remove(key);
+                        }
+                    ReplaceChecks.Install(f, "modA", "Cammy Colors");
+                    ReplaceChecks.Install(f, "modB", "Cammy Alternative");
+                    Call(form, "ShowPage", Get<Panel>(form, library ? "libraryPage" : "installedPage"));
+                    Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                    if (library)
+                    {
+                        var entries = new[] { "modA", "modB" }.Select(name => new LibraryEntry { SourcePath = f.Mod(name), Name = name, Kind = "Folder" }).ToList();
+                        var list = Get<ListView>(form, "modList");
+                        list.Items.Clear();
+                        foreach (var entry in entries) list.Items.Add(new ListViewItem(entry.Name) { Tag = entry });
+                        form.SelectLibraryEntries(entries);
+                    }
+                    else
+                    {
+                        Kind(form, "All");
+                        var list = Get<ListView>(form, "installedList");
+                        foreach (ListViewItem row in list.Items) row.Selected = row.Tag is GameModRow && ((GameModRow)row.Tag).Mod != null;
+                        Call(form, "ShowInstalledSelection");
+                    }
+                    Application.DoEvents();
+                    var button = Get<FlatButton>(form, library ? "batchUninstallButton" : "removeInstalledButton");
+                    Require(button.Visible && button.Enabled, "uninstall selection unavailable on " + (library ? "library" : "installed"));
+                    if (library)
+                    {
+                        // 1.0.15: Ctrl is held to pick the queue's rows, so a lone tap never uninstalls the selection.
+                        int taps = form.CtrlUninstalls;
+                        TapCtrl(form, Get<ListView>(form, "modList")); WaitIdle(form);
+                        Require(form.CtrlUninstalls == taps && engine.LoadState().Mods.Count == 2 && String.IsNullOrEmpty(button.KeyHint), "a Ctrl tap under the library queue uninstalled the selection");
+                    }
+                    Render(form, Path.Combine(root, library ? "library-uninstall.png" : "installed-uninstall.png"));
+                    button.PerformClick(); WaitIdle(form);
+                    Require(engine.LoadState().Mods.Count == 0 && Directory.Exists(f.Mod("modA")) && Directory.Exists(f.Mod("modB")), "selection or sources after uninstall");
+                    ReplaceChecks.SameSnapshot(clean, ReplaceChecks.Snapshot(f.Game), "after uninstall selection");
+                }
+            }
+            finally { f.Engine = originalEngine; }
+        }
+
         private static void LibraryReplacementUninstall(MainForm form, ReplaceChecks.Fixture f, FakeProcessProbe probe, Dictionary<string, string> clean)
         {
             ReplaceEngine engine = FormEngine(f);
@@ -611,7 +782,9 @@ namespace SlotsInstaller
             Call(form, "InstallCurrent"); WaitReview(form);
             ReplaceMod mod = engine.LoadState().Mods.Single();
             ListView list = Get<ListView>(form, "modList"); ContextMenuStrip menu = list.ContextMenuStrip;
-            var outfitItem = (ToolStripMenuItem)menu.Items[4]; var replacementItem = (ToolStripMenuItem)menu.Items[5];   // 1.0.5: Rename is item 2
+            // The uninstall items follow the menu's first separator (Open, Open in Explorer, Rename, Edit bundle… come before it).
+            int uninstalls = menu.Items.IndexOf(menu.Items.OfType<ToolStripSeparator>().First()) + 1;
+            var outfitItem = (ToolStripMenuItem)menu.Items[uninstalls]; var replacementItem = (ToolStripMenuItem)menu.Items[uninstalls + 1];
             FlatButton button = Get<FlatButton>(form, "libraryUninstallButton");
 
 
@@ -684,7 +857,8 @@ namespace SlotsInstaller
                     Require(label != null && page.ClientRectangle.Contains(BoundsIn(label, page)), "caption missing or clipped: " + caption + " at " + logical);
                 }
                 Require(!AllControls(panel).OfType<Label>().Any(l => l.Text == "Default install mode") && !AllControls(panel).OfType<ComboBox>().Any(c => c.Items.Cast<object>().Any(i => Convert.ToString(i).Contains("Extra outfit"))), "Settings still shows Default install mode at " + logical);
-                foreach (Button b in AllControls(panel).OfType<Button>()) Require(b.Parent.ClientRectangle.Contains(b.Bounds) && page.ClientRectangle.Contains(BoundsIn(b, page)), "button clipped: " + b.Text + " at " + logical);
+                Require(Get<FlatButton>(form,"migrateModsButton").Visible == MainForm.MigrationOffered, "migration button shown " + Get<FlatButton>(form,"migrateModsButton").Visible + ", offered " + MainForm.MigrationOffered);
+                foreach (Button b in AllControls(panel).OfType<Button>().Where(x => x.Visible)) Require(b.Parent.ClientRectangle.Contains(b.Bounds) && page.ClientRectangle.Contains(BoundsIn(b, page)), "button clipped: " + b.Text + " at " + logical);
                 Require(Get<Label>(form, "settingsFluffyStatus").Text.Contains("0 mods installed by an external mod manager"), "Fluffy summary (the fixture's external manager is empty since 1.0.1): " + Get<Label>(form, "settingsFluffyStatus").Text);
                 Require(Get<Label>(form, "settingsMethodStatus").Text.Contains("PAK method"), "method status: " + Get<Label>(form, "settingsMethodStatus").Text);
                 Render(form, Path.Combine(root, "settings-replace-" + logical.Width + "x" + logical.Height + "-" + form.DeviceDpi + ".png"));

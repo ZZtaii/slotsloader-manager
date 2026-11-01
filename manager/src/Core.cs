@@ -490,7 +490,7 @@ namespace SlotsInstaller
         }
         internal static void SaveIndex() { SaveIdentityCache(); }
         // The library folders' mods with their file stats only (no archive is opened).
-        private static List<LibraryEntry> ListEntries(IEnumerable<string> libraries)
+        internal static List<LibraryEntry> ListEntries(IEnumerable<string> libraries)
         {
             var result = new List<LibraryEntry>(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var seenLibraries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -907,6 +907,7 @@ namespace SlotsInstaller
         public Dictionary<string,string> Sha256=new Dictionary<string,string>();
         // 1.0.6: parts added from other mods (InstallerParts.cs); null or empty = none. Older Managers ignore the field.
         public List<PartGraft> Parts;
+        public Dictionary<string,string> RebuiltSwatches;
     }
     public static partial class Installer
     {
@@ -960,9 +961,10 @@ namespace SlotsInstaller
                     if (String.Equals(oldManifest.SourcePath,fresh.SourcePath,StringComparison.OrdinalIgnoreCase)) keptParts=ReapplyParts(oldManifest,stage,hashes,transaction,sevenZipPath,droppedParts);
                     else droppedParts.AddRange(oldManifest.Parts.Select(g=>GraftText(g)+" (another mod fills the outfit now)"));
                 }
-                int swatchFixes=FixSwatches(stage,hashes,root);   // 2.5.5: outdated select-screen swatches (ModFixes.UpgradeSwatches)
+                var rebuiltSwatches = new Dictionary<string,string>();
+                int swatchFixes=FixSwatches(stage,hashes,root,rebuiltSwatches);   // 2.5.5: outdated select-screen swatches (ModFixes.UpgradeSwatches)
                 var manifest=new InstallManifest {Id=oldManifest==null ? Guid.NewGuid().ToString("N") : oldManifest.Id,Name=outfitName,Character=character,SourcePath=fresh.SourcePath,CreatedUtc=DateTime.UtcNow.ToString("o"),SelectedIds=current.Layers.Select(c=>c.Id).ToList()};
-                manifest.Sha256=hashes; if (keptParts.Count>0) manifest.Parts=keptParts;
+                manifest.Sha256=hashes; if (rebuiltSwatches.Count > 0) manifest.RebuiltSwatches=rebuiltSwatches; if (keptParts.Count>0) manifest.Parts=keptParts;
                 File.WriteAllText(Path.Combine(stage,"modinfo.ini"),"name="+outfitName+"\r\nauthor="+CleanMetadata(String.Join(", ",current.Layers.Select(c=>c.Author).Where(s=>!String.IsNullOrWhiteSpace(s)).Distinct()))+"\r\ndescription="+CleanMetadata("Composed with Slotsloader Manager. "+String.Join(" + ",current.Layers.Select(c=>c.Name)))+"\r\nversion=1.0\r\n",new UTF8Encoding(false));
                 Json.Write(Path.Combine(stage,ManifestName),manifest);
                 OperationContext.ThrowIfCancellationRequested();
@@ -1105,6 +1107,40 @@ namespace SlotsInstaller
             OutfitHistory.Changed(HistoryKinds.Uninstall,outfit,null);   // 2.4.1 history
             return dst;
         }
+        internal static OutfitPatchReport CheckInstalledHealth(InstalledOutfit outfit, string costumeRoot)
+        {
+            var manifest = ValidateOutfit(outfit, ValidateRoot(costumeRoot));
+            var health = OutfitPatchReport.Installed(outfit, manifest, Path.GetDirectoryName(Path.GetDirectoryName(costumeRoot)));
+            var issues = new List<string>();
+            int checkedCount = 0;
+            foreach (var file in manifest.Sha256)
+            {
+                OperationContext.ThrowIfCancellationRequested();
+                string path = Safety.Under(outfit.Folder, Safety.ArchivePath(file.Key));
+                try
+                {
+                    Safety.NoReparseChain(path);
+                    string actual = ReplaceEngine.Sha(path), recorded;
+                    if (!String.Equals(actual, file.Value, StringComparison.OrdinalIgnoreCase))
+                        issues.Add("Changed · " + file.Key);
+                    else if (manifest.RebuiltSwatches != null && manifest.RebuiltSwatches.TryGetValue(file.Key, out recorded) && actual == recorded)
+                    {
+                        health.Applied.Add(file.Key + " · Uses the rebuilt select-screen colours.");
+                        health.Unchanged.Remove(file.Key);
+                    }
+                }
+                catch (FileNotFoundException) { issues.Add("Missing · " + file.Key); }
+                catch (DirectoryNotFoundException) { issues.Add("Missing · " + file.Key); }
+                catch (UnauthorizedAccessException) { issues.Add("Could not read · " + file.Key); }
+                catch (IOException) { issues.Add("Could not read · " + file.Key); }
+                OperationContext.Report("Checking installed files", ++checkedCount, manifest.Sha256.Count);
+            }
+            string summary = "Files matching the install record · " + (checkedCount - issues.Count) + " of " + checkedCount;
+            health.Integrity = summary;
+            health.Errors.AddRange(issues);
+            return health;
+        }
+
         private static InstallManifest ValidateOutfit(InstalledOutfit o,string root)
         {
             if (!o.Managed) throw new IOException("This outfit was installed manually, so the Manager can't change it.");
@@ -1174,7 +1210,7 @@ namespace SlotsInstaller
         // 2.5.5: an extra outfit's copied swatch files in the older layout are rebuilt from the game's current file
         // (<game>\reframework\costume_mods: the game is two folders up). The recorded hashes follow; the rest is untouched.
         internal static Func<string,byte[]> SwatchGameFile;   // tests: the game's current swatch files
-        internal static int FixSwatches(string stage,Dictionary<string,string> hashes,string costumeRoot)
+        internal static int FixSwatches(string stage,Dictionary<string,string> hashes,string costumeRoot,Dictionary<string,string> rebuilt=null)
         {
             var swatches=hashes.Keys.Where(k=>ModFixes.SwatchPath.IsMatch(ModFixes.NormalizeNativePath(k))).ToList();
             if (swatches.Count==0) return 0;
@@ -1188,7 +1224,7 @@ namespace SlotsInstaller
                 string file=Safety.Under(stage,key); byte[] data=File.ReadAllBytes(file);
                 FixResult fix=ModFixes.UpgradeSwatches(ref data,reference.ReadGameFile(ModFixes.NormalizeNativePath(key)));
                 if (fix==null || !fix.Changed) { if (fix!=null) Program.LogLine(key+": "+fix.Message); continue; }
-                File.WriteAllBytes(file,data); hashes[key]=ReplaceEngine.Sha(data); fixedFiles++;
+                File.WriteAllBytes(file,data); hashes[key]=ReplaceEngine.Sha(data); if (rebuilt!=null) rebuilt[key]=hashes[key]; fixedFiles++;
             }
             return fixedFiles;
         }

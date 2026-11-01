@@ -37,6 +37,17 @@ Read this before changing layout, navigation, option selection, previews, or scr
 
 These cover the custom screens. **Edit options** loads a managed outfit back into the existing Options view; it is not another editor window. Archive/executable pickers and folder browsers are standard Windows dialogs. Since 2.4.1 there are no confirmations for recoverable actions (they act at once with Undo) and errors are inline; the few remaining questions (permanent deletes, another tool's changes) use the themed message box (2.0.3; standard MessageBoxes before). A successful install uses a green checked status line rather than a popup. Taking screenshots does not require installing, disabling, removing, or replacing an outfit.
 
+## Unreleased: migrate installed mods, 2026-11-01
+
+Source: [MigrationForm.cs](../src/MigrationForm.cs) (the window), [ModMigration.cs](../src/ModMigration.cs) (the plan). Checks: `--replace-check` ("migration: …"), `--replace-ui-check` ("Migration wizard previews, pauses, resumes and completes a fixture handoff").
+
+- **Where.** Settings → Game files & replacements → External mod manager: **Migrate installed mods…** beside Import external preset (the two wrap onto two lines in a narrow column). Enabled while the external mod manager lists mods; reads **Resume migration…** while a plan is saved.
+- **Window** (840×580, min 760×480, modal, Esc = Close). A step strip (Review, Uninstall in your other manager, Install here: done steps green with ✓, the current one accent), a bold title and a muted status line (red for errors), the list, the details under a thin rule, and the buttons: secondary on the left (**Locate archive…**, **Locate folder…** for a row that can be fixed; **Forget plan…** while waiting), **Close** and the primary action on the right.
+- **Rows.** "n.  Name" in install order (a later row wins shared files) and a state at the right: **Ready** (green), **Needs attention** (accent: not found, several downloads, or no option with exactly the installed files), **Can't migrate** (red: numbered patch PAK or another install method), **Saved** while waiting, **✓ Moved** when done. Details: the problem and how to fix it, or Source and Option, then "Shared files and the mod that wins each:" and a line when a later mod covers this one.
+- **Steps.** Review: "Review the mods to move here"; **Start migration** (enabled when every row is Ready) checks each mod with progress, then "Your setup is saved" with "Open your other mod manager, choose Uninstall all mods for Street Fighter 6, then close it. This window continues on its own." The window polls every 1.8 s and shows what it waits for (close SF6, close the other manager, its list being saved). Install here: "Installing your mods here", then "Migration complete" and **View installed mods** (opens Installed). An error pauses ("Migration paused", **Retry migration**); before the plan is saved it reads "Not ready to migrate yet".
+- **Forget plan…** asks in place: "Forget this migration plan?", **Keep plan** / **Forget plan** (danger). A plan file that can't be read: "Can't read the saved migration plan", with Forget plan… and Try again.
+- When the migration completes, the external manager's `Mods` folder is added to the mod libraries if it isn't one.
+
 ## Unreleased: tours, 2026-10-27
 
 Source: [Tours.cs](../src/Tours.cs) (the card and its layers), [MainFormTours.cs](../src/MainFormTours.cs) (the steps and when they run). Check: `--polish-check` ("tours (1.0.15)"), which saves `tour-<library|installed|settings>-<n>-<dpi>.png`.

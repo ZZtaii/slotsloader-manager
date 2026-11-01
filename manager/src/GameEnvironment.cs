@@ -131,13 +131,13 @@ namespace SlotsInstaller
 
         // Fluffy rewrites installed.ini through installed.ini.new: a read may meet the file locked or absent for
         // a moment. Shared read with a few retries; absent means no mods.
-        internal static byte[] ReadShared(string path)
+        internal static byte[] ReadShared(string path, bool verifyAccess = false)
         {
             for (int attempt = 0; ; attempt++)
             {
                 try
                 {
-                    if (!File.Exists(path)) return null;
+                    if (!verifyAccess && !File.Exists(path)) return null;
                     using (var s = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                     using (var ms = new MemoryStream()) { s.CopyTo(ms); return ms.ToArray(); }
                 }
@@ -204,17 +204,28 @@ namespace SlotsInstaller
             return new UTF8Encoding(false).GetString(bytes, skip, bytes.Length - skip);
         }
 
-        internal static List<FluffyMod> Parse(string text, string root)
+        internal static List<FluffyMod> Parse(string text, string root, bool strict = false)
         {
             var mods = new List<FluffyMod>(); FluffyMod current = null;
             foreach (string raw in (text ?? "").Replace("\r", "").Split('\n'))
             {
                 string line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith(";")) continue;
-                if (line.StartsWith("[") && line.EndsWith("]")) { current = new FluffyMod { Section = line.Substring(1, line.Length - 2), Root = root, Index = mods.Count }; current.Name = current.Section; mods.Add(current); continue; }
-                if (current == null) continue;
-                int eq = line.IndexOf('='); if (eq < 1) continue;
+                if (line.StartsWith("[") && line.EndsWith("]"))
+                {
+                    string section = line.Substring(1,line.Length-2);
+                    if (strict && String.IsNullOrWhiteSpace(section)) throw new IOException("The installed mod list has an empty section in " + root + ".");
+                    current = new FluffyMod { Section=section, Name=section, Root=root, Index=mods.Count };
+                    mods.Add(current);
+                    continue;
+                }
+                int eq = line.IndexOf('=');
+                if (strict && (line.StartsWith("[") || current == null || eq < 1))
+                    throw new IOException("The installed mod list is unreadable in " + root + ". Check this line before migrating: " + line);
+                if (current == null || eq < 1) continue;
                 string key = line.Substring(0, eq).Trim(), value = line.Substring(eq + 1).Trim();
+                if (strict && key.Equals("file",StringComparison.OrdinalIgnoreCase) && value.Length == 0)
+                    throw new IOException("The installed mod list has an empty file record in [" + current.Section + "].");
                 if (key.Equals("ModName", StringComparison.OrdinalIgnoreCase) && value.Length > 0) current.Name = value;
                 else if (key.Equals("installtype", StringComparison.OrdinalIgnoreCase)) current.InstallType = value;
                 else if (key.Equals("ModID_v1", StringComparison.OrdinalIgnoreCase)) current.ModId = value;

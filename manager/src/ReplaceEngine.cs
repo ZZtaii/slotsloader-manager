@@ -77,6 +77,7 @@ namespace SlotsInstaller
     {
         internal readonly string GameRoot, DataDir;
         internal readonly ReplaceSettings Settings;
+        internal AppConfig SourceConfig;
         internal Func<FluffyInstalls> FluffyProvider;
         // Test hooks: simulate a crash after N completed steps (no in-process rollback).
         internal static int CrashAfterStep = -1;
@@ -93,6 +94,7 @@ namespace SlotsInstaller
         {
             var settings = ReplaceSettings.Load();
             var engine = new ReplaceEngine(config.GameRoot, AppConfig.DataDir, settings);
+            engine.SourceConfig = config;
             engine.FluffyProvider = delegate { return FluffyInstalls.Load(FluffyInstalls.DetectRoots(config.Libraries, settings.FluffyRoots)); };
             return engine;
         }
@@ -605,6 +607,12 @@ namespace SlotsInstaller
                 using (InstallMetrics.Measure("reconcile path safety")) Safety.NoReparseChain(full);
                 string actual;
                 using (InstallMetrics.Measure("reconcile current SHA", InstallMetrics.Enabled && File.Exists(full) ? new FileInfo(full).Length : 0)) actual = CurrentSha(path, full); // empty placeholder counts as no file
+                string expected;
+                if (options.MigrationOriginals != null && options.MigrationOriginals.TryGetValue(path,out expected) && actual != expected)
+                {
+                    Cleanup(journal.CreatedPaths);
+                    throw new IOException("The original game file changed during migration: " + path);
+                }
                 OriginalBackup original = originals.FirstOrDefault(o => String.Equals(o.Path, path, StringComparison.OrdinalIgnoreCase));
                 DriftChoice choice = options.Choice;
                 string beforeSource = null;
@@ -614,7 +622,9 @@ namespace SlotsInstaller
                 ReleasedFile rel = current.Release(path);
                 if (rel != null)
                 {
-                    bool retake = wanted && options.Choice == DriftChoice.Repair && fluffy.Owner(path) == null && !IsPatchPakPath(path);   // 1.0.1: never over another tool's PAK
+                    // 1.0.15: a migrated layer takes the path back like Reapply: it won it in the other manager.
+                    bool retakeFor = wanted && options.RetakeReleasedFor != null && options.RetakeReleasedFor.Contains(want.Key.Id);
+                    bool retake = wanted && (options.Choice == DriftChoice.Repair || retakeFor) && fluffy.Owner(path) == null && !IsPatchPakPath(path);   // 1.0.1: never over another tool's PAK
                     bool askedOriginal = options.RestoreReleased != null && options.RestoreReleased.Contains(path);
                     bool restore = !wanted && rel.Original != null && (askedOriginal || (options.IncludeReleased && options.Choice == DriftChoice.RestoreOriginal));
                     if (!wanted && rel.Original != null && options.IncludeReleased && options.Choice == DriftChoice.Ask && actual != rel.Original.Sha256 && !askedOriginal)
@@ -651,8 +661,8 @@ namespace SlotsInstaller
                         {
                             string backup = Path.Combine(BackupDir, Guid.NewGuid().ToString("N") + ".bin");
                             Directory.CreateDirectory(BackupDir); File.Copy(full, backup);
-                            if (Sha(backup) != actual) throw new IOException("Could not back up " + path + " exactly.");
                             journal.CreatedPaths.Add(backup);
+                            if (Sha(backup) != actual) { Cleanup(journal.CreatedPaths); throw new IOException("Could not back up " + path + " exactly."); }
                             original = new OriginalBackup { Path = path, Backup = backup, Sha256 = actual, Size = new FileInfo(full).Length };
                             originals.Add(original); beforeSource = backup;
                         }
@@ -794,7 +804,10 @@ namespace SlotsInstaller
         private sealed class ChangeOptions
         {
             internal DriftChoice Choice = DriftChoice.Refuse;
+            internal Dictionary<string,string> MigrationOriginals;
+            internal HashSet<string> RetakeReleasedFor;   // mod IDs whose files take back paths kept with "Keep current file"
             internal HashSet<string> RestoreReleased;   // "Restore original game file" for these kept paths
+            internal bool RecycleSurvivingFiles;
             internal bool IncludeReleased;              // restore-all: kept files are part of the question
         }
 
@@ -869,6 +882,12 @@ namespace SlotsInstaller
                     }
                     messages.Add("Changed while SF6 runs: switch outfits or reload the match to load the new files.");
                 }
+                try { PrepareArchivePayloads(current, next, journal, trashFolders, options.RecycleSurvivingFiles); }
+                catch
+                {
+                    foreach (string created in journal.CreatedPaths) DeleteCreated(created);
+                    throw;
+                }
                 foreach (ReplaceMod gone in current.Mods.Where(m => next.Find(m.Id) == null))
                 {
                     string storeDir = Safety.Under(StoreRoot(current), gone.Id), trash;
@@ -907,20 +926,9 @@ namespace SlotsInstaller
                 {
                     ReplaceMod existing = String.IsNullOrEmpty(replaceId) ? null : state.Find(replaceId);
                     if (!String.IsNullOrEmpty(replaceId) && existing == null) throw new IOException("The replacement to update no longer exists. Refresh and try again.");
-                    mod = new ReplaceMod { Id = Guid.NewGuid().ToString("N"), Name = name, SourcePath = plan.SourcePath, Kind = plan.Kind, InstalledUtc = DateTime.UtcNow.ToString("o"), SelectedIds = plan.SelectedIds.ToList(), Enabled = true, Test = test, Affects = plan.AffectsText };
-                    mod.Files = plan.Files.Select(f => new ModFile { Path = f.Path, Sha256 = f.Sha256, Size = f.Size, Fixes = String.Join("; ", f.Fixes.Where(x => x.Changed).Select(x => x.Message)) }).ToList();
-                    mod.Notes = plan.Items.Where(i => i.Level == "fix" || i.Level == "warn").Select(i => i.Text).ToList();
-                    foreach (ModFile f in mod.Files) ValidateDestination(f.Path);
+                    mod = PublishPrepared(plan, name, test, state, out storeDir);
                     string root = StoreRoot(state);
-                    storeDir = Safety.Under(root, mod.Id);
-                    if (!IsUnder(plan.StagingFolder, root)) throw new IOException("Prepared files must be staged inside the replacement store.");
-                    Installer.MoveDirectory(plan.StagingFolder, storeDir);
-                    foreach (ModFile f in mod.Files)
-                    {
-                        string stored = Safety.Under(storeDir, f.Path);
-                        if (!File.Exists(stored) || new FileInfo(stored).Length != f.Size) throw new IOException("The stored copy of " + f.Path + " is missing or changed.");
-                    }
-                    if (existing != null) { int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; state.Mods[at] = mod; }
+                    if (existing != null) { int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer; state.Mods[at] = mod; }
                     else state.Mods.Insert(0, mod);
                     if (String.IsNullOrEmpty(state.StoreRoot)) state.StoreRoot = root;
                     return state;
@@ -930,6 +938,25 @@ namespace SlotsInstaller
             {
                 if (storeDir != null && Directory.Exists(storeDir) && !LoadState().Mods.Any(m => mod != null && m.Id == mod.Id)) { try { Installer.MoveDirectory(storeDir, plan.StagingFolder); } catch { } }
                 throw;
+            }
+            return mod;
+        }
+
+        private ReplaceMod PublishPrepared(ReplacePlan plan, string name, bool test, ReplaceState state, out string storeDir, string newId = null)
+        {
+            var mod = new ReplaceMod { Id = newId ?? Guid.NewGuid().ToString("N"), Name = name, SourcePath = plan.SourcePath, Kind = plan.Kind, InstalledUtc = DateTime.UtcNow.ToString("o"), SelectedIds = plan.SelectedIds.ToList(), Enabled = true, Test = test, Affects = plan.AffectsText };
+            mod.ArchiveSha = plan.ArchiveSha; mod.ArchiveStamp = plan.ArchiveStamp; mod.ArchiveSize = plan.ArchiveSize;
+            mod.Files = plan.Files.Select(f => new ModFile { ArchiveEntry = plan.ArchiveSha != null && !f.Fixes.Any(x => x.Changed) ? f.EntryPath : null, Path = f.Path, Sha256 = f.Sha256, Size = f.Size, Fixes = String.Join("; ", f.Fixes.Where(x => x.Changed).Select(x => x.Message)) }).ToList();
+            mod.Notes = plan.Items.Where(i => i.Level == "fix" || i.Level == "warn").Select(i => i.Text).ToList();
+            foreach (ModFile f in mod.Files) ValidateDestination(f.Path);
+            string root = StoreRoot(state);
+            storeDir = Safety.Under(root, mod.Id);
+            if (!IsUnder(plan.StagingFolder, root)) throw new IOException("Prepared files must be staged inside the replacement store.");
+            Installer.MoveDirectory(plan.StagingFolder, storeDir);
+            foreach (ModFile f in mod.Files)
+            {
+                string stored = Safety.Under(storeDir, f.Path);
+                if (!File.Exists(stored) || new FileInfo(stored).Length != f.Size) throw new IOException("The stored copy of " + f.Path + " is missing or changed.");
             }
             return mod;
         }
@@ -1121,33 +1148,60 @@ namespace SlotsInstaller
         {
             using (Lock())
             {
+                if (JournalPending)
+                {
+                    GameProcesses.RequireIdle("finish the interrupted replacement change");
+                    Recover();
+                }
                 ReplaceState state = LoadState();
                 if (state.Mods.Count == 0) return "";
                 GamePaks paks = GamePaks.Load(GameRoot);
                 GameReference reference = GameReference.Load(GameRoot, paks.Base, paks.Dlc);
-                reference.SwapRepairs = Settings.SwapRepairs;   // 1.0.5: Settings, off by default
                 int changed = 0;
+                var unreadable = new List<string>();
                 foreach (ReplaceMod mod in state.Mods)
-                    foreach (ModFile f in mod.Files)
+                {
+                    var candidates = mod.Files.Where(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) && f.Size <= 256L * 1024 * 1024 &&
+                        (f.Path.IndexOf(".user.", StringComparison.OrdinalIgnoreCase) >= 0 || f.Path.IndexOf(".tex.", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        f.Path.EndsWith(".scn.20", StringComparison.OrdinalIgnoreCase))).ToList();
+                    var paths = new Dictionary<ModFile,string>();
+                    var missing = new List<ModFile>();
+                    foreach (ModFile f in candidates)
                     {
-                        if (!f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)) continue;
-                        string low = f.Path.ToLowerInvariant();
-                        if (!low.Contains(".user.") && !low.Contains(".tex.") && !(reference.SwapRepairs && low.EndsWith(".scn.20"))) continue;
                         string stored = StoreFile(state, mod, f);
-                        if (!File.Exists(stored) || new FileInfo(stored).Length > 256L * 1024 * 1024) continue;
+                        paths[f] = stored;
+                        if (f.ArchiveEntry == null || File.Exists(stored)) continue;
+                        string live = GamePath(f.Path);
+                        if (Verified(live, f)) paths[f] = live;
+                        else missing.Add(f);
+                    }
+                    // A mod whose archive is gone keeps its files as they are; the others still update (the missing
+                    // files stay unreadable below, so they are skipped).
+                    try { Hydrate(state, mod, missing); }
+                    catch (IOException ex) { unreadable.Add(mod.Name); Program.Log(ex); }
+                    catch (InvalidDataException ex) { unreadable.Add(mod.Name); Program.Log(ex); }
+                    catch (UnauthorizedAccessException ex) { unreadable.Add(mod.Name); Program.Log(ex); }
+                    foreach (ModFile f in candidates)
+                    {
+                        string stored = StoreFile(state, mod, f), readable = paths[f];
+                        if (!File.Exists(readable) || new FileInfo(readable).Length > 256L * 1024 * 1024) continue;
                         List<FixResult> quick;
-                        if (f.Path.IndexOf(".tex.", StringComparison.OrdinalIgnoreCase) >= 0 && ModFixes.TextureFileOk(stored, out quick)) continue;   // 1.0.1: nothing to repair (header only)
-                        byte[] data = File.ReadAllBytes(stored);
+                        if (f.Path.IndexOf(".tex.", StringComparison.OrdinalIgnoreCase) >= 0 && ModFixes.TextureFileOk(readable, out quick)) continue;   // 1.0.1: nothing to repair (header only)
+                        byte[] data = File.ReadAllBytes(readable);
                         List<FixResult> fixes = ModFixes.UpgradeModFile(ref data, reference, f.Path);
                         if (!fixes.Any(x => x.Changed)) continue;
                         string fresh = stored + ".refix-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                        Directory.CreateDirectory(Path.GetDirectoryName(stored));
                         DurableFile.Write(fresh, data);
                         DurableFile.Publish(fresh, stored);
-                        f.Sha256 = Sha(data); f.Size = data.Length; changed++;
+                        f.ArchiveEntry = null; f.Sha256 = Sha(data); f.Size = data.Length; changed++;
                     }
-                if (changed == 0) return "";
+                }
+                string skipped = unreadable.Count == 0 ? "" : " Not checked for the current game version: " + String.Join(", ", unreadable.Distinct()) +
+                    " (the original archive is not in your Mod libraries).";
+                if (changed == 0) return skipped.Trim();
                 state.Generation++; DurableFile.WriteJson(StatePath, state);
-                return ReplacePlanner.N(changed, "stored file") + " updated for the current game version.";
+                return ReplacePlanner.N(changed, "stored file") + " updated for the current game version." + skipped;
             }
         }
 
@@ -1224,6 +1278,60 @@ namespace SlotsInstaller
         }
 
         // ---- Status
+        internal List<HealthItem> CheckInstalledFiles(string id)
+        {
+            ReplaceState state = LoadState();
+            ReplaceMod mod = state.Find(id);
+            if (mod == null || !mod.Enabled) throw new IOException("This mod is no longer enabled. Refresh the Installed tab.");
+            var deployments = state.Deployed.ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);
+            var rows = new List<HealthItem>();
+            int matches = 0, overridden = 0, done = 0;
+            // Files a higher mod supplies, by that mod (the one that wins them in the game).
+            var winners = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (ModFile file in mod.Files)
+            {
+                OperationContext.ThrowIfCancellationRequested();
+                OperationContext.Report("Checking " + Path.GetFileName(file.Path), done++, mod.Files.Count);
+                DeployedFile deployed;
+                if (!deployments.TryGetValue(file.Path, out deployed))
+                {
+                    ReleasedFile kept = state.Release(file.Path);
+                    rows.Add(new HealthItem("warn", (kept != null && !String.IsNullOrEmpty(kept.Changer) ? "Left as " + kept.Changer + " changed it · " : "No active deployment · ") + file.Path));
+                    continue;
+                }
+                if (!String.Equals(deployed.Owner, mod.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    overridden++;
+                    ReplaceMod winner = state.Find(deployed.Owner);
+                    string name = winner == null ? "another mod" : "'" + winner.Name + "'";
+                    List<string> paths; if (!winners.TryGetValue(name, out paths)) winners[name] = paths = new List<string>();
+                    paths.Add(file.Path);
+                    continue;
+                }
+                try
+                {
+                    string full = GamePath(deployed.Path);
+                    if (new FileInfo(full).Length != deployed.Size || !String.Equals(Sha(full), deployed.Sha256, StringComparison.OrdinalIgnoreCase))
+                        rows.Add(new HealthItem("error", "Changed · " + file.Path));
+                    else matches++;
+                }
+                catch (FileNotFoundException) { rows.Add(new HealthItem("error", "Missing · " + file.Path)); }
+                catch (DirectoryNotFoundException) { rows.Add(new HealthItem("error", "Missing · " + file.Path)); }
+                catch (IOException e) { rows.Add(new HealthItem("warn", "Could not check " + file.Path + " · " + e.Message)); }
+                catch (UnauthorizedAccessException) { rows.Add(new HealthItem("warn", "Cannot read · " + file.Path)); }
+            }
+            string summary = "Verified " + matches + " of " + ReplacePlanner.N(mod.Files.Count, "installed file");
+            if (overridden > 0) summary += " · " + overridden + " supplied by " + (winners.Count == 1 ? winners.Keys.First() : "other mods");
+            rows.Insert(0, new HealthItem(rows.Count == 0 && matches > 0 ? "good" : "heading", summary));
+            foreach (var winner in winners.OrderByDescending(w => w.Value.Count))
+                rows.Add(new HealthItem("info", "Supplied by " + winner.Key + " (higher on the Installed page) · " + ReplacePlanner.N(winner.Value.Count, "file") +
+                    " · " + String.Join(", ", winner.Value.Take(3).Select(Path.GetFileName)) + (winner.Value.Count > 3 ? ", …" : "")));
+            foreach (var fix in mod.Files.Where(f => !String.IsNullOrWhiteSpace(f.Fixes)).GroupBy(f => f.Fixes))
+                rows.Add(new HealthItem("info", "Patched at install · " + ReplacePlanner.N(fix.Count(), "file") + " · " + fix.Key));
+            foreach (string note in mod.Notes) rows.Add(new HealthItem("info", note));
+            return rows;
+        }
+
         internal GameFilesStatus Status()
         {
             GameFilesStatus status = GameStatus();
@@ -1324,7 +1432,7 @@ namespace SlotsInstaller
                 foreach (ModFile f in m.Files)
                 {
                     string stored = null; bool present;
-                    try { stored = storeFile(m, f); present = File.Exists(stored); } catch { present = false; }
+                    try { stored = storeFile(m, f); present = File.Exists(stored) || (f.ArchiveEntry != null && File.Exists(m.SourcePath)); } catch { present = false; }
                     if (!present) { status.StoredMissing++; if (status.FirstMissingStored == null) status.FirstMissingStored = stored ?? (m.Id + "/" + f.Path); }
                 }
             if (status.BackupsMissing > 0) status.Details.Add(status.BackupsMissing + " of " + ReplacePlanner.N(status.BackupsRecorded, "backup") + " missing on disk (first: " + status.FirstMissingBackup + ")");

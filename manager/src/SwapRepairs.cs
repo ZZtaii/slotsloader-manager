@@ -222,26 +222,24 @@ namespace SlotsInstaller
         }
     }
 
-    // 1.0.5: Settings → "Try to fix character-swap mods" (off by default) also tells Slotsloader: an empty
-    // swap_repairs.txt beside variant_choices.json turns its swap repairs on. Synced at start-up, every refresh
-    // and when the setting changes; Slotsloader rebuilds when the file appears or goes.
+    // Older Slotsloader builds read this marker when generating extra outfits.
     internal static class SwapRepairFlag
     {
         internal const string FileName = "swap_repairs.txt";
         internal static string FilePath(string gameRoot) { return System.IO.Path.Combine(gameRoot, @"reframework\data\SF6_Costumes_Data", FileName); }
 
-        internal static void Sync(string gameRoot, bool enabled)
+        internal static void Ensure(string gameRoot)
         {
-            if (String.IsNullOrEmpty(gameRoot) || !System.IO.Directory.Exists(System.IO.Path.Combine(gameRoot, "reframework"))) return;
+            if (String.IsNullOrEmpty(gameRoot)) return;
             string file = FilePath(gameRoot);
             try
             {
-                if (LinuxPlatform.IsLinux && enabled != System.IO.File.Exists(file))
-                { LinuxPlatform.RequireClosed("change swap-repair settings"); LinuxPlatform.CanonicalRoot(gameRoot, "game"); Safety.NoReparseChain(file); }
-                if (enabled && !System.IO.File.Exists(file)) { System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file)); using (System.IO.File.Create(file)) { } }
-                else if (!enabled && System.IO.File.Exists(file)) System.IO.File.Delete(file);
+                if (!System.IO.Directory.Exists(System.IO.Path.GetDirectoryName(file)) || System.IO.File.Exists(file)) return;
+                if (LinuxPlatform.IsLinux) { LinuxPlatform.RequireClosed("enable swap repairs"); LinuxPlatform.CanonicalRoot(gameRoot, "game"); }
+                Safety.NoReparseChain(file);
+                using (System.IO.File.Open(file, System.IO.FileMode.OpenOrCreate, System.IO.FileAccess.Write, System.IO.FileShare.ReadWrite)) { }
             }
-            catch (Exception ex) { if (ex is System.IO.IOException || ex is UnauthorizedAccessException) { Program.LogLine("Swap repair setting not passed to Slotsloader (" + ex.GetType().Name + ")."); return; } throw; }
+            catch (Exception ex) { if (ex is System.IO.IOException || ex is UnauthorizedAccessException) { Program.LogLine("Could not enable swap repairs for Slotsloader (" + ex.GetType().Name + ")."); return; } throw; }
         }
     }
 }

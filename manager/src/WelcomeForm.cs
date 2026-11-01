@@ -27,7 +27,8 @@ namespace SlotsInstaller
                 "Extra outfits need REFramework and Slotsloader. If one is missing, click the line under INSTALL AS to get it.",
                 "While your mod manager has mods installed, Replace original is off here. Its mods stay its own, so manage them there." } },
             new Topic { Tab = "As standalone", Title = "Use it on its own", Lead = "Let this Manager handle every mod, replacements included.", Highlight = 2, Badge = "Automatic fixes", Points = new[] {
-                "Uninstall everything in your external mod manager first. Replace original stays off until it's empty.",
+                MainForm.MigrationOffered ? "Coming from your external mod manager? Settings → Migrate installed mods moves its mods here. Until that manager is empty, Replace original stays off."
+                    : "Uninstall everything in your external mod manager first. Replace original stays off until it's empty.",
                 "Replace original overwrites the game's files. When two mods change the same outfit, the one higher on the Installed page wins.",
                 "Mods made for an older SF6 are fixed for you, as replacements and as extra outfits: colour files, texture tables, old file names and select-screen colour swatches. Every replacement also gets a health check first." } },
             new Topic { Tab = "Repair", Title = "When something breaks", Lead = "Start with the smallest fix.", Points = new[] {

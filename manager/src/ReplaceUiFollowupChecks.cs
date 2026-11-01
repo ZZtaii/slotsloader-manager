@@ -34,7 +34,7 @@ namespace SlotsInstaller
                 var missing = Get<List<string>>(form, "missingRestoredOptions");
                 missing.Add("Old option"); form.RequestReview(1); WaitReview(form);
                 string before = Summary(form) + " / " + Details(form);
-                Require(before.Contains("Saved options are missing: Old option") && before.Contains(replace ? "Click Health" : "Click Review files") && !Get<FlatButton>(form, "installButton").Enabled, mode + ": flag not shown: " + before);
+                Require(before.Contains("Saved options are missing: Old option") && before.Contains(replace ? "Click Health" : "Click Health") && !Get<FlatButton>(form, "installButton").Enabled, mode + ": flag not shown: " + before);
                 ClickLabel(Get<Label>(form, replace ? "planDetails" : "planSummary"));
                 WaitReview(form);
                 string after = Summary(form) + " / " + Details(form);

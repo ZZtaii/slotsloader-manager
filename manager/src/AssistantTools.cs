@@ -374,7 +374,7 @@ namespace SlotsInstaller
                     var row = new JsonObj().Add("option_id", c.Id).Add("name", Clip(c.Name, 120)).Add("parent_id", c.ParentId);
                     if (c.IsDummy) row.Add("kind", choice ? "choose_one_group" : "group");
                     else row.Add("kind", Composer.IsBase(c) && c.Assets.Count > 0 ? "main_files" : "option");
-                    if (choice) row.Add("required", c.IsChoiceGroup && !Regex.IsMatch(c.Name + " " + c.Description, @"\boptional\b", RegexOptions.IgnoreCase));
+                    if (choice) row.Add("required", c.RequiresChoice);
                     if (!c.IsDummy) row.Add("files", c.Assets.Count);
                     if (c.Assets.Count > 0) row.Add("size", Utilities.FriendlyBytes(c.Assets.Sum(a => a.Size)));
                     row.Add("has_preview", !String.IsNullOrEmpty(c.PreviewEntry));
@@ -387,7 +387,7 @@ namespace SlotsInstaller
                 {
                     var branches = package.Components.Where(c => package.IsChoiceBranch(g, c)).Select(c => c.Id).ToArray();
                     groups.Add(new JsonObj().Add("group_id", g.Id).Add("name", Clip(g.Name, 120)).Add("explicit", g.IsChoiceGroup)
-                        .Add("required", g.IsChoiceGroup && !Regex.IsMatch(g.Name + " " + g.Description, @"\boptional\b", RegexOptions.IgnoreCase)).Add("pick_one_of", branches));
+                        .Add("required", g.RequiresChoice).Add("pick_one_of", branches));
                 }
                 var result = new JsonObj().Add("mod_id", modId).Add("name", package.Name)
                     .Add("detected_character", String.IsNullOrEmpty(package.Character) ? "unknown" : package.Character)

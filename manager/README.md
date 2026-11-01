@@ -1,4 +1,4 @@
-# Slotsloader Manager 1.0.13
+# Slotsloader Manager 1.0.15
 
 A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
@@ -10,17 +10,19 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 ## What changed
 
+- 1.0.15:
+  - Edit a ZIP bundle in the Library to group its options and set selection rules. Suggest layout runs locally. Refine with Assistant is optional. Save ZIP writes the reviewed layout to the archive.
+  - Uninstall selected replacements from the Library or Installed tab. Health checks installed files, names the mods that supply shared files and shows recorded fixes; it changes nothing. Disable and Enable stay on the Installed page. Extra outfit previews group common colour repairs.
+  - Presets install in entry order across archives. Each entry can be left out, and an entry several archives match is chosen in the review. Eligible archive installs can use their library source to save disk space.
+  - **Migrate installed mods** in Settings moves your external mod manager's active mods here, in the same order.
+  - Character-swap repairs now always run during installation (the Settings switch is gone).
+  - Includes Slotsloader Fork 1.10.7 with character-swap resource fixes and a fix for opening Opponent Outfit Settings on fighters with many extra outfits. The Manager also accepts compatible upstream loader packages declaring contract 2 or later.
+  - Linux: Migrate installed mods is Windows only. Linux beta 3 and later update in the app.
+
 - 1.0.13:
   - **One fighter per click.** Clicking a fighter portrait in Filters now shows only that fighter, so you can go from fighter to fighter quickly; before, each click added another fighter. Ctrl+click adds one, Shift+click a range, and clicking the selected fighter again clears it.
   - **Smaller downloads from the next version on.** Future downloads leave out the command-line tool and its guide. This version still has them, so earlier versions can update to it.
   - A shorter start to this README.
-  - Download updated 27 Oct:
-    - Bundles **Slotsloader Fork 1.10.6**: an extra outfit without its own scene loads next to a replacement of the same outfit, and an extra whose mod ships its own colour list shows the mod's colours again.
-    - **Long paths.** A RAR or 7Z mod with deep folders, in a game under `Program Files (x86)`, could fail to install with "Could not find file". The Manager's working folders are shorter now, and a path that is still too long for Windows stops the install with a message that says how to turn on long paths (Help: "A path is too long").
-    - **Same outfit name, another mod.** An edited copy of a mod, with the same option names, now installs as "<name> 2" beside the other one instead of replacing it.
-    - **Tours.** Short step-by-step tours point at the real controls: the Mod library's after the welcome (or at the next start if you saw the welcome before), the Installed page's and Settings' the first time you open them. Gear → Take the tour shows them again.
-    - **Wider mod list.** The library column starts wider, so longer mod names fit. Drag the divider to change it.
-    - **Loader package compatibility.** Manually imported upstream Slots Loader packages declaring `SlotsloaderContract=2` or later are accepted. Packages with an older, missing or invalid contract remain refused.
 
 - 1.0.12:
   - **Browsing is instant.** Opening a mod no longer shows a progress bar or "Reading…", and the library list keeps taking keys and clicks meanwhile: the mod you stop on opens, and the ones you pass over aren't read. Mods opened this session stay ready while unchanged, and the next RAR or 7Z in the list is read ahead, so arrowing through the library shows the options and preview at once.
@@ -87,7 +89,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
   - Portrait art for several fighters counts as a UI mod. A portrait bundle no longer shows under every fighter.
   - Colour-only mods keep their fighter after you open them.
   - Reinstalling an Install all variants copy updates that file, even after the source was renamed.
-  - Settings → Game files & replacements → **Try to fix character-swap mods broken by game updates** (off by default). On, Replace original and Slotsloader 1.10.4 apply known fixes to old character swaps: the Alex update's scene signature, and some Mai and Elena physics files rebuilt from the current game. Only files that match a verified older version are changed. Off, nothing changes and no swap warnings show.
+  - The Manager automatically checks character swaps during installation and reinstallation. It repairs the scene signature changed by the Alex update and certain Mai and Elena physics files when their old versions can be verified against the current game. Slotsloader applies these repairs to extra outfits when it rebuilds them.
   - Bundles **Slotsloader Fork 1.10.4**: the swap fixes above, and an archive briefly locked by a virus scanner is no longer skipped.
 
 - 1.0.4:
@@ -145,7 +147,7 @@ If another tool replaced or deleted a file this app installed, the banner says w
 ## Switching from another mod manager
 
 - **While the external mod manager has any mod installed, only Extra outfit, Slotsloader and REFramework install here.** Replace original, PAK mods and other tool mods wait until it is empty, so two managers never change the same game files. REFramework that the external mod manager installed is updated there. Uninstalling, disabling and Restore original game files still work for this app's own mods.
-- **Moving over**: uninstall your mods in the external mod manager (this app no longer uninstalls them), then install them here with Replace original, or import its preset.
+- **Moving over**: on Windows, **Migrate installed mods…** (Settings → Game files & replacements) reviews that manager's mods, waits while you uninstall them there, then installs them here in the same order. On Linux, install them yourself with Replace original, or import its preset.
 - Close the external mod manager before changing game files here. Don't install the same mod in both managers.
 - External mod manager features this app does not reproduce:
   - the `pak_mods` folder (a PAK mod installs here as the next patch PAK instead);

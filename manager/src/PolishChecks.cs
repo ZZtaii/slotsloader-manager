@@ -297,7 +297,7 @@ namespace SlotsInstaller
             Call(form, "ShowPage", installed); Call(form, "RefreshInstalled", new object[] { null }); WaitIdle(form);
             var list = Get<ListView>(form, "installedList");
             Require(list.Items.Count == 2, "Installed fixtures were not listed: " + list.Items.Count);
-            var buttons = new[] { "openInstalledButton", "editInstalledButton", "toggleInstalledButton", "removeInstalledButton" }.Select(n => Get<FlatButton>(form, n)).ToArray();
+            var buttons = new[] { "openInstalledButton", "editInstalledButton", "toggleInstalledButton", "disableInstalledButton", "removeInstalledButton" }.Select(n => Get<FlatButton>(form, n)).ToArray();
             foreach (ListViewItem row in list.Items) row.Selected = false;
             // 1.0.1: the default sort is Installed (newest first), so the rows are found by kind, not position.
             ListViewItem manualItem = list.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Tag is InstalledOutfit && !((InstalledOutfit)i.Tag).Managed), managedItem = list.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Tag is InstalledOutfit && ((InstalledOutfit)i.Tag).Managed);
@@ -313,7 +313,9 @@ namespace SlotsInstaller
             Require(Get<Panel>(form, "installedPathRow").Visible && Get<Label>(form, "installedDetail").Text == manual.Folder, "Installed path row is missing.");
             manualItem.Selected = false; managedItem.Selected = true; Application.DoEvents();
             visible = buttons.Where(b => b.Visible).ToArray();
-            Require(visible.Length == 4 && visible[0].Top == visible[1].Top && visible[2].Top == visible[3].Top && visible[0].Left == visible[2].Left && visible[1].Left == visible[3].Left && visible[0].Width == visible[3].Width, "Managed outfit actions are not an aligned grid.");
+            // 1.0.15: Open folder, Edit options / Health, Disable outfit / Uninstall alone on the full width (no gap).
+            Require(visible.Length == 5 && visible[0].Top == visible[1].Top && visible[2].Top == visible[3].Top && visible[0].Left == visible[2].Left && visible[1].Left == visible[3].Left && visible[0].Width == visible[3].Width
+                && visible[4].Top > visible[3].Top && visible[4].Left == visible[0].Left && visible[4].Right == visible[1].Right, "Managed outfit actions are not an aligned grid.");
             foreach (var button in visible) Require(button.Parent.ClientRectangle.Contains(button.Bounds), "Installed action is clipped: " + button.Text);
             using (var image = new Bitmap(installed.Width, installed.Height)) { installed.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(root, "polish-installed-" + installed.DeviceDpi + ".png"), ImageFormat.Png); }
             report.Add("PASS: installed details: two-line title, character/state chips, path row with copy action, actions packed into an aligned two-column grid (manual: 2 in one row, managed: 2x2) without clipping.");
@@ -403,8 +405,11 @@ namespace SlotsInstaller
         {
             "AssistantPage.Build",          // the usage meter's per-model breakdown: a viewer the user opens by clicking
             "MainForm.AskDrift",            // another tool changed our files: Restore original / Keep current (only the user can decide)
+            "MainForm.ArchiveDeleteChoice",   // deleting the original archive can remove a replacement repair source
+            "MainForm.ConfirmReclaimSpace", // Reclaim space deletes stored copies: repairs then need the mod archives (no Undo)
             "MainForm.AskPermanentDelete",  // library Delete where the Recycle Bin can't take it: deleted for good (no Undo); never asked when it can
             "MainForm.BuildGameBanner",     // the banner's details: a viewer the user opens by clicking the banner text
+            "MainForm.InspectOrToggleInstalled", // Health on an installed extra outfit opens its file and loader report
             "MainForm.RemoveApiKey",        // the saved API key is deleted for good (no Undo)
             "Program.ShowError",            // an error the app cannot continue after (start-up, unhandled)
             "RecoveryForm.DeleteSelected",  // a recoverable copy is deleted for good (no Undo)
@@ -418,8 +423,11 @@ namespace SlotsInstaller
             "TourForm.Run",                 // 1.0.15 the tours: once per page at first use, then gear → Take the tour (Esc / Skip tour)
             "AddPartsForm.Choose",          // 1.0.6 Add to outfit…: pick the installed outfit and the parts (Cancel changes nothing)
             "FluffyPresetForm.Review",      // Import Fluffy preset: map each entry before anything installs (Cancel installs nothing)
+            "MainForm.ShowMigration",       // Migrate installed mods…: review, then wait while the user uninstalls there (Close keeps the saved plan)
             "MainForm.EnlargePreview",      // the preview image, enlarged (click the preview)
-            "MainForm.ShowCompositionReport", // Review files (Extra outfit mode)
+            "MainForm.ShowCompositionReport", // Health (Extra outfit mode): the compatibility report
+            "MainForm.BuildLibraryPage",    // 1.0.15 right-click → Edit bundle…: the editor (Close / Discard changes)
+            "MainForm.InspectOrToggleInstalled", // 1.0.15 Installed → Health: the read-only file report (Close)
             "MainForm.ShowCurrentReport",   // Health (Replace original): the full report; the inspector shows the summary inline
             "MainForm.ShowPresetsWindow",   // Presets…
             "OutfitSetsForm.Confirm",       // Delete saved copy: permanent (no Undo)

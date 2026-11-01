@@ -43,9 +43,9 @@ namespace SlotsInstaller
         // same files never extracts again. updateId: the replacement being updated in place (keeps its priority).
         internal static ReplacePlan Prepare(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId)
         {
-            using (InstallMetrics.Measure("prepare extraction and fixes")) return PrepareCore(composition, sevenZip, engine, staging, cache, updateId);
+            using (InstallMetrics.Measure("prepare extraction and fixes")) return PrepareCore(composition, sevenZip, engine, staging, cache, updateId, null, null);
         }
-        private static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId)
+        internal static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId, ReplaceState presetState, Func<string> reservePatch, MigrationRow migrationRow = null, string methodOverride = null, bool handoffPreview = false)
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
             if (composition == null) throw new ArgumentNullException("composition");
@@ -57,7 +57,12 @@ namespace SlotsInstaller
             PlannedFile plugin = composition.Files.Values.FirstOrDefault(f => String.Equals(PakHash.Normalize(f.Asset.DestinationPath).TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase));
             if (plugin != null && plugin.Component != null && !LoaderCostumePak.HonoursContract(plugin.Component) && LoaderCostumePak.IsUpstreamBuild(plugin.Component.Name, plugin.Component.Version, plugin.Component.Author))
                 plan.Items.Add(new HealthItem("error", "This is upstream's Slots Loader" + (String.IsNullOrEmpty(plugin.Component.Version) ? "" : " " + plugin.Component.Version) + ", not the Manager's Slotsloader Fork. Install the fork instead: Settings → Install Slotsloader " + UpdateCheck.ShortVersion(LoaderRelease.Pin.Version) + "."));
-            ReplaceState state = engine.LoadState();
+            ReplaceState state = presetState ?? engine.LoadState();
+            if (presetState == null)
+            {
+                string block = OrderedPresetBlock(state, composition, updateId);
+                if (block != null) plan.Items.Add(new HealthItem("error", block));
+            }
             // This state is read-only throughout Prepare. Build the lookup once
             // per review, never retain it across an install or state mutation.
             var deployed = new Dictionary<string, DeployedFile>(StringComparer.OrdinalIgnoreCase);
@@ -67,11 +72,14 @@ namespace SlotsInstaller
             {
                 DeployedFile file; return deployed.TryGetValue(path, out file) ? file : null;
             };
-            plan.Method = engine.CurrentMethod(state);
+            plan.Method = methodOverride ?? engine.CurrentMethod(state);
             GamePaks paks = GamePaks.Load(engine.GameRoot);
             GameReference reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc);
-            reference.SwapRepairs = engine.Settings.SwapRepairs;   // 1.0.5: Settings, off by default
-            FluffyInstalls fluffy = engine.Fluffy();
+            // The read-only handoff preview projects the verified external setup after uninstall.
+            // Actual deployment always reads ownership again.
+            FluffyInstalls fluffy = handoffPreview ? new FluffyInstalls() : engine.Fluffy();
+            if (handoffPreview && plan.Method == ReplaceMethods.Pak && paks.Base == null && composition.Files.Keys.Any(p => p.StartsWith("natives/",StringComparison.OrdinalIgnoreCase)))
+                plan.Items.Add(new HealthItem("error","The PAK method requires re_chunk_000.pak in the game folder."));
             // 1.0.1: Slotsloader still installs; 1.0.10: plain REFramework too, unless the external manager installed it.
             string externalLock = ReplaceEngine.ExternalLockReason(fluffy, composition.Files.Values.Select(f => f.Asset.DestinationPath));
             if (externalLock != null) plan.Items.Add(new HealthItem("error", externalLock));
@@ -106,13 +114,13 @@ namespace SlotsInstaller
             {
                 int number = engine.NextPatchNumber(state, updateId);
                 // 2.5.7: reinstalling or updating an installed PAK mod (same source, or the record being updated) keeps its numbers.
-                List<string> reuse = state.Mods.Where(m => SameSource(m.SourcePath, plan.SourcePath) || (!String.IsNullOrEmpty(updateId) && String.Equals(m.Id, updateId, StringComparison.OrdinalIgnoreCase)))
+                List<string> reuse = state.Mods.Where(m => (presetState == null && !m.PresetLayer && SameSource(m.SourcePath, plan.SourcePath)) || (!String.IsNullOrEmpty(updateId) && String.Equals(m.Id, updateId, StringComparison.OrdinalIgnoreCase)))
                     .SelectMany(m => m.Files).Select(x => x.Path).Where(ReplaceEngine.IsPatchPakPath).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(ReplaceEngine.PatchNumber).ToList();
                 int reused = 0;
                 foreach (PlannedFile f in modPaks.OrderBy(x => x.Asset.DestinationPath, StringComparer.OrdinalIgnoreCase))
                 {
                     bool same = reused < reuse.Count;
-                    string dest = same ? reuse[reused++] : ReplaceEngine.PatchPakName(number++);
+                    string dest = reservePatch != null ? reservePatch() : same ? reuse[reused++] : ReplaceEngine.PatchPakName(number++);
                     chosen[dest] = new PlannedFile { Component = f.Component, Asset = new NativeAsset { EntryPath = f.Asset.EntryPath, DestinationPath = dest, Size = f.Asset.Size } };
                     plan.Items.Add(new HealthItem("info", Path.GetFileName(f.Asset.DestinationPath) + (same ? " replaces its installed copy " + dest + " in place." : " is added as " + dest + ", after the patch PAKs already there. A PAK made for an older game version can stop SF6 from starting: uninstalling it puts the game back.")));
                 }
@@ -125,8 +133,14 @@ namespace SlotsInstaller
             Dictionary<string, string> hashes = null;
             Dictionary<string, PreparedFile> cached = null;
             bool useCache = cache != null && cache.Usable(composition.Package.SourcePath);
+            using (var archive = cache == null && ReplaceEngine.IsLibraryArchive(plan.SourcePath) && staging.StartsWith(engine.StoreRoot(state).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? File.OpenRead(plan.SourcePath) : null)
             using (var reader = new SourceReader(composition.Package.SourcePath, sevenZip, composition.Package.PreviewEntries, composition.Package.PreviewSourceStamp))
             {
+                if (archive != null)
+                {
+                    plan.ArchiveSha = BundleLayout.ArchiveHash(plan.SourcePath, out plan.ArchiveSize);
+                    plan.ArchiveStamp = SourceReader.Stamp(plan.SourcePath);
+                }
                 foreach (PlannedFile f in chosen.Values)
                 {
                     SourceEntry entry;
@@ -140,6 +154,7 @@ namespace SlotsInstaller
                     Directory.CreateDirectory(scratch);
                     try { hashes = reader.CopyFiles(chosen.Values, staging, scratch); }
                     finally { try { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); } catch { } }
+                    if (migrationRow != null) migrationRow.CheckSourceBytes(composition,chosen,hashes,reader,staging,handoffPreview);
                 }
             }
             int fixedFiles = 0;
@@ -158,7 +173,7 @@ namespace SlotsInstaller
                 string low = pair.Key.ToLowerInvariant();
                 List<FixResult> quick;
                 if (prepared.Native && low.Contains(".tex.") && ModFixes.TextureFileOk(staged, out quick)) prepared.Fixes = quick;   // 1.0.1: header only
-                else if (prepared.Native && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && reference.SwapRepairs && low.EndsWith(".scn.20"))) && prepared.Size <= 256L * 1024 * 1024)
+                else if (prepared.Native && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && low.EndsWith(".scn.20"))) && prepared.Size <= 256L * 1024 * 1024)
                 {
                     byte[] data = File.ReadAllBytes(staged);
                     prepared.Fixes = ModFixes.UpgradeModFile(ref data, reference, pair.Key);
@@ -249,7 +264,7 @@ namespace SlotsInstaller
             foreach (ReplaceConflict conflict in plan.ConflictList) plan.Items.Add(new HealthItem(conflict.Level, conflict.Text));
             // 2.4.1: one neutral line for the switch (another variant of this mod replaces the installed one in place).
             // The record being updated (Update, a SlotsLoader from another zip) is named too: the line says what happens.
-            List<ReplaceMod> sameSource = state.Mods.Where(m => SameSource(m.SourcePath, plan.SourcePath)).ToList();
+            List<ReplaceMod> sameSource = state.Mods.Where(m => !m.PresetLayer && SameSource(m.SourcePath, plan.SourcePath)).ToList();
             ReplaceMod updating = String.IsNullOrEmpty(updateId) ? null : state.Find(updateId);
             if (updating != null && !sameSource.Contains(updating)) sameSource.Insert(0, updating);
             if (sameSource.Count > 0) plan.Items.Add(new HealthItem("info", "Replaces installed: " + String.Join(", ", sameSource.Select(m => m.Name)) + (sameSource.Count > 1 ? " (they become one)" : "")));
@@ -337,6 +352,19 @@ namespace SlotsInstaller
         }
 
         // Install: prepare inside the store, then publish through the engine.
+        // Options of this archive installed from an ordered preset (ReplaceEngine.ImportLayers) are separate records in
+        // preset order: a library install can't fold them into one. The health check says so before Install.
+        internal static string OrderedPresetBlock(ReplaceState current, CompositionPlan composition, string replaceId)
+        {
+            List<ReplaceMod> same = current.Mods.Where(m => !m.Test && SameSource(m.SourcePath, composition.Package.SourcePath)).ToList();
+            var ordered = same.Where(m => m.PresetLayer).ToList();
+            ReplaceMod target = String.IsNullOrEmpty(replaceId) ? null : current.Find(replaceId);
+            if (ordered.Count == 0 && (target == null || !target.PresetLayer)) return null;
+            bool wholeMod = ordered.Count == 1 && same.Count == 1 && (String.IsNullOrEmpty(replaceId) || replaceId == ordered[0].Id) &&
+                composition.Package.Components.Count(c => !c.IsDummy && c.HasFiles(true)) == 1 &&
+                ordered[0].SelectedIds.SequenceEqual(composition.Layers.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+            return wholeMod ? null : "This archive has options installed from an ordered preset. Reimport the preset to update them, or uninstall the archive from the library before switching options.";
+        }
         internal static ReplaceMod PrepareAndInstall(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string name, bool test, string replaceId, out ReplacePlan plan)
         {
             string root = engine.StoreRoot(engine.LoadState());
@@ -349,7 +377,10 @@ namespace SlotsInstaller
             List<ReplaceMod> others = new List<ReplaceMod>();
             if (!test)
             {
-                List<ReplaceMod> same = engine.LoadState().Mods.Where(m => SameSource(m.SourcePath, composition.Package.SourcePath)).ToList();
+                ReplaceState current = engine.LoadState();
+                List<ReplaceMod> same = current.Mods.Where(m => SameSource(m.SourcePath, composition.Package.SourcePath)).ToList();
+                string block = OrderedPresetBlock(current, composition, replaceId);
+                if (block != null) throw new IOException(block);
                 if (String.IsNullOrEmpty(replaceId) && same.Count > 0) replaceId = same[0].Id;
                 // SlotsLoader from another zip (a newer build, a renamed copy) updates the installed SlotsLoader in place:
                 // one loader record, and the backup of the game's own amd_ags_x64.dll stays with it.
@@ -369,6 +400,7 @@ namespace SlotsInstaller
                 plan = Prepare(composition, sevenZip, engine, staging, null, replaceId);
                 if (!plan.CanInstall) throw new IOException(String.Join(" ", plan.Errors));
                 ReplaceMod installed = engine.Install(plan, name, test, replaceId);
+                if (LoaderCostumePak.IsLoaderMod(installed)) SwapRepairFlag.Ensure(engine.GameRoot);
                 foreach (ReplaceMod extra in others) engine.UninstallForGood(extra.Id, DriftChoice.Ask, null);   // 1.0.1: no kept copy
                 return installed;
             }
@@ -378,7 +410,7 @@ namespace SlotsInstaller
         // Game facts that change what the fixers write; part of every cache key.
         internal static string ReferenceKey(GameReference r)
         {
-            return (r.SwapRepairs ? "swap1|" + r.OfficialStamp : "swatch1") + "|" + r.TexVersion + "|" + r.CrcSource + "|" + String.Join(",", r.CurrentCrcs.OrderBy(kv => kv.Key).Select(kv => kv.Key.ToString("X8") + ":" + kv.Value.ToString("X8")));
+            return "swap1|" + r.OfficialStamp + "|" + r.TexVersion + "|" + r.CrcSource + "|" + String.Join(",", r.CurrentCrcs.OrderBy(kv => kv.Key).Select(kv => kv.Key.ToString("X8") + ":" + kv.Value.ToString("X8")));
         }
 
         // The area a file belongs to. Outfit folders (esfNNN/CCC) and non-costume folders are "slots":
@@ -434,7 +466,7 @@ namespace SlotsInstaller
                 if (i == updateIndex) continue;
                 // 2.4.1: the same source (another variant or option set of this mod) is a switch, not a conflict:
                 // Install replaces it in place (PrepareAndInstall), so it never warns or offers an Uninstall link.
-                if (!String.IsNullOrEmpty(sourcePath) && SameSource(other.SourcePath, sourcePath)) continue;
+                if (!String.IsNullOrEmpty(sourcePath) && !other.PresetLayer && SameSource(other.SourcePath, sourcePath)) continue;
                 var shared = other.Files.Select(f => f.Path).Where(mine.Contains).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
                 var common = SlotAreas(other.Files.Select(f => f.Path)); common.IntersectWith(mySlots);
                 if (shared.Count == 0 && common.Count == 0) continue;
@@ -585,7 +617,7 @@ namespace SlotsInstaller
                         string low = pair.Key.ToLowerInvariant();
                         List<FixResult> quick;
                         if (low.StartsWith("natives/") && low.Contains(".tex.") && ModFixes.TextureFileOk(file, out quick)) item.Fixes = quick;   // 1.0.1: header only
-                        else if (low.StartsWith("natives/") && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && reference.SwapRepairs && low.EndsWith(".scn.20"))) && item.Size <= 256L * 1024 * 1024)
+                        else if (low.StartsWith("natives/") && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && low.EndsWith(".scn.20"))) && item.Size <= 256L * 1024 * 1024)
                         {
                             byte[] data = System.IO.File.ReadAllBytes(file);
                             item.Fixes = ModFixes.UpgradeModFile(ref data, reference, pair.Key);
