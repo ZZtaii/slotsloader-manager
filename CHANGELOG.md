@@ -1,4 +1,7 @@
-# 1.10.7
+# 1.10.7 (2026-11-01)
+
+Package `SF6_Slotsloader_Fork_v1.10.7.zip`, build ID 2026-11-01-1.10.7-slotsloader-fork
+(the first launch rebuilds the outfit PAK once).
 
 - Extra outfits with cross-fighter scenes can use donor colour and model-setting files from their slot. This fixes the Female Ryu C1 extra outfit crash.
 - Opening a fighter in Opponent Outfit Settings limits the summary to the rows the game can display. The full costume list is restored after the summary draws, so extra outfits and colours stay selectable.
