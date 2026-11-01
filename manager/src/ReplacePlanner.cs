@@ -45,7 +45,7 @@ namespace SlotsInstaller
         {
             using (InstallMetrics.Measure("prepare extraction and fixes")) return PrepareCore(composition, sevenZip, engine, staging, cache, updateId, null, null);
         }
-        internal static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId, ReplaceState presetState, Func<string> reservePatch)
+        internal static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId, ReplaceState presetState, Func<string> reservePatch, Dictionary<string,string> reviewedHashes = null)
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
             if (composition == null) throw new ArgumentNullException("composition");
@@ -145,6 +145,17 @@ namespace SlotsInstaller
                     Directory.CreateDirectory(scratch);
                     try { hashes = reader.CopyFiles(chosen.Values, staging, scratch); }
                     finally { try { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); } catch { } }
+                }
+            }
+            if (reviewedHashes != null)
+            {
+                // Compare the extracted bytes before normal compatibility repairs change them.
+                var sourcePaths = composition.Files.Values.ToDictionary(f => f.Asset.EntryPath, f => FluffyInstalls.Key(f.Asset.DestinationPath), StringComparer.OrdinalIgnoreCase);
+                foreach (var file in chosen)
+                {
+                    string expected;
+                    if (!reviewedHashes.TryGetValue(sourcePaths[file.Value.Asset.EntryPath], out expected) || hashes[file.Key] != expected)
+                        throw new IOException("The reviewed source contents changed: " + file.Value.Asset.EntryPath);
                 }
             }
             int fixedFiles = 0;

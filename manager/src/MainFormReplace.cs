@@ -67,6 +67,7 @@ namespace SlotsInstaller
         private Label settingsSubtitle;   // 2.4.0: shown on the General tab only
         private ComboBox settingsMethod;
         private CheckBox settingsCrashReporter;
+        private FlatButton migrateModsButton;
         private Label settingsMethodStatus, settingsToolStatus, settingsGameFiles, settingsStoreStatus, settingsFluffyStatus;
         private PaddedTextField settingsStore;
         private FlatButton reclaimSpaceButton;
@@ -1151,7 +1152,12 @@ namespace SlotsInstaller
             var fluffyRow = buttonRow(8);
             FlatButton import = Button("Import external preset (.prt)…", false, 190, delegate { ImportFluffyPreset(); }); import.Height = 32; import.Font = Palette.Small; import.Margin = Padding.Empty;
             fluffyRow.Controls.Add(import);
-            add(right, fluffyRow);
+
+            migrateModsButton = Button("Migrate installed mods…", false, 172, ShowMigration);
+            migrateModsButton.Font = Palette.Small; migrateModsButton.Margin = Padding.Empty; migrateModsButton.Height = 32;
+            import.Margin = new Padding(0,0,8,0);
+            fluffyRow.WrapContents = true; fluffyRow.AutoSize = true; fluffyRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            fluffyRow.Controls.Add(migrateModsButton); add(right, fluffyRow);
             columns.Controls.Add(left, 0, 0); columns.Controls.Add(right, 2, 0);
             panel.Controls.Add(columns);
             settingsMethod.SelectedIndexChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
@@ -1198,6 +1204,9 @@ namespace SlotsInstaller
                     string store = engine.StoreRoot(state);
                     settingsStoreStatus.Text = StoreStatusText(InstalledStoreBytes(store), state.Mods.Count, engine.ListRemoved(), store);
                 }
+                bool pendingMigration = File.Exists(ModMigration.Pending(engine));
+                migrateModsButton.Text = pendingMigration ? "Resume migration" : "Migrate installed mods…";
+                migrateModsButton.Enabled = pendingMigration || fluffy.Mods.Count > 0;
                 settingsFluffyStatus.Text = ReplacePlanner.N(fluffy.Mods.Count, "mod") + " installed by an external mod manager (protected) · " + (fluffyRunning ? "it is running" : "it is closed") + " · " + ReplacePlanner.N(FluffyPresets.PresetFiles(fluffy.Roots).Count, "preset") + (fluffy.Roots.Count == 0 ? Environment.NewLine + "No external mod manager found next to your libraries." : String.Concat(fluffy.Roots.Select(r => Environment.NewLine + r)));
             }
             catch (Exception ex) { Program.Log(ex); settingsGameFiles.Text = ex.Message; }
@@ -1243,6 +1252,23 @@ namespace SlotsInstaller
                 if (IsReplaceMode && package != null) RequestReview(ReviewDelay);
             }
             catch (Exception ex) { Error(ex); LoadReplaceSettingsFields(); }
+        }
+
+        private void ShowMigration()
+        {
+            if (busy) return;
+            using (var dialog = new MigrationForm(Engine(), library.ToList(), config.SevenZipPath))
+            {
+                bool view = dialog.ShowDialog(this) == DialogResult.OK;
+                string folder = dialog.LibraryFolder;
+                if (dialog.Completed && Directory.Exists(folder) && !config.Libraries.Contains(folder,StringComparer.OrdinalIgnoreCase))
+                {
+                    config.Libraries.Add(folder); config.Save(); LoadSettingsFields(); RefreshLibrary();
+                }
+                if (view) ShowPage(installedPage);
+            }
+            LoadReplaceSettingsFields();
+            RefreshInstalled();
         }
 
         private void ImportFluffyPreset()

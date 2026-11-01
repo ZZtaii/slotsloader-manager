@@ -52,7 +52,7 @@ namespace SlotsInstaller
     {
         // All replacement layers enter as one highest-priority block. The store GUID is physical;
         // source + component tracks a layer across reimports, including after a library relink.
-        internal List<ReplaceMod> ImportLayers(List<PresetLayer> layers, string sevenZip)
+        internal List<ReplaceMod> ImportLayers(List<PresetLayer> layers, string sevenZip, ModMigration migration = null)
         {
             var imported = new List<ReplaceMod>();
             if (layers.Count == 0) return imported;
@@ -118,7 +118,7 @@ namespace SlotsInstaller
                         string folder = null;
                         try
                         {
-                            ReplacePlan plan = ReplacePlanner.PrepareCore(payload, sevenZip, this, stage, null, old == null ? null : old.Id, state, reservePatch);
+                            ReplacePlan plan = ReplacePlanner.PrepareCore(payload, sevenZip, this, stage, null, old == null ? null : old.Id, state, reservePatch, migration == null ? null : migration.Rows[i].PayloadHashes);
                             if (!plan.CanInstall) throw new IOException(unit.Name + ": " + String.Join(" ", plan.Errors));
                             ReplaceMod mod = PublishPrepared(plan, unit.Name, false, state, out folder, ids[i]);
                             // An unchanged reimport retains the installed store and its ID, including references held by the UI.
@@ -142,6 +142,12 @@ namespace SlotsInstaller
                         if (MainForm.SourceStamp(source.Key) != source.First().Stamp) throw new IOException("The source changed during import: " + source.Key);
                     foreach (ReplaceMod old in legacy) state.Mods.Remove(old);
                     OperationContext.ThrowIfCancellationRequested();
+                    if (migration != null)
+                    {
+                        string wait = migration.Waiting(this);
+                        if (wait != null) throw new IOException(wait);
+                        state.LastMigration = migration.Id;
+                    }
                     return state;
                 }, false, null);
             }

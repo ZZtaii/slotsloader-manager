@@ -58,9 +58,11 @@ The header shows "● Mod manager running". While your replacements use the PAK 
 - **Settings → Game files & replacements → Import external preset (.prt)…** brings over a preset from your mod manager. The numbers beside an archive show its positions in the preset. Later positions win shared replacement files. Importing enables the selected replacements at the top of Installed. Entries with multiple matches are skipped.
 
 ### Moving everything to the Manager
-- Uninstall every mod in your external mod manager first. Replace original stays off until that manager lists no mods.
-- Install them again here with **Replace original**, or import your mod manager's preset.
-- If an uninstalled mod still shows in game after that, see [[Leftover PAKs]].
+1. Add your other manager’s SF6 Mods folder under **Settings → General → Mod libraries** if it is missing. This uses the archives where they are.
+2. Open **Settings → Game files & replacements → Migrate installed mods…**. Review the active mods in install order. Select a row to see its source, any shared files, and which mod wins. Use **Locate archive** or **Locate folder** to resolve an uncertain match.
+3. Choose **Start migration**. Wait for **Your setup is saved** before uninstalling anything. The Manager checks the source files against the active game files first. Unsupported entries, including numbered patch PAKs, block the handoff.
+4. In your other manager, uninstall all SF6 mods and close it. Close SF6 too. The Manager checks the original files and installs the reviewed options as replacements. Choose **View installed mods** to see them. Inactive mods stay available in their library.
+5. If you close the window while waiting, choose **Resume migration** in Settings. Keep the reviewed archives and extracted mod folders available until migration finishes.
 
 # In depth
 
