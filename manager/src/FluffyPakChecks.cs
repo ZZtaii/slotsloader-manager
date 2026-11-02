@@ -270,6 +270,34 @@ namespace SlotsInstaller
             Require(r.Repaired.Single().How == "the TOC backup" && ReplaceEngine.Sha(upak) == uclean, "unsorted with the TOC backup: " + r.Message);
         }
 
+        // ---- 1.0.16 (user report, Sakura as Ryu through Fluffy): the colour-file reference turned off or gone
+        internal static void ReferenceTurnedOff(string root)
+        {
+            const string other = "natives/stm/product/model/esf/esf002/001/esf002_001_cmd_000.user.2";
+            byte[] otherCmd = ReplaceChecks.Usr(ReplaceChecks.MaterialData, 0x22222222, ReplaceChecks.Cloth, 0x11111111);
+            var game = new Dictionary<uint, uint>(); ModFixes.UserTypeCrcs(ReplaceChecks.ReferenceCmd(), game);
+            uint vanilla = game[ReplaceChecks.MaterialData];
+            // Turned off by Fluffy: the game's own file is read from its row (the 2023 layout template too).
+            ReplaceChecks.Fixture f = SortedGame(Path.Combine(root, "turned-off"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
+            Zero(f, ModFixes.ReferenceCmdPath);
+            GameReference r = GameReference.Load(f.Game, PakIndex.Open(BasePak(f)), null);
+            uint got; r.CurrentCrcs.TryGetValue(ReplaceChecks.MaterialData, out got);
+            Require(got == vanilla && got != 0 && r.ReferenceCmd != null && r.CrcSource.Contains("turned off in the PAK"), "turned-off reference: " + r.CrcSource + " · " + got.ToString("X8"));
+            // Not in the PAK at all: another fighter's Outfit 1 colours give the signatures, never the layout template.
+            ReplaceChecks.Fixture g = SortedGame(Path.Combine(root, "missing"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
+            PakIndex withRef = PakIndex.Open(BasePak(g));
+            var entries = new Dictionary<ulong, byte[]>();
+            for (int i = 0; i < withRef.Count; i++) { PakEntry e = withRef.Entry(i); if (e.Hash != PakHash.PathHash(ModFixes.ReferenceCmdPath)) entries[e.Hash] = withRef.Read(e); }
+            WriteSorted(BasePak(g), entries);
+            r = GameReference.Load(g.Game, PakIndex.Open(BasePak(g)), null);
+            r.CurrentCrcs.TryGetValue(ReplaceChecks.MaterialData, out got);
+            Require(got == 0x22222222 && r.ReferenceCmd == null && r.CrcSource.Contains("esf002_001_cmd_000"), "missing reference: " + r.CrcSource + " · " + got.ToString("X8"));
+            // The usual game: the reference as before, untouched by the fallback.
+            ReplaceChecks.Fixture h = SortedGame(Path.Combine(root, "present"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
+            r = GameReference.Load(h.Game, PakIndex.Open(BasePak(h)), null);
+            Require(r.CrcSource == "vanilla " + Path.GetFileName(ModFixes.ReferenceCmdPath) && r.ReferenceCmd != null && r.CurrentCrcs[ReplaceChecks.MaterialData] == vanilla, "present reference: " + r.CrcSource);
+        }
+
         // ---- Owned rows are never repaired: the Manager's own rows and rows any Fluffy installed.ini (either root) owns
         internal static void OwnedRows(string root, FakeProcessProbe probe)
         {

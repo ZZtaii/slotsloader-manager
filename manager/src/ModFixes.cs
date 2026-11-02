@@ -523,9 +523,50 @@ namespace SlotsInstaller
                 if (basePak != null) cmd = basePak.ReadByPath(ModFixes.ReferenceCmdPath);
                 if (cmd == null && dlc != null) foreach (PakIndex p in dlc) { cmd = p.ReadByPath(ModFixes.ReferenceCmdPath); if (cmd != null) break; }
                 if (cmd != null && ModFixes.UserTypeCrcs(cmd, r.CurrentCrcs)) { r.ReferenceCmd = cmd; r.CrcSource = "vanilla " + Path.GetFileName(ModFixes.ReferenceCmdPath); }
+                else if (cmd == null) r.ReferenceFallback(basePak, dlc);
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; r.CrcSource = "unavailable: " + ex.Message; }
             return r;
+        }
+
+        // 1.0.16 (as Slotsloader 1.10.8): a mod over Ryu's Outfit 1 colours installed by the external mod manager turns
+        // the reference off in the PAK, and no outdated colour file was fixed. Its turned-off entry still holds the game's
+        // file; else another fighter's Outfit 1 colours give the same signatures, but not the 2023 layout template (its
+        // fur block may be that fighter's), so ReferenceCmd stays null and 2023 files are left as they are.
+        private void ReferenceFallback(PakIndex basePak, IList<PakIndex> dlc)
+        {
+            if (basePak == null) return;
+            var turnedOff = new List<byte[]>();
+            foreach (int i in basePak.TurnedOffCandidates(PakHash.PathHash(ModFixes.ReferenceCmdPath)))
+            {
+                PakEntry e = basePak.Entry(i);
+                if (e.DecompressedSize <= 0 || e.DecompressedSize > (1 << 20)) continue;
+                byte[] data = basePak.Read(e);
+                if (ColourSignatures(data) != null) turnedOff.Add(data);
+            }
+            if (turnedOff.Count == 1)
+            {
+                CurrentCrcs = ColourSignatures(turnedOff[0]); ReferenceCmd = turnedOff[0];
+                CrcSource = "vanilla " + Path.GetFileName(ModFixes.ReferenceCmdPath) + " (turned off in the PAK, read from its entry)";
+                return;
+            }
+            Func<string, byte[]> read = PakReader(basePak, dlc);
+            for (int f = 0; f < 100; f++)
+            {
+                if (f == 1) continue;
+                string path = String.Format("natives/stm/product/model/esf/esf{0:000}/001/esf{0:000}_001_cmd_000.user.2", f);
+                Dictionary<uint, uint> crcs = ColourSignatures(read(path));
+                if (crcs == null) continue;
+                CurrentCrcs = crcs;
+                CrcSource = "vanilla " + Path.GetFileName(path) + " (" + Path.GetFileName(ModFixes.ReferenceCmdPath) + " is replaced; 2023 colour files keep their layout)";
+                return;
+            }
+        }
+        // A game colour file's type signatures, MaterialData's among them; null when it is not one.
+        private static Dictionary<uint, uint> ColourSignatures(byte[] data)
+        {
+            var crcs = new Dictionary<uint, uint>();
+            return data != null && ModFixes.UserTypeCrcs(data, crcs) && crcs.ContainsKey(0x9E32F1F4) ? crcs : null;
         }
 
         private void LoadTables(string gameRoot)

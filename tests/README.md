@@ -84,6 +84,17 @@ second zeroed scene of the same folder there: left out, no guess; (d) a table no
 sorted: left out. The index names model folders from `natives/`, as the game's does.
 With `--old-loader` (1.10.5 or earlier) case a is left out ("slot scene missing").
 
+## Colour-file reference turned off (unreleased fix)
+
+After `build.bat`, run `python tests/colour_reference.py [--old-loader <previous exe>]`.
+fluffy_coexistence's fixture game, its extra outfit shipping a colour file with the old
+MaterialData signature, the base PAK sorted by hash. The current signatures come from the
+game's `esf001_001_cmd_000.user.2`: (a) present, the mod file is brought up to date as
+before; (b) its entry zeroed (Sakura as Ryu through the external mod manager), read from
+the turned-off entry; (c) gone, read from another fighter's Outfit 1 colours (signatures
+only, no 2023 layout template); (d) no game colour file: a warning, the file keeps its
+signature. With `--old-loader` (1.10.7 or earlier) cases b and c keep the old signature.
+
 ## A mod's own colour list (unreleased fix)
 
 After `build.bat`, run `python tests/mod_colour_list.py [--old-loader <previous exe>]`.

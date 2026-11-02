@@ -336,8 +336,19 @@ namespace SlotsInstaller
                 engine.Install(dup, "modA second", false, null); engine.SetEnabled(engine.LoadState().Mods[0].Id, false);
                 refresh(); string withDuplicate = order();
                 // Restore original game files: no popup, Undo brings every record back in order with its enabled state.
-                Call(form, "RestoreOriginalGameFiles"); WaitIdle(form); refresh();
+                string framework = Path.Combine(f.Game, "reframework"); bool hadFramework = Directory.Exists(framework);
+                Call(form, "RestoreOriginalGameFiles"); WaitIdle(form); string restoredStatus = Get<Label>(form, "statusText").Text; refresh();
                 Require(engine.LoadState().Mods.Count == 0 && asked == 0 && engine.ListRemoved().Count == 3, "restore all: " + order() + ", kept copies " + engine.ListRemoved().Count);
+                // 1.0.16: the enabled replacements were saved as a preset first (the Undo's copies go with the next change).
+                string costumes = Get<AppConfig>(form, "config").CostumeRoot;
+                List<OutfitSetInfo> before = OutfitSetStore.List(costumes).Entries.Where(e => e.Kind == OutfitSetKind.Preset && e.Name.StartsWith(MainForm.BeforeRestorePreset, StringComparison.Ordinal)).ToList();
+                Require(before.Count == 1 && before[0].Scope == PresetScope.Replacements && before[0].ReplacementCount > 0 && restoredStatus.Contains("saved first as the preset “" + before[0].Name + "”"),
+                    "preset before restore: " + before.Count + " presets (" + String.Join("; ", before.Select(e => e.Name + " " + e.Scope + " " + e.ReplacementCount)) + "), status " + restoredStatus);
+                // Later checks compare the game folder with the clean fixture: the preset and the folders it made go.
+                OutfitSetStore.Delete(costumes, before[0]);
+                foreach (string made in new[] { ".slotsloader-installer-presets", ".slotsloader-installer-set-staging" })
+                    if (Directory.Exists(Path.Combine(framework, made)) && !Directory.EnumerateFileSystemEntries(Path.Combine(framework, made)).Any()) Directory.Delete(Path.Combine(framework, made));
+                if (!hadFramework && Directory.Exists(framework) && !Directory.EnumerateFileSystemEntries(framework).Any()) Directory.Delete(framework);
                 undo(); Require(order() == withDuplicate, "Undo of Restore original game files: " + order() + " (was " + withDuplicate + ")");
                 // SF6 running: refused inline, nothing changes, no dialog.
                 probe.Game = true; Call(form, "PollGame");
@@ -1573,6 +1584,17 @@ namespace SlotsInstaller
                     Require(Get<Label>(form, "modeNotice").Text.StartsWith("Slotsloader isn't installed"), "a REFramework updated outside the Manager kept the old notice: " + Get<Label>(form, "modeNotice").Text);
                     putDll("REFramework 01.01.2025"); Call(form, "CheckToolStamp");
                     Require(Get<Label>(form, "modeNotice").Text.StartsWith("REFramework from 1 Jan 2025 is out of date"), "poll after an older build: " + Get<Label>(form, "modeNotice").Text);
+                    // 1.0.16 (user report): Settings → Game files follows a change seen while another page was open, and
+                    // one UpdateModeUi saw first while the tab was open.
+                    Label toolLines = Get<Label>(form, "settingsToolStatus"); Panel settings = Get<Panel>(form, "settingsPage");
+                    Call(form, "ShowPage", settings); Call(form, "ShowSettingsTab", true); Application.DoEvents();
+                    Require(toolLines.Text.StartsWith("REFramework out of date"), "Settings with an older build: " + toolLines.Text);
+                    ShowLibrary(form); putDll("REFramework 13.10.2026"); Call(form, "CheckToolStamp");
+                    Call(form, "ShowPage", settings); Application.DoEvents();
+                    Require(toolLines.Text.StartsWith("REFramework installed"), "Settings kept the old REFramework line after another page saw the change: " + toolLines.Text);
+                    putDll("REFramework 01.01.2025"); Call(form, "UpdateModeUi"); Call(form, "CheckToolStamp");
+                    Require(toolLines.Text.StartsWith("REFramework out of date"), "Settings missed a change UpdateModeUi saw first: " + toolLines.Text);
+                    ShowLibrary(form);
                     putDll("REFramework Upscaler 01.01.2025");
                     Require(notice().StartsWith("Slotsloader isn't installed"), "an upscaler build was called old: " + notice());
                     // One click: the pinned nightly downloaded, verified and opened in Replace original; Install puts it in.

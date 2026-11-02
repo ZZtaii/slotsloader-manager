@@ -112,7 +112,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-11-01-1.10.7-slotsloader-fork";
+static const char* LOADER_BUILD_ID = "2026-11-03-1.10.8-slotsloader-fork";
 
 // ============================================================================
 // Utility
@@ -789,16 +789,57 @@ static const char* type_label(uint32_t t) {
     }
 }
 
+// A game colour file: its type signatures, MaterialData's among them; empty when it is not one.
+static std::unordered_map<uint32_t, uint32_t> cmd_signatures(const std::vector<uint8_t>& data) {
+    std::unordered_map<uint32_t, uint32_t> crcs;
+    if (!user_type_crcs(data, crcs) || !crcs.count(0x9E32F1F4)) crcs.clear();
+    return crcs;
+}
+
+// 1.10.8 (user report): Sakura as Ryu installed by the external mod manager replaces Ryu's Outfit 1
+// colours, which turns this file off in the pak. Nothing was read, so no mod colour file was brought to
+// the current signatures (127 in that game) and Ingrid's extra outfits never finished loading. The
+// turned-off entry still holds the game's file; failing that, another fighter's Outfit 1 colours give
+// the same signatures. That one is not the 2023 layout template: its fur block may be another fighter's.
 static void load_current_crcs(PakReader& base_pak) {
     g_swap_official = &base_pak; g_swap_donors.clear(); g_swap_reported.clear();
     g_current_crc.clear(); g_crc_upgraded_files.clear(); g_crc_stale_files.clear();
     g_cmd_reference.clear(); g_layout_upgraded_files.clear();
     g_tex_repaired_files.clear(); g_tex_bad_files.clear();
     const char* ref = "natives/stm/product/model/esf/esf001/001/esf001_001_cmd_000.user.2";
-    if (auto* e = base_pak.find(pak_path_hash(std::string_view(ref)))) {
+    const uint64_t ref_hash = pak_path_hash(std::string_view(ref));
+    if (auto* e = base_pak.find(ref_hash)) {
         g_cmd_reference = base_pak.read(*e);
         user_type_crcs(g_cmd_reference, g_current_crc);
+        return;
     }
+    const PakEntry* found = nullptr;
+    int n = 0;
+    for (auto* e : base_pak.turned_off_candidates(ref_hash)) {
+        if (e->decompressed_size <= 0 || e->decompressed_size > (1 << 20)) continue;
+        if (!cmd_signatures(base_pak.read(*e)).empty()) { found = e; n++; }
+    }
+    if (n == 1) {
+        g_cmd_reference = base_pak.read(*found);
+        g_current_crc = cmd_signatures(g_cmd_reference);
+        printf("  colour files: the game's %s is turned off in the pak (a replacement installed over it): read from its turned-off entry\n", ref);
+        return;
+    }
+    for (int f = 0; f < 100; f++) {
+        if (f == 1) continue;
+        char path[96];
+        snprintf(path, sizeof path, "natives/stm/product/model/esf/esf%03d/001/esf%03d_001_cmd_000.user.2", f, f);
+        auto* e = base_pak.find(pak_path_hash(std::string_view(path)));
+        if (!e) continue;
+        auto crcs = cmd_signatures(base_pak.read(*e));
+        if (crcs.empty()) continue;
+        g_current_crc = std::move(crcs);
+        printf("  colour files: the game's %s is missing (a replacement installed over it): signatures read from %s; "
+               "colour files of 2023 keep their layout\n", ref, path);
+        return;
+    }
+    printf("  WARN: no game colour file could be read: mod colour files made before a game update keep their "
+           "signatures, and the outfits using them may never finish loading\n");
 }
 
 // source: file name for the log (disk path, or the pak entry hash)

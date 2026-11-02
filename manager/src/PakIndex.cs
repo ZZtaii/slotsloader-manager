@@ -135,6 +135,25 @@ namespace SlotsInstaller
             return byHash.TryGetValue(hash, out list) ? list : new List<int>();
         }
         internal bool Contains(ulong hash) { EnsureLookup(); return byHash.ContainsKey(hash); }
+        // 1.0.16: rows turned off (hash zeroed, data kept) that can have held this hash: the table is sorted by hash
+        // and a turned-off row keeps its place, so only those between the two rows around the hash can. Empty when
+        // the hash is present or the table is not sorted (as the loader's PakReader.turned_off_candidates).
+        internal List<int> TurnedOffCandidates(ulong hash)
+        {
+            var result = new List<int>();
+            if (hash == 0 || Contains(hash)) return result;
+            ulong last = 0; var open = new List<int>();
+            for (int i = 0; i < Count; i++)
+            {
+                ulong h = BitConverter.ToUInt64(Table, i * EntrySize);
+                if (h == 0) { open.Add(i); continue; }
+                if (h < last) return new List<int>();
+                if (h > hash) { if (last < hash) result.AddRange(open); return result; }
+                last = h; open.Clear();
+            }
+            result.AddRange(open);
+            return result;
+        }
         internal int CountZeroed() { EnsureLookup(); return ZeroedCount; }
 
         internal PakEntry Entry(int i)

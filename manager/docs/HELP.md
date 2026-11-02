@@ -343,12 +343,12 @@ The install then stops before anything changes, with "This path is too long for 
 > What each undo and restore option does, from the lightest to the full reset.
 
 ### Undo
-Many actions happen at once and show **Undo** in the status bar: **Disable** and **Enable** of a replacement or tool mod, **Move up** and **Move down**, **Remove this Manager's mods**, changing the replacement method, turning the loose file loader on or off, **Remove PAK**, and turning a variant on or off. An Undo lasts until your next change or until you close the Manager. If it can't run yet, it says why ("Can't undo yet: …") and stays.
+Many actions happen at once and show **Undo** in the status bar: **Disable** and **Enable** of a replacement or tool mod, **Move up** and **Move down**, **Remove this Manager's mods**, changing the replacement method, turning the loose file loader on or off, **Remove PAK**, and turning a variant on or off. An Undo lasts until your next change or you close the Manager. If it can't run yet, it says why and stays.
 
 **Uninstall has no Undo.** It keeps no copy, so reinstall the mod from the Mod library. An outfit or replacement with no library source (a manual drop) goes to the Recycle Bin instead. If the Recycle Bin can't take it, an outfit stays installed and a replacement's files are deleted; the status line says which. Deleting a mod in the Mod library also moves it to the Recycle Bin.
 
 ### Remove this Manager's mods
-**Gear → Restore → Remove this Manager's mods** removes every replacement and tool mod the Manager installed and restores the original files. That includes REFramework and Slotsloader if the Manager installed them, so extra outfits stop loading until you press **Undo**, which puts everything back in its order. Undo waits while your external mod manager has mods installed, and ends at your next change or when you close the Manager. Your extra outfits and your external mod manager's mods are not touched. The same action is **Restore original game files** on the Installed page banner and in **Settings → Game files & replacements**.
+**Gear → Restore → Remove this Manager's mods** removes every replacement and tool mod the Manager installed and restores the original files. That includes REFramework and Slotsloader if the Manager installed them, so extra outfits stop loading until you press **Undo**, which puts everything back. Undo waits while your external mod manager has mods installed and ends at your next change, so your enabled replacements are saved as a preset first. Your extra outfits and your external mod manager's mods are not touched. The same action is **Restore original game files** on the Installed page banner and in **Settings → Game files & replacements**.
 
 ### Restore game to vanilla
 **Gear → Restore → Restore game to vanilla…** asks first and has no Undo. Close SF6 and your external mod manager first. It removes:

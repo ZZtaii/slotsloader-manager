@@ -127,21 +127,24 @@ namespace SlotsInstaller
         // the external mod manager rewrites installed.ini, which did). Checked on every poll and on activation. The external
         // manager's installed.ini is part of the stamp: it decides who updates REFramework, and it can start or stop listing
         // dinput8.dll without the file changing (PR #9 review).
-        private string toolStamp;
+        // 1.0.16 (user report): Settings ? Game files kept "REFramework out of date" and "Slotsloader not installed" after
+        // both were installed. Its own stamp (settingsToolStamp, set when the tab is read): UpdateModeUi takes toolStamp in
+        // Extra outfit mode, so a change seen there first, or while Settings was hidden, never reached the tab. ShowPage
+        // also reads the tab again when Settings opens on it.
+        private string toolStamp, settingsToolStamp;
         private string ToolStampNow()
         {
             string fluffy = "";
             try { fluffy = FluffyInstalls.StampOf(fluffyRoots); } catch (Exception ex) { Program.Log(ex); }
             return ToolStatus.Stamp(config.GameRoot) + "#" + fluffy;
         }
+        private bool SettingsReplaceShown { get { return currentPage == settingsPage && settingsReplacePanel != null && settingsReplacePanel.Visible; } }
         internal void CheckToolStamp()
         {
             if (IsDisposed || busy) return;
             string now = ToolStampNow();
-            if (now == toolStamp) return;
-            toolStamp = now;
-            UpdateModeUi();
-            if (currentPage == settingsPage) LoadReplaceSettingsFields();
+            if (now != toolStamp) { toolStamp = now; UpdateModeUi(); }
+            if (SettingsReplaceShown && now != settingsToolStamp) LoadReplaceSettingsFields();
         }
 
         private void LaunchGame()
@@ -1168,6 +1171,7 @@ namespace SlotsInstaller
         private void LoadReplaceSettingsFields()
         {
             if (settingsMethod == null) return;
+            settingsToolStamp = ToolStampNow();   // 1.0.16 (CheckToolStamp)
             loadingReplaceSettings = true;
             try
             {
