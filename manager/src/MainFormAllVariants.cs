@@ -44,7 +44,7 @@ namespace SlotsInstaller
             }
         }
 
-        private int VariantOptionCount { get { return package == null ? 0 : package.Components.Count(c => !c.IsDummy && c.Assets.Count > 0); } }
+        private int VariantOptionCount { get { return package == null ? 0 : SourcePackage.Components.Count(c => !c.IsDummy && c.Assets.Count > 0); } }   // 1.0.16: the archive's own options
 
         private void UpdateAllVariants()
         {

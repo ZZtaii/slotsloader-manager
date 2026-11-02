@@ -275,12 +275,16 @@ namespace SlotsInstaller
                         e.Result = new ReviewResult { Generation = generation, Package = current, Mode = mode, Selection = selection, SourceChanged = true, SourceGone = sourceStamp == null, Milliseconds = clock.ElapsedMilliseconds };
                         return;
                     }
-                    CompositionPlan composition = Composer.Plan(current, selection, replace);
+                    // 1.0.16: addons shown inside the mod: the main mod is planned and checked with its own ids (the fill-in
+                    // included); the merged ticks and each addon add their errors and notes (MainFormAddons.cs).
+                    AddonSplit split = current.MergedFrom == null ? null : LibraryAddons.Split(current, selection, replace);
+                    CompositionPlan composition = Composer.Plan(current.MergedFrom ?? current, split == null ? selection : split.MainIds.ToArray(), replace);
+                    if (split != null) AddAddonReview(composition, current, selection, split, replace);
                     if (missing.Length > 0) composition.Errors.Add("Saved options are missing: " + String.Join(", ", missing) + ". Click " + "Health" + " to review the changed selection.");
                     ReplacePlan health = null;
                     if (replace && composition.CanInstall && !choicesOpen)
                     {
-                        try { health = ReplacePlanner.Check(composition, sevenZip, engine, cache, updateId); }
+                        try { health = ReplacePlanner.Check(composition, sevenZip, engine, cache, updateId); if (split != null) AdjustAddonHealth(health, current, split, engine); }
                         catch (OperationCanceledException) { throw; }
                         catch (SourceChangedException) { throw; }   // 2.4.1: reloaded, never shown as a problem
                         catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); health = ReplacePlan.Failed(current.Name, current.SourcePath, ex.Message); }
@@ -481,8 +485,8 @@ namespace SlotsInstaller
         internal InstalledOutfit DuplicateExtraOutfit()
         {
             if (package == null || IsReplaceMode || installed == null) return null;
-            var selection = new HashSet<string>(selectedOrder, StringComparer.OrdinalIgnoreCase);
-            return installed.FirstOrDefault(o => o.Managed && String.Equals(o.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase) && o.SelectedIds != null && Composer.MatchesSavedSelection(package, selection, o.SelectedIds));
+            var selection = new HashSet<string>(MainSelection(), StringComparer.OrdinalIgnoreCase);   // 1.0.16: the main mod's own ids
+            return installed.FirstOrDefault(o => o.Managed && String.Equals(o.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase) && o.SelectedIds != null && Composer.MatchesSavedSelection(SourcePackage, selection, o.SelectedIds));
         }
         internal static string DuplicateText(InstalledOutfit o)
         {

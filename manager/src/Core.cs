@@ -879,6 +879,7 @@ namespace SlotsInstaller
         internal ArchiveVariants Variants;      // 2.5.0: SlotsLoader's variants of a manual archive/folder with several (VariantChoices.cs)
         internal bool VariantsUnsupported;      // 2.5.0: several SlotsLoader outfits but no variants.json (an older SlotsLoader)
         internal bool WholeArchive;             // 2.5.4: a manual archive the Manager copied from SourcePath (Install all variants, ArchiveInstalls.cs)
+        internal List<PartGraft> Parts;         // 1.0.16: the manifest's added parts (an addon archive's ticks come back from them)
     }
     public sealed class InstallManifest
     {
@@ -894,9 +895,15 @@ namespace SlotsInstaller
         private const string ManifestName=".slots-installer.json";
         public static InstallResult Install(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged)
         {
-            using (AcquireMutation(costumeRoot)) return InstallLocked(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged);
+            return Install(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,null);
         }
-        private static InstallResult InstallLocked(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged)
+        // 1.0.16: dropPartSources: added parts from these sources are not put back on a reinstall (a main mod's addon
+        // archives, added again afterwards with their current ticks, or left out when none is ticked).
+        internal static InstallResult Install(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources)
+        {
+            using (AcquireMutation(costumeRoot)) return InstallLocked(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,dropPartSources);
+        }
+        private static InstallResult InstallLocked(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources)
         {
             if (!plan.CanInstall) throw new IOException(String.Join(Environment.NewLine,plan.Errors));
             Safety.Segment(character); Safety.Segment(outfitName);
@@ -936,10 +943,12 @@ namespace SlotsInstaller
                 // 1.0.6: parts added from other mods (InstallerParts.cs) stay when the same mod is reinstalled (Edit options,
                 // a changed source); another mod in this outfit's place starts without them.
                 var droppedParts=new List<string>(); List<PartGraft> keptParts=new List<PartGraft>();
-                if (oldManifest!=null && oldManifest.Parts!=null && oldManifest.Parts.Count>0)
+                var drop=new List<string>(dropPartSources ?? new string[0]);
+                List<PartGraft> previousParts=oldManifest==null || oldManifest.Parts==null ? null : oldManifest.Parts.Where(g=>!drop.Any(d=>ReplacePlanner.SameSource(d,g.SourcePath))).ToList();
+                if (previousParts!=null && previousParts.Count>0)
                 {
-                    if (String.Equals(oldManifest.SourcePath,fresh.SourcePath,StringComparison.OrdinalIgnoreCase)) keptParts=ReapplyParts(oldManifest,stage,hashes,transaction,sevenZipPath,droppedParts);
-                    else droppedParts.AddRange(oldManifest.Parts.Select(g=>GraftText(g)+" (another mod fills the outfit now)"));
+                    if (String.Equals(oldManifest.SourcePath,fresh.SourcePath,StringComparison.OrdinalIgnoreCase)) keptParts=ReapplyParts(new InstallManifest {Parts=previousParts},stage,hashes,transaction,sevenZipPath,droppedParts);
+                    else droppedParts.AddRange(previousParts.Select(g=>GraftText(g)+" (another mod fills the outfit now)"));
                 }
                 var rebuiltSwatches = new Dictionary<string,string>();
                 int swatchFixes=FixSwatches(stage,hashes,root,rebuiltSwatches);   // 2.5.5: outdated select-screen swatches (ModFixes.UpgradeSwatches)
@@ -1134,7 +1143,7 @@ namespace SlotsInstaller
         {
             DateTime created;
             if (m==null || !DateTime.TryParse(m.CreatedUtc,null,System.Globalization.DateTimeStyles.RoundtripKind,out created)) created=DateTime.MinValue;
-            return new InstalledOutfit {Folder=folder,Name=m==null ? Path.GetFileName(folder) : m.Name,Character=character,Enabled=enabled,Managed=m!=null,Id=m==null ? "" : m.Id,SourcePath=m==null ? "" : m.SourcePath,SelectedIds=m==null ? new List<string>() : m.SelectedIds,InstalledUtc=created==DateTime.MinValue ? created : created.ToUniversalTime(),SnapshotStamp=OutfitSnapshotStamp(folder)};
+            return new InstalledOutfit {Folder=folder,Name=m==null ? Path.GetFileName(folder) : m.Name,Character=character,Enabled=enabled,Managed=m!=null,Id=m==null ? "" : m.Id,SourcePath=m==null ? "" : m.SourcePath,SelectedIds=m==null ? new List<string>() : m.SelectedIds,Parts=m==null ? null : m.Parts,InstalledUtc=created==DateTime.MinValue ? created : created.ToUniversalTime(),SnapshotStamp=OutfitSnapshotStamp(folder)};
         }
         internal static string OutfitSnapshotStamp(string path)
         {

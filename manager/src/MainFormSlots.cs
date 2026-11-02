@@ -68,8 +68,8 @@ namespace SlotsInstaller
             string plain = CleanName(package.Name), character = TargetCharacter();
             List<InstalledOutfit> slots = ModSlots(character);
             if (slots.Count == 0) return Untaken(plain, character);
-            var selection = new HashSet<string>(selectedOrder, StringComparer.OrdinalIgnoreCase);
-            InstalledOutfit same = slots.FirstOrDefault(o => o.Enabled && o.SelectedIds != null && Composer.MatchesSavedSelection(package, selection, o.SelectedIds));
+            var selection = new HashSet<string>(MainSelection(), StringComparer.OrdinalIgnoreCase);   // 1.0.16: the main mod's own ids
+            InstalledOutfit same = slots.FirstOrDefault(o => o.Enabled && o.SelectedIds != null && Composer.MatchesSavedSelection(SourcePackage, selection, o.SelectedIds));
             if (same != null) return same.Name;
             List<string> options = VariantOptionNames();
             string name = CleanName(options.Count == 0 ? plain : plain + " · " + String.Join(" + ", options));

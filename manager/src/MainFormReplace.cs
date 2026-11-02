@@ -360,11 +360,12 @@ namespace SlotsInstaller
         private ReplaceMod SameInstalledReplacement()
         {
             if (package == null || editingReplacement != null) return null;
-            var selection = new HashSet<string>(selectedOrder, StringComparer.OrdinalIgnoreCase);
+            var selection = new HashSet<string>(MainSelection(), StringComparer.OrdinalIgnoreCase);   // 1.0.16: the main mod's own ids
+            ModPackage own = SourcePackage;
             return gameRows.Where(r => r.Mod != null).Select(r => r.Mod).FirstOrDefault(m =>
             {
                 if (!String.Equals(m.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)) return false;
-                return Composer.MatchesSavedSelection(package, selection, m.SelectedIds);
+                return Composer.MatchesSavedSelection(own, selection, m.SelectedIds);
             });
         }
 
@@ -473,15 +474,21 @@ namespace SlotsInstaller
                 if (loader != null) replaceId = loader.Id;
             }
             CompositionPlan composition = plan; string sevenZip = config.SevenZipPath; string name = ReplacementName(); string game = config.GameRoot;
+            // 1.0.16: the main mod's record (plan holds its split ids), then each addon's own record directly above it, or
+            // the addon's record uninstalled when none of its options is ticked (MainFormAddons.cs).
+            AddonSplit split = package.MergedFrom == null || editingReplacement != null ? null : LibraryAddons.Split(package, selectedOrder, true);
+            string addons = "";
             Work("Installing replacement…", delegate
             {
                 if (convert) engine.SwitchMethod(ReplaceMethods.Pak);
-                ReplacePlan prepared; ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, replaceId, out prepared); if (LoaderCostumePak.IsLoaderMod(mod)) UnownedSlotsFlag.Ensure(game); return mod;
+                ReplacePlan prepared; ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, replaceId, out prepared); if (LoaderCostumePak.IsLoaderMod(mod)) UnownedSlotsFlag.Ensure(game);
+                if (split != null) addons = InstallAddonRecords(engine, mod, split, sevenZip);
+                return mod;
             }, delegate(ReplaceMod mod)
             {
                 editingReplacement = null; UpdateModeUi(); LoaderUpdateInstalled();
                 string method = usePak && mod.Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)) ? (overridden ? " · PAK method used: loose file loader off" : " · PAK method (loose file loader off)") : "";
-                RefreshInstalled("✓ Installed " + mod.Name + " · " + ReplacePlanner.N(mod.Files.Count, "file") + method + ". " + (gameRunning ? "Restart SF6 to see it." : "Start SF6 to see it."));
+                RefreshInstalled("✓ Installed " + mod.Name + " · " + ReplacePlanner.N(mod.Files.Count, "file") + addons + method + ". " + (gameRunning ? "Restart SF6 to see it." : "Start SF6 to see it."));
             });
         }
 

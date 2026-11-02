@@ -2130,11 +2130,15 @@ namespace SlotsInstaller
             Func<string, bool> same = source => String.Equals(source, pkg.SourcePath, StringComparison.OrdinalIgnoreCase);
             List<string> replaced = gameRows.Where(r => r.Mod != null && same(r.Mod.SourcePath) && r.Mod.SelectedIds != null && r.Mod.SelectedIds.Count > 0)
                 .Select(r => r.Mod).OrderByDescending(m => m.Enabled).ThenByDescending(m => m.InstalledUtc ?? "", StringComparer.Ordinal).Select(m => m.SelectedIds).FirstOrDefault();
-            List<string> extra = installed.Where(o => o.Managed && same(o.SourcePath) && o.SelectedIds != null && o.SelectedIds.Count > 0)
-                .OrderByDescending(o => o.Enabled).ThenByDescending(o => o.InstalledUtc).Select(o => o.SelectedIds).FirstOrDefault();
+            InstalledOutfit extraOutfit = installed.Where(o => o.Managed && same(o.SourcePath) && o.SelectedIds != null && o.SelectedIds.Count > 0)
+                .OrderByDescending(o => o.Enabled).ThenByDescending(o => o.InstalledUtc).FirstOrDefault();
+            List<string> extra = extraOutfit == null ? null : extraOutfit.SelectedIds;
             bool replaceMode = IsReplaceMode;
-            List<string> ids = (replaceMode ? replaced ?? extra : extra ?? replaced) ?? new List<string>();
+            bool fromReplace = replaceMode ? replaced != null : extra == null && replaced != null;
+            List<string> ids = (fromReplace ? replaced : extra) ?? new List<string>();
             ids = ids.Where(id => { ModComponent c = pkg.Find(id); return c == null || (!c.IsDummy && c.HasFiles(replaceMode)); }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            // 1.0.16: the addons' installed ticks too; the main branch that stood in for an addon branch shows unticked.
+            if (ids.Count > 0 && pkg.MergedFrom != null) ids = LibraryAddons.Restore(pkg, ids, InstalledAddonIds(pkg, fromReplace, fromReplace ? null : extraOutfit));
             return ids.Count > 0 ? ids : null;
         }
 
@@ -2161,10 +2165,13 @@ namespace SlotsInstaller
             bool replaceLoad = restoreReplace != null || remembered == InstallModes.Replace;
             PackageReload reload = pendingReload; pendingReload = null;   // 2.4.1: a reload after the source changed on disk
             if (reload != null) replaceLoad = reload.Mode == InstallModes.Replace || restoreReplace != null;
+            // 1.0.16: addon archives of this mod in the library show inside it (MainFormAddons.cs); Edit options of one
+            // installed record shows that record's mod alone.
+            string openedName = ""; List<AddonCandidate> addonCandidates =restore == null && restoreReplace == null ? AddonCandidates(entry, out openedName) : null;
             OpenWork(entry.SourcePath, delegate
             {
                 string stamp = SourceStamp(entry.SourcePath);   // before reading: a change while reading is seen next time
-                ModPackage loaded = ReadOpenPackage(entry.SourcePath, stamp, sevenZip);
+                ModPackage loaded = WithAddons(ReadOpenPackage(entry.SourcePath, stamp, sevenZip), openedName, addonCandidates, sevenZip);
                 List<string> defaults = Composer.DefaultSelection(loaded, replaceLoad || IsToolPackage(loaded));
                 byte[] image = null;
                 try { image = loaded.PreviewBytes(defaults.FirstOrDefault(), sevenZip); } catch { }
@@ -2185,13 +2192,14 @@ namespace SlotsInstaller
                 ClearPreviewCache();
                 selectingMod = true;
                 bool relist = false;
+                ModPackage own = SourcePackage;   // 1.0.16: the row describes its own archive, not the addons shown with it
                 foreach (LibraryEntry listed in library.Where(e => String.Equals(e.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)))
                 {
                     string known = ListedIdentity(listed);
-                    listed.CharacterCodes = package.CharacterCodes.ToList(); listed.DetectionError = null;
-                    listed.Character = ModCategories.NameGuessAllowed(listed) ? package.Character : "";   // 2.3.1: no name guess for Misc/Code tools
-                    listed.OptionCount = package.Components.Count(c => c.Assets.Count > 0);
-                    listed.OptionIds = package.Components.Where(c => c.Assets.Count > 0).Select(c => c.Id).ToList();
+                    listed.CharacterCodes = own.CharacterCodes.ToList(); listed.DetectionError = null;
+                    listed.Character = ModCategories.NameGuessAllowed(listed) ? own.Character : "";   // 2.3.1: no name guess for Misc/Code tools
+                    listed.OptionCount = own.Components.Count(c => c.Assets.Count > 0);
+                    listed.OptionIds = own.Components.Where(c => c.Assets.Count > 0).Select(c => c.Id).ToList();
                     installStates.Remove(listed);
                     listed.Detection = listed.CharacterCodes.Count > 1 ? "Ambiguous" : listed.CharacterCodes.Count == 1 ? (Characters.ByCode.ContainsKey(listed.CharacterCodes[0]) ? "Native" : "UnknownNative") : String.IsNullOrEmpty(listed.Character) ? "Unknown" : "Filename";
                     if (ListedIdentity(listed) != known) relist = true;
@@ -2216,6 +2224,7 @@ namespace SlotsInstaller
                 packageDescription.Text = primary == null ? "No options found in this mod." : primary.Description;
                 if (String.IsNullOrWhiteSpace(packageDescription.Text)) packageDescription.Text = "Hover an option to preview it. Check its box to include it.";
                 packageHint.Text = package.Warnings.Count > 0 ? String.Join("\n", package.Warnings.Take(2)) : "Main files first. Options selected later take precedence when they replace the same file.";
+                if (package.AddonParts != null) packageHint.Text = "With options from " + String.Join(", ", package.AddonParts.Select(p => p.FileName)) + " (an addon of this mod)." + (package.Warnings.Count > 0 ? "\n" + package.Warnings[0] : "");
                 SetPreview(result.Preview.TakeImage()); previewComponentId = result.Defaults.FirstOrDefault(); inspectedComponentId = previewComponentId;
                 if (previewComponentId != null) previewCache.Add(previewComponentId, previewImage);
                 outfitNameTyped = false; outfitNameLocked = restore != null;   // 2.5.0: Edit options keeps the outfit's name; otherwise the name is suggested (ApplySuggestedName)
@@ -2322,6 +2331,13 @@ namespace SlotsInstaller
                     ModComponent c = ancestor.Tag as ModComponent;
                     if (c != null && !c.IsDummy && c.HasFiles(IsReplaceMode) && !ancestor.Checked) { ancestor.Checked = true; if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
                 }
+                // 1.0.16: an addon option's Requirement=Main files ticks the main mod's option of that name.
+                if (LibraryAddons.IsAddonId(package, component.Id))
+                    foreach (ModComponent need in LibraryAddons.Requirements(package, component))
+                    {
+                        OptionNode required;
+                        if (need.HasFiles(IsReplaceMode) && componentNodes.TryGetValue(need.Id, out required) && !required.Checked) { required.Checked = true; if (!selectedOrder.Contains(need.Id)) selectedOrder.Insert(0, need.Id); }
+                    }
                 selectedOrder.Remove(component.Id); selectedOrder.Add(component.Id);
             }
             else
@@ -2803,7 +2819,17 @@ namespace SlotsInstaller
                 replace = true;
             }
             CompositionPlan current = plan; string root = config.CostumeRoot; string sevenZip = config.SevenZipPath;
-            Work("Installing extra outfit…", delegate { return Installer.Install(current, root, character, name, sevenZip, replace); }, delegate(InstallResult result)
+            // 1.0.16: the main mod as the outfit (plan holds its split ids), then each addon's ticks as an added part; an
+            // earlier part from an addon is replaced, or taken out when none of its options is ticked.
+            AddonSplit split = package.MergedFrom == null ? null : LibraryAddons.Split(package, selectedOrder, false);
+            List<string> addonSources = split == null ? null : split.Parts.Select(p => p.Key.SourcePath).ToList();
+            string removed = split == null || existing == null || existing.Parts == null ? "" : String.Concat(existing.Parts.Where(g => split.Parts.Any(p => p.Value.Count == 0 && ReplacePlanner.SameSource(p.Key.SourcePath, g.SourcePath))).Select(g => " · removed " + Installer.GraftText(g)));
+            Work("Installing extra outfit…", delegate
+            {
+                InstallResult installedOutfit = Installer.Install(current, root, character, name, sevenZip, replace, addonSources);
+                if (split != null) installedOutfit.PartsNote += AddAddonParts(installedOutfit.Folder, root, split, sevenZip) + removed;
+                return installedOutfit;
+            }, delegate(InstallResult result)
             {
                 RefreshInstalled("✓ Installed " + name + " · " + ReplacePlanner.N(result.FileCount, "file") + result.PartsNote + ". Restart SF6 to see changes.");   // 1.0.6: added parts kept/removed
             });
@@ -3184,7 +3210,10 @@ namespace SlotsInstaller
         private List<GameModRow> LinkedReplacements(string sourcePath)
         {
             if (String.IsNullOrWhiteSpace(sourcePath)) return new List<GameModRow>();
-            return gameRows.Where(r => r.Mod != null && String.Equals(r.Mod.SourcePath, sourcePath, StringComparison.OrdinalIgnoreCase)).OrderBy(r => r.Priority).ToList();
+            // 1.0.16: the open main mod's records include its addons' (installed with it from the same option list).
+            var sources = new List<string> { sourcePath };
+            if (package != null && package.AddonParts != null && String.Equals(package.SourcePath, sourcePath, StringComparison.OrdinalIgnoreCase)) sources.AddRange(package.AddonParts.Select(p => p.SourcePath));
+            return gameRows.Where(r => r.Mod != null && sources.Any(s => String.Equals(r.Mod.SourcePath, s, StringComparison.OrdinalIgnoreCase))).OrderBy(r => r.Priority).ToList();
         }
 
         // Why a replacement can't be uninstalled right now (same wording as the inspector's Uninstall link), or null.
