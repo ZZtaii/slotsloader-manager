@@ -771,13 +771,17 @@ namespace SlotsInstaller
             next.Released = keptReleased;
             next.ForeignCopies = foreignCopies;
 
-            // Crash reporter rename while replacements are installed (Fluffy does the same).
+            // Crash reporter rename while replacements are installed (Fluffy does the same). Deferred while SF6 or the
+            // external mod manager runs: decided again on the next change with both closed.
+            // 1.0.16 (user report): always on (the Settings checkbox is gone), and decided from the files, not only the state:
+            // the external mod manager put CrashReport.exe back when its last mod went while this state still said renamed,
+            // so no later install renamed it again.
             bool anyEnabled = next.Mods.Any(m => m.Enabled);
-            if (deferRenames) anyEnabled = current.CrashReporterRenamed;   // decided again on the next change with the game closed
             string crash = GamePath(CrashReporter.Name), renamed = GamePath(CrashReporter.RenamedName);
             var moves = new List<JournalOp>();
             next.CrashReporterRenamed = current.CrashReporterRenamed;
-            if (anyEnabled && Settings.RenameCrashReporter && !current.CrashReporterRenamed && File.Exists(crash) && !File.Exists(renamed))
+            if (deferRenames) { }
+            else if (anyEnabled && File.Exists(crash) && !File.Exists(renamed))
             { moves.Add(new JournalOp { Kind = "move", Path = CrashReporter.Name, Target = CrashReporter.RenamedName }); next.CrashReporterRenamed = true; }
             else if (!anyEnabled && current.CrashReporterRenamed)
             {

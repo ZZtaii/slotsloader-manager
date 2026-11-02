@@ -66,7 +66,6 @@ namespace SlotsInstaller
         private Control[] settingsGeneralParts = new Control[0];
         private Label settingsSubtitle;   // 2.4.0: shown on the General tab only
         private ComboBox settingsMethod;
-        private CheckBox settingsCrashReporter;
         private FlatButton migrateModsButton;
         private Label settingsMethodStatus, settingsToolStatus, settingsGameFiles, settingsStoreStatus, settingsFluffyStatus;
         private PaddedTextField settingsStore;
@@ -1113,12 +1112,10 @@ namespace SlotsInstaller
             loaderOffButton.AccessibleName = "Turn the loose file loader off";
             foreach (FlatButton b in new[] { loaderOnButton, loaderOffButton }) { b.Height = 32; b.Font = Palette.Small; b.Margin = new Padding(0, 0, 8, 0); loaderRow.Controls.Add(b); }
             add(left, loaderRow);
-            add(left, Rhythm.Gap(Rhythm.AfterAction - 4));
             // 2.4.1: no "Ask before installing while the loose file loader is off": the question is gone (Automatic uses the PAK method then).
             // 2.3.0: no "Default install mode" here any more: the library's INSTALL AS remembers the last choice
             // (ReplaceSettings.DefaultMode stays in the file and is used only before a first choice).
-            settingsCrashReporter = new CheckBox { Text = "Rename the crash reporter while replacements are installed", Height = 28, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0) };
-            add(left, settingsCrashReporter);
+            // 1.0.16 (the user): no "Rename the crash reporter while replacements are installed": always done (ReplaceEngine).
             add(left, Rhythm.Gap(Rhythm.Group));
             add(left, Caption("REFramework and Slotsloader"));
             settingsToolStatus = note("", 52); add(left, settingsToolStatus);
@@ -1171,7 +1168,6 @@ namespace SlotsInstaller
             columns.Controls.Add(left, 0, 0); columns.Controls.Add(right, 2, 0);
             panel.Controls.Add(columns);
             settingsMethod.SelectedIndexChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
-            settingsCrashReporter.CheckedChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
             return panel;
         }
 
@@ -1184,7 +1180,6 @@ namespace SlotsInstaller
             {
                 replaceSettings = ReplaceSettings.Load();
                 settingsMethod.SelectedIndex = replaceSettings.Method == ReplaceMethods.Loose ? 1 : replaceSettings.Method == ReplaceMethods.Pak ? 2 : 0;
-                settingsCrashReporter.Checked = replaceSettings.RenameCrashReporter;
                 settingsStore.Text = replaceSettings.StoreLocation ?? "";
                 ReplaceEngine engine = Engine(); ReplaceState state = null;
                 try { state = engine.LoadState(); } catch (Exception ex) { settingsGameFiles.Text = ex.Message; }
@@ -1255,7 +1250,6 @@ namespace SlotsInstaller
                 bool methodChanged = method != replaceSettings.Method;
                 string previousMethod = replaceSettings.Method ?? "";
                 replaceSettings.Method = method;
-                replaceSettings.RenameCrashReporter = settingsCrashReporter.Checked;
                 string store = settingsStore.Text.Trim();
                 if (!String.Equals(store, replaceSettings.StoreLocation ?? "", StringComparison.OrdinalIgnoreCase))
                 {

@@ -1412,6 +1412,21 @@ namespace SlotsInstaller
             File.Move(GameFile(g, CrashReporter.Name), GameFile(g, CrashReporter.RenamedName));
             ReplaceMod b = Install(g, "modA", "B"); g.Engine.Uninstall(b.Id);
             Require(File.Exists(GameFile(g, CrashReporter.RenamedName)) && !File.Exists(GameFile(g, CrashReporter.Name)), "a rename made by Fluffy must be left alone");
+            // 1.0.16 (user report): Fluffy put CrashReport.exe back when its last mod went while this state still said
+            // renamed; the next change renames it again (it was left active with 16 replacements installed).
+            Fixture h = Create(Path.Combine(root, "put-back"), false, ReplaceMethods.Pak);
+            ReplaceMod c = Install(h, "modA", "C");
+            File.Move(GameFile(h, CrashReporter.RenamedName), GameFile(h, CrashReporter.Name));
+            Require(h.Engine.LoadState().CrashReporterRenamed, "fixture: the state says renamed");
+            ReplaceMod d = Install(h, "modB", "D");
+            Require(File.Exists(GameFile(h, CrashReporter.RenamedName)) && !File.Exists(GameFile(h, CrashReporter.Name)), "a crash reporter put back by another tool was not renamed again");
+            h.Engine.Uninstall(c.Id); h.Engine.Uninstall(d.Id);
+            Require(File.Exists(GameFile(h, CrashReporter.Name)) && !File.Exists(GameFile(h, CrashReporter.RenamedName)), "not restored after the last replacement");
+            // The Settings checkbox is gone: a settings file saying false is ignored.
+            Fixture k = Create(Path.Combine(root, "setting-off"), false, ReplaceMethods.Pak);
+            k.Engine.Settings.RenameCrashReporter = false;
+            Install(k, "modA", "E");
+            Require(File.Exists(GameFile(k, CrashReporter.RenamedName)) && !File.Exists(GameFile(k, CrashReporter.Name)), "RenameCrashReporter=false must no longer stop the rename");
         }
 
         private static void TocFallback(string root)

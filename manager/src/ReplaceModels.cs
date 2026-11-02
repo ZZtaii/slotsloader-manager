@@ -27,7 +27,7 @@ namespace SlotsInstaller
         public string Method = "";               // "" = automatic (2.4.1): loose while the loose file loader is on, else pak
         public bool LooseLoaderConsent;           // asked once before turning the loader on
         public bool SkipLooseLoaderPrompt;        // 2.1.0: "Don't ask again" for installing with the loader off (older files: false)
-        public bool RenameCrashReporter = true;
+        public bool RenameCrashReporter = true;   // 1.0.16: no longer read (always renamed); kept so older files round-trip
         public List<string> FluffyRoots = new List<string>();
         internal bool Relocated;                  // StoreLocation was read from a moved Data folder (not serialized)
 
