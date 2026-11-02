@@ -13,6 +13,8 @@ namespace SlotsInstaller
     {
         private readonly ModPackage package;
         private readonly string stamp;
+        private readonly bool zip;      // 1.0.16: a RAR/7Z layout is saved in the Data folder, not in the archive
+        private readonly string kind;   // "ZIP", "RAR" or "7Z"
         private readonly TreeView tree = new TreeView();
         private readonly PaddedTextField name = new PaddedTextField();
         private readonly ComboBox parent = MainForm.Combo(), rule = MainForm.Combo();
@@ -28,7 +30,7 @@ namespace SlotsInstaller
         private bool wasRestore;
         private CancellationTokenSource refining;
         private readonly List<Control> editing = new List<Control>();   // disabled while the Assistant refines (Close and Cancel stay)
-        private string savedLayout;   // the layout in the ZIP, to tell a real change from an edit that was undone
+        private string savedLayout;   // the saved layout, to tell a real change from an edit that was undone
         private Panel confirmPanel;   // "Discard unsaved changes?" in the footer
         private TreeNode dropTarget;
         private int dropPlace;        // where a drag lands on dropTarget: -1 above it, 0 inside it, 1 below it
@@ -41,6 +43,8 @@ namespace SlotsInstaller
         internal BundleEditorForm(ModPackage package, string stamp, bool assistantShown, AssistantKeyStore keys, AssistantSettings settings)
         {
             this.package=package; this.stamp=stamp;
+            zip=BundleLayout.IsZip(package.SourcePath); kind=Path.GetExtension(package.SourcePath).TrimStart('.').ToUpperInvariant();
+            if(!zip) save.Text="Save layout";
             author = package.AuthorOptions ?? BundleLayout.Options(package);
             groupIds = new HashSet<string>(package.Components.Where(c=>c.IsDummy).Select(c=>c.Id), StringComparer.OrdinalIgnoreCase);
             // Scale the complete control tree together, including the fixed toolbar and field rows.
@@ -161,7 +165,7 @@ namespace SlotsInstaller
             toolbar.Controls.Add(reset,1,0); editing.Add(reset);
             var footer=new Panel { Dock=DockStyle.Fill };
             status.Dock=DockStyle.Fill; status.TextAlign=ContentAlignment.MiddleLeft; status.ForeColor=Palette.Muted;
-            status.Text="Changes apply to this ZIP when you save.";
+            status.Text=IdleText();
             var cancel=Action("Close",95,Close); cancel.Dock=DockStyle.Right;
             save.Width=125; save.Dock=DockStyle.Right; save.Click+=delegate { SaveLayout(); }; save.Enabled=false;
             footer.Controls.Add(status); footer.Controls.Add(cancel);
@@ -406,8 +410,12 @@ namespace SlotsInstaller
             save.Enabled=dirty && !saving && refining==null;
             string problem=dirty ? DraftProblem() : null;
             status.ForeColor=problem!=null ? Palette.Accent : Palette.Muted;
-            status.Text=problem ?? (!dirty ? (restore ? "This ZIP already uses the author layout." : "Changes apply to this ZIP when you save.")
-                : restore ? "Author layout preview. Choose Save ZIP to apply." : "Unsaved changes");
+            status.Text=problem ?? (!dirty ? (restore ? "This "+kind+" already uses the author layout." : IdleText())
+                : restore ? "Author layout preview. Choose "+save.Text+" to apply." : "Unsaved changes");
+        }
+        private string IdleText()
+        {
+            return zip ? "Changes apply to this ZIP when you save." : "Saved in the Data folder. The "+kind+" itself is not changed.";
         }
         private static string Signature(List<BundleOption> items)
         {
@@ -546,7 +554,7 @@ namespace SlotsInstaller
             var items=Draft();
             string problem=DraftProblem();
             if(problem!=null) {SelectProblem(problem); status.ForeColor=Palette.Red; status.Text=problem; return;}
-            saving=true; Controls[0].Enabled=false; UseWaitCursor=true; status.ForeColor=Palette.Muted; status.Text="Saving ZIP…";
+            saving=true; Controls[0].Enabled=false; UseWaitCursor=true; status.ForeColor=Palette.Muted; status.Text=zip ? "Saving ZIP…" : "Saving layout…";
             try
             {
                 var layout=restore ? null : items;
@@ -564,7 +572,7 @@ namespace SlotsInstaller
                 // No popup (PolishChecks): the reason stays in the status line, and the draft stays in the editor.
                 if(ex is OutOfMemoryException) throw;
                 saving=false; Controls[0].Enabled=true; UseWaitCursor=false;
-                status.ForeColor=Palette.Red; status.Text="Could not save the ZIP: "+ex.Message.TrimEnd('.')+". Your changes are still here.";
+                status.ForeColor=Palette.Red; status.Text="Could not save the "+(zip ? "ZIP" : "layout")+": "+ex.Message.TrimEnd('.')+". Your changes are still here.";
             }
         }
     }

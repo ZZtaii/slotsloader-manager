@@ -15,9 +15,112 @@ namespace SlotsInstaller
             Directory.CreateDirectory(root);
             Options(Path.Combine(root, "options"));
             BundleEditing(root);
+            StoredBundleEditing(root);
+            StoredRealArchive(Path.Combine(root, "stored-real"));
             Search(Path.Combine(root, "search"));
             Ranking();
-            Console.WriteLine("PASS install improvements: root choices, saved winners, PAK search/index and portrait ordering");
+            Console.WriteLine("PASS install improvements: root choices, saved winners, ZIP and 7Z bundle edits, PAK search/index and portrait ordering");
+        }
+
+        // 1.0.16: a RAR/7Z layout lives in the Data folder (BundleStore), matched by content; the archive is never written.
+        private static void StoredBundleEditing(string root)
+        {
+            string sevenZip = SevenZipTool.Resolve("");
+            if (String.IsNullOrEmpty(sevenZip)) { Console.WriteLine("SKIP 7Z bundle edits: no 7-Zip on this machine"); return; }
+            string dir = Path.Combine(root, "stored"), other = Path.Combine(root, "stored-copies"), path = Path.Combine(dir, "Stored edit.7z");
+            Directory.CreateDirectory(dir); Directory.CreateDirectory(other);
+            ProcessUtil.RunText(sevenZip, "a -t7z -y " + ProcessUtil.Quote(path) + " " + ProcessUtil.Quote(Path.Combine(root, "options", "*")));
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(-1));
+            string previous = BundleStore.DataDirOverride; BundleStore.DataDirOverride = Path.Combine(root, "stored-data");
+            try
+            {
+                var original = PackageReader.Load(path, sevenZip);
+                Require(!original.HasBundleLayout && original.LayoutError == null && !Directory.Exists(BundleStore.Folder), "a 7Z without a saved layout");
+                var rows = BundleLayout.Options(original);
+                var group = rows.Single(r => original.Find(r.Id).InferredChoice); group.Rule = "Choose up to one";
+                var newGroup = new BundleOption { Id = BundleLayout.GroupPrefix + Guid.NewGuid().ToString("N"), Name = "Levels", Rule = "Choose any" };
+                rows.Add(newGroup); group.Parent = newGroup.Id;
+                var renamed = rows.First(r => !original.Find(r.Id).IsDummy); renamed.Name = "Brightest";
+                string digest = ReplaceEngine.Sha(path), stamp = SourceReader.Stamp(path);
+                DateTime written = File.GetLastWriteTimeUtc(path), installed = DateTime.UtcNow.AddMinutes(-30);
+                BundleLayout.Save(path, stamp, rows);
+                Require(ReplaceEngine.Sha(path) == digest && SourceReader.Stamp(path) == stamp && File.GetLastWriteTimeUtc(path) == written && Directory.GetFiles(dir).Length == 1, "a 7Z layout save wrote the archive or beside it");
+                Require(!MainForm.SourceNewerThan(path, installed) && !BundleEdits.LayoutOnlySince(path, DateTime.UtcNow.AddMinutes(1)), "a 7Z layout save looks like a source change");
+                string stored = Path.Combine(BundleStore.Folder, digest + ".json");
+                Require(File.Exists(stored) && File.ReadAllText(stored).Contains("Stored edit.7z") && File.Exists(Path.Combine(BundleStore.Folder, "index.json")), "stored layout file or index missing");
+                int hashes = BundleStore.Hashes;
+                var edited = PackageReader.Load(path, sevenZip);
+                Require(edited.HasBundleLayout && edited.LayoutError == null && edited.Find(group.Id).ParentId == newGroup.Id && edited.Find(newGroup.Id) != null && edited.Find(newGroup.Id).Name == "Levels"
+                    && !edited.Find(group.Id).RequiresChoice && edited.Find(renamed.Id).Name == "Brightest", "reopened 7Z: groups, rules or names");
+                Require(BundleStore.Hashes == hashes, "an unchanged 7Z was hashed again on opening");
+                var members = edited.Components.Where(c => c.ParentId == group.Id).Select(c => c.Id).ToList();
+                Require(Composer.Plan(edited, members.Take(1), true).CanInstall && !Composer.Plan(edited, members.Take(2), true).CanInstall, "stored optional choose-one group");
+                // An install whose selection names the layout's group restores it; without the layout it needs a review.
+                var saved = new List<string> { newGroup.Id, members[1] }; string note;
+                Require(Composer.RestoreSelection(edited, saved, out note).SequenceEqual(saved) && Composer.Plan(edited, saved, true).CanInstall, "an install with a layout group did not restore");
+                ReplaceChecks.Refused(() => Composer.RestoreSelection(original, saved, out note), "Review");
+                // By content: a copy under another name in another folder, then the original moved.
+                string copy = Path.Combine(other, "Renamed copy.7z"); File.Copy(path, copy);
+                hashes = BundleStore.Hashes;
+                Require(PackageReader.Load(copy, sevenZip).Find(renamed.Id).Name == "Brightest" && BundleStore.Hashes == hashes + 1, "a copied 7Z lost its layout");
+                Require(PackageReader.Load(copy, sevenZip).HasBundleLayout && BundleStore.Hashes == hashes + 1, "a copied 7Z was hashed on every open");
+                string moved = Path.Combine(other, "Moved.7z"); File.Move(path, moved);
+                Require(PackageReader.Load(moved, sevenZip).HasBundleLayout, "a moved 7Z lost its layout");
+                // Another archive of the same size is hashed and not matched; one of another size is not even hashed.
+                byte[] bytes = File.ReadAllBytes(moved); bytes[bytes.Length / 2] ^= 0xFF;
+                string lookalike = Path.Combine(other, "Same size.7z"); File.WriteAllBytes(lookalike, bytes);
+                bool damaged; hashes = BundleStore.Hashes;
+                Require(BundleStore.Find(lookalike, out damaged) == null && !damaged && BundleStore.Hashes == hashes + 1, "a different 7Z of the same size matched");
+                string small = Path.Combine(other, "Other.7z");
+                ProcessUtil.RunText(sevenZip, "a -t7z -y " + ProcessUtil.Quote(small) + " " + ProcessUtil.Quote(Path.Combine(root, "other-options", "*")));
+                hashes = BundleStore.Hashes;
+                var plain = PackageReader.Load(small, sevenZip);
+                Require(!plain.HasBundleLayout && plain.LayoutError == null && BundleStore.Hashes == hashes, "an archive of another size was hashed or given a layout");
+                // A stored layout that doesn't fit (another mod's) and a damaged one: the author's layout and the usual note.
+                string smallSha = ReplaceEngine.Sha(small);
+                DurableFile.WriteJson(Path.Combine(BundleStore.Folder, smallSha + ".json"), new BundleStore.Layout { Sha256 = smallSha, Size = new FileInfo(small).Length, File = "Other.7z", Options = rows });
+                var stale = PackageReader.Load(small, sevenZip);
+                Require(stale.LayoutError != null && stale.LayoutError.Contains("no longer matches") && !stale.HasBundleLayout && stale.Warnings[0] == stale.LayoutError && stale.Components.Any(c => c.Id == "A"), "a stored layout that doesn't fit: " + stale.LayoutError);
+                BundleLayout.Save(small, SourceReader.Stamp(small), BundleLayout.Options(stale));
+                var repaired = PackageReader.Load(small, sevenZip);
+                Require(repaired.LayoutError == null && repaired.HasBundleLayout, "saving the author layout did not replace a stale stored one");
+                File.WriteAllText(stored, "{ not json");
+                var broken = PackageReader.Load(moved, sevenZip);
+                Require(!broken.HasBundleLayout && broken.LayoutError != null && broken.LayoutError.Contains("damaged"), "a damaged stored layout: " + broken.LayoutError);
+                BundleLayout.Save(moved, SourceReader.Stamp(moved), rows);
+                Require(PackageReader.Load(moved, sevenZip).HasBundleLayout, "saving over a damaged stored layout");
+                // Restore author layout: the stored layout goes, for every copy; the archive stays the same.
+                BundleLayout.Save(moved, SourceReader.Stamp(moved), null);
+                Require(!File.Exists(stored) && !PackageReader.Load(moved, sevenZip).HasBundleLayout && !PackageReader.Load(copy, sevenZip).HasBundleLayout && ReplaceEngine.Sha(moved) == digest, "reset left the stored layout or changed the 7Z");
+            }
+            finally { BundleStore.DataDirOverride = previous; }
+        }
+
+        // 1.0.16: a real RAR with several options (tests.local.json Archives.bundleRar) opens with a layout from a scratch Data folder. Read
+        // only: skipped without the local config; the archive's bytes and write time are compared after.
+        private static void StoredRealArchive(string root)
+        {
+            string rar = null;
+            if (LocalTestConfig.Available) try { rar = LocalTestConfig.Current.Archive("bundleRar"); } catch (InvalidOperationException) { }
+            if (rar == null || !File.Exists(rar)) { Console.WriteLine("SKIP real RAR bundle edit: no Archives.bundleRar in the local test config"); return; }
+            string sevenZip = SevenZipTool.Resolve(LocalTestConfig.Current.SevenZip);
+            string previous = BundleStore.DataDirOverride; BundleStore.DataDirOverride = Path.Combine(root, "data");
+            try
+            {
+                string digest = ReplaceEngine.Sha(rar), stamp = SourceReader.Stamp(rar);
+                var original = PackageReader.Load(rar, sevenZip);
+                Require(!original.HasBundleLayout && original.Components.Count(c => !c.IsDummy) >= 2, "real RAR: needs two options and no saved layout");
+                var rows = BundleLayout.Options(original);
+                var option = rows.First(r => !original.Find(r.Id).IsDummy); option.Name = "Edited " + option.Name;
+                var group = new BundleOption { Id = BundleLayout.GroupPrefix + Guid.NewGuid().ToString("N"), Name = "Real group", Rule = "Choose any" };
+                rows.Add(group); option.Parent = group.Id;
+                BundleLayout.Save(rar, stamp, rows);
+                var edited = PackageReader.Load(rar, sevenZip);
+                Require(edited.HasBundleLayout && edited.Find(option.Id).Name == option.Name && edited.Find(option.Id).ParentId == group.Id, "real RAR: stored layout not applied");
+                Require(SourceReader.Stamp(rar) == stamp && ReplaceEngine.Sha(rar) == digest, "real RAR: the archive changed");
+                Console.WriteLine("PASS real RAR bundle edit: " + Path.GetFileName(rar));
+            }
+            finally { BundleStore.DataDirOverride = previous; }
         }
         private static void BundleEditing(string root)
         {

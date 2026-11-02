@@ -682,7 +682,7 @@ namespace SlotsInstaller
             var editBundle = modMenu.Items.Add("Edit bundle…", null, delegate
             {
                 var entry = modMenu.Tag as LibraryEntry;
-                if (entry == null || busy || !BundleLayout.IsZip(entry.SourcePath)) return;
+                if (entry == null || busy || !BundleLayout.CanEdit(entry.SourcePath)) return;   // 1.0.16: ZIP, RAR and 7Z
                 string stamp = null;
                 Work("Opening bundle editor", delegate
                 {
@@ -735,7 +735,7 @@ namespace SlotsInstaller
                 PopulateReplacementUninstall(uninstallReplacementItem, source);
                 PopulateFluffyUninstall(uninstallFluffyItem, source);
                 bool multi = BatchVisible && entry != null && BatchSourcePaths().Contains(entry.SourcePath);
-                editBundle.Visible = !multi && BundleLayout.IsZip(source) && File.Exists(source);
+                editBundle.Visible = !multi && BundleLayout.CanEdit(source) && File.Exists(source);
                 editBundle.Enabled = !busy;
                 uninstallSelectionItem.Visible = multi;
                 uninstallSelectionItem.Enabled = multi && batchUninstallButton.Enabled;
