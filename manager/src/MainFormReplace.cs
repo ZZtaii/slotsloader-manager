@@ -359,8 +359,10 @@ namespace SlotsInstaller
         private ReplaceMod SameInstalledReplacement()
         {
             if (package == null || editingReplacement != null) return null;
-            var selection = new HashSet<string>(MainSelection(), StringComparer.OrdinalIgnoreCase);   // 1.0.16: the main mod's own ids
+            // 1.0.16: the main mod's own ids; PR #22 review (F3): and the addons' records (Install changes or removes one)
+            AddonSplit split = CurrentSplit(); var selection = new HashSet<string>(split.MainIds, StringComparer.OrdinalIgnoreCase);
             ModPackage own = SourcePackage;
+            if (!AddonRecordsMatch(split)) return null;
             return gameRows.Where(r => r.Mod != null).Select(r => r.Mod).FirstOrDefault(m =>
             {
                 if (!String.Equals(m.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)) return false;
@@ -393,7 +395,16 @@ namespace SlotsInstaller
         {
             if (editingReplacement != null) return editingReplacement.Name;
             var layers = plan == null ? new List<ModComponent>() : plan.Layers.Where(c => !Composer.IsBase(c) && !String.Equals(c.Name, package.Name, StringComparison.OrdinalIgnoreCase)).ToList();
-            return package.Name + (layers.Count > 0 && layers.Count <= 3 ? " · " + String.Join(" + ", layers.Select(c => c.Name)) : "");
+            List<string> names = layers.Select(c => c.Name).ToList();
+            // 1.0.16 (PR #22 review, L3): a fill-in only keeps the main record valid alone; the name shows the addon's
+            // options that stand in its place ("… · Short + Barefoot (addon)"), not the fill-in (Full).
+            AddonSplit split = package.MergedFrom == null ? null : CurrentSplit();
+            if (split != null && split.FillIns.Count > 0)
+            {
+                names = layers.Where(c => !split.FillIns.Contains(c.Id, StringComparer.OrdinalIgnoreCase)).Select(c => c.Name).ToList();
+                foreach (var part in split.Ticked) names.Add(LibraryAddons.OptionNames(part.Key.Package, part.Value) + " (addon)");
+            }
+            return package.Name + (names.Count > 0 && names.Count <= 3 ? " · " + String.Join(" + ", names) : "");
         }
 
         // 2.1.0: the loose file loader is optional. Asked only when an install puts natives files in place with
@@ -476,18 +487,22 @@ namespace SlotsInstaller
             // 1.0.16: the main mod's record (plan holds its split ids), then each addon's own record directly above it, or
             // the addon's record uninstalled when none of its options is ticked (MainFormAddons.cs).
             AddonSplit split = package.MergedFrom == null || editingReplacement != null ? null : LibraryAddons.Split(package, selectedOrder, true);
-            string addons = "";
+            var shown = new HashSet<string>(shownAddonRecords, StringComparer.OrdinalIgnoreCase);
             Work("Installing replacement…", delegate
             {
                 if (convert) engine.SwitchMethod(ReplaceMethods.Pak);
-                ReplacePlan prepared; ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, replaceId, out prepared); if (LoaderCostumePak.IsLoaderMod(mod)) UnownedSlotsFlag.Ensure(game);
-                if (split != null) addons = InstallAddonRecords(engine, mod, split, sevenZip);
-                return mod;
-            }, delegate(ReplaceMod mod)
+                AddonInstall result = InstallWithAddons(engine, composition, sevenZip, name, replaceId, split, shown);   // 1.0.16 (PR #22 review, F2)
+                if (LoaderCostumePak.IsLoaderMod(result.Main)) UnownedSlotsFlag.Ensure(game);
+                return result;
+            }, delegate(AddonInstall installed)
             {
                 editingReplacement = null; UpdateModeUi(); LoaderUpdateInstalled();
-                string method = usePak && mod.Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)) ? (overridden ? " · PAK method used: loose file loader off" : " · PAK method (loose file loader off)") : "";
-                RefreshInstalled("✓ Installed " + mod.Name + " · " + ReplacePlanner.N(mod.Files.Count, "file") + addons + method + ". " + (gameRunning ? "Restart SF6 to see it." : "Start SF6 to see it."));
+                FinishAddonInstall(installed, delegate(AddonInstall r)
+                {
+                    ReplaceMod mod = r.Main;
+                    string method = usePak && mod.Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)) ? (overridden ? " · PAK method used: loose file loader off" : " · PAK method (loose file loader off)") : "";
+                    RefreshInstalled((r.Failed.Count == 0 ? "✓ " : "") + "Installed " + mod.Name + " · " + ReplacePlanner.N(mod.Files.Count, "file") + AddonInstallText(r, false) + method + AddonInstallText(r, true) + ". " + (gameRunning ? "Restart SF6 to see it." : "Start SF6 to see it."));
+                });
             });
         }
 

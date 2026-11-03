@@ -396,10 +396,39 @@ namespace SlotsInstaller
         }
         internal static ReplaceMod PrepareAndInstall(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string name, bool test, string replaceId, out ReplacePlan plan)
         {
+            plan = null;
+            PreparedInstall prepared = PrepareInstall(composition, sevenZip, engine, test, replaceId);
+            try
+            {
+                plan = prepared.Plan;
+                ReplaceMod installed = CommitInstall(prepared, engine, name, test, null);
+                foreach (ReplaceMod extra in prepared.Others) engine.UninstallForGood(extra.Id, DriftChoice.Ask, null);   // 1.0.1: no kept copy
+                return installed;
+            }
+            finally { Discard(prepared); }
+        }
+
+        // 1.0.16 (PR #22 review, F2): PrepareAndInstall in its two steps, so a main mod's addon records are staged and
+        // checked (a changed archive, a plan error, a refused health check) before the main record is written, and go in
+        // afterwards. Others: the other records of that source the switch uninstalls (left to the caller). Discard always.
+        internal sealed class PreparedInstall { internal ReplacePlan Plan; internal string ReplaceId, Staging; internal List<ReplaceMod> Others = new List<ReplaceMod>(); }
+        internal static void Discard(PreparedInstall prepared)
+        {
+            if (prepared == null) return;
+            try { if (Directory.Exists(prepared.Staging)) Directory.Delete(prepared.Staging, true); } catch { }
+        }
+        internal static ReplaceMod CommitInstall(PreparedInstall prepared, ReplaceEngine engine, string name, bool test, string aboveId)
+        {
+            ReplaceMod installed;
+            using (InstallMetrics.Measure("engine install")) installed = engine.Install(prepared.Plan, name, test, prepared.ReplaceId, aboveId);
+            if (LoaderCostumePak.IsLoaderMod(installed)) SwapRepairFlag.Ensure(engine.GameRoot);
+            return installed;
+        }
+        internal static PreparedInstall PrepareInstall(CompositionPlan composition, string sevenZip, ReplaceEngine engine, bool test, string replaceId)
+        {
             string root = engine.StoreRoot(engine.LoadState());
             Directory.CreateDirectory(root);
             string staging = Path.Combine(root, ".staging-" + Guid.NewGuid().ToString("N"));
-            plan = null;
             // 2.4.1: installing a mod that is already installed (same source archive or folder, any options) is a switch:
             // the highest-priority record is replaced in place (priority, enabled state and method kept) and any other
             // records of that source are uninstalled recoverably, so one record remains. Test installs never collapse.
@@ -424,17 +453,14 @@ namespace SlotsInstaller
                 string keep = replaceId;
                 others = same.Where(m => !String.Equals(m.Id, keep, StringComparison.OrdinalIgnoreCase)).ToList();
             }
+            var prepared = new PreparedInstall { ReplaceId = replaceId, Staging = staging, Others = others };
             try
             {
-                plan = Prepare(composition, sevenZip, engine, staging, null, replaceId);
-                if (!plan.CanInstall) throw new IOException(String.Join(" ", plan.Errors));
-                ReplaceMod installed;
-                using (InstallMetrics.Measure("engine install")) installed = engine.Install(plan, name, test, replaceId);
-                if (LoaderCostumePak.IsLoaderMod(installed)) SwapRepairFlag.Ensure(engine.GameRoot);
-                foreach (ReplaceMod extra in others) engine.UninstallForGood(extra.Id, DriftChoice.Ask, null);   // 1.0.1: no kept copy
-                return installed;
+                prepared.Plan = Prepare(composition, sevenZip, engine, staging, null, replaceId);
+                if (!prepared.Plan.CanInstall) throw new IOException(String.Join(" ", prepared.Plan.Errors));
+                return prepared;
             }
-            finally { try { if (Directory.Exists(staging)) Directory.Delete(staging, true); } catch { } }
+            catch { Discard(prepared); throw; }
         }
 
         // Game facts that change what the fixers write; part of every cache key.

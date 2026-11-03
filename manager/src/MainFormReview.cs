@@ -256,6 +256,7 @@ namespace SlotsInstaller
                 checkCache = new PrepareCache(); checkCachePackage = current;
             }
             PrepareCache cache = replace ? checkCache : null;
+            var shownAddons = new HashSet<string>(shownAddonRecords, StringComparer.OrdinalIgnoreCase);   // 1.0.16 (PR #22 review, F1)
             var cancel = new CancellationTokenSource(); reviewCancel = cancel; reviewRunning = true; ReviewRuns++; reviewSlow = false;
             reviewSlowTimer.Stop(); reviewSlowTimer.Start();
             UpdateFooter();
@@ -284,7 +285,7 @@ namespace SlotsInstaller
                     ReplacePlan health = null;
                     if (replace && composition.CanInstall && !choicesOpen)
                     {
-                        try { health = ReplacePlanner.Check(composition, sevenZip, engine, cache, updateId); if (split != null) AdjustAddonHealth(health, current, split, engine); }
+                        try { health = ReplacePlanner.Check(composition, sevenZip, engine, cache, updateId); if (split != null) AdjustAddonHealth(health, current, split, engine, shownAddons); }
                         catch (OperationCanceledException) { throw; }
                         catch (SourceChangedException) { throw; }   // 2.4.1: reloaded, never shown as a problem
                         catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); health = ReplacePlan.Failed(current.Name, current.SourcePath, ex.Message); }
@@ -485,8 +486,9 @@ namespace SlotsInstaller
         internal InstalledOutfit DuplicateExtraOutfit()
         {
             if (package == null || IsReplaceMode || installed == null) return null;
-            var selection = new HashSet<string>(MainSelection(), StringComparer.OrdinalIgnoreCase);   // 1.0.16: the main mod's own ids
-            return installed.FirstOrDefault(o => o.Managed && String.Equals(o.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase) && o.SelectedIds != null && Composer.MatchesSavedSelection(SourcePackage, selection, o.SelectedIds));
+            // 1.0.16: the main mod's own ids; PR #22 review (F3): and the addons' ticks against the outfit's added parts
+            AddonSplit split = CurrentSplit(); var selection = new HashSet<string>(split.MainIds, StringComparer.OrdinalIgnoreCase);
+            return installed.FirstOrDefault(o => o.Managed && String.Equals(o.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase) && o.SelectedIds != null && Composer.MatchesSavedSelection(SourcePackage, selection, o.SelectedIds) && AddonPartsMatch(split, o));
         }
         internal static string DuplicateText(InstalledOutfit o)
         {

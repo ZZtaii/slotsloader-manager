@@ -292,6 +292,30 @@ namespace SlotsInstaller
             r = GameReference.Load(g.Game, PakIndex.Open(BasePak(g)), null);
             r.CurrentCrcs.TryGetValue(ReplaceChecks.MaterialData, out got);
             Require(got == 0x22222222 && r.ReferenceCmd == null && r.CrcSource.Contains("esf002_001_cmd_000"), "missing reference: " + r.CrcSource + " · " + got.ToString("X8"));
+            // 1.0.16 (PR #22 review, L1): an unreadable turned-off row where the reference would be (an unsupported
+            // compression) is no candidate and no longer skips the other-fighter fallback ("unavailable" before).
+            ReplaceChecks.Fixture k = SortedGame(Path.Combine(root, "unreadable"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
+            string kpak = BasePak(k); ulong refHash = PakHash.PathHash(ModFixes.ReferenceCmdPath);
+            PakIndex kOld = PakIndex.Open(kpak);
+            var kEntries = new Dictionary<ulong, byte[]>();
+            for (int i = 0; i < kOld.Count; i++) { PakEntry e = kOld.Entry(i); if (e.Hash != refHash) kEntries[e.Hash] = kOld.Read(e); }
+            Require(!kEntries.ContainsKey(refHash + 1), "fixture: the hash after the reference is taken");
+            kEntries[refHash + 1] = B("not readable colour data");
+            WriteSorted(kpak, kEntries);
+            int bad = Zero(kpak, refHash + 1);
+            using (var fs = new FileStream(kpak, FileMode.Open, FileAccess.ReadWrite))
+            {
+                long at = PakIndex.HeaderSize + (long)bad * PakIndex.EntrySize;
+                fs.Seek(at + 24, SeekOrigin.Begin); fs.Write(BitConverter.GetBytes(100L), 0, 8);   // decompressed size
+                fs.Seek(at + 32, SeekOrigin.Begin); fs.Write(BitConverter.GetBytes(9L), 0, 8);     // compression 9: unsupported
+            }
+            GamePaks.Forget(kpak);
+            PakIndex kp = PakIndex.Open(kpak);
+            bool unreadable = false; try { kp.Read(kp.Entry(bad)); } catch (InvalidDataException) { unreadable = true; }
+            Require(unreadable && kp.TurnedOffCandidates(refHash).SequenceEqual(new[] { bad }), "fixture: the unreadable row is the one candidate");
+            r = GameReference.Load(k.Game, kp, null);
+            got = 0; r.CurrentCrcs.TryGetValue(ReplaceChecks.MaterialData, out got);
+            Require(got == 0x22222222 && r.ReferenceCmd == null && r.CrcSource.Contains("esf002_001_cmd_000"), "an unreadable turned-off row skipped the fallback: " + r.CrcSource + " · " + got.ToString("X8"));
             // The usual game: the reference as before, untouched by the fallback.
             ReplaceChecks.Fixture h = SortedGame(Path.Combine(root, "present"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
             r = GameReference.Load(h.Game, PakIndex.Open(BasePak(h)), null);

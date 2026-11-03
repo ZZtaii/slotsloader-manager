@@ -68,8 +68,9 @@ namespace SlotsInstaller
             string plain = CleanName(package.Name), character = TargetCharacter();
             List<InstalledOutfit> slots = ModSlots(character);
             if (slots.Count == 0) return Untaken(plain, character);
-            var selection = new HashSet<string>(MainSelection(), StringComparer.OrdinalIgnoreCase);   // 1.0.16: the main mod's own ids
-            InstalledOutfit same = slots.FirstOrDefault(o => o.Enabled && o.SelectedIds != null && Composer.MatchesSavedSelection(SourcePackage, selection, o.SelectedIds));
+            // 1.0.16: the main mod's own ids; PR #22 review (F3): and the addons' ticks (Barefoot vs Full is another outfit)
+            AddonSplit split = CurrentSplit(); var selection = new HashSet<string>(split.MainIds, StringComparer.OrdinalIgnoreCase);
+            InstalledOutfit same = slots.FirstOrDefault(o => o.Enabled && o.SelectedIds != null && Composer.MatchesSavedSelection(SourcePackage, selection, o.SelectedIds) && AddonPartsMatch(split, o));
             if (same != null) return same.Name;
             List<string> options = VariantOptionNames();
             string name = CleanName(options.Count == 0 ? plain : plain + " · " + String.Join(" + ", options));

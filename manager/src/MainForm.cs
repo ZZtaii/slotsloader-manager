@@ -2171,7 +2171,14 @@ namespace SlotsInstaller
             List<string> ids = (fromReplace ? replaced : extra) ?? new List<string>();
             ids = ids.Where(id => { ModComponent c = pkg.Find(id); return c == null || (!c.IsDummy && c.HasFiles(replaceMode)); }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             // 1.0.16: the addons' installed ticks too; the main branch that stood in for an addon branch shows unticked.
-            if (ids.Count > 0 && pkg.MergedFrom != null) ids = LibraryAddons.Restore(pkg, ids, InstalledAddonIds(pkg, fromReplace, fromReplace ? null : extraOutfit));
+            // PR #22 review (F1): whether or not the main mod is installed (an addon installed first: over the defaults),
+            // from its records in Replace original (a disabled one too; remembered as shown, MainFormAddons.cs).
+            if (pkg.MergedFrom != null)
+            {
+                bool addonRecords = replaceMode || fromReplace;
+                List<KeyValuePair<AddonPart, List<string>>> addonIds = InstalledAddonIds(pkg, addonRecords, addonRecords ? null : extraOutfit, shownAddonRecords);
+                if (addonIds.Count > 0) ids = LibraryAddons.Restore(pkg, ids.Count > 0 ? ids : Composer.DefaultSelection(pkg, replaceMode || IsToolPackage(pkg)), addonIds);
+            }
             return ids.Count > 0 ? ids : null;
         }
 
@@ -2263,6 +2270,7 @@ namespace SlotsInstaller
                 outfitNameTyped = false; outfitNameLocked = restore != null;   // 2.5.0: Edit options keeps the outfit's name; otherwise the name is suggested (ApplySuggestedName)
                 SetOutfitName(restore == null ? CleanName(package.Name) : restore.Name);
                 targetCharacter.SelectedIndex = targetCharacter.Items.IndexOf(restore == null ? package.Character : restore.Character);
+                if (reload == null) shownAddonRecords.Clear();   // 1.0.16 (PR #22 review, F1): per open; a reload keeps them
                 var savedSelection = restoreReplace != null ? restoreReplace.SelectedIds : restore != null ? restore.SelectedIds : reload == null ? InstalledSelection(package) : null;
                 string savedNote = "";
                 if (savedSelection != null)
@@ -2857,10 +2865,15 @@ namespace SlotsInstaller
             AddonSplit split = package.MergedFrom == null ? null : LibraryAddons.Split(package, selectedOrder, false);
             List<string> addonSources = split == null ? null : split.Parts.Select(p => p.Key.SourcePath).ToList();
             string removed = split == null || existing == null || existing.Parts == null ? "" : String.Concat(existing.Parts.Where(g => split.Parts.Any(p => p.Value.Count == 0 && ReplacePlanner.SameSource(p.Key.SourcePath, g.SourcePath))).Select(g => " · removed " + Installer.GraftText(g)));
+            // PR #22 review (F2): the addon parts go in with the outfit, in its one transaction (Installer.Install addParts):
+            // a part that can't be added fails the install with the earlier outfit and its parts as they were.
+            var ticked = split == null ? new List<KeyValuePair<AddonPart, List<string>>>() : split.Ticked.ToList();
+            List<CompositionPlan> addParts = ticked.Select(p => Installer.SelectionFiles(p.Key.Package, p.Value)).ToList();
+            string added = String.Concat(ticked.Select((p, i) => " · added " + Installer.OptionText(addParts[i]) + " from " + p.Key.RecordName));
             Work("Installing extra outfit…", delegate
             {
-                InstallResult installedOutfit = Installer.Install(current, root, character, name, sevenZip, replace, addonSources);
-                if (split != null) installedOutfit.PartsNote += AddAddonParts(installedOutfit.Folder, root, split, sevenZip) + removed;
+                InstallResult installedOutfit = Installer.Install(current, root, character, name, sevenZip, replace, addonSources, addParts);
+                if (split != null) installedOutfit.PartsNote += added + removed;
                 return installedOutfit;
             }, delegate(InstallResult result)
             {

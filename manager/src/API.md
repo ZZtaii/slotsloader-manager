@@ -43,7 +43,7 @@ All types in this section are internal unless noted.
   - analyses each file;
   - fills `Files` (`PreparedFile` with its fixes), `Affects`, `Items` (`HealthItem` level info/fix/warn/error), counts and `InvalidationPreview`;
   - sets `CanInstall` when there are no errors.
-- `ReplacePlanner.Check(...)` prepares into a temporary folder and deletes it; `PrepareAndInstall(...)` stages in the store and installs; `Report(plan)` returns text.
+- `ReplacePlanner.Check(...)` prepares into a temporary folder and deletes it; `PrepareAndInstall(...)` stages in the store and installs (1.0.16: its two steps `PrepareInstall` and `CommitInstall`, `Discard` the staging; a main mod's addon records are staged before the main record); `Report(plan)` returns text. `ReplaceEngine.Install(plan, name, test, replaceId, aboveId)` puts the record directly above `aboveId` in the same change.
 
 **Composition and packages**
 - `ModComponent.RootAssets` (public) holds game-root files in the external mod manager's layout; `HasFiles(includeRoot)` reports whether a component has files.

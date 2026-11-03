@@ -541,7 +541,11 @@ namespace SlotsInstaller
             {
                 PakEntry e = basePak.Entry(i);
                 if (e.DecompressedSize <= 0 || e.DecompressedSize > (1 << 20)) continue;
-                byte[] data = basePak.Read(e);
+                // 1.0.16 (PR #22 review, L1): one unreadable row (corrupt data, another compression) is no candidate; it
+                // no longer skips the other-fighter fallback below.
+                byte[] data;
+                try { data = basePak.Read(e); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); continue; }
                 if (ColourSignatures(data) != null) turnedOff.Add(data);
             }
             if (turnedOff.Count == 1)
@@ -555,7 +559,9 @@ namespace SlotsInstaller
             {
                 if (f == 1) continue;
                 string path = String.Format("natives/stm/product/model/esf/esf{0:000}/001/esf{0:000}_001_cmd_000.user.2", f);
-                Dictionary<uint, uint> crcs = ColourSignatures(read(path));
+                Dictionary<uint, uint> crcs;
+                try { crcs = ColourSignatures(read(path)); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); continue; }   // 1.0.16 (L1): the next fighter
                 if (crcs == null) continue;
                 CurrentCrcs = crcs;
                 CrcSource = "vanilla " + Path.GetFileName(path) + " (" + Path.GetFileName(ModFixes.ReferenceCmdPath) + " is replaced; 2023 colour files keep their layout)";

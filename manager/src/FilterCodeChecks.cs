@@ -67,17 +67,22 @@ namespace SlotsInstaller
         {
             string lib = Path.Combine(root, "code-backfill"); Directory.CreateDirectory(lib);
             string proxy = Path.Combine(lib, "Proxy Loader.zip"), skse = Path.Combine(lib, "Engine Fixes.zip"), outfit = Path.Combine(lib, "Outfit.zip"), script = Path.Combine(lib, "Hitbox Viewer.zip");
+            // 1.0.16 (PR #22 review, F4): an ASI-only and a ReShade-only archive have no tool kinds and no natives options:
+            // their old records are read once too (the shortcut gave them no kind, so they never showed as Code injectors).
+            string asi = Path.Combine(lib, "FPS unlock.zip"), reshade = Path.Combine(lib, "SF6 ReShade preset.zip");
             Zip(proxy, "dinput8.dll", "amd_ags_x64.dll", "readme.txt");
             Zip(skse, "SKSE/Plugins/EngineFixes.dll", "d3dx9_42.dll");
             Zip(outfit, Mesh);
             Zip(script, "reframework/autorun/hitbox.lua");
+            Zip(asi, "Mod/fps.asi");
+            Zip(reshade, "ReShade.ini", "reshade-shaders/Shaders/Bloom.fx");
             string previous = Library.IdentityCacheDirectory, cache = Path.Combine(root, "code-backfill-index");
             try
             {
                 Library.IdentityCacheDirectory = cache;
                 List<LibraryEntry> scanned = Library.Scan(new[] { lib }, "");
                 Func<List<LibraryEntry>, string, LibraryEntry> at = delegate(List<LibraryEntry> list, string path) { return list.Single(e => String.Equals(e.SourcePath, path, StringComparison.OrdinalIgnoreCase)); };
-                Require(String.Join("+", at(scanned, proxy).CodeKinds) == "injector" && at(scanned, skse).CodeKinds.Count == 0 && at(scanned, outfit).CodeKinds.Count == 0 && String.Join("+", at(scanned, script).CodeKinds) == "script", "fresh scan: " + String.Join("; ", scanned.Select(e => e.Name + "=" + String.Join("+", e.CodeKinds ?? new List<string> { "null" }))));
+                Require(String.Join("+", at(scanned, proxy).CodeKinds) == "injector" && at(scanned, skse).CodeKinds.Count == 0 && at(scanned, outfit).CodeKinds.Count == 0 && String.Join("+", at(scanned, script).CodeKinds) == "script" && String.Join("+", at(scanned, asi).CodeKinds) == "injector" && String.Join("+", at(scanned, reshade).CodeKinds) == "injector", "fresh scan: " + String.Join("; ", scanned.Select(e => e.Name + "=" + String.Join("+", e.CodeKinds ?? new List<string> { "null" }))));
                 string file = Path.Combine(cache, Library.CacheFilename);
                 Require(Json.Read<LibraryIdentityCache>(file).Records.All(r => r.CodeKinds != null), "kinds not stored in the index");
                 // The records as an older Manager wrote them (no CodeKinds), read as on a restart.
@@ -89,26 +94,27 @@ namespace SlotsInstaller
                 List<LibraryEntry> pending, names, quick;
                 int misses = Library.CacheMisses;
                 // Start-up is not blocked: no archive is opened (they are locked here) and every mod keeps its identity.
-                var locks = new[] { proxy, skse, outfit, script }.Select(p => new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.None)).ToList();
+                var locks = new[] { proxy, skse, outfit, script, asi, reshade }.Select(p => new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.None)).ToList();
                 try { quick = Library.ScanQuick(new[] { lib }, "", out pending, out names); }
                 finally { foreach (FileStream s in locks) s.Dispose(); }
                 Require(Library.CacheMisses == misses && quick.All(e => !e.Pending && e.Detection != "Error" && e.OptionCount >= 0), "quick listing lost identity: " + String.Join("; ", quick.Select(e => e.Name + " " + e.Detection)));
-                LibraryEntry qProxy = at(quick, proxy), qSkse = at(quick, skse), qOutfit = at(quick, outfit), qScript = at(quick, script);
+                LibraryEntry qProxy = at(quick, proxy), qSkse = at(quick, skse), qOutfit = at(quick, outfit), qScript = at(quick, script), qAsi = at(quick, asi), qReshade = at(quick, reshade);
                 Require(qProxy.CodeKinds == null && qSkse.CodeKinds == null && qScript.CodeKinds == null && pending.Contains(qProxy) && pending.Contains(qSkse) && pending.Contains(qScript), "records with tool kinds are not read again in the background");
-                Require(qOutfit.CodeKinds != null && qOutfit.CodeKinds.Count == 0 && !pending.Contains(qOutfit), "a record without tool kinds was queued: " + (qOutfit.CodeKinds == null ? "null" : "listed"));
+                Require(qAsi.CodeKinds == null && qReshade.CodeKinds == null && pending.Contains(qAsi) && pending.Contains(qReshade), "an ASI-only or ReShade-only record (no tool kinds, no natives options) was not queued: " + (qAsi.CodeKinds == null ? "null" : "listed") + " / " + (qReshade.CodeKinds == null ? "null" : "listed"));
+                Require(qOutfit.CodeKinds != null && qOutfit.CodeKinds.Count == 0 && !pending.Contains(qOutfit), "a natives record without tool kinds was queued: " + (qOutfit.CodeKinds == null ? "null" : "listed"));
                 // Until then the tile guesses from the tool kinds: the script counts, the plain DLLs don't.
                 Require(LibraryCode.Any(qScript) && !LibraryCode.Any(qProxy) && !LibraryCode.Any(qSkse) && !LibraryCode.Any(qOutfit), "guess before the background read");
                 // A failed background read keeps the identity and leaves the kinds for the next start.
                 LibraryEntry copy = Library.IndexCopy(qProxy);
                 using (var locked = new FileStream(proxy, FileMode.Open, FileAccess.Read, FileShare.None)) Library.IndexEntry(copy, "");
                 Require(copy.CodeKinds == null && copy.Detection != "Error" && copy.OptionCount == 0, "a failed backfill erased identity or invented kinds");
-                foreach (LibraryEntry e in new[] { qProxy, qSkse, qScript }) { LibraryEntry c = Library.IndexCopy(e); Library.IndexEntry(c, ""); Library.TakeIdentity(e, c); }
+                foreach (LibraryEntry e in new[] { qProxy, qSkse, qScript, qAsi, qReshade }) { LibraryEntry c = Library.IndexCopy(e); Library.IndexEntry(c, ""); Library.TakeIdentity(e, c); }
                 Library.SaveIndex();
-                Require(String.Join("+", qProxy.CodeKinds) == "injector" && qSkse.CodeKinds.Count == 0 && String.Join("+", qScript.CodeKinds) == "script" && LibraryCode.Any(qProxy) && Library.CacheMisses == misses, "background backfill: " + String.Join("+", qProxy.CodeKinds ?? new List<string> { "null" }) + ", misses " + (Library.CacheMisses - misses));
+                Require(String.Join("+", qProxy.CodeKinds) == "injector" && qSkse.CodeKinds.Count == 0 && String.Join("+", qScript.CodeKinds) == "script" && String.Join("+", qAsi.CodeKinds) == "injector" && String.Join("+", qReshade.CodeKinds) == "injector" && LibraryCode.Any(qProxy) && Library.CacheMisses == misses, "background backfill: " + String.Join("+", qProxy.CodeKinds ?? new List<string> { "null" }) + ", misses " + (Library.CacheMisses - misses));
                 // Saved: the next listing has every kind and queues nothing.
                 Library.IdentityCacheDirectory = Path.Combine(root, "code-backfill-other"); Library.IdentityCacheDirectory = cache;
                 quick = Library.ScanQuick(new[] { lib }, "", out pending, out names);
-                Require(pending.Count == 0 && quick.All(e => e.CodeKinds != null) && String.Join("+", at(quick, proxy).CodeKinds) == "injector", "after the backfill: " + pending.Count + " queued");
+                Require(pending.Count == 0 && quick.All(e => e.CodeKinds != null) && String.Join("+", at(quick, proxy).CodeKinds) == "injector" && String.Join("+", at(quick, reshade).CodeKinds) == "injector", "after the backfill: " + pending.Count + " queued");
             }
             finally { Library.IdentityCacheDirectory = previous; }
         }

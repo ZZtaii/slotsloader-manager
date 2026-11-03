@@ -209,6 +209,133 @@ namespace SlotsInstaller
             }
         }
 
+        // 1.0.16 (PR #22 review): F1 an addon record is restored ticked without a main record and when disabled, and only a
+        // record shown ticked is uninstalled; F2 a changed addon archive stops the install before the main record, a late
+        // failure is named in the status, the addon goes directly above the main record without a Move, and in Extra
+        // outfit a part that can't be added leaves the outfit as it was; F3 addon ticks count in "the same install"
+        // (both modes); L3 the main record's name shows the addon option, not the fill-in.
+        private static void AddonReviewFixes(MainForm form, ReplaceChecks.Fixture f, string folder)
+        {
+            string main, addon; WriteAddonZips(folder, out main, out addon);
+            ReplaceEngine engine = FormEngine(f);
+            List<LibraryEntry> library = Get<List<LibraryEntry>>(form, "library");
+            var mainEntry = new LibraryEntry { SourcePath = main, Name = Path.GetFileNameWithoutExtension(main), DisplayName = AddonTestName, Kind = "ZIP", OptionNames = new List<string> { AddonTestName, "Main files", "Outfit", "Full", "Shorts", "Hair styles", "Short", "Long", "Misc", "Portrait" } };
+            var addonEntry = new LibraryEntry { SourcePath = addon, Name = Path.GetFileNameWithoutExtension(addon), DisplayName = AddonTestName, Kind = "ZIP", OptionNames = new List<string> { AddonTestName, "Barefoot" } };
+            Func<string, bool> isMain = p => ReplacePlanner.SameSource(p, main), isAddon = p => ReplacePlanner.SameSource(p, addon);
+            Func<string, OptionNode> node = name => Get<Dictionary<string, OptionNode>>(form, "componentNodes").Values.First(n => ((ModComponent)n.Tag).Name == name);
+            Func<string, bool> ticked = name => node(name).Checked;
+            Action<LibraryEntry> open = e => { ShowLibrary(form); Call(form, "LoadPackage", e); WaitBusyOnly(form); WaitReview(form); };
+            Action install = () => { Call(form, "InstallCurrent"); WaitIdle(form); Application.DoEvents(); WaitIdle(form); WaitReview(form); };
+            Action refresh = () => { Call(form, "RefreshInstalled", (string)null); WaitIdle(form); WaitReview(form); };
+            Func<string> status = () => Get<Label>(form, "statusText").Text;
+            Func<string> state = () => Summary(form) + " / " + Details(form) + " / " + status() + " / ticks " + Selection(form) + " / records " + String.Join(" / ", engine.LoadState().Mods.Select(m => m.Name + (m.Enabled ? "" : " (off)") + " [" + String.Join(",", m.SelectedIds) + "]"));
+            Func<IEnumerable<string>> healthLines = () => { ReplacePlan h = Get<ReplacePlan>(form, "replacePlan"); return h == null ? new string[0] : h.Items.Select(i => i.Text).ToArray(); };
+            Func<ReplaceMod> mainRecord = () => engine.LoadState().Mods.SingleOrDefault(m => isMain(m.SourcePath));
+            Func<List<ReplaceMod>> addonRecords = () => engine.LoadState().Mods.Where(m => isAddon(m.SourcePath)).ToList();
+            string root = Get<AppConfig>(form, "config").CostumeRoot;
+            Action cleanup = delegate
+            {
+                foreach (ReplaceMod m in engine.LoadState().Mods.Where(m => isMain(m.SourcePath) || isAddon(m.SourcePath)).ToList()) engine.UninstallForGood(m.Id, DriftChoice.Refuse, null);
+                List<InstalledOutfit> mine = Installer.ListInstalled(root).Where(o => o.Managed && isMain(o.SourcePath)).ToList();
+                if (mine.Count > 0) OutfitSetStore.UninstallOutfits(root, mine, null);
+            };
+            library.Add(mainEntry); library.Add(addonEntry);
+            try
+            {
+                cleanup();
+                Call(form, "SetInstallMode", InstallModes.Replace, true);
+                // F1 A: the addon installed first (opened alone), no main record: the main mod opens with Barefoot ticked.
+                ModPackage alone = PackageReader.Load(addon, ""); ReplacePlan alonePlan;
+                ReplacePlanner.PrepareAndInstall(Composer.Plan(alone, new[] { "04 Barefoot" }, true), "", engine, "Barefoot alone", false, null, out alonePlan);
+                refresh();
+                open(mainEntry);
+                Require(ticked("Barefoot") && !ticked("Full") && mainRecord() == null, "an addon installed first is not shown ticked: " + state());
+                node("Short").Checked = true; node("Portrait").Checked = false; WaitReview(form);
+                Require(!healthLines().Any(t => t.StartsWith("Uninstalls")), "the health report says the addon goes: " + String.Join(" / ", healthLines()));
+                int generation = engine.LoadState().Generation;
+                install();
+                List<ReplaceMod> mods = engine.LoadState().Mods; ReplaceMod mainMod = mainRecord(); List<ReplaceMod> addons = addonRecords();
+                Require(mainMod != null && addons.Count == 1 && addons[0].SelectedIds.SequenceEqual(new[] { "04 Barefoot" }) && mods.FindIndex(m => m.Id == addons[0].Id) == mods.FindIndex(m => m.Id == mainMod.Id) - 1, "addon first, then the main mod: " + state());
+                // F2: the addon record is switched in place and moved above the new main record in its own install (no Move).
+                Require(engine.LoadState().Generation == generation + 2, "changes for main + addon: " + (engine.LoadState().Generation - generation) + " (a Move is one more)");
+                // L3: the main record's name shows Barefoot (the addon), not Full (the fill-in it carries).
+                Require(mainMod.Name == AddonTestName + " · Short + Barefoot (addon)", "main record name: " + mainMod.Name);
+                // F3 (Replace original): Full instead of Barefoot is not "already installed".
+                Require(Call(form, "SameInstalledReplacement") != null, "the same ticks are not the installed replacement: " + state());
+                node("Full").Checked = true; WaitReview(form);
+                Require(Call(form, "SameInstalledReplacement") == null && !Details(form).Contains("Already installed"), "Full instead of Barefoot counts as already installed: " + state());
+                node("Barefoot").Checked = true; WaitReview(form);
+                // F1 B: the addon record disabled: shown ticked, it stays disabled when the main mod is reinstalled.
+                engine.SetEnabled(addons[0].Id, false); refresh();
+                open(addonEntry); open(mainEntry);
+                Require(ticked("Barefoot") && !ticked("Full"), "a disabled addon record is not shown ticked: " + state());
+                Require(healthLines().Any(t => t.Contains("stays disabled")) && !healthLines().Any(t => t.StartsWith("Uninstalls")), "health for a disabled addon: " + String.Join(" / ", healthLines()));
+                node("Long").Checked = true; WaitReview(form);
+                install();
+                addons = addonRecords();
+                Require(addons.Count == 1 && !addons[0].Enabled && addons[0].SelectedIds.SequenceEqual(new[] { "04 Barefoot" }) && mainRecord().SelectedIds.Contains(node("Long").Tag is ModComponent ? ((ModComponent)node("Long").Tag).Id : "") && status().Contains("kept disabled"), "the disabled addon record after a reinstall: " + state());
+                // F1: a record never shown ticked is left alone (unticked addon: no health line, nothing uninstalled) ...
+                Get<HashSet<string>>(form, "shownAddonRecords").Clear();
+                node("Full").Checked = true; WaitReview(form);
+                Require(!ticked("Barefoot") && !healthLines().Any(t => t.StartsWith("Uninstalls")), "health for a record never shown: " + String.Join(" / ", healthLines()));
+                install();
+                Require(addonRecords().Count == 1, "a record never shown ticked was uninstalled: " + state());
+                // ... and one shown ticked and unticked goes, as the health report says.
+                open(addonEntry); open(mainEntry);
+                Require(ticked("Barefoot"), "reopen with the disabled record: " + state());
+                node("Full").Checked = true; WaitReview(form);
+                Require(healthLines().Any(t => t.StartsWith("Uninstalls " + AddonTestName + " Addon")), "no uninstall line for the shown record: " + String.Join(" / ", healthLines()));
+                install();
+                Require(addonRecords().Count == 0 && status().Contains("removed " + AddonTestName + " Addon"), "the shown, unticked record stayed: " + state());
+                // F2: a step after the main commit that fails is named in the status (no check mark).
+                MainForm.BeforeAddonCommit = delegate { throw new IOException("simulated addon failure"); };
+                try { node("Barefoot").Checked = true; WaitReview(form); install(); }
+                finally { MainForm.BeforeAddonCommit = null; }
+                Require(mainRecord() != null && addonRecords().Count == 0 && status().StartsWith("Installed " + AddonTestName) && status().Contains("; adding Barefoot from " + Path.GetFileName(addon) + " failed: simulated addon failure"), "late failure: " + state());
+                // F2: the addon archive changed after the review: refused before the main record is written.
+                cleanup(); refresh();
+                open(mainEntry); node("Barefoot").Checked = true; node("Short").Checked = true; WaitReview(form);
+                Require(Get<FlatButton>(form, "installButton").Enabled, "not ready: " + state());
+                WriteZip(addon, new Dictionary<string, byte[]> {
+                    { "00 Menu/modinfo.ini", Ini("name=" + AddonTestName + "\nDummyMod=true\ndescription=Fixture main mod\n") },
+                    { "04 Barefoot/modinfo.ini", Ini("name=Barefoot\nAddonFor=Outfit\nRequirement=Main files\nscreenshot=preview.png\nMenuPriority=100\n") },
+                    { "04 Barefoot/preview.png", AddonPreview },
+                    { "04 Barefoot/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes("barefoot mesh, changed on disk") } });
+                install();
+                Require(mainRecord() == null && addonRecords().Count == 0, "a changed addon archive was not refused before the main record: " + state());
+                // F3 (Extra outfit): Barefoot and Full are two outfits; then a part that can't be added leaves the outfit as it was.
+                Call(form, "SetInstallMode", InstallModes.Slot, true);
+                open(addonEntry); open(mainEntry);
+                node("Barefoot").Checked = true; node("Short").Checked = true; WaitReview(form);
+                Get<ComboBox>(form, "targetCharacter").SelectedItem = "Cammy"; Get<PaddedTextField>(form, "outfitName").Text = "Addon Extra 2"; WaitReview(form);
+                install();
+                InstalledOutfit outfit = Installer.ListInstalled(root).Single(o => o.Name == "Addon Extra 2");
+                string mesh = Path.Combine(outfit.Folder, ReplaceChecks.V5.Replace('/', '\\'));
+                Require(outfit.Parts != null && outfit.Parts.Count == 1 && isAddon(outfit.Parts[0].SourcePath) && File.ReadAllText(mesh) == "barefoot mesh, changed on disk", "extra outfit with Barefoot: " + state());
+                Require(form.DuplicateExtraOutfit() != null && form.SuggestedOutfitName() == "Addon Extra 2", "the same ticks are not that outfit: " + form.SuggestedOutfitName());
+                node("Full").Checked = true; WaitReview(form);
+                Require(form.DuplicateExtraOutfit() == null && form.SuggestedOutfitName() != "Addon Extra 2", "Full instead of Barefoot counts as that outfit: " + form.SuggestedOutfitName());
+                node("Barefoot").Checked = true; Get<PaddedTextField>(form, "outfitName").Text = "Addon Extra 2"; WaitReview(form);
+                WriteZip(addon, new Dictionary<string, byte[]> {
+                    { "00 Menu/modinfo.ini", Ini("name=" + AddonTestName + "\nDummyMod=true\ndescription=Fixture main mod\n") },
+                    { "04 Barefoot/modinfo.ini", Ini("name=Barefoot\nAddonFor=Outfit\nRequirement=Main files\nscreenshot=preview.png\nMenuPriority=100\n") },
+                    { "04 Barefoot/preview.png", AddonPreview },
+                    { "04 Barefoot/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes("barefoot mesh, changed once more") } });
+                install();
+                outfit = Installer.ListInstalled(root).Single(o => o.Name == "Addon Extra 2");
+                Require(outfit.Parts != null && outfit.Parts.Count == 1 && isAddon(outfit.Parts[0].SourcePath) && File.ReadAllText(mesh) == "barefoot mesh, changed on disk", "the outfit lost its Barefoot part when adding it failed: parts " + (outfit.Parts == null ? 0 : outfit.Parts.Count) + " mesh " + File.ReadAllText(mesh) + " / " + state());
+            }
+            finally
+            {
+                MainForm.BeforeAddonCommit = null;
+                library.Remove(mainEntry); library.Remove(addonEntry);
+                try { cleanup(); } catch (Exception ex) { Program.Log(ex); }
+                Call(form, "SetInstallMode", InstallModes.Replace, true);
+                Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                ShowLibrary(form);
+            }
+        }
+
         // With tests.local.json keys addonMain and addonPart (the user's real zips, read only): the main mod takes Barefoot
         // into Outfit next to Full. Without them, nothing to check.
         private static string RealAddonArchives()

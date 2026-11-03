@@ -419,11 +419,14 @@ namespace SlotsInstaller
             }
             return true;
         }
-        // 1.0.16: a record's code kinds (a copy), null while unknown. A record from before them without tool kinds has no
-        // reframework/ file and no DLL, so no code kind: it gets an empty list without reading the archive (CacheLock held).
+        // 1.0.16: a record's code kinds (a copy), null while unknown. A record from before them without tool kinds and with
+        // natives options (a costume or stage mod) gets an empty list without reading the archive (CacheLock held). PR #22
+        // review: one without natives options is read once, as an .asi or ReShade preset (ReShade.ini, reshade-shaders/)
+        // is an injector with no DLL. Left: a natives mod that also ships one of those stays without the kind until its
+        // archive changes.
         private static List<string> CachedCodeKinds(LibraryIdentityRecord cached)
         {
-            if (cached.CodeKinds == null && cached.ToolKinds != null && cached.ToolKinds.Count == 0) { cached.CodeKinds = new List<string>(); cacheDirty = true; }
+            if (cached.CodeKinds == null && cached.ToolKinds != null && cached.ToolKinds.Count == 0 && cached.OptionCount > 0) { cached.CodeKinds = new List<string>(); cacheDirty = true; }
             return cached.CodeKinds == null ? null : new List<string>(cached.CodeKinds);
         }
         // Until it is read: the file-name fighter (as for a mod without fighter files), no options or kinds yet.
@@ -925,9 +928,16 @@ namespace SlotsInstaller
         // archives, added again afterwards with their current ticks, or left out when none is ticked).
         internal static InstallResult Install(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources)
         {
-            using (AcquireMutation(costumeRoot)) return InstallLocked(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,dropPartSources);
+            return Install(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,dropPartSources,null);
         }
-        private static InstallResult InstallLocked(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources)
+        // 1.0.16 (PR #22 review, F2): addParts: selections (an addon's ticks, SelectionFiles) added as parts in this same
+        // transaction, after the kept ones; one that can't be added (changed archive, another fighter or outfit slot)
+        // fails the install before anything is written (AddToOutfit after the commit could leave the dropped part out).
+        internal static InstallResult Install(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources,IList<CompositionPlan> addParts)
+        {
+            using (AcquireMutation(costumeRoot)) return InstallLocked(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,dropPartSources,addParts);
+        }
+        private static InstallResult InstallLocked(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources,IList<CompositionPlan> addParts)
         {
             if (!plan.CanInstall) throw new IOException(String.Join(Environment.NewLine,plan.Errors));
             Safety.Segment(character); Safety.Segment(outfitName);
@@ -975,10 +985,11 @@ namespace SlotsInstaller
                     if (String.Equals(oldManifest.SourcePath,fresh.SourcePath,StringComparison.OrdinalIgnoreCase)) keptParts=ReapplyParts(new InstallManifest {Parts=previousParts},stage,hashes,transaction,sevenZipPath,droppedParts);
                     else droppedParts.AddRange(previousParts.Select(g=>GraftText(g)+" (another mod fills the outfit now)"));
                 }
+                List<PartGraft> addedParts=AddPartsLocked(addParts,stage,hashes,transaction,sevenZipPath,expected,keptParts);
                 var rebuiltSwatches = new Dictionary<string,string>();
                 int swatchFixes=FixSwatches(stage,hashes,root,rebuiltSwatches);   // 2.5.5: outdated select-screen swatches (ModFixes.UpgradeSwatches)
                 var manifest=new InstallManifest {Id=oldManifest==null ? Guid.NewGuid().ToString("N") : oldManifest.Id,Name=outfitName,Character=character,SourcePath=fresh.SourcePath,CreatedUtc=DateTime.UtcNow.ToString("o"),SelectedIds=current.Layers.Select(c=>c.Id).ToList()};
-                manifest.Sha256=hashes; if (rebuiltSwatches.Count > 0) manifest.RebuiltSwatches=rebuiltSwatches; if (keptParts.Count>0) manifest.Parts=keptParts;
+                manifest.Sha256=hashes; if (rebuiltSwatches.Count > 0) manifest.RebuiltSwatches=rebuiltSwatches; if (keptParts.Count+addedParts.Count>0) manifest.Parts=keptParts.Concat(addedParts).ToList();
                 File.WriteAllText(Path.Combine(stage,"modinfo.ini"),"name="+outfitName+"\r\nauthor="+CleanMetadata(String.Join(", ",current.Layers.Select(c=>c.Author).Where(s=>!String.IsNullOrWhiteSpace(s)).Distinct()))+"\r\ndescription="+CleanMetadata("Composed with Slotsloader Manager. "+String.Join(" + ",current.Layers.Select(c=>c.Name)))+"\r\nversion=1.0\r\n",new UTF8Encoding(false));
                 Json.Write(Path.Combine(stage,ManifestName),manifest);
                 OperationContext.ThrowIfCancellationRequested();

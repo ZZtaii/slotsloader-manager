@@ -67,9 +67,15 @@ namespace SlotsInstaller
             return addons.Count == 0 ? loaded : LibraryAddons.Merge(loaded, addons);
         }
 
-        // Reopening: each addon's ids from the newest enabled record of its source (Replace original) or from the added
-        // part of the outfit the main ids came from (Extra outfit).
-        private List<KeyValuePair<AddonPart, List<string>>> InstalledAddonIds(ModPackage merged, bool fromReplace, InstalledOutfit outfit)
+        // 1.0.16 (PR #22 review, F1): the addon records whose ticks this open of the mod showed (restored when it opened,
+        // or installed since). Only these are uninstalled when their addon ends up with nothing ticked: a record never
+        // shown ticked (another copy, one the window didn't restore) is left alone. Cleared when another mod opens.
+        private readonly HashSet<string> shownAddonRecords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Reopening: each addon's ids from the newest record of its source, enabled first, a disabled one too (Replace
+        // original; the record is remembered in `shown`), or from the added part of the outfit the main ids came from
+        // (Extra outfit).
+        private List<KeyValuePair<AddonPart, List<string>>> InstalledAddonIds(ModPackage merged, bool fromReplace, InstalledOutfit outfit, ICollection<string> shown)
         {
             var result = new List<KeyValuePair<AddonPart, List<string>>>();
             if (merged == null || merged.AddonParts == null) return result;
@@ -77,13 +83,52 @@ namespace SlotsInstaller
             {
                 List<string> ids = null;
                 if (fromReplace)
-                    ids = gameRows.Where(r => r.Mod != null && r.Mod.Enabled && ReplacePlanner.SameSource(r.Mod.SourcePath, part.SourcePath) && r.Mod.SelectedIds != null && r.Mod.SelectedIds.Count > 0)
-                        .Select(r => r.Mod).OrderByDescending(m => m.InstalledUtc ?? "", StringComparer.Ordinal).Select(m => m.SelectedIds).FirstOrDefault();
+                {
+                    ReplaceMod record = gameRows.Where(r => r.Mod != null && ReplacePlanner.SameSource(r.Mod.SourcePath, part.SourcePath) && r.Mod.SelectedIds != null && r.Mod.SelectedIds.Count > 0)
+                        .Select(r => r.Mod).OrderByDescending(m => m.Enabled).ThenByDescending(m => m.InstalledUtc ?? "", StringComparer.Ordinal).FirstOrDefault();
+                    if (record != null) { ids = record.SelectedIds; if (shown != null) shown.Add(record.Id); }
+                }
                 else if (outfit != null && outfit.Parts != null)
                     ids = outfit.Parts.Where(g => ReplacePlanner.SameSource(g.SourcePath, part.SourcePath) && g.SelectedIds != null).Select(g => g.SelectedIds).LastOrDefault();
                 if (ids != null && ids.Count > 0) result.Add(new KeyValuePair<AddonPart, List<string>>(part, ids.ToList()));
             }
             return result;
+        }
+
+        // The record an addon's install switches in place: the one shown, else the highest-priority one of its source.
+        private static ReplaceMod AddonTarget(IEnumerable<ReplaceMod> mods, AddonPart part, ICollection<string> shown)
+        {
+            List<ReplaceMod> same = mods.Where(m => m != null && ReplacePlanner.SameSource(m.SourcePath, part.SourcePath)).ToList();
+            return same.FirstOrDefault(m => shown.Contains(m.Id)) ?? same.FirstOrDefault();
+        }
+
+        // 1.0.16 (PR #22 review, F3): "the same install" counts the addon ticks too (main + Barefoot and main + Full have
+        // the same main ids because of the fill-in). Replace original: each ticked addon's record (AddonTarget) has
+        // those ids; an unticked addon has no shown record (one never shown stays as it is, so it doesn't count).
+        private bool AddonRecordsMatch(AddonSplit split)
+        {
+            if (split == null || !split.Merged) return true;
+            List<ReplaceMod> mods = gameRows.Where(r => r.Mod != null).Select(r => r.Mod).ToList();
+            foreach (var part in split.Parts)
+            {
+                if (part.Value.Count == 0) { if (mods.Any(m => shownAddonRecords.Contains(m.Id) && ReplacePlanner.SameSource(m.SourcePath, part.Key.SourcePath))) return false; continue; }
+                ReplaceMod target = AddonTarget(mods, part.Key, shownAddonRecords);
+                if (target == null || target.SelectedIds == null || !Composer.MatchesSavedSelection(part.Key.Package, part.Value, target.SelectedIds)) return false;
+            }
+            return true;
+        }
+        // Extra outfit: the outfit's added parts from each addon have the ticked options (none when nothing is ticked).
+        internal static bool AddonPartsMatch(AddonSplit split, InstalledOutfit outfit)
+        {
+            if (split == null || !split.Merged) return true;
+            foreach (var part in split.Parts)
+            {
+                List<string> saved = (outfit.Parts ?? new List<PartGraft>()).Where(g => ReplacePlanner.SameSource(g.SourcePath, part.Key.SourcePath) && g.SelectedIds != null).SelectMany(g => g.SelectedIds).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                List<string> ticked = part.Value.Count == 0 ? new List<string>() : Installer.SelectionFiles(part.Key.Package, part.Value).Layers.Select(c => c.Id).ToList();
+                if (ticked.Count == 0 && saved.Count == 0) continue;
+                if (ticked.Count == 0 || saved.Count == 0 || !Composer.MatchesSavedSelection(part.Key.Package, ticked, saved)) return false;
+            }
+            return true;
         }
 
         // Review: the merged selection's own errors (two picks in one group) and each addon's, the notes and fill-in warnings.
@@ -100,7 +145,9 @@ namespace SlotsInstaller
         }
 
         // Health: the main mod's own addon records are not conflicts (the addon is meant to win the files they share).
-        private static void AdjustAddonHealth(ReplacePlan health, ModPackage merged, AddonSplit split, ReplaceEngine engine)
+        // 1.0.16 (PR #22 review, F1): the lines say what Install does: only a shown record is uninstalled, a disabled
+        // one stays disabled, other records of an addon's source go (the 2.4.1 switch keeps one).
+        private static void AdjustAddonHealth(ReplacePlan health, ModPackage merged, AddonSplit split, ReplaceEngine engine, ICollection<string> shown)
         {
             if (health == null || merged.AddonParts == null) return;
             ReplaceState state = engine.LoadState();
@@ -113,52 +160,115 @@ namespace SlotsInstaller
             }
             health.Conflicts = health.ConflictList.Where(x => x.Enabled).Sum(x => x.Shared);
             foreach (string warning in split.Warnings) health.Items.Add(new HealthItem("warn", warning));
-            foreach (var part in split.Parts.Where(p => p.Value.Count == 0))
-            {
-                List<string> names = state.Mods.Where(m => ReplacePlanner.SameSource(m.SourcePath, part.Key.SourcePath)).Select(m => m.Name).ToList();
-                if (names.Count > 0) health.Items.Add(new HealthItem("info", "Uninstalls " + String.Join(", ", names) + ": none of its options is ticked."));
-            }
-        }
-
-        // Worker (Replace original): each addon after the main record. Its own record (an earlier one of the same source is
-        // switched in place by PrepareAndInstall), moved directly above the main record; nothing ticked uninstalls it.
-        private static string InstallAddonRecords(ReplaceEngine engine, ReplaceMod main, AddonSplit split, string sevenZip)
-        {
-            var said = new List<string>();
             foreach (var part in split.Parts)
             {
-                List<ReplaceMod> existing = engine.LoadState().Mods.Where(m => ReplacePlanner.SameSource(m.SourcePath, part.Key.SourcePath)).ToList();
                 if (part.Value.Count == 0)
                 {
-                    foreach (ReplaceMod old in existing) engine.UninstallForGood(old.Id, DriftChoice.Ask, null);
-                    if (existing.Count > 0) said.Add("removed " + String.Join(", ", existing.Select(m => m.Name)));
+                    List<string> names = state.Mods.Where(m => shown.Contains(m.Id) && ReplacePlanner.SameSource(m.SourcePath, part.Key.SourcePath)).Select(m => m.Name).ToList();
+                    if (names.Count > 0) health.Items.Add(new HealthItem("info", "Uninstalls " + String.Join(", ", names) + ": none of its options is ticked."));
                     continue;
                 }
-                CompositionPlan own = Composer.Plan(part.Key.Package, part.Value, true);
-                if (!own.CanInstall) throw new IOException(part.Key.FileName + ": " + String.Join(" ", own.Errors));
-                ReplacePlan prepared;
-                ReplaceMod addon = ReplacePlanner.PrepareAndInstall(own, sevenZip, engine, part.Key.RecordName, false, null, out prepared);
-                ReplaceState state = engine.LoadState();
-                int below = state.Mods.FindIndex(m => m.Id == main.Id), at = state.Mods.FindIndex(m => m.Id == addon.Id);
-                if (below >= 0 && at >= 0 && at != below - 1) engine.Move(addon.Id, (at > below ? below : below - 1) - at);
-                said.Add(addon.Name + " (" + Installer.OptionText(own) + ") · " + ReplacePlanner.N(addon.Files.Count, "file"));
+                ReplaceMod target = AddonTarget(state.Mods, part.Key, shown);
+                if (target == null) continue;
+                if (!target.Enabled) health.Items.Add(new HealthItem("info", target.Name + " stays disabled, as on the Installed page: enable it there to see " + LibraryAddons.OptionNames(part.Key.Package, part.Value) + " in game."));
+                List<string> others = state.Mods.Where(m => m.Id != target.Id && ReplacePlanner.SameSource(m.SourcePath, part.Key.SourcePath)).Select(m => m.Name).ToList();
+                if (others.Count > 0) health.Items.Add(new HealthItem("info", "Uninstalls " + String.Join(", ", others) + ": another record of " + part.Key.FileName + " (one stays)."));
             }
-            return said.Count == 0 ? "" : " + " + String.Join(" + ", said);
         }
 
-        // Worker (Extra outfit): each addon's ticks added to the outfit the main mod was just installed as.
-        private static string AddAddonParts(string folder, string costumeRoot, AddonSplit split, string sevenZip)
+        // What an install with addons did (Replace original). Leftover: addon records still to uninstall (after a drift
+        // question); Failed: the steps after the main commit that didn't go through, for the status line.
+        private sealed class AddonInstall
         {
-            string note = "";
-            foreach (var part in split.Ticked)
+            internal ReplaceMod Main; internal DriftException Drift;
+            internal List<string> Said = new List<string>(), Failed = new List<string>(), Installed = new List<string>();
+            internal List<ReplaceMod> Leftover = new List<ReplaceMod>(), Removed = new List<ReplaceMod>();
+        }
+        internal static Action<AddonPart> BeforeAddonCommit;   // tests: a step after the main commit that fails
+
+        // Worker (Replace original). 1.0.16 (PR #22 review, F2): each ticked addon is planned, staged and checked first
+        // (a changed archive, a plan error, a refused health check stop here with nothing written); then the main record;
+        // then each addon's record (an earlier one switched in place) directly above the main record in the same change
+        // (no Move); then the records to uninstall: other records of a ticked addon's source and, for an addon with
+        // nothing ticked, its shown record (F1). A drift question there goes back to the window (ChangeWithDriftChoice's
+        // question); a step that fails after the main commit is named in the status, not thrown.
+        private static AddonInstall InstallWithAddons(ReplaceEngine engine, CompositionPlan composition, string sevenZip, string name, string replaceId, AddonSplit split, ICollection<string> shown)
+        {
+            var result = new AddonInstall();
+            var prepared = new List<KeyValuePair<AddonPart, ReplacePlanner.PreparedInstall>>();
+            var options = new Dictionary<AddonPart, string>();
+            try
             {
-                CompositionPlan selection = Installer.SelectionFiles(part.Key.Package, part.Value);
-                InstalledOutfit target = Installer.ListInstalled(costumeRoot).FirstOrDefault(o => String.Equals(Path.GetFullPath(o.Folder).TrimEnd('\\'), Path.GetFullPath(folder).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase));
-                if (target == null) throw new IOException("Installed, but the outfit wasn't found to add " + Installer.OptionText(selection) + " from " + part.Key.FileName + ". Refresh and install again.");
-                Installer.AddToOutfit(target, costumeRoot, selection, sevenZip);
-                note += " · added " + Installer.OptionText(selection) + " from " + part.Key.RecordName;
+                foreach (var part in split == null ? new KeyValuePair<AddonPart, List<string>>[0] : split.Ticked.ToArray())
+                {
+                    CompositionPlan own = Composer.Plan(part.Key.Package, part.Value, true);
+                    if (!own.CanInstall) throw new IOException(part.Key.FileName + ": " + String.Join(" ", own.Errors));
+                    options[part.Key] = Installer.OptionText(own);
+                    ReplaceMod target = AddonTarget(engine.LoadState().Mods, part.Key, shown);
+                    try { prepared.Add(new KeyValuePair<AddonPart, ReplacePlanner.PreparedInstall>(part.Key, ReplacePlanner.PrepareInstall(own, sevenZip, engine, false, target == null ? null : target.Id))); }
+                    catch (SourceChangedException) { throw; }   // reloaded (MainForm.Error), nothing installed
+                    catch (IOException ex) { throw new IOException(part.Key.FileName + ": " + ex.Message, ex); }
+                }
+                ReplacePlan mainPlan;
+                result.Main = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, replaceId, out mainPlan);
+                if (split == null) return result;
+                foreach (var p in prepared)
+                {
+                    try
+                    {
+                        if (BeforeAddonCommit != null) BeforeAddonCommit(p.Key);
+                        ReplaceMod addon = ReplacePlanner.CommitInstall(p.Value, engine, p.Key.RecordName, false, result.Main.Id);
+                        result.Installed.Add(addon.Id); result.Leftover.AddRange(p.Value.Others);
+                        result.Said.Add(addon.Name + " (" + options[p.Key] + (addon.Enabled ? "" : ", kept disabled") + ") · " + ReplacePlanner.N(addon.Files.Count, "file"));
+                    }
+                    catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); result.Failed.Add("adding " + options[p.Key] + " from " + p.Key.FileName + " failed: " + ex.Message.TrimEnd('.')); }
+                }
+                ReplaceState state = engine.LoadState();
+                foreach (var part in split.Parts.Where(x => x.Value.Count == 0))
+                    result.Leftover.AddRange(state.Mods.Where(m => shown.Contains(m.Id) && ReplacePlanner.SameSource(m.SourcePath, part.Key.SourcePath)));
+                RemoveAddonRecords(engine, result, DriftChoice.Ask);
+                return result;
             }
-            return note;
+            finally { foreach (var p in prepared) ReplacePlanner.Discard(p.Value); }
+        }
+        // Uninstalls the leftover records for good (no kept copy, as the 2.4.1 switch); stops at a drift question.
+        private static void RemoveAddonRecords(ReplaceEngine engine, AddonInstall result, DriftChoice choice)
+        {
+            result.Drift = null;
+            foreach (ReplaceMod old in result.Leftover.ToList())
+            {
+                if (engine.LoadState().Find(old.Id) == null) { result.Leftover.Remove(old); continue; }
+                try { engine.UninstallForGood(old.Id, choice, null); result.Removed.Add(old); }
+                catch (DriftException ex) { if (choice != DriftChoice.Ask) throw; result.Drift = ex; return; }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); result.Failed.Add("removing " + old.Name + " failed: " + ex.Message.TrimEnd('.')); }
+                result.Leftover.Remove(old);
+            }
+        }
+        // " + X Addon (Barefoot) · 1 file + removed Y", or the failures: "; adding Barefoot from Y.zip failed: …".
+        private static string AddonInstallText(AddonInstall r, bool failures)
+        {
+            if (failures) return r.Failed.Count == 0 ? "" : "; " + String.Join("; ", r.Failed);
+            var parts = new List<string>(r.Said);
+            if (r.Removed.Count > 0) parts.Add("removed " + String.Join(", ", r.Removed.Select(m => m.Name)));
+            return parts.Count == 0 ? "" : " + " + String.Join(" + ", parts);
+        }
+
+        // Window side of InstallWithAddons: the shown records follow the install, a drift question is asked as for any
+        // uninstall (Cancel keeps the records and says so), then the status line.
+        private void FinishAddonInstall(AddonInstall r, Action<AddonInstall> done)
+        {
+            foreach (string id in r.Installed) shownAddonRecords.Add(id);
+            foreach (ReplaceMod m in r.Removed) shownAddonRecords.Remove(m.Id);
+            if (r.Drift == null) { done(r); return; }
+            DriftChoice choice = AskDrift(r.Drift);
+            LastDriftChoice = choice;
+            if (choice == DriftChoice.Ask)
+            {
+                r.Failed.Add("kept " + String.Join(", ", r.Leftover.Select(m => m.Name)) + ": " + r.Drift.Items[0].Text);
+                r.Drift = null; r.Leftover.Clear(); done(r); return;
+            }
+            ReplaceEngine again = Engine();
+            Work("Installing replacement…", delegate { RemoveAddonRecords(again, r, choice); return r; }, delegate(AddonInstall after) { FinishAddonInstall(after, done); });
         }
     }
 }

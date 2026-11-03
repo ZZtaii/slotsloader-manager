@@ -850,6 +850,8 @@ namespace SlotsInstaller
             if (deferRenames) { }
             else if (anyEnabled && File.Exists(crash) && !File.Exists(renamed))
             { moves.Add(new JournalOp { Kind = "move", Path = CrashReporter.Name, Target = CrashReporter.RenamedName }); next.CrashReporterRenamed = true; }
+            else if (anyEnabled && File.Exists(crash) && File.Exists(renamed))
+            { moves.AddRange(CrashReporterOverStale()); next.CrashReporterRenamed = true; }
             else if (!anyEnabled && current.CrashReporterRenamed)
             {
                 if (File.Exists(renamed) && !File.Exists(crash)) moves.Add(new JournalOp { Kind = "move", Path = CrashReporter.RenamedName, Target = CrashReporter.Name });
@@ -865,6 +867,31 @@ namespace SlotsInstaller
             journal.Ops.AddRange(moves);
             journal.Ops.AddRange(zeroRows.Select(kv => pakOp(kv.Key, kv.Value)));
             return journal;
+        }
+
+        // 1.0.16 (PR #22 review, F5): CrashReport.exe back beside its renamed copy (Steam "Verify integrity" or a game update
+        // restores the exe and leaves the copy): the exe takes the renamed name. Sha-checked file ops, so a crash at any
+        // step rolls back to both files as they were: the same bytes, the exe is dropped (the renamed copy is it); other
+        // bytes, the stale copy is kept as CrashReport_FMMBACKUP.exe.old (.old2 … when taken), then the exe replaces it.
+        private List<JournalOp> CrashReporterOverStale()
+        {
+            string crash = GamePath(CrashReporter.Name), renamed = GamePath(CrashReporter.RenamedName);
+            string crashSha = Sha(crash), staleSha = Sha(renamed);
+            var ops = new List<JournalOp>();
+            if (crashSha != staleSha)
+            {
+                string aside = null;
+                for (int n = 1; aside == null; n++)
+                {
+                    string candidate = CrashReporter.RenamedName + ".old" + (n == 1 ? "" : n.ToString());
+                    string full = GamePath(candidate);
+                    if (!File.Exists(full) && !Directory.Exists(full)) { aside = candidate; ops.Add(new JournalOp { Kind = "file", Path = candidate, BeforeSha = null, AfterSha = staleSha, AfterSource = renamed }); }
+                    else if (File.Exists(full) && Sha(full) == staleSha) aside = candidate;   // kept by an earlier change
+                }
+                ops.Add(new JournalOp { Kind = "file", Path = CrashReporter.RenamedName, BeforeSha = staleSha, BeforeSource = GamePath(aside), AfterSha = crashSha, AfterSource = crash });
+            }
+            ops.Add(new JournalOp { Kind = "file", Path = CrashReporter.Name, BeforeSha = crashSha, BeforeSource = renamed, AfterSha = null });
+            return ops;
         }
 
         // How one change treats files other tools changed (2.2.0) and which kept files it restores.
@@ -983,7 +1010,11 @@ namespace SlotsInstaller
         // ---- Public API
 
         // Publishes a prepared plan (files staged in plan.StagingFolder under the store root).
-        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId)
+        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId) { return Install(plan, name, test, replaceId, null); }
+        // 1.0.16 (PR #22 review, F2): aboveId: the record goes directly above that one (a main mod's addon record, new or
+        // switched in place) in this same change: one Reconcile and one history entry (an in-place switch that moved is
+        // still an Update), where a Move used to follow.
+        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId, string aboveId)
         {
             if (plan == null || !plan.CanInstall) throw new IOException(plan == null ? "Nothing to install." : String.Join(" ", plan.Errors));
             ReplaceMod mod = null; string storeDir = null;
@@ -997,6 +1028,8 @@ namespace SlotsInstaller
                     string root = StoreRoot(state);
                     if (existing != null) { int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer; state.Mods[at] = mod; }
                     else state.Mods.Insert(0, mod);
+                    ReplaceMod below = String.IsNullOrEmpty(aboveId) ? null : state.Find(aboveId);
+                    if (below != null && !ReferenceEquals(below, mod)) { state.Mods.Remove(mod); state.Mods.Insert(state.Mods.IndexOf(below), mod); historySwitched = existing == null ? null : existing.Id; }
                     if (String.IsNullOrEmpty(state.StoreRoot)) state.StoreRoot = root;
                     return state;
                 }, false, null);
@@ -1006,8 +1039,10 @@ namespace SlotsInstaller
                 if (storeDir != null && Directory.Exists(storeDir) && !LoadState().Mods.Any(m => mod != null && m.Id == mod.Id)) { try { Installer.MoveDirectory(storeDir, plan.StagingFolder); } catch { } }
                 throw;
             }
+            finally { historySwitched = null; }
             return mod;
         }
+        private string historySwitched;   // the record an Install with aboveId switched in place (HistoryHooks: an Update)
 
         private ReplaceMod PublishPrepared(ReplacePlan plan, string name, bool test, ReplaceState state, out string storeDir, string newId = null)
         {
