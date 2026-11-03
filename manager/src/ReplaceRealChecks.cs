@@ -40,16 +40,25 @@ namespace SlotsInstaller
                 PakIndex p = PakIndex.Open(pakPath);
                 beforeToc = p.TocSha256();
                 var cmd = p.Find(PakHash.PathHash(ModFixes.ReferenceCmdPath));
-                ReplaceChecks.Require(cmd.Count == 1, "reference colour file not found");
-                byte[] data = p.Read(p.Entry(cmd[0]));
+                // 1.0.16: a replacement over Ryu's Outfit 1 colours in the PAK method (Sakura as Ryu) turns the entry off;
+                // it is then read from its turned-off row, as GameReference does.
+                int at = cmd.Count == 1 ? cmd[0] : -1; string how = "";
+                if (at < 0)
+                {
+                    List<int> rows = p.TurnedOffCandidates(PakHash.PathHash(ModFixes.ReferenceCmdPath)).Where(i => { try { byte[] d = p.Read(p.Entry(i)); return d.Length > 1000 && d[0] == 'U'; } catch (InvalidDataException) { return false; } catch (IOException) { return false; } }).ToList();
+                    ReplaceChecks.Require(rows.Count == 1, "reference colour file not found (" + rows.Count + " turned-off candidates)");
+                    at = rows[0]; how = ", turned off by a replacement: read from its row";
+                }
+                byte[] data = p.Read(p.Entry(at));
                 ReplaceChecks.Require(data.Length > 1000 && data[0] == 'U', "reference did not decode");
-                return "KPKA " + p.Major + "." + p.Minor + ", features " + p.Features + ", " + p.Count + " entries, fingerprint 0x" + p.Fingerprint.ToString("X8") + ", zeroed " + p.CountZeroed() + ", TOC SHA-256 " + beforeToc.Substring(0, 16) + ", table-only SHA-256 " + TableSha(p).Substring(0, 16) + ", reference entry #" + cmd[0] + " (" + data.Length + " bytes)";
+                return "KPKA " + p.Major + "." + p.Minor + ", features " + p.Features + ", " + p.Count + " entries, fingerprint 0x" + p.Fingerprint.ToString("X8") + ", zeroed " + p.CountZeroed() + ", TOC SHA-256 " + beforeToc.Substring(0, 16) + ", table-only SHA-256 " + TableSha(p).Substring(0, 16) + ", reference entry #" + at + " (" + data.Length + " bytes" + how + ")";
             });
             byte[] referenceCmd = null;
             check("C# fixers match Slotsloader's C++ output byte for byte on real outdated files", delegate
             {
                 if (!File.Exists(pakPath)) throw new SkipException("game not found");
-                referenceCmd = PakIndex.Open(pakPath).ReadByPath(ModFixes.ReferenceCmdPath);
+                referenceCmd = GameReference.Load(RealGame, PakIndex.Open(pakPath), null).ReferenceCmd;   // 1.0.16: also from a turned-off row
+                ReplaceChecks.Require(referenceCmd != null, "reference colour file not found");
                 bool sameReference = ReplaceEngine.Sha(referenceCmd).ToUpperInvariant() == ReferenceSha;
                 GameReference reference = GameReference.FromCmd(referenceCmd);
                 int compared = 0;
