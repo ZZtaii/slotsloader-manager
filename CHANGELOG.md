@@ -1,3 +1,10 @@
+# 1.10.8 (2026-11-03)
+
+Package `SF6_Slotsloader_Fork_v1.10.8.zip`, build ID 2026-11-03-1.10.8-slotsloader-fork
+(the first launch rebuilds the outfit PAK once).
+
+- Extra outfits made before a game update load again while a mod replaces Ryu's Outfit 1 colours through another mod manager (Sakura as Ryu). Their colour files are brought to the current game by reading Ryu's Outfit 1 colour file, and that mod turned it off in the game's PAK, so nothing was updated and outfits such as Ingrid's never finished loading. The colour file is now read from its turned-off entry, else another fighter's Outfit 1 colours give the same signatures, and the log warns when no game colour file can be read.
+
 # 1.10.7 (2026-11-01)
 
 Package `SF6_Slotsloader_Fork_v1.10.7.zip`, build ID 2026-11-01-1.10.7-slotsloader-fork

@@ -164,6 +164,11 @@ namespace SlotsInstaller
                 Require(find("lua") == "Folder Script, Hitbox Viewer, Training Suite" && find("scripts") == find("lua") && find("script") == find("lua"),"'lua': "+find("lua"));
                 Require(find("dll") == "Frame Meter Plugin, Proxy Loader, Training Suite" && find("DLLs") == find("dll"),"'dll': "+find("dll"));
                 Require(find("is:tool, suite") == "Training Suite" && find("suite, plugin") == "Training Suite" && find("is:tool color") == "" && find("color") == "Cammy Color Pack" && find("reframeworks") == "","combined terms: "+find("is:tool, suite")+" / "+find("color"));
+                // 1.0.16: REFramework & code kinds from the same listing pass; "injector(s)" lists the game-root loaders.
+                Func<string,string> code=delegate(string n) { return String.Join("+",listed.Single(e=>e.Name == n).CodeKinds); };
+                Require(code("Hitbox Viewer") == "script" && code("Frame Meter Plugin") == "plugin" && code("Proxy Loader") == "injector" && code("Training Suite") == "script+plugin+reframework" && code("Training Fonts") == "reframework"
+                    && code("Cammy Color Pack") == "" && code("Cammy Mac Pack") == "" && code("Code Vein Jacket") == "" && code("Folder Script") == "script" && find("injectors") == "Proxy Loader" && find("code injector") == "Proxy Loader",
+                    "code kinds: "+String.Join("; ",listed.Select(e=>e.Name+"="+String.Join("+",e.CodeKinds ?? new List<string> {"null"})))+" / injectors: "+find("injectors"));
                 // 2.0.4: typing a start of the long keywords (three letters or more) already lists them.
                 foreach(string text in new[] {"refr","refra","REFRAM","reframewor","refw","too","tool"}) Require(find(text) == allTools,"prefix '"+text+"': "+find(text));
                 Require(find("cod") == find("code") && find("plu") == find("plugin") && find("plugi") == find("plugin") && find("scr") == find("lua") && find("scrip") == find("lua"),"prefix kinds: "+find("plu")+" / "+find("scr"));

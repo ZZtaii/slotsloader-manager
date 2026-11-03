@@ -18,7 +18,8 @@ namespace SlotsInstaller
     // 2.0.3 tool terms: "reframework", "code", "tool(s)", "tool mod(s)", "code mod(s)", "ref" list tool mods
     // (2.0.4: also any start of reframework/plugins/scripts/tools from three letters, e.g. "refra"),
     // "plugin(s)", "script(s)"/"lua" and "dll(s)" one kind, OR-ed with the usual name/path match; is:tool / type:tool
-    // (Filters "Tool mod") keeps only tool mods.
+    // (Filters "Tool mod") keeps only tool mods. 1.0.16: "injector(s)"/"code injector(s)" list the mods of the Filters chip
+    // Code injectors (LibraryCode).
     // 2.3.0 category terms: "stage(s)" and "misc" list that category (OR-ed with the name match, like the tool
     // words); is:stage / is:misc / is:character keep only that category (ModCategories).
     internal static class LibrarySearch
@@ -75,6 +76,7 @@ namespace SlotsInstaller
                 case "plugin": case "plugins": return Library.ToolPlugin;
                 case "script": case "scripts": case "lua": return Library.ToolScript;
                 case "dll": case "dlls": return Library.ToolDll;
+                case "injector": case "injectors": case "code injector": case "code injectors": return LibraryCode.Injector;   // 1.0.16
             }
             if (t.Length < 3) return null;
             if ("reframework".StartsWith(t, StringComparison.Ordinal) || "tools".StartsWith(t, StringComparison.Ordinal) || "code".StartsWith(t, StringComparison.Ordinal)) return AnyTool;
@@ -98,6 +100,7 @@ namespace SlotsInstaller
         {
             if (keyword == AnyTool) return IsToolMod(e);
             if (keyword == Library.ToolDll) return HasTool(e, Library.ToolDll) || HasTool(e, Library.ToolPlugin);
+            if (keyword == LibraryCode.Injector) return LibraryCode.Has(e, LibraryCode.Injector);
             return keyword != null && HasTool(e, keyword);
         }
 

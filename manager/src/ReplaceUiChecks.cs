@@ -94,11 +94,17 @@ namespace SlotsInstaller
                         check("Settings has no automatic-uninstall option", delegate { NoAutoUninstallSetting(form); });
                         check("root alternatives: empty initial choice, radio switching, Reset and saved all-five winner without a record rewrite; renders", delegate { RootChoiceUi(form, f, root); });
                         check("browsing (1.0.12): opening a mod shows no progress bar or status text and keeps the list and options usable; the newest pick wins and stops the read in flight; the shown mod picked again keeps its ticks; the mod being read picked again after another pick still opens; Ctrl/Shift selection changes during a read decide what opens (one row, or the queue); read archives are kept until they change; the footer shows only the result; the health check waits for browsing to settle and StartReviewNow starts it; the next 7Z row is read ahead and opens from it", delegate { Browse(form, f, root); });
+                        check("7Z bundle layout (1.0.16): saved in the Data folder, the open mod shows it at once although the archive and its stamp are unchanged; Edit options with a layout group ticks the same options", delegate { StoredLayoutOpen(form, f, root); });
                         check("changed on disk (2.4.1): editing the open zip reloads it on F5, on window activation and before Install (selection kept by option id, else by name; mode and Install kept; status says so); a deleted source clears the inspector; the library index re-reads the edited archive; an installed copy shows Source changed and Reinstall applies the edit in place; no \"changed on disk\" problem reaches the user", delegate { SourceReload(form, f); });
                         check("saved options missing (2.4.2): a click on the footer reviews without them and clears the flag in Replace original and Extra outfit, like Health / Review files", delegate { FooterMissingOptions(form, f); });
                         check("removed copies (2.4.2): Settings → Game files & replacements says how many (the copies Restore original game files keeps for its Undo), their size and the keep rule (1.0.1: only while their Undo is available) under the store (no '(freed on uninstall)'), fits at 1232x640 and 1110x610; render at the device DPI; a new change ends the Undo and the copy is deleted", delegate { SettingsStoreLine(form, f, root); });
                         check("copy not saved (2.4.2): Restore original game files (1.0.1: uninstall keeps no copy) with a store file open in another program says the copy wasn't saved (never 'kept'); the refresh retries and keeps it; Undo puts it back", delegate { TrashWarningInline(form, f); });
                         check("Undo position (2.4.2): after another program installs a mod over the same files, the window's Undo of Restore original game files puts the removed mods back below it", delegate { UndoBelowNewer(form, f); });
+                        check("addon archives (1.0.16): opened from the library, the main mod shows its addon's Barefoot inside Outfit next to Full (choose one, its preview from the addon; the addon alone unchanged; bundle layouts never merged); Install in Replace original makes two records, the addon directly above the main one, the main record valid alone with Full as the fill-in; reopening restores Barefoot ticked and Full unticked; unticking Barefoot removes the addon's record; the footer's Uninstall removes both; Extra outfit adds Barefoot as a part of the outfit and unticking takes it out", delegate { AddonArchives(form, f, Path.Combine(root, "addon-library")); });
+                        check("addon archives, PR #22 review fixes (1.0.16): an addon record installed first or disabled is shown ticked (a disabled one stays disabled) and only a record shown ticked is uninstalled; a changed addon archive stops the install before the main record, a late failure is named in the status, the addon goes directly above the main record without a Move; addon ticks count in \"already installed\" in both modes; the main record is named after the addon option, not the fill-in; in Extra outfit a part that can't be added leaves the outfit as it was", delegate { AddonReviewFixes(form, f, Path.Combine(root, "addon-review")); });
+                        string realAddons = "";
+                        check("addon archives (1.0.16), the user's real zips when tests.local.json names addonMain and addonPart (read only)", delegate { realAddons = RealAddonArchives(); });
+                        report.Add("    " + realAddons);
                         check("cleanup: Restore original game files leaves no replacement installed (the next suites share Data)", delegate { var e = new ReplaceEngine(f.Game, AppConfig.DataDir, ReplaceSettings.Load()); e.RestoreAll(); Require(e.LoadState().Mods.Count == 0 && !Directory.Exists(Path.Combine(f.Game, "natives")), "cleanup"); });
                         check("multi-select Uninstall in Mod library and Installed removes both replacements and keeps both sources", delegate { UninstallSelections(form, f, root); });
                         check("game entries left invalidated and Fluffy PAK installs (2.4.2): the banner says \"2 game entries left invalidated by another tool.\" with Repair (compact row, rendered at the device DPI); SF6 or Fluffy running refuses inline; Repair restores both (the Fluffy-owned entry stays) with the result inline and no popup; both Fluffy instances are watched, also with an unreadable Manager record; an invalidate install uninstalls from the Installed page (entry restored) and Undo zeroes it again", delegate { FluffyPakUiChecks.Run(root, probe); });
@@ -336,8 +342,19 @@ namespace SlotsInstaller
                 engine.Install(dup, "modA second", false, null); engine.SetEnabled(engine.LoadState().Mods[0].Id, false);
                 refresh(); string withDuplicate = order();
                 // Restore original game files: no popup, Undo brings every record back in order with its enabled state.
-                Call(form, "RestoreOriginalGameFiles"); WaitIdle(form); refresh();
+                string framework = Path.Combine(f.Game, "reframework"); bool hadFramework = Directory.Exists(framework);
+                Call(form, "RestoreOriginalGameFiles"); WaitIdle(form); string restoredStatus = Get<Label>(form, "statusText").Text; refresh();
                 Require(engine.LoadState().Mods.Count == 0 && asked == 0 && engine.ListRemoved().Count == 3, "restore all: " + order() + ", kept copies " + engine.ListRemoved().Count);
+                // 1.0.16: the enabled replacements were saved as a preset first (the Undo's copies go with the next change).
+                string costumes = Get<AppConfig>(form, "config").CostumeRoot;
+                List<OutfitSetInfo> before = OutfitSetStore.List(costumes).Entries.Where(e => e.Kind == OutfitSetKind.Preset && e.Name.StartsWith(MainForm.BeforeRestorePreset, StringComparison.Ordinal)).ToList();
+                Require(before.Count == 1 && before[0].Scope == PresetScope.Replacements && before[0].ReplacementCount > 0 && restoredStatus.Contains("saved first as the preset “" + before[0].Name + "”"),
+                    "preset before restore: " + before.Count + " presets (" + String.Join("; ", before.Select(e => e.Name + " " + e.Scope + " " + e.ReplacementCount)) + "), status " + restoredStatus);
+                // Later checks compare the game folder with the clean fixture: the preset and the folders it made go.
+                OutfitSetStore.Delete(costumes, before[0]);
+                foreach (string made in new[] { ".slotsloader-installer-presets", ".slotsloader-installer-set-staging" })
+                    if (Directory.Exists(Path.Combine(framework, made)) && !Directory.EnumerateFileSystemEntries(Path.Combine(framework, made)).Any()) Directory.Delete(Path.Combine(framework, made));
+                if (!hadFramework && Directory.Exists(framework) && !Directory.EnumerateFileSystemEntries(framework).Any()) Directory.Delete(framework);
                 undo(); Require(order() == withDuplicate, "Undo of Restore original game files: " + order() + " (was " + withDuplicate + ")");
                 // SF6 running: refused inline, nothing changes, no dialog.
                 probe.Game = true; Call(form, "PollGame");
@@ -1573,6 +1590,17 @@ namespace SlotsInstaller
                     Require(Get<Label>(form, "modeNotice").Text.StartsWith("Slotsloader isn't installed"), "a REFramework updated outside the Manager kept the old notice: " + Get<Label>(form, "modeNotice").Text);
                     putDll("REFramework 01.01.2025"); Call(form, "CheckToolStamp");
                     Require(Get<Label>(form, "modeNotice").Text.StartsWith("REFramework from 1 Jan 2025 is out of date"), "poll after an older build: " + Get<Label>(form, "modeNotice").Text);
+                    // 1.0.16 (user report): Settings → Game files follows a change seen while another page was open, and
+                    // one UpdateModeUi saw first while the tab was open.
+                    Label toolLines = Get<Label>(form, "settingsToolStatus"); Panel settings = Get<Panel>(form, "settingsPage");
+                    Call(form, "ShowPage", settings); Call(form, "ShowSettingsTab", true); Application.DoEvents();
+                    Require(toolLines.Text.StartsWith("REFramework out of date"), "Settings with an older build: " + toolLines.Text);
+                    ShowLibrary(form); putDll("REFramework 13.10.2026"); Call(form, "CheckToolStamp");
+                    Call(form, "ShowPage", settings); Application.DoEvents();
+                    Require(toolLines.Text.StartsWith("REFramework installed"), "Settings kept the old REFramework line after another page saw the change: " + toolLines.Text);
+                    putDll("REFramework 01.01.2025"); Call(form, "UpdateModeUi"); Call(form, "CheckToolStamp");
+                    Require(toolLines.Text.StartsWith("REFramework out of date"), "Settings missed a change UpdateModeUi saw first: " + toolLines.Text);
+                    ShowLibrary(form);
                     putDll("REFramework Upscaler 01.01.2025");
                     Require(notice().StartsWith("Slotsloader isn't installed"), "an upscaler build was called old: " + notice());
                     // One click: the pinned nightly downloaded, verified and opened in Replace original; Install puts it in.

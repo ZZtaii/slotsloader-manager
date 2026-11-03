@@ -52,6 +52,11 @@ namespace SlotsInstaller
                 check("murmur3 path hash matches the game's index (two real vanilla paths)", HashVectors);
                 check("KPKA TOC parse, lookups, zero/restore rows with verification, refusal of features != 0 and wrong expected bytes", delegate { PakBasics(Path.Combine(run, "pak")); });
                 check("fixers: allow-listed CRC upgrade, stale types reported, mip pitch repair, old tex suffix and path normalization", delegate { Fixers(); });
+                // 1.0.16: install/uninstall speed-ups (SpeedShortcutChecks.cs)
+                check("PAK lookups (1.0.16): repeated hashes give every row in table order and a new list per call; zeroed rows, Contains; the blocked layout hash equals the row-by-row one across full and partial blocks, ignores hash fields and follows every other change", delegate { SpeedShortcutChecks.PakTable(Path.Combine(run, "speed-pak")); });
+                check("link checks per pass (1.0.16): folders checked once per pass; a link not checked before in the pass is refused every time and never remembered; a game folder made a link after install refuses the change with nothing committed", delegate { SpeedShortcutChecks.ReparseFolders(Path.Combine(run, "speed-links")); SpeedShortcutChecks.ReconcileLink(Path.Combine(run, "speed-reconcile-link")); });
+                check("rollback copy (1.0.16): an archive mod's game file changed after Reconcile hashed it is not stored (the archive gives the installed version), the uninstall is refused as before, recovery and a later uninstall work", delegate { SpeedShortcutChecks.HydrateAfterChange(Path.Combine(run, "speed-hydrate")); });
+                check("PAK stamps (1.0.16): the base PAK stamp and BaseAtInstall after a change match a fresh read of the PAK; status reports no change", delegate { SpeedShortcutChecks.Stamps(Path.Combine(run, "speed-stamps")); });
                 check("Extra outfit health previews repairs and flags unpatched files, then checks the installed bytes", delegate { ExtraPatchHealth(Path.Combine(run, "outfit-health")); });
                 check("swatch repair (2.5.5): an old select-screen swatch file is rebuilt from the game's current one with the mod's colours per ID (extra current IDs kept); current files, other paths and unknown layouts untouched; another outfit, a missing ID or no game file leave it as it is with a warning; extra outfit installs rebuild the copy and its hash", delegate { Swatches(); });
                 check("install -> conflict/priority -> disable -> uninstall restores every PAK and loose file byte for byte (PAK method)", delegate { Lifecycle(Path.Combine(run, "lifecycle")); });
@@ -92,7 +97,7 @@ namespace SlotsInstaller
                 check("REFramework loose-file log parsing matches test files", LogParsing);
                 check("health check: affected outfit, fixes, streaming twin, unknown folder, conflicts, outdated suffix", delegate { Health(Path.Combine(run, "health")); });
                 check("leftover Test in game record (feature removed in 2.3.0): kept as a normal install, logging keys restored, record deleted, game files unchanged", delegate { LeftoverTest(Path.Combine(run, "testgame"), probe); });
-                check("crash reporter is renamed while replacements are installed and restored after", delegate { CrashReporterRename(Path.Combine(run, "crashreporter")); });
+                check("crash reporter is renamed while replacements are installed and restored after (PR #22 review: also when the exe came back beside its renamed copy, a crash at any step rolls back)", delegate { CrashReporterRename(Path.Combine(run, "crashreporter")); });
                 check("TOC backup fallback restores only zeroed rows when the PAK layout still matches", delegate { TocFallback(Path.Combine(run, "tocfallback")); });
                 check("Ordered preset import, reimport, rollback, uninstall and ambiguous sources", delegate {
                     OrderedPatchPaks(Path.Combine(run, "ordered-paks"));
@@ -131,6 +136,8 @@ namespace SlotsInstaller
                 check("owned rows (2.4.2): the Manager's zeroed rows and rows a Fluffy installed.ini owns (two Fluffy instances) are never repaired; the one orphaned row is; Repair refuses while Fluffy or SF6 runs; 1.0.1: uninstalling an external mod here is refused and the Manager's own uninstall gives back only its own rows", delegate { FluffyPakChecks.OwnedRows(Path.Combine(run, "pak-owned"), probe); });
                 check("external-manager lockout (1.0.1): while installed.ini lists a mod, a replacement, a PAK mod and a tool mod are refused (health check and engine; nothing in the game folder changes), so are enabling, moving and Reapply; Slotsloader installs; disabling and uninstalling the Manager's own mods work; uninstalling the external mod is refused; once installed.ini is empty a replacement installs", delegate { FluffyLinkChecks.Lockout(Path.Combine(run, "lockout"), probe); });
                 check("Restore game to vanilla (1.0.11): replacements here and the external manager's mods go, so do every patch PAK and natives; this Manager's REFramework and Slotsloader stay (records and files)", delegate { FluffyLinkChecks.VanillaKeepsTools(Path.Combine(run, "vanilla")); });
+                check("colour reference (1.0.16): Ryu's Outfit 1 colours turned off by Fluffy are read from their row; missing, another fighter's give the signatures without the 2023 layout template (an unreadable turned-off row does not stop that, PR #22 review); present, as before", delegate { FluffyPakChecks.ReferenceTurnedOff(Path.Combine(run, "pak-reference")); });
+                check("parallel hashing (1.0.16): the same installs, refusal of a changed file and uninstall on a hard drive (one thread) and an SSD (game files hashed by several threads first) give the same files, records and message; the drive query never throws", delegate { SpeedShortcutChecks.ParallelHashing(Path.Combine(run, "speed-parallel")); });
                 check("Fluffy watcher (2.4.2): both instances' installed.ini watched (installs and removals seen within 2 s in each); a root missing at start makes the watcher restart once it appears; the stamp covers both", delegate { FluffyPakChecks.WatchBothRoots(Path.Combine(run, "pak-watch")); });
             }
             finally { GameProcesses.Probe = previousProbe; GameProcesses.Launcher = previousLauncher; }
@@ -1412,6 +1419,54 @@ namespace SlotsInstaller
             File.Move(GameFile(g, CrashReporter.Name), GameFile(g, CrashReporter.RenamedName));
             ReplaceMod b = Install(g, "modA", "B"); g.Engine.Uninstall(b.Id);
             Require(File.Exists(GameFile(g, CrashReporter.RenamedName)) && !File.Exists(GameFile(g, CrashReporter.Name)), "a rename made by Fluffy must be left alone");
+            // 1.0.16 (user report): Fluffy put CrashReport.exe back when its last mod went while this state still said
+            // renamed; the next change renames it again (it was left active with 16 replacements installed).
+            Fixture h = Create(Path.Combine(root, "put-back"), false, ReplaceMethods.Pak);
+            ReplaceMod c = Install(h, "modA", "C");
+            File.Move(GameFile(h, CrashReporter.RenamedName), GameFile(h, CrashReporter.Name));
+            Require(h.Engine.LoadState().CrashReporterRenamed, "fixture: the state says renamed");
+            ReplaceMod d = Install(h, "modB", "D");
+            Require(File.Exists(GameFile(h, CrashReporter.RenamedName)) && !File.Exists(GameFile(h, CrashReporter.Name)), "a crash reporter put back by another tool was not renamed again");
+            h.Engine.Uninstall(c.Id); h.Engine.Uninstall(d.Id);
+            Require(File.Exists(GameFile(h, CrashReporter.Name)) && !File.Exists(GameFile(h, CrashReporter.RenamedName)), "not restored after the last replacement");
+            // The Settings checkbox is gone: a settings file saying false is ignored.
+            Fixture k = Create(Path.Combine(root, "setting-off"), false, ReplaceMethods.Pak);
+            k.Engine.Settings.RenameCrashReporter = false;
+            Install(k, "modA", "E");
+            Require(File.Exists(GameFile(k, CrashReporter.RenamedName)) && !File.Exists(GameFile(k, CrashReporter.Name)), "RenameCrashReporter=false must no longer stop the rename");
+            // 1.0.16 (PR #22 review, F5): Steam "Verify integrity" (or a game update) puts CrashReport.exe back beside the
+            // renamed copy; the next change renames it again. Other bytes: the stale copy is kept as .old and the exe takes
+            // the renamed name; the same bytes: the exe goes (the renamed copy is it). No copy is ever lost.
+            Fixture v = Create(Path.Combine(root, "verified"), false, ReplaceMethods.Pak);
+            ReplaceMod g1 = Install(v, "modA", "G1");
+            string crash = GameFile(v, CrashReporter.Name), renamed = GameFile(v, CrashReporter.RenamedName);
+            byte[] stale = File.ReadAllBytes(renamed), fresh = System.Text.Encoding.ASCII.GetBytes("CrashReport.exe after a game update");
+            File.WriteAllBytes(crash, fresh);
+            Install(v, "modB", "G2");
+            Require(!File.Exists(crash) && File.ReadAllBytes(renamed).SequenceEqual(fresh) && File.Exists(renamed + ".old") && File.ReadAllBytes(renamed + ".old").SequenceEqual(stale) && v.Engine.LoadState().CrashReporterRenamed && !v.Engine.JournalPending,
+                "both present: exe " + File.Exists(crash) + ", renamed " + (File.Exists(renamed) ? System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(renamed)) : "missing") + ", .old " + File.Exists(renamed + ".old"));
+            File.WriteAllBytes(crash, fresh);
+            v.Engine.SetEnabled(g1.Id, false);
+            Require(!File.Exists(crash) && File.ReadAllBytes(renamed).SequenceEqual(fresh) && !File.Exists(renamed + ".old2"), "the same bytes: the exe stays beside its copy, or a second .old was made");
+            // A crash at any step of that change rolls back to both files as they were (or, once committed, the rename).
+            int clean = -1;
+            for (int n = 0; n < 40 && clean < 0; n++)
+            {
+                Fixture w = Create(Path.Combine(root, "verified-crash-" + n), false, ReplaceMethods.Pak);
+                Install(w, "modA", "H1");
+                string cCrash = GameFile(w, CrashReporter.Name), cRenamed = GameFile(w, CrashReporter.RenamedName);
+                byte[] cStale = File.ReadAllBytes(cRenamed);
+                File.WriteAllBytes(cCrash, fresh);
+                var before = Snapshot(w.Game);
+                ReplaceEngine.CrashAfterStep = n; bool crashed = false;
+                try { Install(w, "modB", "H2"); } catch (ReplaceEngine.SimulatedCrashException) { crashed = true; }
+                finally { ReplaceEngine.CrashAfterStep = -1; }
+                if (!crashed) { clean = n; break; }
+                w.Engine.Recover();
+                if (w.Engine.LoadState().Mods.Count == 1) SameSnapshot(before, Snapshot(w.Game), "crash reporter rollback after a crash at step " + n);
+                else Require(!File.Exists(cCrash) && File.ReadAllBytes(cRenamed).SequenceEqual(fresh) && File.ReadAllBytes(cRenamed + ".old").SequenceEqual(cStale), "committed crash at step " + n + " lost a copy");
+            }
+            Require(clean > 3, "the crash loop did not reach a clean run: " + clean);
         }
 
         private static void TocFallback(string root)

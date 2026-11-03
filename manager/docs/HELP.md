@@ -146,12 +146,12 @@ For an archive with several options, **Install all variants** copies the whole a
 ### Edit options
 On the Installed page, select an outfit and click **Edit options**. It opens in the Mod library with its options ticked. Change them and click **Install** to update that slot. Two or more slots from one mod show as one row with "N slots"; click its arrow to see each slot.
 
-### Organize a ZIP bundle
-In the library, right-click a ZIP with several options and choose **Edit bundle**. Select an option to rename it or change its rule. Use **New group** under the selected item, then drag options onto it or use **Move under**. Drop an option near the top or bottom edge of a row to place it above or below that row. Pick **Choose one** for required alternatives or **Choose up to one** when the base outfit works on its own. The line under the list says when a rule would stop the layout from saving.
+### Organize a bundle
+In the library, right-click a ZIP, RAR or 7Z with several options and choose **Edit bundle**. Select an option to rename it or change its rule. Use **New group** under the selected item, then drag options onto it or use **Move under**. Drop an option near the top or bottom edge of a row to place it above or below that row. Pick **Choose one** for required alternatives or **Choose up to one** when the base outfit works on its own. The line under the list says when a rule would stop the layout from saving.
 
-**Suggest layout** works locally. It groups recognizable alternatives and explains which rules came from the author. Review any uncertain groups before saving. **Refine with Assistant** sends option names, rules and descriptions to your configured Claude model. It works on the current draft, and **Cancel refinement** stops it. Use **Undo suggestion** to return to the previous draft, or **Save ZIP** to apply it.
+**Suggest layout** works locally. It groups recognizable alternatives and explains which rules came from the author. Review any uncertain groups before saving. **Refine with Assistant** sends option names, rules and descriptions to your configured Claude model. It works on the current draft, and **Cancel refinement** stops it. Use **Undo suggestion** to return to the previous draft.
 
-**Save ZIP** updates the original archive: the layout goes into the ZIP's comment, and the files inside stay as they are, so installed copies don't show "Source changed". Other Slotsloader Managers with the editor can read the layout. **Restore author layout** lets you preview the original menu and save it again. An installed outfit uses its existing files until you reinstall it. If files are added to the ZIP in another program and the saved layout no longer fits, the Manager shows the author's layout with a note; open **Edit bundle** and save to replace it.
+**Save ZIP** puts the layout in the ZIP's comment; its files stay as they are, so installed copies don't show "Source changed". **Save layout** (RAR, 7Z) keeps it in the `Data` folder and never changes the archive; a renamed or moved copy keeps it. **Restore author layout** lets you preview the original menu and save it again. An installed outfit uses its existing files until you reinstall it. If a saved layout no longer fits (files added in another program), the author's layout shows with a note; open **Edit bundle** and save to replace it.
 
 ## Presets
 > Save your whole setup as a list and bring it back later.
@@ -333,12 +333,12 @@ The install then stops before anything changes, with "This path is too long for 
 > What each undo and restore option does, from the lightest to the full reset.
 
 ### Undo
-Many actions happen at once and show **Undo** in the status bar: **Disable** and **Enable** of a replacement or tool mod, **Move up** and **Move down**, **Remove this Manager's mods**, changing the replacement method, turning the loose file loader on or off, **Remove PAK**, and turning a variant on or off. An Undo lasts until your next change or until you close the Manager. If it can't run yet, it says why ("Can't undo yet: …") and stays.
+Many actions happen at once and show **Undo** in the status bar: **Disable** and **Enable** of a replacement or tool mod, **Move up** and **Move down**, **Remove this Manager's mods**, changing the replacement method, turning the loose file loader on or off, **Remove PAK**, and turning a variant on or off. An Undo lasts until your next change or you close the Manager. If it can't run yet, it says why and stays.
 
 **Uninstall has no Undo.** It keeps no copy, so reinstall the mod from the Mod library. An outfit or replacement with no library source (a manual drop) goes to the Recycle Bin instead. If the Recycle Bin can't take it, an outfit stays installed and a replacement's files are deleted; the status line says which. Deleting a mod in the Mod library also moves it to the Recycle Bin.
 
 ### Remove this Manager's mods
-**Gear → Restore → Remove this Manager's mods** removes every replacement and tool mod the Manager installed and restores the original files. That includes REFramework and Slotsloader if the Manager installed them, so extra outfits stop loading until you press **Undo**, which puts everything back in its order. Undo waits while your external mod manager has mods installed, and ends at your next change or when you close the Manager. Your extra outfits and your external mod manager's mods are not touched. The same action is **Restore original game files** on the Installed page banner and in **Settings → Game files & replacements**.
+**Gear → Restore → Remove this Manager's mods** removes every replacement and tool mod the Manager installed and restores the original files. That includes REFramework and Slotsloader if the Manager installed them, so extra outfits stop loading until you press **Undo**, which puts everything back. Undo waits while your external mod manager has mods installed and ends at your next change, so your enabled replacements are saved as a preset first. Your extra outfits and your external mod manager's mods are not touched. The same action is **Restore original game files** on the Installed page banner and in **Settings → Game files & replacements**.
 
 ### Restore game to vanilla
 **Gear → Restore → Restore game to vanilla…** asks first and has no Undo. Close SF6 and your external mod manager first. It removes:

@@ -1,4 +1,4 @@
-# Slotsloader Manager 1.0.15
+# Slotsloader Manager 1.0.16
 
 A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
@@ -9,6 +9,13 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 **Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
+
+- 1.0.16:
+  - Includes Slotsloader Fork 1.10.8: extra outfits load again while another mod manager replaces Ryu's Outfit 1 colours.
+  - Addon zips show their options inside their main mod. Edit bundle works on RAR and 7Z too.
+  - Filters: **REFramework & code** replaces Tool mods.
+  - Restoring game files saves a preset first; the crash reporter is always renamed.
+  - Faster installs and uninstalls.
 
 - 1.0.15:
   - Edit a ZIP bundle in the Library to group its options and set selection rules. Suggest layout runs locally. Refine with Assistant is optional. Save ZIP writes the reviewed layout to the archive.
@@ -152,7 +159,7 @@ If another tool replaced or deleted a file this app installed, the banner says w
 - External mod manager features this app does not reproduce:
   - the `pak_mods` folder (a PAK mod installs here as the next patch PAK instead);
   - replacing game executables;
-  - the mod categories view (the Filters panel has fighters, Tool mods and Misc).
+  - the mod categories view (the Filters panel has fighters, REFramework & code and Misc).
 
 ## Ask the Assistant
 
@@ -190,7 +197,7 @@ Presets live in `reframework/.slotsloader-installer-presets`; keep that folder i
 
 ## Filter the library
 
-**Filters** (Ctrl+Shift+F) opens the panel beside the list: fighters, Tool mods, Misc (with its kinds), Installed and, with several libraries, one tile per library. **MY FILTERS** holds keyword filters you make. Click one to show only its mods, again to hide its mods, once more to turn it off; right-click offers the same and **Edit filter** (F2 on a focused chip). **+ New filter** opens the editor: a name and keywords separated by commas or new lines. A keyword matches a mod whose file name, own name, the name you typed for it, or any option name or folder contains it, ignoring case, spaces and dashes (`see through` also finds `See-Through`); one- and two-letter keywords must start a word. While you edit, the list shows what the keywords match. The **NSFW** filter comes ready-made; edit or delete it like your own. **Clear** turns every filter off.
+**Filters** (Ctrl+Shift+F) opens the panel beside the list: fighters, REFramework & code (SF6 code only) and Misc, each with its kind chips, Installed and, with several libraries, one tile per library. **MY FILTERS** holds keyword filters you make. Click one to show only its mods, again to hide them, once more to turn it off; right-click offers the same and **Edit filter** (F2 on a focused chip). **+ New filter** opens the editor: a name and keywords separated by commas or new lines. A keyword matches a mod whose file name, own name, the name you typed for it, or any option name or folder contains it, ignoring case, spaces and dashes (`see through` also finds `See-Through`); one- and two-letter keywords must start a word. While you edit, the list shows the matches. The **NSFW** filter comes ready-made; edit or delete it like your own. **Clear** turns every filter off.
 
 ## Move the app folder
 
@@ -209,9 +216,9 @@ When it next starts, the app finds the recorded backups and stored copies in the
 & '.\Slotsloader CLI.exe' replace-status --game '<game folder>'
 ```
 
-Bundles need `--select '<ID>'` options or `--selection '<JSON file>'`. `test-loader` additionally takes an explicit native loader, installed game root and **new separate sandbox**. See [docs/CLI.md](docs/CLI.md) for the full command and report scope. Tests never need to install into the live game.
+Bundles need `--select '<ID>'` options or `--selection '<JSON file>'`. `test-loader` additionally takes an explicit native loader, installed game root and **new separate sandbox**. See [docs/CLI.md](docs/CLI.md) for the full command and report scope. Tests never install into the live game.
 
-Extra outfit mode composes loose native costumes. Replace mode installs a PAK-only source as the next patch PAK. Lua and DLL tool mods install in Replace original mode. A composition/integrity pass does not prove appearance in-game. Native loader tests also omit DLC PAKs and report that limitation. No loader/game update is included.
+Extra outfit mode composes loose native costumes. Replace mode installs a PAK-only source as the next patch PAK. Lua and DLL tool mods install as Replace original. A composition/integrity pass does not prove in-game appearance. Native loader tests omit DLC PAKs and say so. No loader/game update is included.
 
 Source: this folder (`src/`). Use `build.ps1` to build both executables and `test.ps1` for isolated fixtures (`-RealArchives` adds the real-library checks, `-Only <names>` runs selected checks; see docs/DEVELOPMENT.md). The owned native loader repository is [ZZtaii/slotsloader-manager](https://github.com/ZZtaii/slotsloader-manager).
 

@@ -367,11 +367,12 @@ namespace SlotsInstaller
                         patch.ShaAfter = File.Exists(full) ? Sha(full) : null;
                     }
                     // Crash reporter: Fluffy renames it while its mods are installed. The last Fluffy mod gone: back,
-                    // unless this app's own replacements still want it renamed (then this app takes it over).
+                    // unless this app's own replacements still want it renamed (then this app takes it over; 1.0.16: always,
+                    // the Settings checkbox is gone).
                     string crash = GamePath(CrashReporter.Name), renamed = GamePath(CrashReporter.RenamedName);
                     if (remaining.Count == 0 && File.Exists(renamed) && !File.Exists(crash) && !state.CrashReporterRenamed)
                     {
-                        if (state.Mods.Any(m => m.Enabled) && Settings.RenameCrashReporter) { state.CrashReporterRenamed = true; state.Generation++; DurableFile.WriteJson(StatePath, state); record.CrashTakenByManager = true; }
+                        if (state.Mods.Any(m => m.Enabled)) { state.CrashReporterRenamed = true; state.Generation++; DurableFile.WriteJson(StatePath, state); record.CrashTakenByManager = true; }
                         else { File.Move(renamed, crash); record.CrashRestored = true; }
                     }
                     // installed.ini without the section, every other byte unchanged. Re-read first: Fluffy must not

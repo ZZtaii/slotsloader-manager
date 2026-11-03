@@ -38,6 +38,10 @@ namespace SlotsInstaller
         internal readonly Dictionary<string,byte[]> PreloadedPreviews = new Dictionary<string,byte[]>(StringComparer.OrdinalIgnoreCase);
         internal Dictionary<string,SourceEntry> PreviewEntries;
         internal string PreviewSourceStamp;
+        // 1.0.16: a main mod shown with its addon archives (LibraryAddons.cs). MergedFrom is the main's own package (it
+        // reads files and plans installs); AddonParts are the addons, their options here under "addon:<n>:" ids.
+        internal ModPackage MergedFrom;
+        internal List<AddonPart> AddonParts;
         private readonly object previewLock = new object();
         private sealed class ComponentIndex
         {
@@ -124,6 +128,12 @@ namespace SlotsInstaller
         }
         public byte[] PreviewBytes(string componentId, string sevenZipPath)
         {
+            if (MergedFrom != null)
+            {
+                // 1.0.16: each option's image is read from its own archive (and that package's preview cache).
+                AddonPart part = LibraryAddons.PartOf(this, componentId);
+                return part != null ? part.Package.PreviewBytes(componentId.Substring(part.Prefix.Length), sevenZipPath) : MergedFrom.PreviewBytes(componentId, sevenZipPath);
+            }
             lock (previewLock)
             {
             ModComponent c = Find(componentId);

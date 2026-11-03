@@ -134,6 +134,39 @@ namespace SlotsInstaller
             }
         }
 
+        // 1.0.16 (PR #22 review, F2): Install's addParts, applied to its stage like AddToOutfit (same checks: the outfit's
+        // fighter and outfit slots; the selection must still match the mod). The same options of the same mod already kept
+        // are replaced. Throws before the install commits.
+        private static List<PartGraft> AddPartsLocked(IList<CompositionPlan> selections, string stage, Dictionary<string, string> hashes, string transaction, string sevenZipPath, string code, List<PartGraft> kept)
+        {
+            var added = new List<PartGraft>();
+            if (selections == null || selections.Count == 0) return added;
+            List<string> folders = BodyFolders(hashes.Keys);
+            foreach (CompositionPlan selection in selections)
+            {
+                OperationContext.ThrowIfCancellationRequested();
+                string from = Path.GetFileName(selection.Package.SourcePath ?? "");
+                if (selection.Files.Count == 0 || selection.Errors.Count > 0) throw new IOException(from + ": " + String.Join(" ", selection.Errors.DefaultIfEmpty("Tick the options to add.")));
+                var codes = SelectionCodes(selection);
+                if (codes.Any(c => c != code)) throw new IOException(from + ": these files belong to " + String.Join(", ", codes.Where(c => c != code).Select(c => Characters.ByCode.ContainsKey(c) ? Characters.ByCode[c] : "esf" + c)) + "; the Manager can't retarget mods.");
+                string mismatch = FolderMismatch(SelectionFolders(selection), folders);
+                if (mismatch != null) throw new IOException("Can't add " + OptionText(selection) + " from " + from + ": these files are made for " + mismatch + (folders.Count == 0 ? "" : " and the outfit is built on " + SlotText(folders)) + ". Materials point at their own outfit slot's files.");
+                var graft = new PartGraft { SourcePath = selection.Package.SourcePath, Mod = selection.Package.Name ?? "", AddedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => c.Name).ToList() };
+                ApplyGraft(stage, hashes, graft, transaction, sevenZipPath, selection);
+                var ids = new HashSet<string>(graft.SelectedIds, StringComparer.OrdinalIgnoreCase);
+                kept.RemoveAll(g => String.Equals(g.SourcePath, graft.SourcePath, StringComparison.OrdinalIgnoreCase) && ids.SetEquals(g.SelectedIds ?? new List<string>()));
+                added.Add(graft);
+            }
+            return added;
+        }
+        // Costume folders (FFF, not 000) the body meshes among these installed paths are in.
+        private static List<string> BodyFolders(IEnumerable<string> paths)
+        {
+            var folders = new List<string>();
+            foreach (string path in paths) { Match body = BodyMesh.Match(path); if (body.Success && body.Groups[2].Value != "000" && !folders.Contains(body.Groups[2].Value)) folders.Add(body.Groups[2].Value); }
+            return folders;
+        }
+
         // Copies the graft's options from its mod into `stage`, overwriting files of the same path. `hashes` and
         // graft.Files follow. `opened` (the selection the user saw) must still match the mod; null = a reinstall.
         private static void ApplyGraft(string stage, Dictionary<string, string> hashes, PartGraft graft, string transaction, string sevenZipPath, CompositionPlan opened)
@@ -166,8 +199,7 @@ namespace SlotsInstaller
         {
             var kept = new List<PartGraft>();
             if (previous == null || previous.Parts == null) return kept;
-            var folders = new List<string>();
-            foreach (string path in hashes.Keys) { Match body = BodyMesh.Match(path); if (body.Success && body.Groups[2].Value != "000" && !folders.Contains(body.Groups[2].Value)) folders.Add(body.Groups[2].Value); }
+            List<string> folders = BodyFolders(hashes.Keys);
             foreach (PartGraft graft in previous.Parts)
             {
                 OperationContext.ThrowIfCancellationRequested();

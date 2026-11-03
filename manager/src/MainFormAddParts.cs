@@ -24,7 +24,8 @@ namespace SlotsInstaller
         }
 
         // The ticked options' files (no main-file or choose-one rule: a lone hair option is fine).
-        private CompositionPlan AddSelection() { return package == null ? null : Installer.SelectionFiles(package, selectedOrder); }
+        // 1.0.16: the open mod's own ticks only (addon options shown inside it are added by Install).
+        private CompositionPlan AddSelection() { return package == null ? null : Installer.SelectionFiles(SourcePackage, LibraryAddons.MainOnly(package, selectedOrder)); }
 
         // Shown in Extra outfit mode for an open mod; usable once a ticked option has natives files.
         private void UpdateAddPartsButton()

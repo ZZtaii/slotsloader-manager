@@ -106,7 +106,9 @@ namespace SlotsInstaller
         }
 
         // ---- Archives read this session
-        private sealed class CachedPackage { internal string Stamp; internal ModPackage Package; internal long Bytes, Used; }
+        // 1.0.16: Layouts is BundleStore.Version before the read. A RAR/7Z layout save leaves the archive's stamp as it
+        // was, so its kept package must not survive the save (Edit bundle reopens the mod at once).
+        private sealed class CachedPackage { internal string Stamp; internal ModPackage Package; internal long Bytes, Used, Layouts; }
         private const int PackageCacheCount = 12;
         private const long PackageCacheBytes = 96L * 1024 * 1024;   // preloaded previews of the kept packages
         private readonly Dictionary<string, CachedPackage> packageCache = new Dictionary<string, CachedPackage>(StringComparer.OrdinalIgnoreCase);
@@ -117,37 +119,38 @@ namespace SlotsInstaller
         private ModPackage ReadOpenPackage(string path, string stamp, string sevenZip)
         {
             Task ahead = null;
+            long layouts = BundleStore.Version;
             lock (packageCacheGate)
             {
-                ModPackage kept = KeptPackage(path, stamp);
+                ModPackage kept = KeptPackage(path, stamp, layouts);
                 if (kept != null) { PackageCacheHits++; return kept; }
                 if (readAhead != null && String.Equals(readAhead.Path, path, StringComparison.OrdinalIgnoreCase)) ahead = readAhead.Task;
             }
             if (ahead != null)
             {
                 try { ahead.Wait(OperationContext.Token); } catch (AggregateException) { }
-                lock (packageCacheGate) { ModPackage kept = KeptPackage(path, stamp); if (kept != null) { PackageCacheHits++; return kept; } }
+                lock (packageCacheGate) { ModPackage kept = KeptPackage(path, stamp, layouts); if (kept != null) { PackageCacheHits++; return kept; } }
             }
             Interlocked.Increment(ref PackageReads);
             ModPackage loaded = PackageReader.Load(path, sevenZip, true);
-            KeepPackage(path, stamp, loaded);
+            KeepPackage(path, stamp, layouts, loaded);
             return loaded;
         }
-        private ModPackage KeptPackage(string path, string stamp)
+        private ModPackage KeptPackage(string path, string stamp, long layouts)
         {
             CachedPackage kept;
             if (stamp == null || !packageCache.TryGetValue(path, out kept)) return null;
-            if (kept.Stamp != stamp) { packageCache.Remove(path); return null; }
+            if (kept.Stamp != stamp || kept.Layouts != layouts) { packageCache.Remove(path); return null; }
             kept.Used = ++packageCacheClock;
             return kept.Package;
         }
         // Archives only: a folder mod's stamp walks every file and its read is as quick as the walk.
-        private void KeepPackage(string path, string stamp, ModPackage package)
+        private void KeepPackage(string path, string stamp, long layouts, ModPackage package)
         {
             if (stamp == null || !stamp.StartsWith("file:", StringComparison.Ordinal) || package == null) return;
             lock (packageCacheGate)
             {
-                packageCache[path] = new CachedPackage { Stamp = stamp, Package = package, Bytes = package.PreloadedPreviews.Values.Sum(b => (long)b.Length), Used = ++packageCacheClock };
+                packageCache[path] = new CachedPackage { Stamp = stamp, Layouts = layouts, Package = package, Bytes = package.PreloadedPreviews.Values.Sum(b => (long)b.Length), Used = ++packageCacheClock };
                 while (packageCache.Count > PackageCacheCount || (packageCache.Count > 1 && packageCache.Values.Sum(c => c.Bytes) > PackageCacheBytes))
                     packageCache.Remove(packageCache.OrderBy(kv => kv.Value.Used).First().Key);
             }
@@ -174,11 +177,11 @@ namespace SlotsInstaller
                 {
                     using (OperationContext.Begin(job.Cancel.Token, null))
                     {
-                        string stamp = SourceStamp(path);
-                        lock (packageCacheGate) if (stamp == null || KeptPackage(path, stamp) != null) return;
+                        string stamp = SourceStamp(path); long layouts = BundleStore.Version;
+                        lock (packageCacheGate) if (stamp == null || KeptPackage(path, stamp, layouts) != null) return;
                         ModPackage read = PackageReader.Load(path, sevenZip, true);
                         Interlocked.Increment(ref PrefetchReads);
-                        KeepPackage(path, stamp, read);
+                        KeepPackage(path, stamp, layouts, read);
                     }
                 }
                 catch (Exception ex) { if (ex is OutOfMemoryException) throw; }   // only a head start: opening it reads again and reports

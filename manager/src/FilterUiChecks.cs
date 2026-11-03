@@ -182,7 +182,7 @@ namespace SlotsInstaller
                 int cw = grid.CardWidth, ch = grid.CardHeight, cols = grid.ColumnCount;
                 Require(cw >= DpiMetrics.Px(form, FighterGrid.MinCardWidth) - 1 && cw <= DpiMetrics.Px(form, FighterGrid.MaxCardWidth) + 1 && Math.Abs(ch - cw * 7.0 / 5.0) <= 1.5 && cols >= 4, ctx + ": cards " + cw + "x" + ch + " in " + cols + " columns");
                 Require(grid.Height >= grid.ItemBounds(grid.ItemCount - 1).Bottom && grid.ItemBounds(cols - 1).Right <= grid.ClientSize.Width, ctx + ": the grid must show every card (the panel scrolls, not the grid)");
-                Require(kinds.ItemCount == 5 && kinds.Cards[0].Name == "Tool mods" && kinds.Cards[1].Name == "Misc" && kinds.Cards[2].Name == "Installed" && kinds.Cards[3].Name == "filters" && kinds.Cards[4].Name == "other"
+                Require(kinds.ItemCount == 5 && kinds.Cards[0].Name == FilterPanel.CodeTile && kinds.Cards[1].Name == "Misc" && kinds.Cards[2].Name == "Installed" && kinds.Cards[3].Name == "filters" && kinds.Cards[4].Name == "other"
                     && kinds.CardWidth == cw && kinds.CardHeight == ch && kinds.Cards.All(c => c.Portrait != null), ctx + ": tiles are not face-sized tiles with placeholder art (" + String.Join(",", kinds.Cards.Select(c => c.Name)) + ")");
                 // The library tiles start after a small gap; all tiles stay inside the row (wrapping when needed).
                 Rectangle installedTile = kinds.ItemBounds(2), firstLibrary = kinds.ItemBounds(3);
@@ -426,13 +426,13 @@ namespace SlotsInstaller
                 Require(panel.Kinds.Cards.Skip(3).Select(c => c.Name).SequenceEqual(new[] { "a", "b" }), "duplicate names: " + String.Join(", ", panel.Kinds.Cards.Skip(3).Select(c => c.Name)));
                 panel.SetLibraries(new[] { @"E:\Fluffy\Games\SF6\Mods", @"E:\Games\Fluffy - Copy\Games\SF6\Mods" });
                 Require(panel.Kinds.Cards.Skip(3).Select(c => c.Name).SequenceEqual(new[] { "Fluffy", "Fluffy - Copy" }), "the user's two libraries: " + String.Join(", ", panel.Kinds.Cards.Skip(3).Select(c => c.Name)));
-                // Inter's metrics can ellipsize a library name that Segoe fits. The
-                // portrait band intentionally uses EndEllipsis; retain the full accessible name.
-                Require(panel.Kinds.Cards.Select((c, i) => panel.Kinds.NameFits(c.Name) ||
+                // 1.0.16: REFramework & code fits on two lines (CardNameFits). Inter's metrics can ellipsize a library
+                // name that Segoe fits; the portrait band intentionally uses EndEllipsis, so retain the full accessible name.
+                Require(panel.Kinds.Cards.Select((c, i) => panel.Kinds.CardNameFits(c) ||
                     (LinuxPlatform.IsLinux && i >= panel.Kinds.GroupBreak && panel.Kinds.GroupBreak >= 0 &&
                      panel.Kinds.ItemAccessibleName(i).StartsWith("Library ", StringComparison.Ordinal) &&
                      panel.Kinds.ItemAccessibleName(i).Contains(c.Name))).All(ok => ok),
-                    "a tile name is cut without its full accessible name: " + String.Join(", ", panel.Kinds.Cards.Where(c => !panel.Kinds.NameFits(c.Name)).Select(c => c.Name)));
+                    "a tile name is cut without its full accessible name: " + String.Join(", ", panel.Kinds.Cards.Where(c => !panel.Kinds.CardNameFits(c)).Select(c => c.Name)));
             }
         }
 
@@ -494,7 +494,7 @@ namespace SlotsInstaller
                 grid.SetSelected(new string[0], true);
                 // The kind tiles behave like the fighter cards (keyboard, accessibility).
                 AccessibleObject kinds = panel.Kinds.AccessibilityObject;
-                Require(kinds.GetChildCount() == 3 && kinds.GetChild(0).Name == "Tool mods, 3 mods" && kinds.GetChild(1).Name == "Misc, 4 mods" && kinds.GetChild(2).Name == "Installed mods only, 0 mods", "kind accessibility: " + kinds.GetChild(0).Name + " / " + kinds.GetChild(1).Name);
+                Require(kinds.GetChildCount() == 3 && kinds.GetChild(0).Name == "REFramework & code, 3 mods" && kinds.GetChild(1).Name == "Misc, 4 mods" && kinds.GetChild(2).Name == "Installed mods only, 0 mods", "kind accessibility: " + kinds.GetChild(0).Name + " / " + kinds.GetChild(1).Name);
                 Key(panel.Kinds, Keys.D); Key(panel.Kinds, Keys.D); Key(panel.Kinds, Keys.A); Require(panel.Kinds.FocusIndex == 1, "tiles: D D A");
                 Key(panel.Kinds, Keys.A); Key(panel.Kinds, Keys.Right); Key(panel.Kinds, Keys.Space);
                 Require(panel.MiscOn && panel.MiscChips.Visible && Listed(form).Count == 4 && kinds.GetChild(1).Name == "Misc, 4 mods, selected", "Misc tile keyboard");

@@ -66,7 +66,6 @@ namespace SlotsInstaller
         private Control[] settingsGeneralParts = new Control[0];
         private Label settingsSubtitle;   // 2.4.0: shown on the General tab only
         private ComboBox settingsMethod;
-        private CheckBox settingsCrashReporter;
         private FlatButton migrateModsButton;
         internal static bool MigrationOffered { get { return !LinuxPlatform.IsLinux; } }
         private Label settingsMethodStatus, settingsToolStatus, settingsGameFiles, settingsStoreStatus, settingsFluffyStatus;
@@ -135,21 +134,24 @@ namespace SlotsInstaller
         // the external mod manager rewrites installed.ini, which did). Checked on every poll and on activation. The external
         // manager's installed.ini is part of the stamp: it decides who updates REFramework, and it can start or stop listing
         // dinput8.dll without the file changing (PR #9 review).
-        private string toolStamp;
+        // 1.0.16 (user report): Settings ? Game files kept "REFramework out of date" and "Slotsloader not installed" after
+        // both were installed. Its own stamp (settingsToolStamp, set when the tab is read): UpdateModeUi takes toolStamp in
+        // Extra outfit mode, so a change seen there first, or while Settings was hidden, never reached the tab. ShowPage
+        // also reads the tab again when Settings opens on it.
+        private string toolStamp, settingsToolStamp;
         private string ToolStampNow()
         {
             string fluffy = "";
             try { fluffy = FluffyInstalls.StampOf(fluffyRoots); } catch (Exception ex) { Program.Log(ex); }
             return ToolStatus.Stamp(config.GameRoot) + "#" + fluffy;
         }
+        private bool SettingsReplaceShown { get { return currentPage == settingsPage && settingsReplacePanel != null && settingsReplacePanel.Visible; } }
         internal void CheckToolStamp()
         {
             if (IsDisposed || busy) return;
             string now = ToolStampNow();
-            if (now == toolStamp) return;
-            toolStamp = now;
-            UpdateModeUi();
-            if (currentPage == settingsPage) LoadReplaceSettingsFields();
+            if (now != toolStamp) { toolStamp = now; UpdateModeUi(); }
+            if (SettingsReplaceShown && now != settingsToolStamp) LoadReplaceSettingsFields();
         }
 
         private void LaunchGame()
@@ -365,11 +367,14 @@ namespace SlotsInstaller
         private ReplaceMod SameInstalledReplacement()
         {
             if (package == null || editingReplacement != null) return null;
-            var selection = new HashSet<string>(selectedOrder, StringComparer.OrdinalIgnoreCase);
+            // 1.0.16: the main mod's own ids; PR #22 review (F3): and the addons' records (Install changes or removes one)
+            AddonSplit split = CurrentSplit(); var selection = new HashSet<string>(split.MainIds, StringComparer.OrdinalIgnoreCase);
+            ModPackage own = SourcePackage;
+            if (!AddonRecordsMatch(split)) return null;
             return gameRows.Where(r => r.Mod != null).Select(r => r.Mod).FirstOrDefault(m =>
             {
                 if (!String.Equals(m.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)) return false;
-                return Composer.MatchesSavedSelection(package, selection, m.SelectedIds);
+                return Composer.MatchesSavedSelection(own, selection, m.SelectedIds);
             });
         }
 
@@ -398,7 +403,16 @@ namespace SlotsInstaller
         {
             if (editingReplacement != null) return editingReplacement.Name;
             var layers = plan == null ? new List<ModComponent>() : plan.Layers.Where(c => !Composer.IsBase(c) && !String.Equals(c.Name, package.Name, StringComparison.OrdinalIgnoreCase)).ToList();
-            return package.Name + (layers.Count > 0 && layers.Count <= 3 ? " · " + String.Join(" + ", layers.Select(c => c.Name)) : "");
+            List<string> names = layers.Select(c => c.Name).ToList();
+            // 1.0.16 (PR #22 review, L3): a fill-in only keeps the main record valid alone; the name shows the addon's
+            // options that stand in its place ("… · Short + Barefoot (addon)"), not the fill-in (Full).
+            AddonSplit split = package.MergedFrom == null ? null : CurrentSplit();
+            if (split != null && split.FillIns.Count > 0)
+            {
+                names = layers.Where(c => !split.FillIns.Contains(c.Id, StringComparer.OrdinalIgnoreCase)).Select(c => c.Name).ToList();
+                foreach (var part in split.Ticked) names.Add(LibraryAddons.OptionNames(part.Key.Package, part.Value) + " (addon)");
+            }
+            return package.Name + (names.Count > 0 && names.Count <= 3 ? " · " + String.Join(" + ", names) : "");
         }
 
         // 2.1.0: the loose file loader is optional. Asked only when an install puts natives files in place with
@@ -478,15 +492,25 @@ namespace SlotsInstaller
                 if (loader != null) replaceId = loader.Id;
             }
             CompositionPlan composition = plan; string sevenZip = config.SevenZipPath; string name = ReplacementName(); string game = config.GameRoot;
+            // 1.0.16: the main mod's record (plan holds its split ids), then each addon's own record directly above it, or
+            // the addon's record uninstalled when none of its options is ticked (MainFormAddons.cs).
+            AddonSplit split = package.MergedFrom == null || editingReplacement != null ? null : LibraryAddons.Split(package, selectedOrder, true);
+            var shown = new HashSet<string>(shownAddonRecords, StringComparer.OrdinalIgnoreCase);
             Work("Installing replacement…", delegate
             {
                 if (convert) engine.SwitchMethod(ReplaceMethods.Pak);
-                ReplacePlan prepared; ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, replaceId, out prepared); if (LoaderCostumePak.IsLoaderMod(mod)) UnownedSlotsFlag.Ensure(game); return mod;
-            }, delegate(ReplaceMod mod)
+                AddonInstall result = InstallWithAddons(engine, composition, sevenZip, name, replaceId, split, shown);   // 1.0.16 (PR #22 review, F2)
+                if (LoaderCostumePak.IsLoaderMod(result.Main)) UnownedSlotsFlag.Ensure(game);
+                return result;
+            }, delegate(AddonInstall installed)
             {
                 editingReplacement = null; UpdateModeUi(); LoaderUpdateInstalled();
-                string method = usePak && mod.Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)) ? (overridden ? " · PAK method used: loose file loader off" : " · PAK method (loose file loader off)") : "";
-                RefreshInstalled("✓ Installed " + mod.Name + " · " + ReplacePlanner.N(mod.Files.Count, "file") + method + ". " + (gameRunning ? "Restart SF6 to see it." : "Start SF6 to see it."));
+                FinishAddonInstall(installed, delegate(AddonInstall r)
+                {
+                    ReplaceMod mod = r.Main;
+                    string method = usePak && mod.Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)) ? (overridden ? " · PAK method used: loose file loader off" : " · PAK method (loose file loader off)") : "";
+                    RefreshInstalled((r.Failed.Count == 0 ? "✓ " : "") + "Installed " + mod.Name + " · " + ReplacePlanner.N(mod.Files.Count, "file") + AddonInstallText(r, false) + method + AddonInstallText(r, true) + ". " + (gameRunning ? "Restart SF6 to see it." : "Start SF6 to see it."));
+                });
             });
         }
 
@@ -1111,12 +1135,10 @@ namespace SlotsInstaller
             loaderOffButton.AccessibleName = "Turn the loose file loader off";
             foreach (FlatButton b in new[] { loaderOnButton, loaderOffButton }) { b.Height = 32; b.Font = Palette.Small; b.Margin = new Padding(0, 0, 8, 0); loaderRow.Controls.Add(b); }
             add(left, loaderRow);
-            add(left, Rhythm.Gap(Rhythm.AfterAction - 4));
             // 2.4.1: no "Ask before installing while the loose file loader is off": the question is gone (Automatic uses the PAK method then).
             // 2.3.0: no "Default install mode" here any more: the library's INSTALL AS remembers the last choice
             // (ReplaceSettings.DefaultMode stays in the file and is used only before a first choice).
-            settingsCrashReporter = new CheckBox { Text = "Rename the crash reporter while replacements are installed", Height = 28, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0) };
-            add(left, settingsCrashReporter);
+            // 1.0.16 (the user): no "Rename the crash reporter while replacements are installed": always done (ReplaceEngine).
             add(left, Rhythm.Gap(Rhythm.Group));
             add(left, Caption("REFramework and Slotsloader"));
             settingsToolStatus = note("", 52); add(left, settingsToolStatus);
@@ -1171,19 +1193,18 @@ namespace SlotsInstaller
             columns.Controls.Add(left, 0, 0); columns.Controls.Add(right, 2, 0);
             panel.Controls.Add(columns);
             settingsMethod.SelectedIndexChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
-            settingsCrashReporter.CheckedChanged += delegate { if (!loadingReplaceSettings) SaveReplacePreferences(); };
             return panel;
         }
 
         private void LoadReplaceSettingsFields()
         {
             if (settingsMethod == null) return;
+            settingsToolStamp = ToolStampNow();   // 1.0.16 (CheckToolStamp)
             loadingReplaceSettings = true;
             try
             {
                 replaceSettings = ReplaceSettings.Load();
                 settingsMethod.SelectedIndex = replaceSettings.Method == ReplaceMethods.Loose ? 1 : replaceSettings.Method == ReplaceMethods.Pak ? 2 : 0;
-                settingsCrashReporter.Checked = replaceSettings.RenameCrashReporter;
                 settingsStore.Text = replaceSettings.StoreLocation ?? "";
                 ReplaceEngine engine = Engine(); ReplaceState state = null;
                 try { state = engine.LoadState(); } catch (Exception ex) { settingsGameFiles.Text = ex.Message; }
@@ -1254,7 +1275,6 @@ namespace SlotsInstaller
                 bool methodChanged = method != replaceSettings.Method;
                 string previousMethod = replaceSettings.Method ?? "";
                 replaceSettings.Method = method;
-                replaceSettings.RenameCrashReporter = settingsCrashReporter.Checked;
                 string store = settingsStore.Text.Trim();
                 if (!String.Equals(store, replaceSettings.StoreLocation ?? "", StringComparison.OrdinalIgnoreCase))
                 {

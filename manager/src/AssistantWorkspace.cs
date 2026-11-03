@@ -97,7 +97,7 @@ namespace SlotsInstaller
         {
             string id = ModId(entry.SourcePath);
             string stamp = null;
-            if (File.Exists(entry.SourcePath)) { var info = new FileInfo(entry.SourcePath); stamp = info.Length + ":" + info.LastWriteTimeUtc.Ticks; }
+            if (File.Exists(entry.SourcePath)) { var info = new FileInfo(entry.SourcePath); stamp = info.Length + ":" + info.LastWriteTimeUtc.Ticks + ":" + BundleStore.Version; }   // 1.0.16: a RAR/7Z layout save keeps the archive's stamp
             lock (sync)
             {
                 CachedPackage cached;

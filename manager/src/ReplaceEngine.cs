@@ -81,6 +81,7 @@ namespace SlotsInstaller
         internal Func<FluffyInstalls> FluffyProvider;
         // Test hooks: simulate a crash after N completed steps (no in-process rollback).
         internal static int CrashAfterStep = -1;
+        internal static Action BeforeArchivePayloads;   // 1.0.16 checks: a game file changing after Reconcile read it
         internal sealed class SimulatedCrashException : Exception { internal SimulatedCrashException() : base("Simulated crash for a recovery test.") { } }
 
         internal ReplaceEngine(string gameRoot, string dataDir, ReplaceSettings settings)
@@ -450,7 +451,7 @@ namespace SlotsInstaller
             next.UpdatedUtc = DateTime.UtcNow.ToString("o");
             Directory.CreateDirectory(DataDir);
             removableDirs = new HashSet<string>(current.CreatedDirs.Concat(journal.CreatedDirs), StringComparer.OrdinalIgnoreCase);
-            DurableFile.WriteJson(JournalPath, journal);
+            using (InstallMetrics.Measure("journal write")) DurableFile.WriteJson(JournalPath, journal);
             int step = 0;
             using (OperationContext.NonCancellable())
             {
@@ -460,7 +461,8 @@ namespace SlotsInstaller
                     {
                         if (CrashAfterStep == step) throw new SimulatedCrashException();
                         OperationContext.Report("Applying game file changes", step, journal.Ops.Count);
-                        Do(op); step++;
+                        using (InstallMetrics.Enabled ? InstallMetrics.Measure("execute " + op.Kind + " op") : null) Do(op);
+                        step++;
                     }
                     if (CrashAfterStep == step) throw new SimulatedCrashException();
                     using (InstallMetrics.Measure("post-commit PAK stamps")) StampPaks(next);
@@ -507,18 +509,29 @@ namespace SlotsInstaller
         {
             var names = next.Deployed.SelectMany(d => d.Zeroed).Select(z => z.Pak).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var stamps = new List<PakStamp>();
+            string basePath = Path.Combine(GameRoot, "re_chunk_000.pak");
+            // 1.0.16 (speed): the base PAK is read once, from disk (never a cached copy), for both its stamp and
+            // BaseAtInstall, and each of its two hashes is computed once (before: two reads, four hashes, ~25 ms).
+            PakStamp baseNow = null;
             foreach (string name in names)
             {
-                PakIndex p = PakIndex.Open(GamePath(name), false);
+                string full = GamePath(name);
                 PakStamp old = next.Paks.FirstOrDefault(s => String.Equals(s.Pak, name, StringComparison.OrdinalIgnoreCase));
-                stamps.Add(new PakStamp { Pak = name, Length = p.Length, Fingerprint = p.Fingerprint, LayoutSha = p.LayoutSha256(), TocSha = p.TocSha256(), Backup = old == null ? "" : old.Backup });
+                bool isBase = String.Equals(Path.GetFullPath(full), Path.GetFullPath(basePath), StringComparison.OrdinalIgnoreCase) && File.Exists(basePath);
+                if (isBase && baseNow == null) { GamePaks.Forget(basePath); PakIndex b = GamePaks.Cached(basePath); baseNow = new PakStamp { Length = b.Length, Fingerprint = b.Fingerprint, LayoutSha = b.LayoutSha256(), TocSha = b.TocSha256() }; }
+                PakIndex p = isBase ? null : PakIndex.Open(full, false);
+                stamps.Add(isBase ? new PakStamp { Pak = name, Length = baseNow.Length, Fingerprint = baseNow.Fingerprint, LayoutSha = baseNow.LayoutSha, TocSha = baseNow.TocSha, Backup = old == null ? "" : old.Backup }
+                    : new PakStamp { Pak = name, Length = p.Length, Fingerprint = p.Fingerprint, LayoutSha = p.LayoutSha256(), TocSha = p.TocSha256(), Backup = old == null ? "" : old.Backup });
             }
             next.Paks = stamps;
-            string basePath = Path.Combine(GameRoot, "re_chunk_000.pak");
             if (File.Exists(basePath))
             {
-                PakIndex b = GamePaks.Cached(basePath);
-                next.BaseAtInstall = new PakStamp { Pak = "re_chunk_000.pak", Length = b.Length, Fingerprint = b.Fingerprint, LayoutSha = b.LayoutSha256(), TocSha = b.TocSha256() };
+                if (baseNow != null) next.BaseAtInstall = new PakStamp { Pak = "re_chunk_000.pak", Length = baseNow.Length, Fingerprint = baseNow.Fingerprint, LayoutSha = baseNow.LayoutSha, TocSha = baseNow.TocSha };
+                else
+                {
+                    PakIndex b = GamePaks.Cached(basePath);
+                    next.BaseAtInstall = new PakStamp { Pak = "re_chunk_000.pak", Length = b.Length, Fingerprint = b.Fingerprint, LayoutSha = b.LayoutSha256(), TocSha = b.TocSha256() };
+                }
             }
         }
 
@@ -550,7 +563,38 @@ namespace SlotsInstaller
         // 2.2.0: files another tool changed after this app installed them follow options.Choice (see DriftChoice);
         // the changer (a Fluffy mod, a known SlotsLoader/AGS build or "another tool") is named in every message.
         internal bool BenchmarkUncachedLayouts; // fixture comparison only; never set by application callers
-        private ReplaceJournal Reconcile(ReplaceState current, ReplaceState next, string method, GamePaks paks, FluffyInstalls fluffy, ChangeOptions options, string description, List<string> messages)
+        internal static int PreHashedFiles;     // checks: files the last pass hashed in parallel
+
+        // 1.0.16 (speed, the user): on an SSD the pass's game files are hashed by several threads first (DriveKind.HashThreads:
+        // cores minus one, at most 4; on a hard drive or a weak CPU nothing changes). Links are checked first, in the
+        // pass's order and with a set of their own; a path whose check or hash fails is left to the pass, which then
+        // refuses it or reports its error at the same point and with the same message as before. Null: not used.
+        private Dictionary<string, string> PreHash(List<string> ordered)
+        {
+            PreHashedFiles = 0;
+            int threads = DriveKind.HashThreads(GameRoot);
+            if (threads < 2 || ordered.Count < 2) return null;
+            var todo = new List<KeyValuePair<string, string>>();
+            var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in ordered)
+            {
+                string full = GamePath(path);
+                try { Safety.NoReparseChain(full, folders); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; continue; }
+                todo.Add(new KeyValuePair<string, string>(path, full));
+            }
+            var hashed = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            using (InstallMetrics.Measure("reconcile current SHA (parallel)"))
+                System.Threading.Tasks.Parallel.ForEach(todo, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = OperationContext.Token }, item =>
+                {
+                    try { hashed[item.Key] = CurrentSha(item.Key, item.Value); }
+                    catch (Exception ex) { if (ex is OutOfMemoryException) throw; }   // the pass reads it again and reports it
+                });
+            PreHashedFiles = hashed.Count;
+            return new Dictionary<string, string>(hashed, StringComparer.OrdinalIgnoreCase);
+        }
+        // observed (1.0.16): each game path's SHA-256 as this pass read it (null: no file), for PrepareArchivePayloads.
+        private ReplaceJournal Reconcile(ReplaceState current, ReplaceState next, string method, GamePaks paks, FluffyInstalls fluffy, ChangeOptions options, string description, List<string> messages, Dictionary<string, string> observed)
         {
             var journal = new ReplaceJournal { OperationId = Guid.NewGuid().ToString("N"), Description = description, StartedUtc = DateTime.UtcNow.ToString("o") };
             paks.SetModPaks(current.Mods); paks.SetModPaks(next.Mods);   // 2.5.7
@@ -591,22 +635,45 @@ namespace SlotsInstaller
                 PakStamp stamp = current.Paks.FirstOrDefault(s => String.Equals(s.Pak, z.Pak, StringComparison.OrdinalIgnoreCase));
                 return p != null && stamp != null && p.Length == stamp.Length && p.Fingerprint == stamp.Fingerprint && layout(p) == stamp.LayoutSha && z.Index < p.Count;
             };
+            var rowsAdded = new HashSet<Tuple<object, PakIndex, int>>();   // 1.0.16 (speed): was a scan of the list per row
             Action<Dictionary<PakIndex, List<JournalRow>>, PakIndex, JournalRow> addRow = delegate(Dictionary<PakIndex, List<JournalRow>> map, PakIndex p, JournalRow r)
             {
                 List<JournalRow> list; if (!map.TryGetValue(p, out list)) map[p] = list = new List<JournalRow>();
-                if (!list.Any(x => x.Index == r.Index)) list.Add(r);
+                if (rowsAdded.Add(Tuple.Create((object)map, p, r.Index))) list.Add(r);
             };
             Func<PakIndex, int, string> rowBytes = delegate(PakIndex p, int i) { var e = p.Entry(i); return Hex(PakWriter.HashBytes(e.HashLower, e.HashUpper)); };
+            var checkedFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // 1.0.16 (speed): this pass only
+            // 1.0.16 (speed): the lookups below were linear searches per path (10,270 files: ~2.7 s of the 6.6 s pass).
+            // `current` is read-only here; each map keeps the first entry per path, as FirstOrDefault did.
+            var deployedAt = new Dictionary<string, DeployedFile>(StringComparer.OrdinalIgnoreCase);
+            foreach (DeployedFile d in current.Deployed) if (d.Path != null && !deployedAt.ContainsKey(d.Path)) deployedAt.Add(d.Path, d);
+            var releasedAt = new Dictionary<string, ReleasedFile>(StringComparer.OrdinalIgnoreCase);
+            foreach (ReleasedFile r in current.Released) if (r.Path != null && !releasedAt.ContainsKey(r.Path)) releasedAt.Add(r.Path, r);
+            var filesOf = new Dictionary<ReplaceMod, Dictionary<string, ModFile>>();
+            Func<ReplaceMod, string, ModFile> fileOf = delegate(ReplaceMod mod, string p)
+            {
+                Dictionary<string, ModFile> map;
+                if (!filesOf.TryGetValue(mod, out map))
+                {
+                    filesOf[mod] = map = new Dictionary<string, ModFile>(StringComparer.OrdinalIgnoreCase);
+                    foreach (ModFile f in mod.Files) if (f.Path != null && !map.ContainsKey(f.Path)) map.Add(f.Path, f);
+                }
+                ModFile found; return map.TryGetValue(p, out found) ? found : null;
+            };
 
-            foreach (string path in paths.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            List<string> ordered = paths.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            Dictionary<string, string> preHashed = PreHash(ordered);
+            foreach (string path in ordered)
             {
                 OperationContext.ThrowIfCancellationRequested();
-                DeployedFile was = current.Deployment(path);
+                DeployedFile was; deployedAt.TryGetValue(path, out was);
                 KeyValuePair<ReplaceMod, ModFile> want; bool wanted = desired.TryGetValue(path, out want);
                 string full = GamePath(path);
-                using (InstallMetrics.Measure("reconcile path safety")) Safety.NoReparseChain(full);
+                using (InstallMetrics.Measure("reconcile path safety")) Safety.NoReparseChain(full, checkedFolders);
                 string actual;
-                using (InstallMetrics.Measure("reconcile current SHA", InstallMetrics.Enabled && File.Exists(full) ? new FileInfo(full).Length : 0)) actual = CurrentSha(path, full); // empty placeholder counts as no file
+                if (preHashed == null || !preHashed.TryGetValue(path, out actual))
+                    using (InstallMetrics.Measure("reconcile current SHA", InstallMetrics.Enabled && File.Exists(full) ? new FileInfo(full).Length : 0)) actual = CurrentSha(path, full); // empty placeholder counts as no file
+                if (observed != null) observed[path] = actual;
                 string expected;
                 if (options.MigrationOriginals != null && options.MigrationOriginals.TryGetValue(path,out expected) && actual != expected)
                 {
@@ -619,7 +686,7 @@ namespace SlotsInstaller
 
                 // A file kept earlier with "Keep current file": left alone unless Reapply takes it back, or its
                 // genuine original is restored (Restore original game file / restore-all).
-                ReleasedFile rel = current.Release(path);
+                ReleasedFile rel; releasedAt.TryGetValue(path, out rel);
                 if (rel != null)
                 {
                     // 1.0.15: a migrated layer takes the path back like Reapply: it won it in the other manager.
@@ -643,7 +710,7 @@ namespace SlotsInstaller
                 if (actual != null)
                 {
                     ReplaceMod owner = was == null ? null : current.Find(was.Owner);
-                    ModFile ownerFile = owner == null ? null : owner.Files.FirstOrDefault(f => String.Equals(f.Path, path, StringComparison.OrdinalIgnoreCase));
+                    ModFile ownerFile = owner == null ? null : fileOf(owner, path);
                     if (was != null && actual == was.Sha256 && ownerFile != null && ownerFile.Sha256 == actual) beforeSource = StoreFile(current, owner, ownerFile);
                     else if (original != null && actual == original.Sha256) beforeSource = original.Backup;
                     else if (was != null && actual == was.Sha256)
@@ -775,14 +842,20 @@ namespace SlotsInstaller
             next.Released = keptReleased;
             next.ForeignCopies = foreignCopies;
 
-            // Crash reporter rename while replacements are installed (Fluffy does the same).
+            // Crash reporter rename while replacements are installed (Fluffy does the same). Deferred while SF6 or the
+            // external mod manager runs: decided again on the next change with both closed.
+            // 1.0.16 (user report): always on (the Settings checkbox is gone), and decided from the files, not only the state:
+            // the external mod manager put CrashReport.exe back when its last mod went while this state still said renamed,
+            // so no later install renamed it again.
             bool anyEnabled = next.Mods.Any(m => m.Enabled);
-            if (deferRenames) anyEnabled = current.CrashReporterRenamed;   // decided again on the next change with the game closed
             string crash = GamePath(CrashReporter.Name), renamed = GamePath(CrashReporter.RenamedName);
             var moves = new List<JournalOp>();
             next.CrashReporterRenamed = current.CrashReporterRenamed;
-            if (anyEnabled && Settings.RenameCrashReporter && !current.CrashReporterRenamed && File.Exists(crash) && !File.Exists(renamed))
+            if (deferRenames) { }
+            else if (anyEnabled && File.Exists(crash) && !File.Exists(renamed))
             { moves.Add(new JournalOp { Kind = "move", Path = CrashReporter.Name, Target = CrashReporter.RenamedName }); next.CrashReporterRenamed = true; }
+            else if (anyEnabled && File.Exists(crash) && File.Exists(renamed))
+            { moves.AddRange(CrashReporterOverStale()); next.CrashReporterRenamed = true; }
             else if (!anyEnabled && current.CrashReporterRenamed)
             {
                 if (File.Exists(renamed) && !File.Exists(crash)) moves.Add(new JournalOp { Kind = "move", Path = CrashReporter.RenamedName, Target = CrashReporter.Name });
@@ -798,6 +871,31 @@ namespace SlotsInstaller
             journal.Ops.AddRange(moves);
             journal.Ops.AddRange(zeroRows.Select(kv => pakOp(kv.Key, kv.Value)));
             return journal;
+        }
+
+        // 1.0.16 (PR #22 review, F5): CrashReport.exe back beside its renamed copy (Steam "Verify integrity" or a game update
+        // restores the exe and leaves the copy): the exe takes the renamed name. Sha-checked file ops, so a crash at any
+        // step rolls back to both files as they were: the same bytes, the exe is dropped (the renamed copy is it); other
+        // bytes, the stale copy is kept as CrashReport_FMMBACKUP.exe.old (.old2 … when taken), then the exe replaces it.
+        private List<JournalOp> CrashReporterOverStale()
+        {
+            string crash = GamePath(CrashReporter.Name), renamed = GamePath(CrashReporter.RenamedName);
+            string crashSha = Sha(crash), staleSha = Sha(renamed);
+            var ops = new List<JournalOp>();
+            if (crashSha != staleSha)
+            {
+                string aside = null;
+                for (int n = 1; aside == null; n++)
+                {
+                    string candidate = CrashReporter.RenamedName + ".old" + (n == 1 ? "" : n.ToString());
+                    string full = GamePath(candidate);
+                    if (!File.Exists(full) && !Directory.Exists(full)) { aside = candidate; ops.Add(new JournalOp { Kind = "file", Path = candidate, BeforeSha = null, AfterSha = staleSha, AfterSource = renamed }); }
+                    else if (File.Exists(full) && Sha(full) == staleSha) aside = candidate;   // kept by an earlier change
+                }
+                ops.Add(new JournalOp { Kind = "file", Path = CrashReporter.RenamedName, BeforeSha = staleSha, BeforeSource = GamePath(aside), AfterSha = crashSha, AfterSource = crash });
+            }
+            ops.Add(new JournalOp { Kind = "file", Path = CrashReporter.Name, BeforeSha = crashSha, BeforeSource = renamed, AfterSha = null });
+            return ops;
         }
 
         // How one change treats files other tools changed (2.2.0) and which kept files it restores.
@@ -862,7 +960,8 @@ namespace SlotsInstaller
                 var messages = new List<string>();
                 deferRenames = gameRunning || fluffyRunning;   // the crash reporter is Fluffy's too: renamed at the next change with both closed
                 ReplaceJournal journal;
-                try { using (InstallMetrics.Measure("reconcile")) journal = Reconcile(current, next, method, paks, Fluffy(), options, description, messages); }
+                var observed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                try { using (InstallMetrics.Measure("reconcile")) journal = Reconcile(current, next, method, paks, Fluffy(), options, description, messages, observed); }
                 finally { deferRenames = false; }
                 deferRenames = false;
                 if (fluffyRunning && journal.Ops.Any(o => o.Kind == "pak"))
@@ -882,7 +981,8 @@ namespace SlotsInstaller
                     }
                     messages.Add("Changed while SF6 runs: switch outfits or reload the match to load the new files.");
                 }
-                try { PrepareArchivePayloads(current, next, journal, trashFolders, options.RecycleSurvivingFiles); }
+                if (BeforeArchivePayloads != null) BeforeArchivePayloads();
+                try { using (InstallMetrics.Measure("archive payloads")) PrepareArchivePayloads(current, next, journal, trashFolders, options.RecycleSurvivingFiles, observed); }
                 catch
                 {
                     foreach (string created in journal.CreatedPaths) DeleteCreated(created);
@@ -916,7 +1016,11 @@ namespace SlotsInstaller
         // ---- Public API
 
         // Publishes a prepared plan (files staged in plan.StagingFolder under the store root).
-        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId)
+        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId) { return Install(plan, name, test, replaceId, null); }
+        // 1.0.16 (PR #22 review, F2): aboveId: the record goes directly above that one (a main mod's addon record, new or
+        // switched in place) in this same change: one Reconcile and one history entry (an in-place switch that moved is
+        // still an Update), where a Move used to follow.
+        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId, string aboveId)
         {
             if (plan == null || !plan.CanInstall) throw new IOException(plan == null ? "Nothing to install." : String.Join(" ", plan.Errors));
             ReplaceMod mod = null; string storeDir = null;
@@ -930,6 +1034,8 @@ namespace SlotsInstaller
                     string root = StoreRoot(state);
                     if (existing != null) { int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer; state.Mods[at] = mod; }
                     else state.Mods.Insert(0, mod);
+                    ReplaceMod below = String.IsNullOrEmpty(aboveId) ? null : state.Find(aboveId);
+                    if (below != null && !ReferenceEquals(below, mod)) { state.Mods.Remove(mod); state.Mods.Insert(state.Mods.IndexOf(below), mod); historySwitched = existing == null ? null : existing.Id; }
                     if (String.IsNullOrEmpty(state.StoreRoot)) state.StoreRoot = root;
                     return state;
                 }, false, null);
@@ -939,8 +1045,10 @@ namespace SlotsInstaller
                 if (storeDir != null && Directory.Exists(storeDir) && !LoadState().Mods.Any(m => mod != null && m.Id == mod.Id)) { try { Installer.MoveDirectory(storeDir, plan.StagingFolder); } catch { } }
                 throw;
             }
+            finally { historySwitched = null; }
             return mod;
         }
+        private string historySwitched;   // the record an Install with aboveId switched in place (HistoryHooks: an Update)
 
         private ReplaceMod PublishPrepared(ReplacePlan plan, string name, bool test, ReplaceState state, out string storeDir, string newId = null)
         {
@@ -952,7 +1060,7 @@ namespace SlotsInstaller
             string root = StoreRoot(state);
             storeDir = Safety.Under(root, mod.Id);
             if (!IsUnder(plan.StagingFolder, root)) throw new IOException("Prepared files must be staged inside the replacement store.");
-            Installer.MoveDirectory(plan.StagingFolder, storeDir);
+            using (InstallMetrics.Measure("store move")) Installer.MoveDirectory(plan.StagingFolder, storeDir);
             foreach (ModFile f in mod.Files)
             {
                 string stored = Safety.Under(storeDir, f.Path);
@@ -1346,7 +1454,7 @@ namespace SlotsInstaller
             var status = new GameFilesStatus { JournalPending = JournalPending };
             try { status.OrphanCostumePaks = LoaderCostumePak.Orphaned(GameRoot).Select(p => p.Name).ToList(); }
             catch (Exception ex) { Program.Log(ex); }
-            try { status.OrphanedRows = OrphanedRows(out status.OrphanedRowsWhere); }   // 2.4.2 (PakRepair.cs)
+            try { using (InstallMetrics.Measure("status orphaned rows")) status.OrphanedRows = OrphanedRows(out status.OrphanedRowsWhere); }   // 2.4.2 (PakRepair.cs)
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
             ReplaceState state;
             try { RelocationReport relocation; state = LoadState(out relocation); status.Relocation = relocation; } catch (Exception ex) { status.Details.Add(ex.Message); return status; }

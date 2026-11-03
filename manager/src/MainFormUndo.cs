@@ -179,10 +179,41 @@ namespace SlotsInstaller
         {
             if (busy || String.IsNullOrWhiteSpace(config.GameRoot)) return;
             if (!ConfirmVanilla()) return;
-            ReplaceEngine engine = Engine();
-            Work("Restoring the game to vanilla…", delegate { return engine.RestoreVanilla(); }, delegate(string message) { RefreshInstalled("✓ " + message); });
+            ReplaceEngine engine = Engine(); string costumeRoot = config.CostumeRoot; List<LibraryMod> mods = PresetLibrary();
+            Work("Restoring the game to vanilla…", delegate
+            {
+                string saved = SaveBeforeRestore(costumeRoot, engine, mods, DateTime.Now);
+                return (engine.RestoreVanilla() + " " + saved).Trim();
+            }, delegate(string message) { RefreshInstalled("✓ " + message); });
         }
-        internal const string VanillaQuestion = "Restore SF6 to vanilla?\n\nThis removes everything this Manager installed except REFramework and Slotsloader, and every mod the external mod manager installed (its list is cleared), deletes all patch PAKs and the natives folder, and puts back the game entries mods invalidated. Your extra outfits stay.\n\nThere is no Undo. Your mods stay in your libraries to reinstall.";
+
+        // 1.0.16 (the user, after a restore): Restore original game files keeps its copies only until the next change, and
+        // Restore to vanilla keeps none, so the enabled replacements are saved as a list preset first (library sources
+        // listed, only mods without one copied). Never blocks the restore: the sentence for the result says what happened.
+        internal const string BeforeRestorePreset = "Before restoring game files";
+        internal static string SaveBeforeRestore(string costumeRoot, ReplaceEngine engine, List<LibraryMod> library, DateTime now)
+        {
+            try
+            {
+                if (String.IsNullOrWhiteSpace(costumeRoot) || !engine.LoadState().Mods.Any(m => m.Enabled && !LoaderCostumePak.IsLoaderMod(m))) return "";
+                var taken = new HashSet<string>(OutfitSetStore.List(costumeRoot).Entries.Where(e => e.Kind == OutfitSetKind.Preset).Select(e => e.Name), StringComparer.OrdinalIgnoreCase);
+                string name = BeforeRestorePreset + " (" + now.ToString("d MMM yyyy, HH.mm", System.Globalization.CultureInfo.InvariantCulture) + ")";
+                for (int n = 2; taken.Contains(name); n++) name = BeforeRestorePreset + " (" + now.ToString("d MMM yyyy, HH.mm", System.Globalization.CultureInfo.InvariantCulture) + ", " + n + ")";
+                OutfitSetInfo saved = OutfitSetStore.CreatePreset(costumeRoot, name, PresetScope.Replacements, engine, library);
+                return "Your replacements were saved first as the preset “" + saved.Name + "” (Presets).";
+            }
+            catch (Exception ex)
+            {
+                if (ex is OutOfMemoryException || ex is OperationCanceledException) throw;
+                Program.Log(ex);
+                return "Your replacements could not be saved as a preset first: " + ex.Message;
+            }
+        }
+        private List<LibraryMod> PresetLibrary()
+        {
+            try { return OutfitSetStore.LibraryMods(library); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); return null; }
+        }
+        internal const string VanillaQuestion = "Restore SF6 to vanilla?\n\nThis removes everything this Manager installed except REFramework and Slotsloader, and every mod the external mod manager installed (its list is cleared), deletes all patch PAKs and the natives folder, and puts back the game entries mods invalidated. Your extra outfits stay.\n\nThere is no Undo. Your enabled replacements are saved as a preset first, and your mods stay in your libraries to reinstall.";
         private bool ConfirmVanilla()
         {
             if (Program.Headless && ThemedMessageBox.TestResponder == null) return false;
@@ -194,9 +225,11 @@ namespace SlotsInstaller
         private void RestoreAllWithUndo()
         {
             var folders = new List<string>();
+            string costumeRoot = config.CostumeRoot, saved = null; List<LibraryMod> mods = PresetLibrary();
             ChangeWithDriftChoice("Restoring original game files", delegate(ReplaceEngine e, DriftChoice c)
             {
-                List<string> kept; string result = e.RestoreAll(c, out kept); folders.Clear(); folders.AddRange(kept); undoFolders = folders.ToArray(); return result;
+                if (saved == null) saved = SaveBeforeRestore(costumeRoot, e, mods, DateTime.Now);   // once: a drift question calls again
+                List<string> kept; string result = e.RestoreAll(c, out kept); folders.Clear(); folders.AddRange(kept); undoFolders = folders.ToArray(); return (result + " " + saved).Trim();
             }, "Original game files restored.", delegate(ReplaceEngine e) { try { return RestoreFolders(e, folders); } finally { undoInFlight = new string[0]; } }, RestoreAllUndoBlocker);
         }
         // Putting the replacements back is an install, which the external-manager lockout refuses while that manager
