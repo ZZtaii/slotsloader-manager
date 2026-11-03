@@ -16,6 +16,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
   - Filters: **REFramework & code** replaces Tool mods.
   - Restoring game files saves a preset first; the crash reporter is always renamed.
   - Faster installs and uninstalls.
+  - Linux: game and library files are still read one at a time, since their drive type can't be read under Wine.
 
 - 1.0.15:
   - Edit a ZIP bundle in the Library to group its options and set selection rules. Suggest layout runs locally. Refine with Assistant is optional. Save ZIP writes the reviewed layout to the archive.
