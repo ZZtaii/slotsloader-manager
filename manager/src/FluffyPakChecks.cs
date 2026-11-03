@@ -270,6 +270,58 @@ namespace SlotsInstaller
             Require(r.Repaired.Single().How == "the TOC backup" && ReplaceEngine.Sha(upak) == uclean, "unsorted with the TOC backup: " + r.Message);
         }
 
+        // ---- 1.0.16 (user report, Sakura as Ryu through Fluffy): the colour-file reference turned off or gone
+        internal static void ReferenceTurnedOff(string root)
+        {
+            const string other = "natives/stm/product/model/esf/esf002/001/esf002_001_cmd_000.user.2";
+            byte[] otherCmd = ReplaceChecks.Usr(ReplaceChecks.MaterialData, 0x22222222, ReplaceChecks.Cloth, 0x11111111);
+            var game = new Dictionary<uint, uint>(); ModFixes.UserTypeCrcs(ReplaceChecks.ReferenceCmd(), game);
+            uint vanilla = game[ReplaceChecks.MaterialData];
+            // Turned off by Fluffy: the game's own file is read from its row (the 2023 layout template too).
+            ReplaceChecks.Fixture f = SortedGame(Path.Combine(root, "turned-off"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
+            Zero(f, ModFixes.ReferenceCmdPath);
+            GameReference r = GameReference.Load(f.Game, PakIndex.Open(BasePak(f)), null);
+            uint got; r.CurrentCrcs.TryGetValue(ReplaceChecks.MaterialData, out got);
+            Require(got == vanilla && got != 0 && r.ReferenceCmd != null && r.CrcSource.Contains("turned off in the PAK"), "turned-off reference: " + r.CrcSource + " · " + got.ToString("X8"));
+            // Not in the PAK at all: another fighter's Outfit 1 colours give the signatures, never the layout template.
+            ReplaceChecks.Fixture g = SortedGame(Path.Combine(root, "missing"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
+            PakIndex withRef = PakIndex.Open(BasePak(g));
+            var entries = new Dictionary<ulong, byte[]>();
+            for (int i = 0; i < withRef.Count; i++) { PakEntry e = withRef.Entry(i); if (e.Hash != PakHash.PathHash(ModFixes.ReferenceCmdPath)) entries[e.Hash] = withRef.Read(e); }
+            WriteSorted(BasePak(g), entries);
+            r = GameReference.Load(g.Game, PakIndex.Open(BasePak(g)), null);
+            r.CurrentCrcs.TryGetValue(ReplaceChecks.MaterialData, out got);
+            Require(got == 0x22222222 && r.ReferenceCmd == null && r.CrcSource.Contains("esf002_001_cmd_000"), "missing reference: " + r.CrcSource + " · " + got.ToString("X8"));
+            // 1.0.16 (PR #22 review, L1): an unreadable turned-off row where the reference would be (an unsupported
+            // compression) is no candidate and no longer skips the other-fighter fallback ("unavailable" before).
+            ReplaceChecks.Fixture k = SortedGame(Path.Combine(root, "unreadable"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
+            string kpak = BasePak(k); ulong refHash = PakHash.PathHash(ModFixes.ReferenceCmdPath);
+            PakIndex kOld = PakIndex.Open(kpak);
+            var kEntries = new Dictionary<ulong, byte[]>();
+            for (int i = 0; i < kOld.Count; i++) { PakEntry e = kOld.Entry(i); if (e.Hash != refHash) kEntries[e.Hash] = kOld.Read(e); }
+            Require(!kEntries.ContainsKey(refHash + 1), "fixture: the hash after the reference is taken");
+            kEntries[refHash + 1] = B("not readable colour data");
+            WriteSorted(kpak, kEntries);
+            int bad = Zero(kpak, refHash + 1);
+            using (var fs = new FileStream(kpak, FileMode.Open, FileAccess.ReadWrite))
+            {
+                long at = PakIndex.HeaderSize + (long)bad * PakIndex.EntrySize;
+                fs.Seek(at + 24, SeekOrigin.Begin); fs.Write(BitConverter.GetBytes(100L), 0, 8);   // decompressed size
+                fs.Seek(at + 32, SeekOrigin.Begin); fs.Write(BitConverter.GetBytes(9L), 0, 8);     // compression 9: unsupported
+            }
+            GamePaks.Forget(kpak);
+            PakIndex kp = PakIndex.Open(kpak);
+            bool unreadable = false; try { kp.Read(kp.Entry(bad)); } catch (InvalidDataException) { unreadable = true; }
+            Require(unreadable && kp.TurnedOffCandidates(refHash).SequenceEqual(new[] { bad }), "fixture: the unreadable row is the one candidate");
+            r = GameReference.Load(k.Game, kp, null);
+            got = 0; r.CurrentCrcs.TryGetValue(ReplaceChecks.MaterialData, out got);
+            Require(got == 0x22222222 && r.ReferenceCmd == null && r.CrcSource.Contains("esf002_001_cmd_000"), "an unreadable turned-off row skipped the fallback: " + r.CrcSource + " · " + got.ToString("X8"));
+            // The usual game: the reference as before, untouched by the fallback.
+            ReplaceChecks.Fixture h = SortedGame(Path.Combine(root, "present"), new Dictionary<string, byte[]> { { other, otherCmd } }, 200);
+            r = GameReference.Load(h.Game, PakIndex.Open(BasePak(h)), null);
+            Require(r.CrcSource == "vanilla " + Path.GetFileName(ModFixes.ReferenceCmdPath) && r.ReferenceCmd != null && r.CurrentCrcs[ReplaceChecks.MaterialData] == vanilla, "present reference: " + r.CrcSource);
+        }
+
         // ---- Owned rows are never repaired: the Manager's own rows and rows any Fluffy installed.ini (either root) owns
         internal static void OwnedRows(string root, FakeProcessProbe probe)
         {

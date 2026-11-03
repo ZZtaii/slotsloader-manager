@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace SlotsInstaller
@@ -26,6 +28,9 @@ namespace SlotsInstaller
         internal static readonly string[] GroupRules = { "Original", "Choose any", "Choose one", "Choose up to one" };
         internal static readonly string[] FileRules = { "Original", "Required", "Optional" };
         internal static bool IsZip(string path) { return String.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase); }
+        // 1.0.16: RAR and 7Z keep their layout in the Manager's Data folder (BundleStore); the archive is never written.
+        internal static bool IsStored(string path) { string ext = Path.GetExtension(path ?? ""); return String.Equals(ext, ".rar", StringComparison.OrdinalIgnoreCase) || String.Equals(ext, ".7z", StringComparison.OrdinalIgnoreCase); }
+        internal static bool CanEdit(string path) { return !String.IsNullOrEmpty(path) && (IsZip(path) || IsStored(path)); }
 
         internal static List<BundleOption> Options(ModPackage p)
         {
@@ -69,6 +74,18 @@ namespace SlotsInstaller
             string json; bool damaged;
             int start = LayoutStart(comment, out json, out damaged);
             if (start < 0) { if (damaged) Ignore(package, "Its saved option layout is damaged"); return; }
+            Apply(package, json);
+        }
+        // 1.0.16: a RAR/7Z's layout from the Data folder, matched by content, through the same checks as a ZIP's.
+        internal static void ReadStored(ModPackage package)
+        {
+            bool damaged;
+            string json = BundleStore.Find(package.SourcePath, out damaged);
+            if (json == null) { if (damaged) Ignore(package, "Its saved option layout is damaged"); return; }
+            Apply(package, json);
+        }
+        private static void Apply(ModPackage package, string json)
+        {
             var kept = package.Components.Select(c => new { Component = c, c.Name, c.ParentId, c.BundleRule, c.InferredChoice, c.IsDefaultChoice, c.AuthorBase, c.AuthorChoiceRequired }).ToList();
             var authorOptions = Options(package);
             var slotDefaults = Composer.DefaultSelection(package,false);
@@ -113,7 +130,7 @@ namespace SlotsInstaller
                 nodes.Add(item.Id, item);
             }
             if (package.Components.Any(c => !c.Id.StartsWith(GroupPrefix, StringComparison.Ordinal) && !nodes.ContainsKey(c.Id)))
-                throw new InvalidDataException("The bundle no longer matches the options in this ZIP.");
+                throw new InvalidDataException("The bundle no longer matches the options in this archive.");
             var result = new List<ModComponent>();
             foreach (var item in options)
             {
@@ -162,13 +179,20 @@ namespace SlotsInstaller
 
         internal static void Save(string path, string stamp, List<BundleOption> options)
         {
-            if (!IsZip(path)) throw new IOException("Bundle editing is available for ZIP archives.");
+            if (!CanEdit(path)) throw new IOException("Bundle editing is available for ZIP, RAR and 7Z archives.");
             Safety.NoReparseChain(path);
             string key = ReplaceEngine.Sha(Encoding.UTF8.GetBytes(Path.GetFullPath(path).ToUpperInvariant()));
             using (var mutex = new System.Threading.Mutex(false, "SlotsloaderBundle-" + key))
             {
                 try { if (!mutex.WaitOne(0)) throw new IOException("Another window is saving this bundle."); }
                 catch (System.Threading.AbandonedMutexException) { } // the previous writer exited before publishing
+                if (IsStored(path))
+                {
+                    // 1.0.16: same bytes and write time, so no "Source changed" and no BundleEdits record.
+                    try { BundleStore.Save(path,stamp,options); }
+                    finally { mutex.ReleaseMutex(); }
+                    return;
+                }
                 DateTime before;
                 try { before = SaveLocked(path,stamp,options); }
                 finally { mutex.ReleaseMutex(); }
@@ -259,6 +283,148 @@ namespace SlotsInstaller
                     return BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant();
                 }
             }
+        }
+    }
+
+    // 1.0.16: RAR and 7Z layouts. 7-Zip can't change an archive's comment without repacking it, so the layout lives in
+    // Data\bundle-layouts\<sha256>.json and the archive is never written. It is matched by content: a renamed, moved or
+    // copied archive keeps its layout. index.json (full path -> stamp, size, sha256) lets an open skip the hash while the
+    // archive's stamp is the same; otherwise an archive is hashed only when a stored layout has its size.
+    internal static class BundleStore
+    {
+        public sealed class Layout
+        {
+            public string Format = FormatName, Sha256 = "", File = "", SavedUtc = "";   // File: the archive's name when saved (for people)
+            public long Size;
+            public List<BundleOption> Options;
+        }
+        public sealed class Known { public string Stamp = "", Sha256 = ""; public long Size; }
+        private const string FormatName = "slotsloader-bundle-layout-1";
+        private static readonly object Gate = new object();
+        private static readonly Dictionary<string, KeyValuePair<long, long>> sizes = new Dictionary<string, KeyValuePair<long, long>>(StringComparer.OrdinalIgnoreCase);   // layout file -> (write ticks, archive size)
+        private static readonly Regex ShaName = new Regex("^[0-9a-f]{64}$", RegexOptions.IgnoreCase);
+        internal static string DataDirOverride;   // checks: a fixture Data folder
+        internal static int Hashes;               // checks: archives hashed to look a layout up
+        private static long version;
+        // Bumped by every save: packages kept by their archive's stamp (MainFormOpen, the Assistant) are read again.
+        internal static long Version { get { return Interlocked.Read(ref version); } }
+        internal static string Folder { get { return Path.Combine(DataDirOverride ?? AppConfig.DataDir, "bundle-layouts"); } }
+        private static string IndexPath { get { return Path.Combine(Folder, "index.json"); } }
+        private static string LayoutPath(string sha) { return Path.Combine(Folder, sha + ".json"); }
+        private static string Key(string path) { return Path.GetFullPath(path); }   // the index compares paths ignoring case
+
+        // The layout's options as JSON, or null (none stored, or damaged: then damaged is true). Never makes a mod unreadable.
+        internal static string Find(string path, out bool damaged)
+        {
+            damaged = false;
+            try
+            {
+                Dictionary<string, long> stored = Stored();
+                if (stored.Count == 0) return null;
+                string sha = Sha(path, stored.Values, false);
+                if (sha == null || !stored.ContainsKey(sha)) return null;
+                Layout layout = null;
+                try { layout = Json.Serializer().Deserialize<Layout>(System.IO.File.ReadAllText(LayoutPath(sha), Encoding.UTF8)); }
+                catch (ArgumentException) { } catch (InvalidOperationException) { }
+                if (layout == null || layout.Options == null) { damaged = true; Program.LogLine(path + ": stored option layout " + sha + " is damaged"); return null; }
+                return Json.Serializer().Serialize(layout.Options);
+            }
+            catch (IOException ex) { Program.Log(ex); return null; }
+            catch (UnauthorizedAccessException ex) { Program.Log(ex); return null; }
+        }
+
+        // options == null: back to the author's layout (the stored one is removed).
+        internal static void Save(string path, string stamp, List<BundleOption> options)
+        {
+            if (SourceReader.Stamp(path) != stamp) throw new SourceChangedException();
+            if (options != null) BundleLayout.ValidateDraft(path, options);
+            string sha = Sha(path, null, true);
+            OperationContext.ThrowIfCancellationRequested();
+            if (SourceReader.Stamp(path) != stamp) throw new SourceChangedException();
+            lock (Gate)
+            {
+                Directory.CreateDirectory(Folder); Safety.NoReparseChain(Folder);
+                string file = LayoutPath(sha);
+                if (options == null) { if (System.IO.File.Exists(file)) System.IO.File.Delete(file); }
+                else DurableFile.WriteJson(file, new Layout { Sha256 = sha, Size = new FileInfo(path).Length, File = Path.GetFileName(path), SavedUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture), Options = options });
+                sizes.Remove(file);
+            }
+            Interlocked.Increment(ref version);
+        }
+
+        // sha256 -> archive size of each stored layout (-1: unreadable, matched only through the index).
+        private static Dictionary<string, long> Stored()
+        {
+            var result = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            var folder = new DirectoryInfo(Folder);
+            if (!folder.Exists) return result;
+            foreach (FileInfo f in folder.EnumerateFiles("*.json"))
+            {
+                string sha = Path.GetFileNameWithoutExtension(f.Name);
+                if (!ShaName.IsMatch(sha)) continue;   // index.json
+                long ticks = f.LastWriteTimeUtc.Ticks, size = -1;
+                KeyValuePair<long, long> seen;
+                lock (Gate) if (sizes.TryGetValue(f.FullName, out seen) && seen.Key == ticks) { result[sha.ToLowerInvariant()] = seen.Value; continue; }
+                try { Layout layout = Json.Serializer().Deserialize<Layout>(System.IO.File.ReadAllText(f.FullName, Encoding.UTF8)); if (layout != null) size = layout.Size; }
+                catch (ArgumentException) { } catch (InvalidOperationException) { } catch (IOException) { }
+                lock (Gate) sizes[f.FullName] = new KeyValuePair<long, long>(ticks, size);
+                result[sha.ToLowerInvariant()] = size;
+            }
+            return result;
+        }
+
+        // The archive's SHA-256: the index's while the stamp is the same, else hashed (always, or when a stored layout has
+        // its size; null otherwise). Lower-case hex, as BundleLayout.ArchiveHash gives for a RAR/7Z.
+        private static string Sha(string path, IEnumerable<long> wanted, bool always)
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists) throw new FileNotFoundException("The archive is no longer on disk.", path);
+            string stamp = info.Length + ":" + info.LastWriteTimeUtc.Ticks;
+            Known known;
+            lock (Gate) if (LoadIndex().TryGetValue(Key(path), out known) && known != null && known.Stamp == stamp && ShaName.IsMatch(known.Sha256 ?? "")) return known.Sha256.ToLowerInvariant();
+            if (!always && !wanted.Contains(info.Length)) return null;
+            string sha = Hash(path);
+            Interlocked.Increment(ref Hashes);
+            if (SourceReader.Stamp(path) == stamp) Remember(path, new Known { Stamp = stamp, Size = info.Length, Sha256 = sha });
+            return sha;
+        }
+        private static string Hash(string path)
+        {
+            using (var sha = FastHash.Sha256())
+            using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 1 << 16))
+            {
+                byte[] buffer = new byte[1 << 20]; int n;
+                while ((n = input.Read(buffer, 0, buffer.Length)) > 0) { OperationContext.ThrowIfCancellationRequested(); sha.TransformBlock(buffer, 0, n, null, 0); }
+                sha.TransformFinalBlock(buffer, 0, 0);
+                return BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        private static Dictionary<string, Known> LoadIndex()
+        {
+            var index = new Dictionary<string, Known>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (System.IO.File.Exists(IndexPath))
+                    foreach (var pair in Json.Serializer().Deserialize<Dictionary<string, Known>>(System.IO.File.ReadAllText(IndexPath, Encoding.UTF8)) ?? new Dictionary<string, Known>())
+                        if (pair.Value != null) index[pair.Key] = pair.Value;
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            return index;
+        }
+        // A cache: a failed write only means the next open hashes again. Paths no longer on disk are dropped.
+        private static void Remember(string path, Known known)
+        {
+            lock (Gate)
+                try
+                {
+                    var index = LoadIndex();
+                    index[Key(path)] = known;
+                    foreach (string gone in index.Keys.Where(k => !System.IO.File.Exists(k)).ToList()) index.Remove(gone);
+                    Directory.CreateDirectory(Folder); Safety.NoReparseChain(Folder);
+                    DurableFile.WriteJson(IndexPath, index);
+                }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
         }
     }
 

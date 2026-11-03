@@ -30,6 +30,8 @@ namespace SlotsInstaller
         public bool FiltersOpen;
         public string FilterTab = "";
         public List<string> Fighters = new List<string>(), Kinds = new List<string>(), MiscAreas = new List<string>(), Stages = new List<string>(), SelectedLibraries = new List<string>();
+        // 1.0.16: the REFramework & code chips (LibraryCode kinds; "tools" in Kinds is that tile); missing in older files = none.
+        public List<string> CodeKinds = new List<string>();
         // 2.4.1 sort chips: "added" | "last_used" | "installed" and "desc" | "asc". Missing or unknown (older files) = Installed ↓.
         public string LibrarySort = "", LibrarySortOrder = "", InstalledSort = "", InstalledSortOrder = "";   // 2.5.5: Installed sort
         // 1.0.6: library rows show "name" (modinfo.ini) or "file" names (missing = file); Deep search on/off.
@@ -376,6 +378,7 @@ namespace SlotsInstaller
                 FiltersOpen=filterPanel.Visible,
                 Fighters=filterPanel.Grid.Selected.OrderBy(c=>c,StringComparer.Ordinal).ToList(),
                 Kinds=new[]{FilterPanel.ToolsKind,FilterPanel.MiscKind}.Where(k=>filterPanel.Kinds.Selected.Contains(k)).ToList(),SelectedLibraries=filterPanel.LibrariesSelected.OrderBy(k=>k,StringComparer.OrdinalIgnoreCase).ToList(),MiscAreas=MiscKindsSelectedOrPending().ToList(),
+                CodeKinds=LibraryCode.Order.Where(CodeKindsSelectedOrPending().Contains).ToList(),
                 LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,
                 FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide),
                 WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen,
@@ -682,7 +685,7 @@ namespace SlotsInstaller
             var editBundle = modMenu.Items.Add("Edit bundle…", null, delegate
             {
                 var entry = modMenu.Tag as LibraryEntry;
-                if (entry == null || busy || !BundleLayout.IsZip(entry.SourcePath)) return;
+                if (entry == null || busy || !BundleLayout.CanEdit(entry.SourcePath)) return;   // 1.0.16: ZIP, RAR and 7Z
                 string stamp = null;
                 Work("Opening bundle editor", delegate
                 {
@@ -735,7 +738,7 @@ namespace SlotsInstaller
                 PopulateReplacementUninstall(uninstallReplacementItem, source);
                 PopulateFluffyUninstall(uninstallFluffyItem, source);
                 bool multi = BatchVisible && entry != null && BatchSourcePaths().Contains(entry.SourcePath);
-                editBundle.Visible = !multi && BundleLayout.IsZip(source) && File.Exists(source);
+                editBundle.Visible = !multi && BundleLayout.CanEdit(source) && File.Exists(source);
                 editBundle.Enabled = !busy;
                 uninstallSelectionItem.Visible = multi;
                 uninstallSelectionItem.Enabled = multi && batchUninstallButton.Enabled;
@@ -1449,6 +1452,7 @@ namespace SlotsInstaller
             };
             swap();
             if (changed) UpdateGameFilesToast();   // 1.0.10: hidden on Installed, where the banner says it
+            if (changed && SettingsReplaceShown) LoadReplaceSettingsFields();   // 1.0.16: installs and uninstalls happen on other pages
             if(page==libraryPage || page==installedPage || page==assistantPage) {lastMainPage=page==installedPage ? "Installed" : page==assistantPage ? "Assistant" : "Library"; QueueViewSave();}
             // A page needs DPI metrics once per DPI after it first has a real
             // size; repeating the full pass on every tab switch only re-laid
@@ -1636,9 +1640,11 @@ namespace SlotsInstaller
             // 2.3.0: fighters are OR-ed, the kind tiles (Code tools, Misc with its kinds) OR-ed, the library tiles OR-ed;
             // fighters, kinds, Installed and libraries are AND-ed with each other and with search. Each card or tile
             // counts what selecting it would add to the rest of the selection.
-            HashSet<string> fighters = filterPanel.Grid.Selected, miscKinds = filterPanel.MiscSelected, libraries = filterPanel.LibrariesSelected;
+            // 1.0.16: the "tools" tile is REFramework & code (LibraryCode kinds, narrowed by its chips like Misc), no longer
+            // every tool mod (IsToolMod, which still decides how a mod installs).
+            HashSet<string> fighters = filterPanel.Grid.Selected, miscKinds = filterPanel.MiscSelected, codeKinds = filterPanel.CodeSelected, libraries = filterPanel.LibrariesSelected;
             bool toolsOn = filterPanel.ToolsOn, miscOn = filterPanel.MiscOn, kindsOn = toolsOn || miscOn, installedOn = filterPanel.InstalledOn;
-            var fighterCounts = new Dictionary<string, int>(StringComparer.Ordinal); var miscCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var fighterCounts = new Dictionary<string, int>(StringComparer.Ordinal); var miscCounts = new Dictionary<string, int>(StringComparer.Ordinal); var codeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             var libraryCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             int toolCount = 0, miscCount = 0, installedCount = 0;
             Action<Dictionary<string, int>, string> count = delegate(Dictionary<string, int> map, string key) { int n; map.TryGetValue(key, out n); map[key] = n + 1; };
@@ -1672,10 +1678,10 @@ namespace SlotsInstaller
                 if (rank < 0) continue;
                 if (!MatchesModType(e, query.Type) || !MatchesFormat(e, query.Format)) continue;
                 HashSet<string> codes = FighterCodes(e);
-                bool isTool = ModCategories.IsTool(e), isMisc = ModCategories.IsMisc(e), isInstalled = CachedInstallState(e) != LibraryInstallState.None;
+                bool isTool = LibraryCode.Any(e), isMisc = ModCategories.IsMisc(e), isInstalled = CachedInstallState(e) != LibraryInstallState.None;
                 string from = String.IsNullOrEmpty(e.SourcePath) ? "" : FilterPanel.LibraryKey(e.LibraryFolder ?? "");
                 bool fighterOk = fighters.Count == 0 || codes.Overlaps(fighters);
-                bool kindOk = !kindsOn || (toolsOn && isTool) || (miscOn && isMisc && (miscKinds.Count == 0 || e.MiscAreas.Any(miscKinds.Contains)));
+                bool kindOk = !kindsOn || (toolsOn && isTool && (codeKinds.Count == 0 || LibraryCode.AnyOf(e, codeKinds))) || (miscOn && isMisc && (miscKinds.Count == 0 || e.MiscAreas.Any(miscKinds.Contains)));
                 bool installedOk = !installedOn || isInstalled, libraryOk = libraries.Count == 0 || libraries.Contains(from);
                 bool onlyOk = !anyOnly, draftOk = draft == null || CustomMatch(e, draftKey); int hides = 0;
                 for (int i = 0; i < customCount; i++)
@@ -1688,14 +1694,14 @@ namespace SlotsInstaller
                 if (fighterOk && kindOk && installedOk && libraryOk && draftOk)
                     for (int i = 0; i < customCount; i++) if (customHit[i] && hides - (customState[i] == CustomFilterState.Hide ? 1 : 0) == 0) customTotals[i]++;
                 if (kindOk && installedOk && libraryOk && customOk) foreach (string code in codes) count(fighterCounts, code);
-                if (fighterOk && installedOk && libraryOk && customOk) { if (isTool) toolCount++; if (isMisc) { miscCount++; foreach (string label in e.MiscAreas) count(miscCounts, label); } }
+                if (fighterOk && installedOk && libraryOk && customOk) { if (isTool) { toolCount++; foreach (string kind in LibraryCode.Order) if (LibraryCode.Has(e, kind)) count(codeCounts, kind); } if (isMisc) { miscCount++; foreach (string label in e.MiscAreas) count(miscCounts, label); } }
                 if (fighterOk && kindOk && libraryOk && customOk && isInstalled) installedCount++;
                 if (fighterOk && kindOk && installedOk && customOk) count(libraryCounts, from);
                 if (!fighterOk || !kindOk || !installedOk || !libraryOk || !customOk) continue;
                 ranked.Add(new KeyValuePair<LibraryEntry, int>(e, rank));
                 if (query.HasCostume) libraryRanks[e] = rank;
             }
-            UpdateFacetCounts(fighterCounts, miscCounts, toolCount, miscCount, installedCount, libraryCounts);
+            UpdateFacetCounts(fighterCounts, miscCounts, codeCounts, toolCount, miscCount, installedCount, libraryCounts);
             if (countCustom) { customCounts.Clear(); for (int i = 0; i < customCount; i++) customCounts[custom[i].Id] = customTotals[i]; }
             UpdateCustomChipLooks();
             UpdateFilterButton();
@@ -1850,8 +1856,8 @@ namespace SlotsInstaller
 
         private void ClearLibraryFilters()
         {
-            // Fighters, Tool mods/Misc, the Misc chips, Installed and libraries; the search text stays (it is not a filter).
-            filterPanel.ClearSelections(); pendingMiscKinds.Clear();
+            // Fighters, REFramework & code/Misc and their chips, Installed and libraries; the search text stays (it is not a filter).
+            filterPanel.ClearSelections(); pendingMiscKinds.Clear(); pendingCodeKinds.Clear();
             customStates.Clear(); UpdateCustomChipLooks();   // 1.0.8: MY FILTERS chips too
             libraryToTop = true; ApplyFilters(); QueueViewSave();
         }
@@ -1885,6 +1891,11 @@ namespace SlotsInstaller
             pendingMiscKinds.Clear(); pendingMiscKinds.UnionWith(miscKinds);
             foreach (FlatButton chip in filterPanel.MiscChips.Controls.OfType<FlatButton>()) chip.SetActive(pendingMiscKinds.Contains((string)chip.Tag));
             pendingMiscKinds.RemoveWhere(k => filterPanel.MiscChips.Controls.OfType<FlatButton>().Any(b => (string)b.Tag == k));
+            // 1.0.16: the REFramework & code chips (an older file has none: every kind); unknown kinds are dropped.
+            pendingCodeKinds.Clear();
+            pendingCodeKinds.UnionWith((saved.CodeKinds ?? new List<string>()).Where(k => LibraryCode.Order.Contains(k)));
+            foreach (FlatButton chip in filterPanel.CodeChips.Controls.OfType<FlatButton>()) chip.SetActive(pendingCodeKinds.Contains((string)chip.Tag));
+            if (filterPanel.CodeChips.Controls.Count > 0) pendingCodeKinds.Clear();
             RestoreCustomStates(saved);   // 1.0.8
         }
 
@@ -1908,6 +1919,9 @@ namespace SlotsInstaller
         // Misc kind chips from the whole library (counts come from ApplyFilters); pending kinds from view settings apply once listed.
         private readonly HashSet<string> pendingMiscKinds = new HashSet<string>(StringComparer.Ordinal);
         private IEnumerable<string> MiscKindsSelectedOrPending() { return filterPanel.MiscSelected.Concat(pendingMiscKinds).Distinct(); }
+        // 1.0.16: REFramework & code chips restored before the chips exist (the first RefreshFacetRows makes them).
+        private readonly HashSet<string> pendingCodeKinds = new HashSet<string>(StringComparer.Ordinal);
+        private IEnumerable<string> CodeKindsSelectedOrPending() { return filterPanel.CodeSelected.Concat(pendingCodeKinds).Distinct(); }
         private void RefreshFacetRows()
         {
             quietFilters++; try { RefreshFacetRowsQuiet(); } finally { quietFilters--; }
@@ -1923,32 +1937,45 @@ namespace SlotsInstaller
             try
             {
                 foreach (Control old in chips.Controls.Cast<Control>().ToList()) { chips.Controls.Remove(old); old.Dispose(); }
-                foreach (string kind in kinds)
-                {
-                    string key = kind;
-                    FlatButton chip = new FlatButton(kind, false) { Tag = key, Height = 26, AutoSize = false, Font = Palette.Small, Margin = new Padding(0, 0, 6, 6), Padding = new Padding(6, 0, 6, 0), AccessibleName = "Misc kind " + kind };
-                    chip.Width = TextRenderer.MeasureText(kind + " 999", chip.Font).Width + DpiMetrics.Px(filterPanel, 18);
-                    chip.Height = DpiMetrics.Px(filterPanel, 26);
-                    chip.SetActive(selected.Contains(key));
-                    chip.Click += delegate { chip.SetActive(!chip.Active); pendingMiscKinds.Clear(); filterPanel.RaiseChanged(); };
-                    // Arrow keys move between the chips (WinForms); W/A/S/D do the same (2.3.1).
-                    chip.KeyDown += delegate(object sender, KeyEventArgs e)
-                    {
-                        Keys arrow = FighterGrid.WasdArrow(e);
-                        if (arrow == e.KeyCode) return;
-                        chips.SelectNextControl(chip, arrow == Keys.Right || arrow == Keys.Down, true, false, true);
-                        e.Handled = e.SuppressKeyPress = true;
-                    };
-                    chips.Controls.Add(chip);
-                }
+                foreach (string kind in kinds) chips.Controls.Add(FacetChip(chips, kind, kind, "Misc kind " + kind, selected.Contains(kind), pendingMiscKinds));
             }
             finally { chips.ResumeLayout(); }
             pendingMiscKinds.RemoveWhere(k => kinds.Contains(k));
+            // 1.0.16: the REFramework & code chips, always all four (counts follow in UpdateFacetCounts).
+            var code = new HashSet<string>(CodeKindsSelectedOrPending(), StringComparer.Ordinal);
+            FlowLayoutPanel codeChips = filterPanel.CodeChips;
+            codeChips.SuspendLayout();
+            try
+            {
+                foreach (Control old in codeChips.Controls.Cast<Control>().ToList()) { codeChips.Controls.Remove(old); old.Dispose(); }
+                for (int i = 0; i < LibraryCode.Order.Length; i++) codeChips.Controls.Add(FacetChip(codeChips, LibraryCode.Order[i], LibraryCode.Labels[i], "Code kind " + LibraryCode.Labels[i], code.Contains(LibraryCode.Order[i]), pendingCodeKinds));
+            }
+            finally { codeChips.ResumeLayout(); }
+            pendingCodeKinds.Clear();
             FillCustomChips();   // 1.0.8: MY FILTERS, at the same time and size rules as the Misc chips
             filterPanel.Arrange();
         }
 
-        private void UpdateFacetCounts(Dictionary<string, int> fighters, Dictionary<string, int> misc, int tools, int miscTotal, int installedTotal, Dictionary<string, int> libraries)
+        // A Misc or REFramework & code chip (Tag = key; its text gets the count): sized for "label 999", toggles on click.
+        private FlatButton FacetChip(FlowLayoutPanel chips, string key, string label, string accessibleName, bool active, HashSet<string> pending)
+        {
+            FlatButton chip = new FlatButton(label, false) { Tag = key, Height = 26, AutoSize = false, Font = Palette.Small, Margin = new Padding(0, 0, 6, 6), Padding = new Padding(6, 0, 6, 0), AccessibleName = accessibleName };
+            chip.Width = TextRenderer.MeasureText(label + " 999", chip.Font).Width + DpiMetrics.Px(filterPanel, 18);
+            chip.Height = DpiMetrics.Px(filterPanel, 26);
+            chip.SetActive(active);
+            chip.Click += delegate { chip.SetActive(!chip.Active); pending.Clear(); filterPanel.RaiseChanged(); };
+            // Arrow keys move between the chips (WinForms); W/A/S/D do the same (2.3.1).
+            chip.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                Keys arrow = FighterGrid.WasdArrow(e);
+                if (arrow == e.KeyCode) return;
+                chips.SelectNextControl(chip, arrow == Keys.Right || arrow == Keys.Down, true, false, true);
+                e.Handled = e.SuppressKeyPress = true;
+            };
+            return chip;
+        }
+
+        private void UpdateFacetCounts(Dictionary<string, int> fighters, Dictionary<string, int> misc, Dictionary<string, int> code, int tools, int miscTotal, int installedTotal, Dictionary<string, int> libraries)
         {
             filterPanel.Grid.SetCounts(fighters);
             var tiles = new Dictionary<string, int> { { FilterPanel.ToolsKind, tools }, { FilterPanel.MiscKind, miscTotal }, { FilterPanel.InstalledKind, installedTotal } };
@@ -1963,8 +1990,15 @@ namespace SlotsInstaller
                 string text = (string)chip.Tag + " " + n;
                 if (chip.Text != text) chip.Text = text;
             }
+            foreach (FlatButton chip in filterPanel.CodeChips.Controls.OfType<FlatButton>())
+            {
+                int n; code.TryGetValue((string)chip.Tag, out n);
+                string text = LibraryCode.Label((string)chip.Tag) + " " + n;
+                if (chip.Text != text) chip.Text = text;
+            }
             int selected = filterPanel.Grid.Selected.Count;
-            string kinds = String.Join(" + ", new[] { filterPanel.ToolsOn ? "tool mods" : null, filterPanel.MiscOn ? (filterPanel.MiscSelected.Count > 0 ? String.Join(", ", filterPanel.MiscSelected) : "misc") : null }.Where(s => s != null));
+            HashSet<string> codeSelected = filterPanel.CodeSelected;
+            string kinds = String.Join(" + ", new[] { filterPanel.ToolsOn ? (codeSelected.Count > 0 ? String.Join(", ", LibraryCode.Order.Where(codeSelected.Contains).Select(LibraryCode.Label)) : "REFramework and code") : null, filterPanel.MiscOn ? (filterPanel.MiscSelected.Count > 0 ? String.Join(", ", filterPanel.MiscSelected) : "misc") : null }.Where(s => s != null));
             // 2.4.1: no summary line in the FIGHTERS row; screen readers get it as the grid's description.
             filterPanel.Grid.AccessibleDescription = (selected == 0 ? "All fighters" : ReplacePlanner.N(selected, "fighter") + " selected") + (kinds.Length > 0 ? " · only " + kinds : "");
         }
@@ -2129,11 +2163,22 @@ namespace SlotsInstaller
             Func<string, bool> same = source => String.Equals(source, pkg.SourcePath, StringComparison.OrdinalIgnoreCase);
             List<string> replaced = gameRows.Where(r => r.Mod != null && same(r.Mod.SourcePath) && r.Mod.SelectedIds != null && r.Mod.SelectedIds.Count > 0)
                 .Select(r => r.Mod).OrderByDescending(m => m.Enabled).ThenByDescending(m => m.InstalledUtc ?? "", StringComparer.Ordinal).Select(m => m.SelectedIds).FirstOrDefault();
-            List<string> extra = installed.Where(o => o.Managed && same(o.SourcePath) && o.SelectedIds != null && o.SelectedIds.Count > 0)
-                .OrderByDescending(o => o.Enabled).ThenByDescending(o => o.InstalledUtc).Select(o => o.SelectedIds).FirstOrDefault();
+            InstalledOutfit extraOutfit = installed.Where(o => o.Managed && same(o.SourcePath) && o.SelectedIds != null && o.SelectedIds.Count > 0)
+                .OrderByDescending(o => o.Enabled).ThenByDescending(o => o.InstalledUtc).FirstOrDefault();
+            List<string> extra = extraOutfit == null ? null : extraOutfit.SelectedIds;
             bool replaceMode = IsReplaceMode;
-            List<string> ids = (replaceMode ? replaced ?? extra : extra ?? replaced) ?? new List<string>();
+            bool fromReplace = replaceMode ? replaced != null : extra == null && replaced != null;
+            List<string> ids = (fromReplace ? replaced : extra) ?? new List<string>();
             ids = ids.Where(id => { ModComponent c = pkg.Find(id); return c == null || (!c.IsDummy && c.HasFiles(replaceMode)); }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            // 1.0.16: the addons' installed ticks too; the main branch that stood in for an addon branch shows unticked.
+            // PR #22 review (F1): whether or not the main mod is installed (an addon installed first: over the defaults),
+            // from its records in Replace original (a disabled one too; remembered as shown, MainFormAddons.cs).
+            if (pkg.MergedFrom != null)
+            {
+                bool addonRecords = replaceMode || fromReplace;
+                List<KeyValuePair<AddonPart, List<string>>> addonIds = InstalledAddonIds(pkg, addonRecords, addonRecords ? null : extraOutfit, shownAddonRecords);
+                if (addonIds.Count > 0) ids = LibraryAddons.Restore(pkg, ids.Count > 0 ? ids : Composer.DefaultSelection(pkg, replaceMode || IsToolPackage(pkg)), addonIds);
+            }
             return ids.Count > 0 ? ids : null;
         }
 
@@ -2160,10 +2205,13 @@ namespace SlotsInstaller
             bool replaceLoad = restoreReplace != null || remembered == InstallModes.Replace;
             PackageReload reload = pendingReload; pendingReload = null;   // 2.4.1: a reload after the source changed on disk
             if (reload != null) replaceLoad = reload.Mode == InstallModes.Replace || restoreReplace != null;
+            // 1.0.16: addon archives of this mod in the library show inside it (MainFormAddons.cs); Edit options of one
+            // installed record shows that record's mod alone.
+            string openedName = ""; List<AddonCandidate> addonCandidates =restore == null && restoreReplace == null ? AddonCandidates(entry, out openedName) : null;
             OpenWork(entry.SourcePath, delegate
             {
                 string stamp = SourceStamp(entry.SourcePath);   // before reading: a change while reading is seen next time
-                ModPackage loaded = ReadOpenPackage(entry.SourcePath, stamp, sevenZip);
+                ModPackage loaded = WithAddons(ReadOpenPackage(entry.SourcePath, stamp, sevenZip), openedName, addonCandidates, sevenZip);
                 List<string> defaults = Composer.DefaultSelection(loaded, replaceLoad || IsToolPackage(loaded));
                 byte[] image = null;
                 try { image = loaded.PreviewBytes(defaults.FirstOrDefault(), sevenZip); } catch { }
@@ -2184,13 +2232,14 @@ namespace SlotsInstaller
                 ClearPreviewCache();
                 selectingMod = true;
                 bool relist = false;
+                ModPackage own = SourcePackage;   // 1.0.16: the row describes its own archive, not the addons shown with it
                 foreach (LibraryEntry listed in library.Where(e => String.Equals(e.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)))
                 {
                     string known = ListedIdentity(listed);
-                    listed.CharacterCodes = package.CharacterCodes.ToList(); listed.DetectionError = null;
-                    listed.Character = ModCategories.NameGuessAllowed(listed) ? package.Character : "";   // 2.3.1: no name guess for Misc/Code tools
-                    listed.OptionCount = package.Components.Count(c => c.Assets.Count > 0);
-                    listed.OptionIds = package.Components.Where(c => c.Assets.Count > 0).Select(c => c.Id).ToList();
+                    listed.CharacterCodes = own.CharacterCodes.ToList(); listed.DetectionError = null;
+                    listed.Character = ModCategories.NameGuessAllowed(listed) ? own.Character : "";   // 2.3.1: no name guess for Misc/Code tools
+                    listed.OptionCount = own.Components.Count(c => c.Assets.Count > 0);
+                    listed.OptionIds = own.Components.Where(c => c.Assets.Count > 0).Select(c => c.Id).ToList();
                     installStates.Remove(listed);
                     listed.Detection = listed.CharacterCodes.Count > 1 ? "Ambiguous" : listed.CharacterCodes.Count == 1 ? (Characters.ByCode.ContainsKey(listed.CharacterCodes[0]) ? "Native" : "UnknownNative") : String.IsNullOrEmpty(listed.Character) ? "Unknown" : "Filename";
                     if (ListedIdentity(listed) != known) relist = true;
@@ -2215,11 +2264,13 @@ namespace SlotsInstaller
                 packageDescription.Text = primary == null ? "No options found in this mod." : primary.Description;
                 if (String.IsNullOrWhiteSpace(packageDescription.Text)) packageDescription.Text = "Hover an option to preview it. Check its box to include it.";
                 packageHint.Text = package.Warnings.Count > 0 ? String.Join("\n", package.Warnings.Take(2)) : "Main files first. Options selected later take precedence when they replace the same file.";
+                if (package.AddonParts != null) packageHint.Text = "With options from " + String.Join(", ", package.AddonParts.Select(p => p.FileName)) + " (an addon of this mod)." + (package.Warnings.Count > 0 ? "\n" + package.Warnings[0] : "");
                 SetPreview(result.Preview.TakeImage()); previewComponentId = result.Defaults.FirstOrDefault(); inspectedComponentId = previewComponentId;
                 if (previewComponentId != null) previewCache.Add(previewComponentId, previewImage);
                 outfitNameTyped = false; outfitNameLocked = restore != null;   // 2.5.0: Edit options keeps the outfit's name; otherwise the name is suggested (ApplySuggestedName)
                 SetOutfitName(restore == null ? CleanName(package.Name) : restore.Name);
                 targetCharacter.SelectedIndex = targetCharacter.Items.IndexOf(restore == null ? package.Character : restore.Character);
+                if (reload == null) shownAddonRecords.Clear();   // 1.0.16 (PR #22 review, F1): per open; a reload keeps them
                 var savedSelection = restoreReplace != null ? restoreReplace.SelectedIds : restore != null ? restore.SelectedIds : reload == null ? InstalledSelection(package) : null;
                 string savedNote = "";
                 if (savedSelection != null)
@@ -2321,6 +2372,13 @@ namespace SlotsInstaller
                     ModComponent c = ancestor.Tag as ModComponent;
                     if (c != null && !c.IsDummy && c.HasFiles(IsReplaceMode) && !ancestor.Checked) { ancestor.Checked = true; if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
                 }
+                // 1.0.16: an addon option's Requirement=Main files ticks the main mod's option of that name.
+                if (LibraryAddons.IsAddonId(package, component.Id))
+                    foreach (ModComponent need in LibraryAddons.Requirements(package, component))
+                    {
+                        OptionNode required;
+                        if (need.HasFiles(IsReplaceMode) && componentNodes.TryGetValue(need.Id, out required) && !required.Checked) { required.Checked = true; if (!selectedOrder.Contains(need.Id)) selectedOrder.Insert(0, need.Id); }
+                    }
                 selectedOrder.Remove(component.Id); selectedOrder.Add(component.Id);
             }
             else
@@ -2802,7 +2860,22 @@ namespace SlotsInstaller
                 replace = true;
             }
             CompositionPlan current = plan; string root = config.CostumeRoot; string sevenZip = config.SevenZipPath;
-            Work("Installing extra outfit…", delegate { return Installer.Install(current, root, character, name, sevenZip, replace); }, delegate(InstallResult result)
+            // 1.0.16: the main mod as the outfit (plan holds its split ids), then each addon's ticks as an added part; an
+            // earlier part from an addon is replaced, or taken out when none of its options is ticked.
+            AddonSplit split = package.MergedFrom == null ? null : LibraryAddons.Split(package, selectedOrder, false);
+            List<string> addonSources = split == null ? null : split.Parts.Select(p => p.Key.SourcePath).ToList();
+            string removed = split == null || existing == null || existing.Parts == null ? "" : String.Concat(existing.Parts.Where(g => split.Parts.Any(p => p.Value.Count == 0 && ReplacePlanner.SameSource(p.Key.SourcePath, g.SourcePath))).Select(g => " · removed " + Installer.GraftText(g)));
+            // PR #22 review (F2): the addon parts go in with the outfit, in its one transaction (Installer.Install addParts):
+            // a part that can't be added fails the install with the earlier outfit and its parts as they were.
+            var ticked = split == null ? new List<KeyValuePair<AddonPart, List<string>>>() : split.Ticked.ToList();
+            List<CompositionPlan> addParts = ticked.Select(p => Installer.SelectionFiles(p.Key.Package, p.Value)).ToList();
+            string added = String.Concat(ticked.Select((p, i) => " · added " + Installer.OptionText(addParts[i]) + " from " + p.Key.RecordName));
+            Work("Installing extra outfit…", delegate
+            {
+                InstallResult installedOutfit = Installer.Install(current, root, character, name, sevenZip, replace, addonSources, addParts);
+                if (split != null) installedOutfit.PartsNote += added + removed;
+                return installedOutfit;
+            }, delegate(InstallResult result)
             {
                 RefreshInstalled("✓ Installed " + name + " · " + ReplacePlanner.N(result.FileCount, "file") + result.PartsNote + ". Restart SF6 to see changes.");   // 1.0.6: added parts kept/removed
             });
@@ -3183,7 +3256,10 @@ namespace SlotsInstaller
         private List<GameModRow> LinkedReplacements(string sourcePath)
         {
             if (String.IsNullOrWhiteSpace(sourcePath)) return new List<GameModRow>();
-            return gameRows.Where(r => r.Mod != null && String.Equals(r.Mod.SourcePath, sourcePath, StringComparison.OrdinalIgnoreCase)).OrderBy(r => r.Priority).ToList();
+            // 1.0.16: the open main mod's records include its addons' (installed with it from the same option list).
+            var sources = new List<string> { sourcePath };
+            if (package != null && package.AddonParts != null && String.Equals(package.SourcePath, sourcePath, StringComparison.OrdinalIgnoreCase)) sources.AddRange(package.AddonParts.Select(p => p.SourcePath));
+            return gameRows.Where(r => r.Mod != null && sources.Any(s => String.Equals(r.Mod.SourcePath, s, StringComparison.OrdinalIgnoreCase))).OrderBy(r => r.Priority).ToList();
         }
 
         // Why a replacement can't be uninstalled right now (same wording as the inspector's Uninstall link), or null.

@@ -12,7 +12,7 @@ All types in this section are internal unless noted.
   - reads the header and the entry table read-only (`FileShare.ReadWrite | Delete`);
   - refuses anything other than KPKA 4.x with `features == 0`;
   - validates every entry's bounds.
-- `PakIndex` members: `Find(hash) → List<int>` (zeroed rows are skipped), `Contains`, `CountZeroed`, `Entry(i) → PakEntry`, `Read(entry)` (stored, deflate or zstd), `ReadByPath`, `TocSha256()` (header + table) and `LayoutSha256()` (hash fields ignored).
+- `PakIndex` members: `Find(hash) → List<int>` (zeroed rows are skipped; every row of a repeated hash in table order; 1.0.16: a new list each call), `Contains`, `CountZeroed`, `Entry(i) → PakEntry`, `Read(entry)` (stored, deflate or zstd), `ReadByPath`, `TocSha256()` (header + table) and `LayoutSha256()` (hash fields ignored).
 - `PakWriter.WriteHashes(pak, length, header, IList<PakHashWrite>)`:
   - rechecks the length and header;
   - requires each row to hold `Expected` (rows already at `Value` are skipped);
@@ -36,14 +36,14 @@ All types in this section are internal unless noted.
 - 1.0.9: after each commit, `ManagerInstalls.Write(gameRoot, state)` ([ManagerInstalls.cs](ManagerInstalls.cs)) writes `reframework\data\SF6_Costumes_Data\manager_installs.json` for other costume loaders. `ManagerInstalls.Sync(engine)` does the same at start-up and every refresh. Neither ever throws. The file is only written when that folder exists and something besides `generated` changed. `ManagerInstalls.Text(state, generatedUtc)` returns the text; the format is in docs/ARCHITECTURE.md.
 - Recovery and status: `Recover() → string` (null if nothing was pending), `JournalPending`, `Status() → GameFilesStatus` (`NeedsReapply`, `PakChanged`, `BaseChanged`, `RowsNotZero`, `FilesMissing`, `FilesChanged`, `LooseLoaderOff`, `Summary`), `RestoreFromTocBackup(pak) → rows restored` (last resort).
 - Other members: `LoadState()`, `CurrentMethod(state)`, `DesiredMethod()`, `StoreRoot(state)`, `EnsureTocBackup(pak)` and `ValidateDestination(path)` (static; protected paths).
-- `ReplaceEngine.CrashAfterStep` is a test hook that throws `SimulatedCrashException`.
+- `ReplaceEngine.CrashAfterStep` is a test hook that throws `SimulatedCrashException`. 1.0.16: `ReplaceEngine.BeforeArchivePayloads` (test hook) runs between Reconcile and the archive payload step; Reconcile passes the SHA-256 it read per path to that step, which copies an intact file for rollback without hashing it again (the copy is verified). `Safety.NoReparseChain(path, checkedFolders)` checks many paths in one pass (folders once).
 - Public models (JSON-serialized): `ReplaceSettings`, `ReplaceState`, `ReplaceMod`, `ModFile`, `DeployedFile`, `ZeroedRow`, `OriginalBackup`, `PakStamp`, `ReplaceJournal`, `JournalOp`, `JournalRow`, `TestSessionRecord`.
 - `ReplacePlanner.Prepare(CompositionPlan replaceMode, sevenZip, engine, stagingFolder) → ReplacePlan`:
   - normalizes and renames paths, then copies and fixes the files;
   - analyses each file;
   - fills `Files` (`PreparedFile` with its fixes), `Affects`, `Items` (`HealthItem` level info/fix/warn/error), counts and `InvalidationPreview`;
   - sets `CanInstall` when there are no errors.
-- `ReplacePlanner.Check(...)` prepares into a temporary folder and deletes it; `PrepareAndInstall(...)` stages in the store and installs; `Report(plan)` returns text.
+- `ReplacePlanner.Check(...)` prepares into a temporary folder and deletes it; `PrepareAndInstall(...)` stages in the store and installs (1.0.16: its two steps `PrepareInstall` and `CommitInstall`, `Discard` the staging; a main mod's addon records are staged before the main record); `Report(plan)` returns text. `ReplaceEngine.Install(plan, name, test, replaceId, aboveId)` puts the record directly above `aboveId` in the same change.
 
 **Composition and packages**
 - `ModComponent.RootAssets` (public) holds game-root files in the external mod manager's layout; `HasFiles(includeRoot)` reports whether a component has files.
@@ -80,6 +80,10 @@ All types in this section are internal unless noted.
 - `GameReference.Tables(gameRoot)`: outfit labels without reading a PAK.
 - `LibraryEntry.CostumeKeys`, identity cache `sf6-native-library-index-v2`; `LibrarySearch.Parse/CostumeRank/MatchesText/CostumeLabel/CostumesIn`.
 - Assistant: `search_mods` takes `costume` and returns `costumes`, `costume_label`, `costume_match`; `install_replacement` results carry `conflicts` and `conflict_note`; `list_game_mods` rows carry `shares_files_with` and `same_outfit_no_shared_files`; `check_outfit` returns `already_installed_as`.
+
+## 1.0.16 additions
+
+- `LibraryCode.Classify(paths, name)` (pure): the SF6 code kinds `script`, `plugin`, `reframework`, `injector` (`LibraryCode.Order`, chip labels `Labels`) of one archive or folder; `LibraryEntry.CodeKinds` / `LibraryIdentityRecord.CodeKinds` (null = not known; index v4, additive; backfilled in the background for records with tool kinds). `LibraryCode.Has(e, kind)` / `Any(e)` fall back to a guess from `ToolKinds` while null. The Filters tile `FilterPanel.ToolsKind` ("tools") is **REFramework & code**; `FilterPanel.CodeChips`, `CodeSelected`; `ViewPreferences.CodeKinds`. `LibrarySearch.ToolKeyword` returns `injector` for `injector(s)`/`code injector(s)`. `IsToolMod` is unchanged.
 
 ## 2.5.1 additions
 

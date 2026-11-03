@@ -431,7 +431,7 @@ namespace SlotsInstaller
             Directory.CreateDirectory(Path.Combine(folder, "natives")); File.WriteAllText(Path.Combine(folder, "natives", "fixture.bin"), "managed bytes");
             Json.Write(Path.Combine(folder, ".slots-installer.json"), new InstallManifest { Id = Guid.NewGuid().ToString("N"), Character = "Juri", Name = name, SourcePath = source, CreatedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = new List<string> { "Main" }, Sha256 = new Dictionary<string, string> { { "natives/fixture.bin", new string('a', 64) } } });
         }
-        private static bool Junction(string link, string target)
+        internal static bool Junction(string link, string target)
         {
             try
             {

@@ -71,7 +71,10 @@ namespace SlotsInstaller
         internal long Length;
         internal DateTime LastWriteUtc;
         internal byte[] Header, Table;
-        private Dictionary<ulong, List<int>> byHash;
+        // 1.0.16 (speed): one int per hash (a List per row cost ~15-30 ms and ~20 MB for the 286,816-row base PAK,
+        // again after every PAK write); the rare repeated hash keeps all its rows in More. Published as one object.
+        private sealed class Lookup { internal Dictionary<ulong, int> First; internal Dictionary<ulong, List<int>> More; }
+        private Lookup byHash;
         internal int ZeroedCount;
 
         internal static PakIndex Open(string path) { return Open(path, true); }
@@ -115,26 +118,50 @@ namespace SlotsInstaller
         private void EnsureLookup()
         {
             if (byHash != null) return;
-            var map = new Dictionary<ulong, List<int>>((int)Count);
+            var lookup = new Lookup { First = new Dictionary<ulong, int>((int)Count) };
             int zeroed = 0;
             for (int i = 0; i < Count; i++)
             {
                 ulong h = BitConverter.ToUInt64(Table, i * EntrySize);
                 if (h == 0) { zeroed++; continue; }
+                int first;
+                if (!lookup.First.TryGetValue(h, out first)) { lookup.First.Add(h, i); continue; }
+                if (lookup.More == null) lookup.More = new Dictionary<ulong, List<int>>();
                 List<int> list;
-                if (!map.TryGetValue(h, out list)) map[h] = list = new List<int>(1);
+                if (!lookup.More.TryGetValue(h, out list)) lookup.More[h] = list = new List<int> { first };
                 list.Add(i);
             }
-            ZeroedCount = zeroed; byHash = map;
+            ZeroedCount = zeroed; byHash = lookup;
         }
 
+        // The rows holding this hash in table order (a new list each call).
         internal List<int> Find(ulong hash)
         {
             EnsureLookup();
-            List<int> list;
-            return byHash.TryGetValue(hash, out list) ? list : new List<int>();
+            Lookup lookup = byHash; int first; List<int> list;
+            if (!lookup.First.TryGetValue(hash, out first)) return new List<int>();
+            return lookup.More != null && lookup.More.TryGetValue(hash, out list) ? new List<int>(list) : new List<int> { first };
         }
-        internal bool Contains(ulong hash) { EnsureLookup(); return byHash.ContainsKey(hash); }
+        internal bool Contains(ulong hash) { EnsureLookup(); return byHash.First.ContainsKey(hash); }
+        // 1.0.16: rows turned off (hash zeroed, data kept) that can have held this hash: the table is sorted by hash
+        // and a turned-off row keeps its place, so only those between the two rows around the hash can. Empty when
+        // the hash is present or the table is not sorted (as the loader's PakReader.turned_off_candidates).
+        internal List<int> TurnedOffCandidates(ulong hash)
+        {
+            var result = new List<int>();
+            if (hash == 0 || Contains(hash)) return result;
+            ulong last = 0; var open = new List<int>();
+            for (int i = 0; i < Count; i++)
+            {
+                ulong h = BitConverter.ToUInt64(Table, i * EntrySize);
+                if (h == 0) { open.Add(i); continue; }
+                if (h < last) return new List<int>();
+                if (h > hash) { if (last < hash) result.AddRange(open); return result; }
+                last = h; open.Clear();
+            }
+            result.AddRange(open);
+            return result;
+        }
         internal int CountZeroed() { EnsureLookup(); return ZeroedCount; }
 
         internal PakEntry Entry(int i)
@@ -159,13 +186,22 @@ namespace SlotsInstaller
             }
         }
         // The table identity ignoring the hash fields, which Fluffy-style invalidation zeroes.
+        // 1.0.16 (speed): hashed 4,096 rows per call instead of one 48-byte call per row (14 ms → ~7 ms on the base
+        // PAK; it runs several times per change and refresh); the same bytes in the same order, so the same digest.
         internal string LayoutSha256()
         {
             using (var sha = FastHash.Sha256())
             {
                 sha.TransformBlock(Header, 0, Header.Length, null, 0);
-                var row = new byte[EntrySize];
-                for (int i = 0; i < Count; i++) { Buffer.BlockCopy(Table, i * EntrySize, row, 0, EntrySize); for (int k = 0; k < 8; k++) row[k] = 0; sha.TransformBlock(row, 0, EntrySize, null, 0); }
+                const int rowsPerBlock = 4096;
+                var block = new byte[rowsPerBlock * EntrySize];
+                for (long start = 0; start < Count; start += rowsPerBlock)
+                {
+                    int rows = (int)Math.Min(rowsPerBlock, Count - start);
+                    Buffer.BlockCopy(Table, (int)(start * EntrySize), block, 0, rows * EntrySize);
+                    for (int o = 0; o < rows * EntrySize; o += EntrySize) { block[o] = 0; block[o + 1] = 0; block[o + 2] = 0; block[o + 3] = 0; block[o + 4] = 0; block[o + 5] = 0; block[o + 6] = 0; block[o + 7] = 0; }
+                    sha.TransformBlock(block, 0, rows * EntrySize, null, 0);
+                }
                 sha.TransformFinalBlock(new byte[0], 0, 0);
                 return BitConverter.ToString(sha.Hash).Replace("-", "");
             }

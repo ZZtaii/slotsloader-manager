@@ -25,6 +25,8 @@ namespace SlotsInstaller
                 {
                     int at = after.Mods.IndexOf(added);
                     ReplaceMod old = before.Mods.FirstOrDefault(m => !now.ContainsKey(m.Id) && before.Mods.IndexOf(m) == at && ReplacePlanner.SameSource(m.SourcePath, added.SourcePath));
+                    // 1.0.16 (PR #22 review): an addon record switched in place and moved above its main record (Install aboveId)
+                    if (old == null && historySwitched != null) old = before.Mods.FirstOrDefault(m => m.Id == historySwitched && !now.ContainsKey(m.Id) && ReplacePlanner.SameSource(m.SourcePath, added.SourcePath));
                     HistoryEvent e;
                     if (old != null)
                     {
