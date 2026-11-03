@@ -37,6 +37,16 @@ Read this before changing layout, navigation, option selection, previews, or scr
 
 These cover the custom screens. **Edit options** loads a managed outfit back into the existing Options view; it is not another editor window. Archive/executable pickers and folder browsers are standard Windows dialogs. Since 2.4.1 there are no confirmations for recoverable actions (they act at once with Undo) and errors are inline; the few remaining questions (permanent deletes, another tool's changes) use the themed message box (2.0.3; standard MessageBoxes before). A successful install uses a green checked status line rather than a popup. Taking screenshots does not require installing, disabling, removing, or replacing an outfit.
 
+## Unreleased: REFramework & code filter, 2026-11-03
+
+Source: [LibraryCode.cs](../src/LibraryCode.cs) (the kinds), [FilterPanel.cs](../src/FilterPanel.cs) (tile and chips), `MainForm.ApplyFilters`. Check: `--filter-check` ("REFramework & code …").
+
+- **Tile.** The first kind tile reads **REFramework & code** (was Tool mods; id `tools`, so saved views keep it), on two lines ("REFramework" / "& code") in a taller name band: the 9 pt font, else 8 pt, else the largest smaller size (not under 6.5 pt) that fits the card. Caption "REFRAMEWORK & CODE, MISC, INSTALLED".
+- **Chips** (while the tile is selected, under it and above the Misc chips): **Scripts**, **Plugins**, **REFramework**, **Code injectors** with counts, OR-ed, none = all. `view-settings.json` `CodeKinds` (missing = none).
+- **What counts.** Scripts `reframework/autorun/**.lua`; Plugins `reframework/plugins/**.dll`; REFramework: REFramework itself (`dinput8.dll` at the archive root or under one folder, with `reframework_revision.txt`, a `reframework/` folder or "REFramework" in the name) and other `reframework/` files of a mod without natives; Code injectors: `dinput8.dll` (not REFramework), `dxgi.dll`, `d3d12.dll`, `version.dll`, `winmm.dll`, `amd_ags_x64.dll`, `.asi` files and ReShade at that level. Another game's mod (SKSE/F4SE/SFSE/OBSE/NVSE folders, ENB, `.esp .esm .esl .bsa .ba2 .pex`, Mod Engine, `regulation.bin`) has none unless it also has `reframework/` files. Other DLL mods still install as tool mods; they only leave this filter.
+- **Index.** Stored as `CodeKinds` in index v4 records. Older records keep their identity: those with tool kinds are read again once in the background ("· READING n%"), the rest get none without a read. Until then scripts, plugins and REFramework files without natives count; a plain DLL doesn't.
+- Search: `injector`, `injectors`, `code injector(s)` list the Code injectors kind.
+
 ## Unreleased: migrate installed mods, 2026-11-01
 
 Source: [MigrationForm.cs](../src/MigrationForm.cs) (the window), [ModMigration.cs](../src/ModMigration.cs) (the plan). Checks: `--replace-check` ("migration: …"), `--replace-ui-check` ("Migration wizard previews, pauses, resumes and completes a fixture handoff").

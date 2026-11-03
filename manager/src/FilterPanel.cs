@@ -10,16 +10,23 @@ namespace SlotsInstaller
 {
     // 2.3.0 library Filters panel: shown to the right of the library list, in place of the options column
     // (the inspector and footer stay). One screen, top to bottom: the "FIGHTERS" line (summary, Clear), the
-    // fighter grid, and three tiles in the same style: Code tools and Misc (kinds; Misc shows its kind chips when
-    // selected) and Installed (a narrowing toggle). The panel scrolls only when the window is too short for it.
+    // fighter grid, and three tiles in the same style: REFramework & code and Misc (kinds; each shows its kind chips
+    // when selected) and Installed (a narrowing toggle). The panel scrolls only when the window is too short for it.
     internal sealed class FilterPanel : Panel
     {
+        // 1.0.16: the "tools" tile is "REFramework & code" (LibraryCode; was "Tool mods"); its id stays, so saved views keep it.
         internal const string ToolsKind = "tools", MiscKind = "misc", InstalledKind = "installed", LibraryPrefix = "lib:";
+        internal const string CodeTile = "REFramework & code";
+        internal static readonly string[] CodeTileLines = { "REFramework", "& code" };   // too wide for one line on a tile
+        private static List<KeyValuePair<string, string>> KindTiles() { return new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>(ToolsKind, CodeTile), new KeyValuePair<string, string>(MiscKind, "Misc"), new KeyValuePair<string, string>(InstalledKind, "Installed") }; }
+        private void SetTiles(List<KeyValuePair<string, string>> tiles) { Kinds.SetFighters(tiles); foreach (FighterCard c in Kinds.Cards) if (c.Code == ToolsKind) c.Lines = CodeTileLines; }
         // Hover text of the tiles (library tiles: the full path).
         internal event EventHandler FiltersChanged;
         internal readonly FighterGrid Grid = new FighterGrid { ClickReplaces = true };   // one fighter at a time; Ctrl+click adds
         internal readonly FighterGrid Kinds = new FighterGrid { KeepOrder = true };
-        internal readonly FlowLayoutPanel MiscChips;
+        // 1.0.16: CodeChips (Scripts, Plugins, REFramework, Code injectors; Tag = the LibraryCode kind) show under the
+        // tiles while REFramework & code is selected, like the Misc chips; MainForm.RefreshFacetRows fills both.
+        internal readonly FlowLayoutPanel MiscChips, CodeChips;
         internal readonly Label Title, KindsTitle;
         // 1.0.8: MY FILTERS, the user's keyword filters (LibraryFilters.cs): one chip each, "+ New filter", and the
         // inline editor below them (MainFormCustomFilters.cs fills and drives them).
@@ -27,6 +34,9 @@ namespace SlotsInstaller
         internal readonly Label CustomTitle;
         internal readonly CustomFilterEditor Editor;
         private readonly Panel body, header, kindsHeader;
+        // 1.0.16: a chip row whose window is made when it first shows can land elsewhere in the native z-order, and
+        // WinForms then moves it in Controls (the dock order): the code chips docked under the Misc chips. Arrange keeps it.
+        private readonly Control[] dockOrder;
         private bool arranging;
 
         internal FilterPanel()
@@ -40,16 +50,17 @@ namespace SlotsInstaller
             Grid.Dock = DockStyle.Top; Grid.AutoScroll = false; Grid.AccessibleName = "Fighters";
             Grid.SelectionChanged += delegate { Raise(); };
             kindsHeader = new Panel { Dock = DockStyle.Top, Height = 22, BackColor = Palette.Surface };
-            KindsTitle = new Label { UseMnemonic = false, Text = "TOOL MODS, MISC, INSTALLED", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.BottomLeft };
+            KindsTitle = new Label { UseMnemonic = false, Text = KindsCaption(false), Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.BottomLeft };
             kindsHeader.Controls.Add(KindsTitle);
-            Kinds.Dock = DockStyle.Top; Kinds.AutoScroll = false; Kinds.AccessibleName = "Tool mods, misc and installed mods";
-            Kinds.SetFighters(new[] { new KeyValuePair<string, string>(ToolsKind, "Tool mods"), new KeyValuePair<string, string>(MiscKind, "Misc"), new KeyValuePair<string, string>(InstalledKind, "Installed") });
+            Kinds.Dock = DockStyle.Top; Kinds.AutoScroll = false; Kinds.AccessibleName = KindsAccessibleName(false);
+            SetTiles(KindTiles());
             Kinds.AccessibleNames[InstalledKind] = "Installed mods only"; Kinds.GroupBreak = 3;
             Kinds.SetPortrait(ToolsKind, KindArt.Placeholder(ToolsKind), "placeholder");
             Kinds.SetPortrait(MiscKind, KindArt.Placeholder(MiscKind), "placeholder");
             Kinds.SetPortrait(InstalledKind, KindArt.Placeholder(InstalledKind), "placeholder");
-            Kinds.SelectionChanged += delegate { MiscChips.Visible = Kinds.Selected.Contains(MiscKind); Arrange(); Raise(); };
+            Kinds.SelectionChanged += delegate { MiscChips.Visible = MiscOn; CodeChips.Visible = ToolsOn; Arrange(); Raise(); };
             MiscChips = new FlowLayoutPanel { Dock = DockStyle.Top, WrapContents = true, Visible = false, BackColor = Palette.Surface, Padding = new Padding(4, 2, 0, 4), Margin = Padding.Empty, AccessibleName = "Misc kinds" };
+            CodeChips = new FlowLayoutPanel { Dock = DockStyle.Top, WrapContents = true, Visible = false, BackColor = Palette.Surface, Padding = new Padding(4, 2, 0, 4), Margin = Padding.Empty, AccessibleName = "REFramework and code kinds" };
             // The MY FILTERS caption starts the chip row (a line of its own made the panel scroll at 1460x920 with the
             // Misc chips showing); MainFormCustomFilters.FillCustomChips keeps it first and sizes it like a chip.
             CustomTitle = new Label { UseMnemonic = false, Text = "MY FILTERS", AutoSize = false, Font = new Font("Segoe UI", 8F, FontStyle.Bold), ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
@@ -59,7 +70,8 @@ namespace SlotsInstaller
             Editor.HeightChanged += delegate { Arrange(); };
             // Dock order: the last control added is docked first (top).
             body.Controls.Add(Editor); body.Controls.Add(CustomChips);
-            body.Controls.Add(MiscChips); body.Controls.Add(Kinds); body.Controls.Add(kindsHeader); body.Controls.Add(Grid); body.Controls.Add(header);
+            body.Controls.Add(MiscChips); body.Controls.Add(CodeChips); body.Controls.Add(Kinds); body.Controls.Add(kindsHeader); body.Controls.Add(Grid); body.Controls.Add(header);
+            dockOrder = body.Controls.Cast<Control>().ToArray();
             Controls.Add(body);
         }
 
@@ -74,12 +86,14 @@ namespace SlotsInstaller
             arranging = true;
             try
             {
+                if (dockOrder != null) for (int i = 0; i < dockOrder.Length; i++) if (body.Controls.GetChildIndex(dockOrder[i], false) != i) body.Controls.SetChildIndex(dockOrder[i], i);
                 int width = Math.Max(1, ClientSize.Width - Padding.Horizontal);
                 int gridHeight = Grid.HeightFor(width), kindsHeight = Kinds.HeightFor(width);
                 if (Grid.Height != gridHeight) Grid.Height = gridHeight;
                 if (Kinds.Height != kindsHeight) Kinds.Height = kindsHeight;
                 int chips = 0;
                 if (MiscChips.Visible) { chips = MiscChips.GetPreferredSize(new Size(width, 0)).Height; if (MiscChips.Height != chips) MiscChips.Height = chips; }
+                if (CodeChips.Visible) { int code = CodeChips.GetPreferredSize(new Size(width, 0)).Height; if (CodeChips.Height != code) CodeChips.Height = code; chips += code; }
                 int custom = CustomChips.GetPreferredSize(new Size(width, 0)).Height; if (CustomChips.Height != custom) CustomChips.Height = custom;
                 int editor = 0;
                 if (Editor.Visible) { editor = Editor.HeightFor(width); if (Editor.Height != editor) Editor.Height = editor; }
@@ -108,7 +122,7 @@ namespace SlotsInstaller
         internal void SetLibraries(IList<string> paths)
         {
             var keys = (paths ?? new List<string>()).Where(p => !String.IsNullOrWhiteSpace(p)).Select(LibraryKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            var tiles = new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>(ToolsKind, "Tool mods"), new KeyValuePair<string, string>(MiscKind, "Misc"), new KeyValuePair<string, string>(InstalledKind, "Installed") };
+            var tiles = KindTiles();
             foreach (string code in Kinds.AccessibleNames.Keys.Where(k => k.StartsWith(LibraryPrefix, StringComparison.Ordinal)).ToList()) Kinds.AccessibleNames.Remove(code);
             if (keys.Count > 1)
             {
@@ -134,13 +148,15 @@ namespace SlotsInstaller
                 }
             }
             bool selectionLost = Kinds.Selected.Any(c => c.StartsWith(LibraryPrefix, StringComparison.Ordinal) && !tiles.Any(t => t.Key == c));
-            Kinds.SetFighters(tiles);
+            SetTiles(tiles);
             foreach (FighterCard card in Kinds.Cards.Where(c => c.Portrait == null && c.Code.StartsWith(LibraryPrefix, StringComparison.Ordinal)).ToList()) Kinds.SetPortrait(card.Code, KindArt.Placeholder("library"), "placeholder");
-            KindsTitle.Text = keys.Count > 1 ? "TOOL MODS, MISC, INSTALLED, LIBRARIES" : "TOOL MODS, MISC, INSTALLED";
-            Kinds.AccessibleName = keys.Count > 1 ? "Tool mods, misc, installed mods and libraries" : "Tool mods, misc and installed mods";
+            KindsTitle.Text = KindsCaption(keys.Count > 1);
+            Kinds.AccessibleName = KindsAccessibleName(keys.Count > 1);
             Arrange();
             if (selectionLost) Raise();
         }
+        private static string KindsCaption(bool libraries) { return "REFRAMEWORK & CODE, MISC, INSTALLED" + (libraries ? ", LIBRARIES" : ""); }
+        private static string KindsAccessibleName(bool libraries) { return libraries ? "REFramework and code, misc, installed mods and libraries" : "REFramework and code, misc and installed mods"; }
         internal void SetInstalled(bool on)
         {
             var selected = Kinds.Selected;
@@ -149,16 +165,18 @@ namespace SlotsInstaller
         }
         // Selected Misc chips (their Tag is the kind label); empty = every Misc kind.
         internal HashSet<string> MiscSelected { get { return new HashSet<string>(MiscChips.Controls.OfType<FlatButton>().Where(b => b.Active).Select(b => (string)b.Tag), StringComparer.Ordinal); } }
+        // 1.0.16: selected REFramework & code chips (Tag = LibraryCode kind); empty = every kind.
+        internal HashSet<string> CodeSelected { get { return new HashSet<string>(CodeChips.Controls.OfType<FlatButton>().Where(b => b.Active).Select(b => (string)b.Tag), StringComparer.Ordinal); } }
 
         internal void ClearSelections()
         {
             Grid.SetSelected(new string[0], false); Kinds.SetSelected(new string[0], false);
-            foreach (FlatButton chip in MiscChips.Controls.OfType<FlatButton>()) chip.SetActive(false);
-            MiscChips.Visible = false; Arrange();
+            foreach (FlatButton chip in MiscChips.Controls.OfType<FlatButton>().Concat(CodeChips.Controls.OfType<FlatButton>())) chip.SetActive(false);
+            MiscChips.Visible = false; CodeChips.Visible = false; Arrange();
         }
         internal void SetKinds(IEnumerable<string> kinds)
         {
-            Kinds.SetSelected(kinds, false); MiscChips.Visible = MiscOn; Arrange();
+            Kinds.SetSelected(kinds, false); MiscChips.Visible = MiscOn; CodeChips.Visible = ToolsOn; Arrange();
         }
         // 1.0.8: scrolls the panel so the open filter editor is in view (its bottom first, then its top).
         internal void ShowEditor()
@@ -418,6 +436,7 @@ namespace SlotsInstaller
     internal sealed class FighterCard
     {
         internal string Code, Name;
+        internal string[] Lines;   // 1.0.16: the name on two lines when it is too wide for one (FighterGrid.NameLines); null = none
         internal int Count;
         internal bool Selected;
         internal Bitmap Portrait;   // owned by the grid
@@ -563,6 +582,41 @@ namespace SlotsInstaller
             return TextRenderer.MeasureText(name, Palette.Small, Size.Empty, flags).Width <= NameWidth() ? Palette.Small : Palette.Tiny;
         }
         internal bool NameFits(string name) { return TextRenderer.MeasureText(name, NameFont(name), Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width <= NameWidth(); }
+        // 1.0.16: a card with Lines ("REFramework" / "& code") uses them when its name doesn't fit on one line; the lines
+        // share the normal small font, the tiny one, or the largest smaller one (not under 6.5 pt) that fits them all.
+        internal string[] NameLines(FighterCard card) { return card.Lines != null && card.Lines.Length > 1 && !NameFits(card.Name) ? card.Lines : new[] { card.Name }; }
+        private static readonly Dictionary<float, Font> fittedFonts = new Dictionary<float, Font>();
+        internal Font LinesFont(string[] lines)
+        {
+            if (lines.Length < 2) return NameFont(lines[0]);
+            const TextFormatFlags flags = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+            int width = NameWidth();
+            if (lines.All(l => TextRenderer.MeasureText(l, Palette.Small, Size.Empty, flags).Width <= width)) return Palette.Small;
+            int widest = lines.Max(l => TextRenderer.MeasureText(l, Palette.Tiny, Size.Empty, flags).Width);
+            if (widest <= width) return Palette.Tiny;
+            float size = Math.Max(6.5F, (float)Math.Floor(Palette.Tiny.SizeInPoints * width / widest * 2) / 2);
+            Font font;
+            lock (fittedFonts) if (!fittedFonts.TryGetValue(size, out font)) fittedFonts[size] = font = new Font("Segoe UI", size);
+            // Rounded font metrics can still be a pixel wider than the estimate: step down until every line fits.
+            while (size > 6.5F && lines.Any(l => TextRenderer.MeasureText(l, font, Size.Empty, flags).Width > width))
+            {
+                size -= 0.5F;
+                lock (fittedFonts) if (!fittedFonts.TryGetValue(size, out font)) fittedFonts[size] = font = new Font("Segoe UI", size);
+            }
+            return font;
+        }
+        internal bool CardNameFits(FighterCard card)
+        {
+            string[] lines = NameLines(card); Font font = LinesFont(lines);
+            return lines.All(l => TextRenderer.MeasureText(l, font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width <= NameWidth());
+        }
+        // The name band's height: one line as before, two lines plus a little room.
+        internal int BandHeight(string[] lines)
+        {
+            if (lines.Length < 2) return Px(22);
+            int line = TextRenderer.MeasureText("Ag", LinesFont(lines), Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Height;
+            return Math.Max(Px(22), lines.Length * line + Px(4));
+        }
         // The slanted card: top edge shifted right by the slant.
         internal GraphicsPath CardPath(Rectangle box)
         {
@@ -660,12 +714,19 @@ namespace SlotsInstaller
                         TextRenderer.DrawText(g, card.Name, font, new Rectangle(box.Left + slant / 2 + Px(2), box.Top + Px(18), box.Width - slant - Px(4), box.Height - Px(22)), dim ? Palette.Muted : card.Selected ? Palette.Accent : Palette.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
                 }
                 if (dim) using (Brush veil = new SolidBrush(Color.FromArgb(150, Palette.Background))) g.FillRectangle(veil, box);
-                // Name band at the bottom.
-                int band = Px(22);
+                // Name band at the bottom (1.0.16: two lines for a card with Lines that don't fit on one).
+                string[] lines = image != null ? NameLines(card) : new[] { card.Name };
+                int band = BandHeight(lines);
                 Rectangle bandRect = new Rectangle(box.Left, box.Bottom - band - Px(6), box.Width, band + Px(6));
                 using (Brush shade = VerticalGradient(bandRect, Color.FromArgb(0, 0, 0, 0), Color.FromArgb(215, 8, 9, 12))) g.FillRectangle(shade, bandRect);
                 Color nameColor = dim ? Palette.Muted : card.Selected ? Palette.Accent : Palette.Text;
-                if (image != null) TextRenderer.DrawText(g, card.Name, NameFont(card.Name), new Rectangle(box.Left + Px(3), box.Bottom - band, NameWidth(), band), nameColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                const TextFormatFlags nameFlags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+                if (image != null && lines.Length == 1) TextRenderer.DrawText(g, card.Name, NameFont(card.Name), new Rectangle(box.Left + Px(3), box.Bottom - band, NameWidth(), band), nameColor, nameFlags);
+                else if (image != null)
+                {
+                    Font font = LinesFont(lines); int line = (band - Px(4)) / lines.Length;
+                    for (int i = 0; i < lines.Length; i++) TextRenderer.DrawText(g, lines[i], font, new Rectangle(box.Left + Px(3), box.Bottom - band + Px(1) + i * line, NameWidth(), line), nameColor, nameFlags);
+                }
                 // Mod count, top right.
                 string count = card.Count.ToString();
                 Size textSize = TextRenderer.MeasureText(g, count, Palette.Tiny, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);

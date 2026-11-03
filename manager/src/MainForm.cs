@@ -30,6 +30,8 @@ namespace SlotsInstaller
         public bool FiltersOpen;
         public string FilterTab = "";
         public List<string> Fighters = new List<string>(), Kinds = new List<string>(), MiscAreas = new List<string>(), Stages = new List<string>(), SelectedLibraries = new List<string>();
+        // 1.0.16: the REFramework & code chips (LibraryCode kinds; "tools" in Kinds is that tile); missing in older files = none.
+        public List<string> CodeKinds = new List<string>();
         // 2.4.1 sort chips: "added" | "last_used" | "installed" and "desc" | "asc". Missing or unknown (older files) = Installed ↓.
         public string LibrarySort = "", LibrarySortOrder = "", InstalledSort = "", InstalledSortOrder = "";   // 2.5.5: Installed sort
         // 1.0.6: library rows show "name" (modinfo.ini) or "file" names (missing = file); Deep search on/off.
@@ -376,6 +378,7 @@ namespace SlotsInstaller
                 FiltersOpen=filterPanel.Visible,
                 Fighters=filterPanel.Grid.Selected.OrderBy(c=>c,StringComparer.Ordinal).ToList(),
                 Kinds=new[]{FilterPanel.ToolsKind,FilterPanel.MiscKind}.Where(k=>filterPanel.Kinds.Selected.Contains(k)).ToList(),SelectedLibraries=filterPanel.LibrariesSelected.OrderBy(k=>k,StringComparer.OrdinalIgnoreCase).ToList(),MiscAreas=MiscKindsSelectedOrPending().ToList(),
+                CodeKinds=LibraryCode.Order.Where(CodeKindsSelectedOrPending().Contains).ToList(),
                 LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,
                 FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide),
                 WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen,
@@ -1637,9 +1640,11 @@ namespace SlotsInstaller
             // 2.3.0: fighters are OR-ed, the kind tiles (Code tools, Misc with its kinds) OR-ed, the library tiles OR-ed;
             // fighters, kinds, Installed and libraries are AND-ed with each other and with search. Each card or tile
             // counts what selecting it would add to the rest of the selection.
-            HashSet<string> fighters = filterPanel.Grid.Selected, miscKinds = filterPanel.MiscSelected, libraries = filterPanel.LibrariesSelected;
+            // 1.0.16: the "tools" tile is REFramework & code (LibraryCode kinds, narrowed by its chips like Misc), no longer
+            // every tool mod (IsToolMod, which still decides how a mod installs).
+            HashSet<string> fighters = filterPanel.Grid.Selected, miscKinds = filterPanel.MiscSelected, codeKinds = filterPanel.CodeSelected, libraries = filterPanel.LibrariesSelected;
             bool toolsOn = filterPanel.ToolsOn, miscOn = filterPanel.MiscOn, kindsOn = toolsOn || miscOn, installedOn = filterPanel.InstalledOn;
-            var fighterCounts = new Dictionary<string, int>(StringComparer.Ordinal); var miscCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var fighterCounts = new Dictionary<string, int>(StringComparer.Ordinal); var miscCounts = new Dictionary<string, int>(StringComparer.Ordinal); var codeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             var libraryCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             int toolCount = 0, miscCount = 0, installedCount = 0;
             Action<Dictionary<string, int>, string> count = delegate(Dictionary<string, int> map, string key) { int n; map.TryGetValue(key, out n); map[key] = n + 1; };
@@ -1673,10 +1678,10 @@ namespace SlotsInstaller
                 if (rank < 0) continue;
                 if (!MatchesModType(e, query.Type) || !MatchesFormat(e, query.Format)) continue;
                 HashSet<string> codes = FighterCodes(e);
-                bool isTool = ModCategories.IsTool(e), isMisc = ModCategories.IsMisc(e), isInstalled = CachedInstallState(e) != LibraryInstallState.None;
+                bool isTool = LibraryCode.Any(e), isMisc = ModCategories.IsMisc(e), isInstalled = CachedInstallState(e) != LibraryInstallState.None;
                 string from = String.IsNullOrEmpty(e.SourcePath) ? "" : FilterPanel.LibraryKey(e.LibraryFolder ?? "");
                 bool fighterOk = fighters.Count == 0 || codes.Overlaps(fighters);
-                bool kindOk = !kindsOn || (toolsOn && isTool) || (miscOn && isMisc && (miscKinds.Count == 0 || e.MiscAreas.Any(miscKinds.Contains)));
+                bool kindOk = !kindsOn || (toolsOn && isTool && (codeKinds.Count == 0 || LibraryCode.AnyOf(e, codeKinds))) || (miscOn && isMisc && (miscKinds.Count == 0 || e.MiscAreas.Any(miscKinds.Contains)));
                 bool installedOk = !installedOn || isInstalled, libraryOk = libraries.Count == 0 || libraries.Contains(from);
                 bool onlyOk = !anyOnly, draftOk = draft == null || CustomMatch(e, draftKey); int hides = 0;
                 for (int i = 0; i < customCount; i++)
@@ -1689,14 +1694,14 @@ namespace SlotsInstaller
                 if (fighterOk && kindOk && installedOk && libraryOk && draftOk)
                     for (int i = 0; i < customCount; i++) if (customHit[i] && hides - (customState[i] == CustomFilterState.Hide ? 1 : 0) == 0) customTotals[i]++;
                 if (kindOk && installedOk && libraryOk && customOk) foreach (string code in codes) count(fighterCounts, code);
-                if (fighterOk && installedOk && libraryOk && customOk) { if (isTool) toolCount++; if (isMisc) { miscCount++; foreach (string label in e.MiscAreas) count(miscCounts, label); } }
+                if (fighterOk && installedOk && libraryOk && customOk) { if (isTool) { toolCount++; foreach (string kind in LibraryCode.Order) if (LibraryCode.Has(e, kind)) count(codeCounts, kind); } if (isMisc) { miscCount++; foreach (string label in e.MiscAreas) count(miscCounts, label); } }
                 if (fighterOk && kindOk && libraryOk && customOk && isInstalled) installedCount++;
                 if (fighterOk && kindOk && installedOk && customOk) count(libraryCounts, from);
                 if (!fighterOk || !kindOk || !installedOk || !libraryOk || !customOk) continue;
                 ranked.Add(new KeyValuePair<LibraryEntry, int>(e, rank));
                 if (query.HasCostume) libraryRanks[e] = rank;
             }
-            UpdateFacetCounts(fighterCounts, miscCounts, toolCount, miscCount, installedCount, libraryCounts);
+            UpdateFacetCounts(fighterCounts, miscCounts, codeCounts, toolCount, miscCount, installedCount, libraryCounts);
             if (countCustom) { customCounts.Clear(); for (int i = 0; i < customCount; i++) customCounts[custom[i].Id] = customTotals[i]; }
             UpdateCustomChipLooks();
             UpdateFilterButton();
@@ -1851,8 +1856,8 @@ namespace SlotsInstaller
 
         private void ClearLibraryFilters()
         {
-            // Fighters, Tool mods/Misc, the Misc chips, Installed and libraries; the search text stays (it is not a filter).
-            filterPanel.ClearSelections(); pendingMiscKinds.Clear();
+            // Fighters, REFramework & code/Misc and their chips, Installed and libraries; the search text stays (it is not a filter).
+            filterPanel.ClearSelections(); pendingMiscKinds.Clear(); pendingCodeKinds.Clear();
             customStates.Clear(); UpdateCustomChipLooks();   // 1.0.8: MY FILTERS chips too
             libraryToTop = true; ApplyFilters(); QueueViewSave();
         }
@@ -1886,6 +1891,11 @@ namespace SlotsInstaller
             pendingMiscKinds.Clear(); pendingMiscKinds.UnionWith(miscKinds);
             foreach (FlatButton chip in filterPanel.MiscChips.Controls.OfType<FlatButton>()) chip.SetActive(pendingMiscKinds.Contains((string)chip.Tag));
             pendingMiscKinds.RemoveWhere(k => filterPanel.MiscChips.Controls.OfType<FlatButton>().Any(b => (string)b.Tag == k));
+            // 1.0.16: the REFramework & code chips (an older file has none: every kind); unknown kinds are dropped.
+            pendingCodeKinds.Clear();
+            pendingCodeKinds.UnionWith((saved.CodeKinds ?? new List<string>()).Where(k => LibraryCode.Order.Contains(k)));
+            foreach (FlatButton chip in filterPanel.CodeChips.Controls.OfType<FlatButton>()) chip.SetActive(pendingCodeKinds.Contains((string)chip.Tag));
+            if (filterPanel.CodeChips.Controls.Count > 0) pendingCodeKinds.Clear();
             RestoreCustomStates(saved);   // 1.0.8
         }
 
@@ -1909,6 +1919,9 @@ namespace SlotsInstaller
         // Misc kind chips from the whole library (counts come from ApplyFilters); pending kinds from view settings apply once listed.
         private readonly HashSet<string> pendingMiscKinds = new HashSet<string>(StringComparer.Ordinal);
         private IEnumerable<string> MiscKindsSelectedOrPending() { return filterPanel.MiscSelected.Concat(pendingMiscKinds).Distinct(); }
+        // 1.0.16: REFramework & code chips restored before the chips exist (the first RefreshFacetRows makes them).
+        private readonly HashSet<string> pendingCodeKinds = new HashSet<string>(StringComparer.Ordinal);
+        private IEnumerable<string> CodeKindsSelectedOrPending() { return filterPanel.CodeSelected.Concat(pendingCodeKinds).Distinct(); }
         private void RefreshFacetRows()
         {
             quietFilters++; try { RefreshFacetRowsQuiet(); } finally { quietFilters--; }
@@ -1924,32 +1937,45 @@ namespace SlotsInstaller
             try
             {
                 foreach (Control old in chips.Controls.Cast<Control>().ToList()) { chips.Controls.Remove(old); old.Dispose(); }
-                foreach (string kind in kinds)
-                {
-                    string key = kind;
-                    FlatButton chip = new FlatButton(kind, false) { Tag = key, Height = 26, AutoSize = false, Font = Palette.Small, Margin = new Padding(0, 0, 6, 6), Padding = new Padding(6, 0, 6, 0), AccessibleName = "Misc kind " + kind };
-                    chip.Width = TextRenderer.MeasureText(kind + " 999", chip.Font).Width + DpiMetrics.Px(filterPanel, 18);
-                    chip.Height = DpiMetrics.Px(filterPanel, 26);
-                    chip.SetActive(selected.Contains(key));
-                    chip.Click += delegate { chip.SetActive(!chip.Active); pendingMiscKinds.Clear(); filterPanel.RaiseChanged(); };
-                    // Arrow keys move between the chips (WinForms); W/A/S/D do the same (2.3.1).
-                    chip.KeyDown += delegate(object sender, KeyEventArgs e)
-                    {
-                        Keys arrow = FighterGrid.WasdArrow(e);
-                        if (arrow == e.KeyCode) return;
-                        chips.SelectNextControl(chip, arrow == Keys.Right || arrow == Keys.Down, true, false, true);
-                        e.Handled = e.SuppressKeyPress = true;
-                    };
-                    chips.Controls.Add(chip);
-                }
+                foreach (string kind in kinds) chips.Controls.Add(FacetChip(chips, kind, kind, "Misc kind " + kind, selected.Contains(kind), pendingMiscKinds));
             }
             finally { chips.ResumeLayout(); }
             pendingMiscKinds.RemoveWhere(k => kinds.Contains(k));
+            // 1.0.16: the REFramework & code chips, always all four (counts follow in UpdateFacetCounts).
+            var code = new HashSet<string>(CodeKindsSelectedOrPending(), StringComparer.Ordinal);
+            FlowLayoutPanel codeChips = filterPanel.CodeChips;
+            codeChips.SuspendLayout();
+            try
+            {
+                foreach (Control old in codeChips.Controls.Cast<Control>().ToList()) { codeChips.Controls.Remove(old); old.Dispose(); }
+                for (int i = 0; i < LibraryCode.Order.Length; i++) codeChips.Controls.Add(FacetChip(codeChips, LibraryCode.Order[i], LibraryCode.Labels[i], "Code kind " + LibraryCode.Labels[i], code.Contains(LibraryCode.Order[i]), pendingCodeKinds));
+            }
+            finally { codeChips.ResumeLayout(); }
+            pendingCodeKinds.Clear();
             FillCustomChips();   // 1.0.8: MY FILTERS, at the same time and size rules as the Misc chips
             filterPanel.Arrange();
         }
 
-        private void UpdateFacetCounts(Dictionary<string, int> fighters, Dictionary<string, int> misc, int tools, int miscTotal, int installedTotal, Dictionary<string, int> libraries)
+        // A Misc or REFramework & code chip (Tag = key; its text gets the count): sized for "label 999", toggles on click.
+        private FlatButton FacetChip(FlowLayoutPanel chips, string key, string label, string accessibleName, bool active, HashSet<string> pending)
+        {
+            FlatButton chip = new FlatButton(label, false) { Tag = key, Height = 26, AutoSize = false, Font = Palette.Small, Margin = new Padding(0, 0, 6, 6), Padding = new Padding(6, 0, 6, 0), AccessibleName = accessibleName };
+            chip.Width = TextRenderer.MeasureText(label + " 999", chip.Font).Width + DpiMetrics.Px(filterPanel, 18);
+            chip.Height = DpiMetrics.Px(filterPanel, 26);
+            chip.SetActive(active);
+            chip.Click += delegate { chip.SetActive(!chip.Active); pending.Clear(); filterPanel.RaiseChanged(); };
+            // Arrow keys move between the chips (WinForms); W/A/S/D do the same (2.3.1).
+            chip.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                Keys arrow = FighterGrid.WasdArrow(e);
+                if (arrow == e.KeyCode) return;
+                chips.SelectNextControl(chip, arrow == Keys.Right || arrow == Keys.Down, true, false, true);
+                e.Handled = e.SuppressKeyPress = true;
+            };
+            return chip;
+        }
+
+        private void UpdateFacetCounts(Dictionary<string, int> fighters, Dictionary<string, int> misc, Dictionary<string, int> code, int tools, int miscTotal, int installedTotal, Dictionary<string, int> libraries)
         {
             filterPanel.Grid.SetCounts(fighters);
             var tiles = new Dictionary<string, int> { { FilterPanel.ToolsKind, tools }, { FilterPanel.MiscKind, miscTotal }, { FilterPanel.InstalledKind, installedTotal } };
@@ -1964,8 +1990,15 @@ namespace SlotsInstaller
                 string text = (string)chip.Tag + " " + n;
                 if (chip.Text != text) chip.Text = text;
             }
+            foreach (FlatButton chip in filterPanel.CodeChips.Controls.OfType<FlatButton>())
+            {
+                int n; code.TryGetValue((string)chip.Tag, out n);
+                string text = LibraryCode.Label((string)chip.Tag) + " " + n;
+                if (chip.Text != text) chip.Text = text;
+            }
             int selected = filterPanel.Grid.Selected.Count;
-            string kinds = String.Join(" + ", new[] { filterPanel.ToolsOn ? "tool mods" : null, filterPanel.MiscOn ? (filterPanel.MiscSelected.Count > 0 ? String.Join(", ", filterPanel.MiscSelected) : "misc") : null }.Where(s => s != null));
+            HashSet<string> codeSelected = filterPanel.CodeSelected;
+            string kinds = String.Join(" + ", new[] { filterPanel.ToolsOn ? (codeSelected.Count > 0 ? String.Join(", ", LibraryCode.Order.Where(codeSelected.Contains).Select(LibraryCode.Label)) : "REFramework and code") : null, filterPanel.MiscOn ? (filterPanel.MiscSelected.Count > 0 ? String.Join(", ", filterPanel.MiscSelected) : "misc") : null }.Where(s => s != null));
             // 2.4.1: no summary line in the FIGHTERS row; screen readers get it as the grid's description.
             filterPanel.Grid.AccessibleDescription = (selected == 0 ? "All fighters" : ReplacePlanner.N(selected, "fighter") + " selected") + (kinds.Length > 0 ? " · only " + kinds : "");
         }

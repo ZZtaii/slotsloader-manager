@@ -100,6 +100,7 @@ namespace SlotsInstaller
             row.CharacterCodes = row.CharacterCodes.Union(source.CharacterCodes, StringComparer.OrdinalIgnoreCase).ToList();
             row.CostumeKeys = row.CostumeKeys.Union(source.CostumeKeys, StringComparer.OrdinalIgnoreCase).ToList();
             row.ToolKinds = row.ToolKinds.Union(source.ToolKinds, StringComparer.OrdinalIgnoreCase).ToList();
+            row.CodeKinds = source.CodeKinds == null ? null : source.CodeKinds.ToList();   // 1.0.16: the "injector" search word
             row.StageIds = source.StageIds.ToList(); row.MiscAreas = source.MiscAreas.ToList();
             if (String.IsNullOrEmpty(row.Character)) row.Character = source.Character;
             return row;

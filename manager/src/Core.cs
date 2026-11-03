@@ -134,6 +134,9 @@ namespace SlotsInstaller
         // Files outside natives (2.0.3): "script" (reframework/autorun/**.lua), "plugin" (reframework/plugins/**.dll),
         // "dll" (any other DLL) and "reframework" (other REFramework files), in that order. See LibrarySearch.IsToolMod.
         public List<string> ToolKinds = new List<string>();
+        // 1.0.16: the SF6 code kinds (LibraryCode.Classify: script, plugin, reframework, injector) for the Filters tile
+        // "REFramework & code"; null = not known yet (an older index record: read again in the background).
+        public List<string> CodeKinds;
         public bool? HasPakPayload; // null = older index: backfill without discarding known identity
         // 2.3.0 categories (ModCategories): stage numbers of the native files ("0000" = ess0000, Training Room;
         // "other" = stage folders without a code) and the Misc labels ("UI", "Sound", "VFX", ...).
@@ -176,6 +179,9 @@ namespace SlotsInstaller
         public string SourcePath, Stamp;
         public List<string> CharacterCodes = new List<string>();
         public List<string> CostumeKeys, ToolKinds, StageIds, MiscAreas;
+        // 1.0.16 (still index v4, additive): LibraryCode kinds. A record without them keeps its identity: one with tool
+        // kinds is read again once in the background (as HasPakPayload), one without any has none (no read).
+        public List<string> CodeKinds;
         public bool? HasPakPayload;
         public int? OptionCount;
         public List<string> OptionIds;
@@ -269,7 +275,7 @@ namespace SlotsInstaller
         private static LibraryIdentityRecord CopyIdentity(LibraryIdentityRecord record)
         {
             return new LibraryIdentityRecord { SourcePath = record.SourcePath, Stamp = record.Stamp, CharacterCodes = record.CharacterCodes.ToList(),
-                OptionCount = record.OptionCount, OptionIds = record.OptionIds.ToList(), CostumeKeys = record.CostumeKeys.ToList(), ToolKinds = record.ToolKinds.ToList(),
+                OptionCount = record.OptionCount, OptionIds = record.OptionIds.ToList(), CostumeKeys = record.CostumeKeys.ToList(), ToolKinds = record.ToolKinds.ToList(), CodeKinds = record.CodeKinds == null ? null : record.CodeKinds.ToList(),
                 HasPakPayload = record.HasPakPayload, StageIds = record.StageIds.ToList(), MiscAreas = record.MiscAreas.ToList(), Authors = record.Authors == null ? null : record.Authors.ToList(), AddedUtc = record.AddedUtc, CodesVersion = record.CodesVersion, DisplayName = record.DisplayName, OptionNames = record.OptionNames == null ? null : record.OptionNames.ToList() };
         }
         // Only archive content metadata is reusable. Capture it while the old source still exists; incomplete or
@@ -383,7 +389,7 @@ namespace SlotsInstaller
                 OperationContext.ThrowIfCancellationRequested();
                 if (entry.Detection == "Error") continue;
                 if (!ApplyCached(entry, tool)) { MarkPending(entry); pending.Add(entry); }
-                else if (!entry.HasPakPayload.HasValue) pending.Add(entry); // retain identity while backfilling the payload fact
+                else if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null) pending.Add(entry); // retain identity while backfilling the payload fact (1.0.16: or the code kinds)
                 else if (entry.NamesPending) namesPending.Add(entry);
             }
             SaveIdentityCache();   // Added times filled in from this listing
@@ -406,11 +412,19 @@ namespace SlotsInstaller
                 if (cached != null && added != null && cached.AddedUtc != added) { cached.AddedUtc = added; cacheDirty = true; }
                 if (cached == null) return false;
                 entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas); entry.HasPakPayload = cached.HasPakPayload;
+                entry.CodeKinds = CachedCodeKinds(cached);
                 if (NamesKnown(cached)) { entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); entry.NamesPending = false; }
                 else entry.NamesPending = true;
                 ApplyCodes(entry, new List<string>(cached.CharacterCodes));
             }
             return true;
+        }
+        // 1.0.16: a record's code kinds (a copy), null while unknown. A record from before them without tool kinds has no
+        // reframework/ file and no DLL, so no code kind: it gets an empty list without reading the archive (CacheLock held).
+        private static List<string> CachedCodeKinds(LibraryIdentityRecord cached)
+        {
+            if (cached.CodeKinds == null && cached.ToolKinds != null && cached.ToolKinds.Count == 0) { cached.CodeKinds = new List<string>(); cacheDirty = true; }
+            return cached.CodeKinds == null ? null : new List<string>(cached.CodeKinds);
         }
         // Until it is read: the file-name fighter (as for a mod without fighter files), no options or kinds yet.
         private static void MarkPending(LibraryEntry entry)
@@ -460,7 +474,7 @@ namespace SlotsInstaller
         internal static void TakeIdentity(LibraryEntry entry, LibraryEntry found)
         {
             entry.CharacterCodes = found.CharacterCodes; entry.Character = found.Character; entry.Detection = found.Detection; entry.DetectionError = found.DetectionError;
-            entry.OptionCount = found.OptionCount; entry.OptionIds = found.OptionIds; entry.CostumeKeys = found.CostumeKeys; entry.ToolKinds = found.ToolKinds; entry.StageIds = found.StageIds; entry.MiscAreas = found.MiscAreas; entry.HasPakPayload = found.HasPakPayload;
+            entry.OptionCount = found.OptionCount; entry.OptionIds = found.OptionIds; entry.CostumeKeys = found.CostumeKeys; entry.ToolKinds = found.ToolKinds; entry.StageIds = found.StageIds; entry.MiscAreas = found.MiscAreas; entry.HasPakPayload = found.HasPakPayload; entry.CodeKinds = found.CodeKinds;
             entry.Authors = found.Authors; entry.DisplayName = found.DisplayName; entry.OptionNames = found.OptionNames; entry.FilenameCharacter = found.FilenameCharacter;
             entry.Pending = false; entry.NamesPending = found.NamesPending;
         }
@@ -624,11 +638,20 @@ namespace SlotsInstaller
                 }
                 List<string> codes;
                 if (cached != null) { codes = new List<string>(cached.CharacterCodes); entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas); entry.HasPakPayload = cached.HasPakPayload;
-                    if (!entry.HasPakPayload.HasValue)
+                    lock (CacheLock) entry.CodeKinds = CachedCodeKinds(cached);
+                    if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null)
                     {
-                        try { using (var reader = new SourceReader(entry.SourcePath, sevenZipPath)) entry.HasPakPayload = ReadPakPayload(entry.SourcePath, reader); }
+                        bool pak = !entry.HasPakPayload.HasValue;   // 1.0.16: one listing backfills both
+                        try
+                        {
+                            using (var reader = new SourceReader(entry.SourcePath, sevenZipPath))
+                            {
+                                if (pak) entry.HasPakPayload = ReadPakPayload(entry.SourcePath, reader);
+                                if (entry.CodeKinds == null) entry.CodeKinds = LibraryCode.Classify(reader.Entries.Keys, entry.Name);
+                            }
+                        }
                         catch (Exception ex) { if (ex is OutOfMemoryException || ex is OperationCanceledException) throw; Program.Log(ex); } // optional backfill cannot erase known identity
-                        lock (CacheLock) { cached.HasPakPayload = entry.HasPakPayload; cacheDirty = true; }
+                        lock (CacheLock) { if (pak) cached.HasPakPayload = entry.HasPakPayload; if (entry.CodeKinds != null) cached.CodeKinds = new List<string>(entry.CodeKinds); cacheDirty = true; }
                     }
                     if (NamesKnown(cached)) { entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); entry.NamesPending = false; }
                     else if (readNames) IndexNames(entry, sevenZipPath);   // a names failure costs only the names
@@ -667,6 +690,7 @@ namespace SlotsInstaller
                             categories.AddNative(native, fileIdentity.Fighter);
                         }
                         entry.HasPakPayload = ReadPakPayload(entry.SourcePath, reader);
+                        entry.CodeKinds = LibraryCode.Classify(reader.Entries.Keys, entry.Name);   // 1.0.16
                         if (readNames) { ModInfoSummary info = ReadModInfo(reader); entry.Authors = info.Authors; entry.DisplayName = info.DisplayName; entry.OptionNames = info.OptionNames; entry.NamesPending = false; }
                         else entry.NamesPending = true;
                     }
@@ -682,7 +706,7 @@ namespace SlotsInstaller
                     {
                         lock (CacheLock)
                         {
-                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, HasPakPayload = entry.HasPakPayload, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = readNames ? new List<string>(entry.Authors) : null, CodesVersion = CodesVersion, DisplayName = readNames ? entry.DisplayName ?? "" : null, OptionNames = readNames ? new List<string>(entry.OptionNames) : null };
+                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, HasPakPayload = entry.HasPakPayload, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), CodeKinds = new List<string>(entry.CodeKinds), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = readNames ? new List<string>(entry.Authors) : null, CodesVersion = CodesVersion, DisplayName = readNames ? entry.DisplayName ?? "" : null, OptionNames = readNames ? new List<string>(entry.OptionNames) : null };
                             cacheDirty = true;
                         }
                     }
@@ -696,7 +720,7 @@ namespace SlotsInstaller
                 // Failed reads are not cached, so Refresh can recover from temporary IO errors.
                 ForgetIdentity(entry.SourcePath);
                 entry.Character = ""; entry.FilenameCharacter=""; entry.Detection = "Error"; entry.DetectionError = ex.Message;
-                entry.HasPakPayload = null; entry.CharacterCodes.Clear(); entry.OptionIds.Clear(); entry.OptionCount=-1; entry.CostumeKeys.Clear(); entry.ToolKinds.Clear(); entry.StageIds.Clear(); entry.MiscAreas.Clear(); entry.Authors.Clear(); entry.DisplayName = ""; entry.OptionNames.Clear(); entry.NamesPending = false;
+                entry.HasPakPayload = null; entry.CodeKinds = null; entry.CharacterCodes.Clear(); entry.OptionIds.Clear(); entry.OptionCount=-1; entry.CostumeKeys.Clear(); entry.ToolKinds.Clear(); entry.StageIds.Clear(); entry.MiscAreas.Clear(); entry.Authors.Clear(); entry.DisplayName = ""; entry.OptionNames.Clear(); entry.NamesPending = false;
             }
         }
         // The fighter of a mod from its native codes (one known fighter), else its file-name guess when allowed.
@@ -838,7 +862,7 @@ namespace SlotsInstaller
                     if (data == null || data.Format != CacheFormat || data.Records == null) return;
                     foreach (var record in data.Records)
                     {
-                        if (record == null || String.IsNullOrWhiteSpace(record.SourcePath) || record.Stamp == null || record.CharacterCodes == null || record.CharacterCodes.Any(c => !Regex.IsMatch(c ?? "", @"^\d{3}$")) || (record.CostumeKeys != null && record.CostumeKeys.Any(k => !Regex.IsMatch(k ?? "", @"^\d{3}/\d{3}$"))) || (record.ToolKinds != null && record.ToolKinds.Any(k => !ToolKindOrder.Contains(k)))
+                        if (record == null || String.IsNullOrWhiteSpace(record.SourcePath) || record.Stamp == null || record.CharacterCodes == null || record.CharacterCodes.Any(c => !Regex.IsMatch(c ?? "", @"^\d{3}$")) || (record.CostumeKeys != null && record.CostumeKeys.Any(k => !Regex.IsMatch(k ?? "", @"^\d{3}/\d{3}$"))) || (record.ToolKinds != null && record.ToolKinds.Any(k => !ToolKindOrder.Contains(k))) || (record.CodeKinds != null && record.CodeKinds.Any(k => !LibraryCode.Order.Contains(k)))
                             || (record.StageIds != null && record.StageIds.Any(k => !Regex.IsMatch(k ?? "", @"^(\d{4}(_\d{2})?|other)$"))) || (record.MiscAreas != null && record.MiscAreas.Any(k => String.IsNullOrWhiteSpace(k) || k.Length > 40))
                             || (record.DisplayName != null && record.DisplayName.Length > 300) || (record.OptionNames != null && (record.OptionNames.Count > 2000 || record.OptionNames.Any(k => k == null || k.Length > 300)))) continue;
                         IdentityCache[Path.GetFullPath(record.SourcePath)] = record;

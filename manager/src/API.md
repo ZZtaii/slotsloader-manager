@@ -81,6 +81,10 @@ All types in this section are internal unless noted.
 - `LibraryEntry.CostumeKeys`, identity cache `sf6-native-library-index-v2`; `LibrarySearch.Parse/CostumeRank/MatchesText/CostumeLabel/CostumesIn`.
 - Assistant: `search_mods` takes `costume` and returns `costumes`, `costume_label`, `costume_match`; `install_replacement` results carry `conflicts` and `conflict_note`; `list_game_mods` rows carry `shares_files_with` and `same_outfit_no_shared_files`; `check_outfit` returns `already_installed_as`.
 
+## 1.0.16 additions
+
+- `LibraryCode.Classify(paths, name)` (pure): the SF6 code kinds `script`, `plugin`, `reframework`, `injector` (`LibraryCode.Order`, chip labels `Labels`) of one archive or folder; `LibraryEntry.CodeKinds` / `LibraryIdentityRecord.CodeKinds` (null = not known; index v4, additive; backfilled in the background for records with tool kinds). `LibraryCode.Has(e, kind)` / `Any(e)` fall back to a guess from `ToolKinds` while null. The Filters tile `FilterPanel.ToolsKind` ("tools") is **REFramework & code**; `FilterPanel.CodeChips`, `CodeSelected`; `ViewPreferences.CodeKinds`. `LibrarySearch.ToolKeyword` returns `injector` for `injector(s)`/`code injector(s)`. `IsToolMod` is unchanged.
+
 ## 2.5.1 additions
 
 - CLI: `manager-status`, `manager-uninstall`, `manager-restore`; `ReplaceCommandLine.Aliases` maps the old names (`fluffy-status`, `fluffy-uninstall`, `fluffy-restore`) to them; the old names are not in the help.
