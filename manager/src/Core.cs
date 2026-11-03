@@ -957,6 +957,7 @@ namespace SlotsInstaller
             {
                 // Reinspect before writing: source options and asset sizes must still match the plan.
                 ModPackage fresh; CompositionPlan current; Dictionary<string,string> hashes;
+                using (InstallMetrics.Measure("outfit reinspect and copy"))
                 using (var r=new SourceReader(plan.Package.SourcePath,sevenZipPath))
                 {
                 fresh=PackageReader.Load(plan.Package.SourcePath,r,false);
@@ -1296,6 +1297,22 @@ namespace SlotsInstaller
                 if (Directory.Exists(current) || File.Exists(current)) NoReparse(current);
                 current=Path.GetDirectoryName(current);
             }
+        }
+        // 1.0.16 (speed): the same check for many paths in one pass (Reconcile walks every installed file): a folder
+        // whose whole chain was checked earlier in this pass is not checked again. The path itself always is, and
+        // writes check their own chain again (ReplaceEngine.SetFile). `checkedFolders` belongs to one pass only.
+        internal static void NoReparseChain(string path,HashSet<string> checkedFolders)
+        {
+            string current=Path.GetFullPath(path); bool leaf=true; var passed=new List<string>();
+            while (!String.IsNullOrEmpty(current))
+            {
+                if (!leaf && checkedFolders.Contains(current)) break;
+                bool folder=Directory.Exists(current);
+                if (folder || File.Exists(current)) { NoReparse(current); if (!leaf && folder) passed.Add(current); }
+                leaf=false;
+                current=Path.GetDirectoryName(current);
+            }
+            foreach (string done in passed) checkedFolders.Add(done);
         }
         // 1.0.15: a new folder under `root` with a short name (prefix + 8 hex), not a 32-character GUID, so deep
         // mods stay under Windows' path limit (LongPaths.cs).

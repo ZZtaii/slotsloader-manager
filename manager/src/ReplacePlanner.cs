@@ -73,8 +73,12 @@ namespace SlotsInstaller
                 DeployedFile file; return deployed.TryGetValue(path, out file) ? file : null;
             };
             plan.Method = methodOverride ?? engine.CurrentMethod(state);
-            GamePaks paks = GamePaks.Load(engine.GameRoot);
-            GameReference reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc);
+            GamePaks paks; GameReference reference;
+            using (InstallMetrics.Measure("prepare game reference"))
+            {
+                paks = GamePaks.Load(engine.GameRoot);
+                reference = GameReference.Load(engine.GameRoot, paks.Base, paks.Dlc);
+            }
             // The read-only handoff preview projects the verified external setup after uninstall.
             // Actual deployment always reads ownership again.
             FluffyInstalls fluffy = handoffPreview ? new FluffyInstalls() : engine.Fluffy();
@@ -136,28 +140,43 @@ namespace SlotsInstaller
             using (var archive = cache == null && ReplaceEngine.IsLibraryArchive(plan.SourcePath) && staging.StartsWith(engine.StoreRoot(state).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? File.OpenRead(plan.SourcePath) : null)
             using (var reader = new SourceReader(composition.Package.SourcePath, sevenZip, composition.Package.PreviewEntries, composition.Package.PreviewSourceStamp))
             {
+                // 1.0.16 (speed): the archive's identity hash (a full read: ~140 ms for a 176 MB mod) runs beside the
+                // extraction instead of before it. The archive stays open read-only meanwhile, as before, and a failed
+                // hash is still the error reported, even when the extraction failed too.
+                System.Threading.Tasks.Task<string> archiveHash = null; long archiveSize = 0;
                 if (archive != null)
                 {
-                    plan.ArchiveSha = BundleLayout.ArchiveHash(plan.SourcePath, out plan.ArchiveSize);
+                    string source = plan.SourcePath;
+                    archiveHash = System.Threading.Tasks.Task.Run(() => { using (InstallMetrics.Measure("prepare archive hash")) return BundleLayout.ArchiveHash(source, out archiveSize); });
                     plan.ArchiveStamp = SourceReader.Stamp(plan.SourcePath);
                 }
-                foreach (PlannedFile f in chosen.Values)
+                try
                 {
-                    SourceEntry entry;
-                    if (!reader.Entries.TryGetValue(f.Asset.EntryPath, out entry) || entry.Size != f.Asset.Size) throw new SourceChangedException();
+                    foreach (PlannedFile f in chosen.Values)
+                    {
+                        SourceEntry entry;
+                        if (!reader.Entries.TryGetValue(f.Asset.EntryPath, out entry) || entry.Size != f.Asset.Size) throw new SourceChangedException();
+                    }
+                    if (useCache) using (InstallMetrics.Measure("prepare copy (check cache)")) cached = cache.Stage(chosen, reader, reference, ReferenceKey(reference));
+                    else using (InstallMetrics.Measure("prepare copy"))
+                    {
+                        Directory.CreateDirectory(staging);
+                        string scratch = Path.Combine(staging, ".scratch-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                        Directory.CreateDirectory(scratch);
+                        try { hashes = reader.CopyFiles(chosen.Values, staging, scratch); }
+                        finally { try { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); } catch { } }
+                        if (migrationRow != null) migrationRow.CheckSourceBytes(composition,chosen,hashes,reader,staging,handoffPreview);
+                    }
                 }
-                if (useCache) cached = cache.Stage(chosen, reader, reference, ReferenceKey(reference));
-                else
+                catch
                 {
-                    Directory.CreateDirectory(staging);
-                    string scratch = Path.Combine(staging, ".scratch-" + Guid.NewGuid().ToString("N").Substring(0, 8));
-                    Directory.CreateDirectory(scratch);
-                    try { hashes = reader.CopyFiles(chosen.Values, staging, scratch); }
-                    finally { try { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); } catch { } }
-                    if (migrationRow != null) migrationRow.CheckSourceBytes(composition,chosen,hashes,reader,staging,handoffPreview);
+                    if (archiveHash != null) Finished(archiveHash);
+                    throw;
                 }
+                if (archiveHash != null) { plan.ArchiveSha = Finished(archiveHash); plan.ArchiveSize = archiveSize; }
             }
             int fixedFiles = 0;
+            IDisposable fixClock = InstallMetrics.Measure("prepare fixes");
             if (cached != null)
                 foreach (var pair in chosen.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
                 {
@@ -185,6 +204,7 @@ namespace SlotsInstaller
                 }
                 plan.Files.Add(prepared);
             }
+            if (fixClock != null) fixClock.Dispose();
             plan.Fixed = fixedFiles + renamed.Count;
             foreach (var group in plan.Files.SelectMany(f => f.Fixes.Select(x => new { File = f, Fix = x })).GroupBy(x => x.Fix.Kind))
             {
@@ -293,6 +313,13 @@ namespace SlotsInstaller
             return plan;
         }
 
+        // A background step's result, or its own exception (not wrapped).
+        private static T Finished<T>(System.Threading.Tasks.Task<T> task)
+        {
+            try { return task.Result; }
+            catch (AggregateException ex) { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerExceptions[0]).Throw(); throw; }
+        }
+
         // Fluffy renames mesh files from old (beta) SF6 versions: only when the current-version
         // path is a vanilla file, so a new custom file is never renamed onto an unrelated path.
         private static string UpgradeVersionSuffix(string dest, GameReference reference, GamePaks paks, ReplaceState state)
@@ -399,7 +426,8 @@ namespace SlotsInstaller
             {
                 plan = Prepare(composition, sevenZip, engine, staging, null, replaceId);
                 if (!plan.CanInstall) throw new IOException(String.Join(" ", plan.Errors));
-                ReplaceMod installed = engine.Install(plan, name, test, replaceId);
+                ReplaceMod installed;
+                using (InstallMetrics.Measure("engine install")) installed = engine.Install(plan, name, test, replaceId);
                 if (LoaderCostumePak.IsLoaderMod(installed)) SwapRepairFlag.Ensure(engine.GameRoot);
                 foreach (ReplaceMod extra in others) engine.UninstallForGood(extra.Id, DriftChoice.Ask, null);   // 1.0.1: no kept copy
                 return installed;

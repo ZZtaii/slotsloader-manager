@@ -15,8 +15,13 @@ namespace SlotsInstaller
 
         private static bool Verified(string path, ModFile f)
         {
+            return Present(path, f) && Sha(path) == f.Sha256;
+        }
+        // Verified without the hash (1.0.16: for a file whose hash this change already read).
+        private static bool Present(string path, ModFile f)
+        {
             Safety.NoReparseChain(path);
-            return File.Exists(path) && new FileInfo(path).Length == f.Size && Sha(path) == f.Sha256;
+            return File.Exists(path) && new FileInfo(path).Length == f.Size;
         }
 
         internal bool PayloadMatches(ReplaceState s, ReplaceMod m, ModFile f)
@@ -36,7 +41,12 @@ namespace SlotsInstaller
 
         // Materialize only files that are about to lose their live bytes, or need repair. Publication
         // uses a new temporary file and checks the installed SHA before anything can use its contents.
-        private void Hydrate(ReplaceState state, ReplaceMod mod, List<ModFile> files)
+        private void Hydrate(ReplaceState state, ReplaceMod mod, List<ModFile> files) { Hydrate(state, mod, files, null); }
+        // observed (1.0.16, speed): the SHA-256 this change's Reconcile just read for each game path, under the same
+        // lock. A live file it found intact is copied without hashing it again first (uninstalling a large archive mod
+        // read every file once less); the copy is still verified, and a copy that differs gets the full check of the
+        // live file, so it is extracted from the archive or refused exactly as before.
+        private void Hydrate(ReplaceState state, ReplaceMod mod, List<ModFile> files, Dictionary<string,string> observed)
         {
             if (files.Count == 0) return;
             string root = StoreRoot(state);
@@ -49,10 +59,18 @@ namespace SlotsInstaller
                 {
                     OperationContext.ThrowIfCancellationRequested();
                     string live = GamePath(f.Path);
-                    if (!Verified(live, f)) { extract.Add(f); continue; }
+                    string seen;
+                    bool known = observed != null && observed.TryGetValue(f.Path, out seen) && seen != null && seen == f.Sha256 && Present(live, f);
+                    if (!known && !Verified(live, f)) { extract.Add(f); continue; }
                     string temp = Path.Combine(scratch, Guid.NewGuid().ToString("N"));
                     File.Copy(live, temp);
-                    PublishPayload(state, mod, f, temp);
+                    if (known && !Verified(temp, f))
+                    {
+                        File.Delete(temp);
+                        if (!Verified(live, f)) { extract.Add(f); continue; }
+                        throw new IOException("The recovered bytes differ from the installed version of " + f.Path + ".");
+                    }
+                    PublishPayload(state, mod, f, temp, known);
                 }
                 if (extract.Count == 0) return;
                 string archive = ResolveArchive(mod);
@@ -90,9 +108,9 @@ namespace SlotsInstaller
             finally { Safety.DeleteGenerated(scratch, root); }
         }
 
-        private void PublishPayload(ReplaceState state, ReplaceMod mod, ModFile f, string temp)
+        private void PublishPayload(ReplaceState state, ReplaceMod mod, ModFile f, string temp, bool verified = false)
         {
-            if (!Verified(temp, f)) throw new IOException("The recovered bytes differ from the installed version of " + f.Path + ".");
+            if (!verified && !Verified(temp, f)) throw new IOException("The recovered bytes differ from the installed version of " + f.Path + ".");
             string target = StoreFile(state, mod, f);
             Safety.NoReparseChain(target);
             Directory.CreateDirectory(Path.GetDirectoryName(target));
@@ -311,7 +329,7 @@ namespace SlotsInstaller
             return m.ArchiveSha != null && IsLibraryArchive(m.SourcePath) && SourceReader.Stamp(m.SourcePath) == m.ArchiveStamp;
         }
 
-        private void PrepareArchivePayloads(ReplaceState current, ReplaceState next, ReplaceJournal journal, Dictionary<string,string> trash, bool recycleSurvivingFiles)
+        private void PrepareArchivePayloads(ReplaceState current, ReplaceState next, ReplaceJournal journal, Dictionary<string,string> trash, bool recycleSurvivingFiles, Dictionary<string,string> observed)
         {
             var winners = next.Deployed.ToDictionary(d => d.Path, d => d.Owner, StringComparer.OrdinalIgnoreCase);
             var needed = new HashSet<string>(journal.Ops.Where(o => o.Kind == "file").SelectMany(o => new[] { o.BeforeSource, o.AfterSource }), StringComparer.OrdinalIgnoreCase);
@@ -333,7 +351,7 @@ namespace SlotsInstaller
                     if (!present && needsCopy) hydrate.Add(f);
                     if (canRelease && winner && (present || needsCopy)) journal.CleanupAfterCommit.Add(stored);
                 }
-                Hydrate(current, m, hydrate);
+                Hydrate(current, m, hydrate, observed);
             }
         }
     }

@@ -12,7 +12,7 @@ All types in this section are internal unless noted.
   - reads the header and the entry table read-only (`FileShare.ReadWrite | Delete`);
   - refuses anything other than KPKA 4.x with `features == 0`;
   - validates every entry's bounds.
-- `PakIndex` members: `Find(hash) → List<int>` (zeroed rows are skipped), `Contains`, `CountZeroed`, `Entry(i) → PakEntry`, `Read(entry)` (stored, deflate or zstd), `ReadByPath`, `TocSha256()` (header + table) and `LayoutSha256()` (hash fields ignored).
+- `PakIndex` members: `Find(hash) → List<int>` (zeroed rows are skipped; every row of a repeated hash in table order; 1.0.16: a new list each call), `Contains`, `CountZeroed`, `Entry(i) → PakEntry`, `Read(entry)` (stored, deflate or zstd), `ReadByPath`, `TocSha256()` (header + table) and `LayoutSha256()` (hash fields ignored).
 - `PakWriter.WriteHashes(pak, length, header, IList<PakHashWrite>)`:
   - rechecks the length and header;
   - requires each row to hold `Expected` (rows already at `Value` are skipped);
@@ -36,7 +36,7 @@ All types in this section are internal unless noted.
 - 1.0.9: after each commit, `ManagerInstalls.Write(gameRoot, state)` ([ManagerInstalls.cs](ManagerInstalls.cs)) writes `reframework\data\SF6_Costumes_Data\manager_installs.json` for other costume loaders. `ManagerInstalls.Sync(engine)` does the same at start-up and every refresh. Neither ever throws. The file is only written when that folder exists and something besides `generated` changed. `ManagerInstalls.Text(state, generatedUtc)` returns the text; the format is in docs/ARCHITECTURE.md.
 - Recovery and status: `Recover() → string` (null if nothing was pending), `JournalPending`, `Status() → GameFilesStatus` (`NeedsReapply`, `PakChanged`, `BaseChanged`, `RowsNotZero`, `FilesMissing`, `FilesChanged`, `LooseLoaderOff`, `Summary`), `RestoreFromTocBackup(pak) → rows restored` (last resort).
 - Other members: `LoadState()`, `CurrentMethod(state)`, `DesiredMethod()`, `StoreRoot(state)`, `EnsureTocBackup(pak)` and `ValidateDestination(path)` (static; protected paths).
-- `ReplaceEngine.CrashAfterStep` is a test hook that throws `SimulatedCrashException`.
+- `ReplaceEngine.CrashAfterStep` is a test hook that throws `SimulatedCrashException`. 1.0.16: `ReplaceEngine.BeforeArchivePayloads` (test hook) runs between Reconcile and the archive payload step; Reconcile passes the SHA-256 it read per path to that step, which copies an intact file for rollback without hashing it again (the copy is verified). `Safety.NoReparseChain(path, checkedFolders)` checks many paths in one pass (folders once).
 - Public models (JSON-serialized): `ReplaceSettings`, `ReplaceState`, `ReplaceMod`, `ModFile`, `DeployedFile`, `ZeroedRow`, `OriginalBackup`, `PakStamp`, `ReplaceJournal`, `JournalOp`, `JournalRow`, `TestSessionRecord`.
 - `ReplacePlanner.Prepare(CompositionPlan replaceMode, sevenZip, engine, stagingFolder) → ReplacePlan`:
   - normalizes and renames paths, then copies and fixes the files;
