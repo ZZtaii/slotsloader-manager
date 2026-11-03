@@ -37,7 +37,7 @@ Read this before changing layout, navigation, option selection, previews, or scr
 
 These cover the custom screens. **Edit options** loads a managed outfit back into the existing Options view; it is not another editor window. Archive/executable pickers and folder browsers are standard Windows dialogs. Since 2.4.1 there are no confirmations for recoverable actions (they act at once with Undo) and errors are inline; the few remaining questions (permanent deletes, another tool's changes) use the themed message box (2.0.3; standard MessageBoxes before). A successful install uses a green checked status line rather than a popup. Taking screenshots does not require installing, disabling, removing, or replacing an outfit.
 
-## Unreleased: REFramework & code filter, 2026-11-03
+## 1.0.16: REFramework & code filter, 2026-11-03
 
 Source: [LibraryCode.cs](../src/LibraryCode.cs) (the kinds), [FilterPanel.cs](../src/FilterPanel.cs) (tile and chips), `MainForm.ApplyFilters`. Check: `--filter-check` ("REFramework & code …").
 

@@ -1,4 +1,4 @@
-# Slotsloader Manager 1.0.15
+# Slotsloader Manager 1.0.16
 
 A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
@@ -9,6 +9,13 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 **Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
+
+- 1.0.16:
+  - Includes Slotsloader Fork 1.10.8: extra outfits load again while another mod manager replaces Ryu's Outfit 1 colours.
+  - Addon zips show their options inside their main mod. Edit bundle works on RAR and 7Z too.
+  - Filters: **REFramework & code** replaces Tool mods.
+  - Restoring game files saves a preset first; the crash reporter is always renamed.
+  - Faster installs and uninstalls.
 
 - 1.0.15:
   - Edit a ZIP bundle in the Library to group its options and set selection rules. Suggest layout runs locally. Refine with Assistant is optional. Save ZIP writes the reviewed layout to the archive.
