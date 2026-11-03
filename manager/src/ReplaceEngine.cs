@@ -559,6 +559,36 @@ namespace SlotsInstaller
         // 2.2.0: files another tool changed after this app installed them follow options.Choice (see DriftChoice);
         // the changer (a Fluffy mod, a known SlotsLoader/AGS build or "another tool") is named in every message.
         internal bool BenchmarkUncachedLayouts; // fixture comparison only; never set by application callers
+        internal static int PreHashedFiles;     // checks: files the last pass hashed in parallel
+
+        // 1.0.16 (speed, the user): on an SSD the pass's game files are hashed by several threads first (DriveKind.HashThreads:
+        // cores minus one, at most 4; on a hard drive or a weak CPU nothing changes). Links are checked first, in the
+        // pass's order and with a set of their own; a path whose check or hash fails is left to the pass, which then
+        // refuses it or reports its error at the same point and with the same message as before. Null: not used.
+        private Dictionary<string, string> PreHash(List<string> ordered)
+        {
+            PreHashedFiles = 0;
+            int threads = DriveKind.HashThreads(GameRoot);
+            if (threads < 2 || ordered.Count < 2) return null;
+            var todo = new List<KeyValuePair<string, string>>();
+            var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in ordered)
+            {
+                string full = GamePath(path);
+                try { Safety.NoReparseChain(full, folders); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; continue; }
+                todo.Add(new KeyValuePair<string, string>(path, full));
+            }
+            var hashed = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            using (InstallMetrics.Measure("reconcile current SHA (parallel)"))
+                System.Threading.Tasks.Parallel.ForEach(todo, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = OperationContext.Token }, item =>
+                {
+                    try { hashed[item.Key] = CurrentSha(item.Key, item.Value); }
+                    catch (Exception ex) { if (ex is OutOfMemoryException) throw; }   // the pass reads it again and reports it
+                });
+            PreHashedFiles = hashed.Count;
+            return new Dictionary<string, string>(hashed, StringComparer.OrdinalIgnoreCase);
+        }
         // observed (1.0.16): each game path's SHA-256 as this pass read it (null: no file), for PrepareArchivePayloads.
         private ReplaceJournal Reconcile(ReplaceState current, ReplaceState next, string method, GamePaks paks, FluffyInstalls fluffy, ChangeOptions options, string description, List<string> messages, Dictionary<string, string> observed)
         {
@@ -627,7 +657,9 @@ namespace SlotsInstaller
                 ModFile found; return map.TryGetValue(p, out found) ? found : null;
             };
 
-            foreach (string path in paths.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            List<string> ordered = paths.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            Dictionary<string, string> preHashed = PreHash(ordered);
+            foreach (string path in ordered)
             {
                 OperationContext.ThrowIfCancellationRequested();
                 DeployedFile was; deployedAt.TryGetValue(path, out was);
@@ -635,7 +667,8 @@ namespace SlotsInstaller
                 string full = GamePath(path);
                 using (InstallMetrics.Measure("reconcile path safety")) Safety.NoReparseChain(full, checkedFolders);
                 string actual;
-                using (InstallMetrics.Measure("reconcile current SHA", InstallMetrics.Enabled && File.Exists(full) ? new FileInfo(full).Length : 0)) actual = CurrentSha(path, full); // empty placeholder counts as no file
+                if (preHashed == null || !preHashed.TryGetValue(path, out actual))
+                    using (InstallMetrics.Measure("reconcile current SHA", InstallMetrics.Enabled && File.Exists(full) ? new FileInfo(full).Length : 0)) actual = CurrentSha(path, full); // empty placeholder counts as no file
                 if (observed != null) observed[path] = actual;
                 string expected;
                 if (options.MigrationOriginals != null && options.MigrationOriginals.TryGetValue(path,out expected) && actual != expected)

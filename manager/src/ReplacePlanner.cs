@@ -142,12 +142,14 @@ namespace SlotsInstaller
             {
                 // 1.0.16 (speed): the archive's identity hash (a full read: ~140 ms for a 176 MB mod) runs beside the
                 // extraction instead of before it. The archive stays open read-only meanwhile, as before, and a failed
-                // hash is still the error reported, even when the extraction failed too.
+                // hash is still the error reported, even when the extraction failed too. Only on an SSD (DriveKind): on a
+                // hard drive two reads of one archive make the head jump, so it is hashed first, as before.
                 System.Threading.Tasks.Task<string> archiveHash = null; long archiveSize = 0;
                 if (archive != null)
                 {
                     string source = plan.SourcePath;
-                    archiveHash = System.Threading.Tasks.Task.Run(() => { using (InstallMetrics.Measure("prepare archive hash")) return BundleLayout.ArchiveHash(source, out archiveSize); });
+                    Func<string> hash = () => { using (InstallMetrics.Measure("prepare archive hash")) return BundleLayout.ArchiveHash(source, out archiveSize); };
+                    archiveHash = DriveKind.IsSolidState(source) ? System.Threading.Tasks.Task.Run(hash) : System.Threading.Tasks.Task.FromResult(hash());
                     plan.ArchiveStamp = SourceReader.Stamp(plan.SourcePath);
                 }
                 try

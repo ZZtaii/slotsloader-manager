@@ -11,6 +11,43 @@ namespace SlotsInstaller
     {
         private static void Require(bool condition, string message) { ReplaceChecks.Require(condition, message); }
 
+        // 1.0.16 (the user: "issues for users on slower PCs?"): the same changes as on a hard drive (one thread) and on an
+        // SSD (game files hashed in parallel first): same installed files and records, the same drift refusal and message.
+        internal static void ParallelHashing(string root)
+        {
+            var results = new Dictionary<string, string>();
+            try
+            {
+                foreach (string mode in new[] { "hdd", "ssd" })
+                {
+                    DriveKind.Override = delegate(string p) { return mode == "ssd"; };
+                    Require(DriveKind.HashThreads(root) == (mode == "ssd" && Environment.ProcessorCount >= 3 ? Math.Min(4, Environment.ProcessorCount - 1) : 1), mode + ": thread count " + DriveKind.HashThreads(root));
+                    ReplaceChecks.Fixture f = ReplaceChecks.Create(Path.Combine(root, mode), false, ReplaceMethods.Pak);
+                    ReplaceMod a = ReplaceChecks.Install(f, "modA", "A");
+                    ReplaceMod b = ReplaceChecks.Install(f, "modB", "B");
+                    int parallel = ReplaceEngine.PreHashedFiles;
+                    Require(mode == "hdd" ? parallel == 0 : (Environment.ProcessorCount < 3 || parallel > 0), mode + ": files hashed in parallel " + parallel);
+                    ReplaceState state = f.Engine.LoadState();
+                    var lines = state.Deployed.OrderBy(d => d.Path, StringComparer.OrdinalIgnoreCase).Select(d => d.Path + "=" + d.Sha256 + "@" + (d.Owner == a.Id ? "A" : d.Owner == b.Id ? "B" : "?")).ToList();
+                    lines.AddRange(state.Deployed.Select(d => d.Path).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).Select(p => p + " on disk " + ReplaceEngine.Sha(f.Engine.GamePath(p))));
+                    // Another tool changes one of A's files: uninstalling A is refused the same way.
+                    DeployedFile changed = state.Deployed.First(d => d.Owner == a.Id);
+                    File.WriteAllBytes(f.Engine.GamePath(changed.Path), Encoding.ASCII.GetBytes("changed by another tool"));
+                    string refusal = "none";
+                    try { f.Engine.Uninstall(a.Id); } catch (DriftException ex) { refusal = (ex.Items.Count + ": " + String.Join("; ", ex.Items.Select(i => i.Text))).Replace(f.Game, "<game>"); }
+                    lines.Add("refusal " + refusal);
+                    f.Engine.Uninstall(b.Id);
+                    lines.AddRange(f.Engine.LoadState().Deployed.OrderBy(d => d.Path, StringComparer.OrdinalIgnoreCase).Select(d => "after " + d.Path + "=" + d.Sha256));
+                    results[mode] = String.Join("\n", lines);
+                    Require(refusal != "none", mode + ": the changed file did not stop the uninstall");
+                }
+            }
+            finally { DriveKind.Override = null; }
+            Require(results["hdd"] == results["ssd"], "parallel hashing changed the result:\nHDD:\n" + results["hdd"] + "\nSSD:\n" + results["ssd"]);
+            // The real query never throws (a share or an unknown drive is "not solid state").
+            DriveKind.IsSolidState(Path.GetTempPath()); DriveKind.IsSolidState(@"\\server\share\x");
+        }
+
         // The 1.0.15 layout hash: one 48-byte row at a time.
         private static string RowByRowLayout(PakIndex p)
         {
