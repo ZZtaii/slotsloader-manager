@@ -50,7 +50,6 @@ namespace SlotsInstaller
         private System.Windows.Forms.Timer gameTimer;
         private bool gameRunning, fluffyRunning;
         private bool leftoverTestPending;
-        private bool retryCostumeCache;
         private ToolStatus toolStatus = new ToolStatus();
         private SegmentedChoice installedKind;   // 1.0.1: All · Extra · Installed (extra outfits / everything in the game folder)
         internal static readonly string[] InstalledKinds = { "All", "Extra", "Installed" };
@@ -118,11 +117,6 @@ namespace SlotsInstaller
             launchButton.Enabled = !game && !busy;
             if (changed) { UpdateFooter(); ShowInstalledSelection(); UpdateBanner(); UpdateLibraryUninstall(); }
             if (leftoverTestPending && !gameRunning && !busy) FinishLeftoverTest();
-            if (retryCostumeCache && !gameRunning && !fluffyRunning && !busy)
-            {
-                retryCostumeCache = false;
-                RefreshInstalled();
-            }
             CheckFluffyStamp();
             CheckToolStamp();
         }
@@ -584,7 +578,7 @@ namespace SlotsInstaller
             });
         }
         // ---- Installed page: replacements, tool mods and Fluffy rows
-        private sealed class GameRowsResult { internal List<GameModRow> Rows = new List<GameModRow>(); internal GameFilesStatus Status = new GameFilesStatus(); internal string Recovery, Method = "", FluffyStamp = ""; internal bool RetryCostumeCache; internal HashSet<string> Sources = new HashSet<string>(StringComparer.OrdinalIgnoreCase); internal List<string> FluffyRoots = new List<string>(); }
+        private sealed class GameRowsResult { internal List<GameModRow> Rows = new List<GameModRow>(); internal GameFilesStatus Status = new GameFilesStatus(); internal string Recovery, Method = "", FluffyStamp = ""; internal HashSet<string> Sources = new HashSet<string>(StringComparer.OrdinalIgnoreCase); internal List<string> FluffyRoots = new List<string>(); }
 
         private GameRowsResult LoadGameRows(bool allowRecovery)
         {
@@ -608,8 +602,6 @@ namespace SlotsInstaller
             // 1.0.1: the keep rule is "only what a live Undo needs": nothing else can use a copy any more.
             if (allowRecovery)
             {
-                string cache = LoaderCostumePak.RetireMissingSource(config.CostumeRoot, out result.RetryCostumeCache, engine);
-                if (cache.Length > 0) result.Recovery = ((result.Recovery ?? "") + " " + cache).Trim();
                 try { engine.RelinkArchives(); } catch (IOException ex) { Program.Log(ex); }
                 try { string trash = engine.RetryTrash(); if (trash != null && String.IsNullOrEmpty(result.Recovery)) result.Recovery = trash; }
                 catch (Exception ex) { Program.Log(ex); }
@@ -689,7 +681,6 @@ namespace SlotsInstaller
 
         private void ApplyGameRows(GameRowsResult result)
         {
-            retryCostumeCache = result.RetryCostumeCache;
             InvalidateInstalledSearch();
             gameRows = result.Rows; gameStatus = result.Status; gameMethod = result.Method;
             WatchFluffy(result.FluffyRoots, result.FluffyStamp);

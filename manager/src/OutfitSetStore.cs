@@ -280,7 +280,7 @@ namespace SlotsInstaller
         // whose source the library still has (Managed / Install all variants) is deleted: reinstalling it is the way
         // back. One with nothing to reinstall from (a manual drop, or its source is gone) goes to the Recycle Bin; when
         // the Recycle Bin can't take it, it stays installed and Result.Kept says why.
-        internal sealed class UninstallResult { internal int Deleted, Recycled; internal string CacheNote = ""; internal readonly List<string> Kept=new List<string>(); }
+        internal sealed class UninstallResult { internal int Deleted, Recycled; internal readonly List<string> Kept=new List<string>(); }
         internal static bool HasSource(InstalledOutfit o)
         {
             if (o==null || (!o.Managed && !o.WholeArchive) || String.IsNullOrWhiteSpace(o.SourcePath)) return false;
@@ -292,7 +292,7 @@ namespace SlotsInstaller
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; return false; }
         }
-        internal static UninstallResult UninstallOutfits(string costumeRoot,IEnumerable<InstalledOutfit> selected,IRecycleBin bin, ReplaceEngine engine = null)
+        internal static UninstallResult UninstallOutfits(string costumeRoot,IEnumerable<InstalledOutfit> selected,IRecycleBin bin)
         {
             using (Installer.AcquireMutation(costumeRoot))
             {
@@ -301,40 +301,29 @@ namespace SlotsInstaller
                 foreach (SourceItem source in sources)
                     if (Installer.OutfitSnapshotStamp(source.Outfit.Folder)!=source.Outfit.SnapshotStamp) throw new IOException("An outfit changed during this operation: "+source.Item.RelativePath+". Nothing was changed.");
                 OperationContext.ThrowIfCancellationRequested();
-                try
+                using (OperationContext.NonCancellable())
                 {
-                    using (OperationContext.NonCancellable())
+                    int done=0;
+                    foreach (SourceItem source in sources)
                     {
-                        int done=0;
-                        foreach (SourceItem source in sources)
+                        string path=source.Outfit.Folder; bool directory=source.Item.Directory;
+                        Safety.NoReparseChain(path);
+                        if (HasSource(source.Outfit))
                         {
-                            string path=source.Outfit.Folder; bool directory=source.Item.Directory;
-                            Safety.NoReparseChain(path);
-                            if (HasSource(source.Outfit))
-                            {
-                                if (directory) Safety.DeleteGenerated(path,System.IO.Path.GetDirectoryName(path)); else File.Delete(path);
-                                result.Deleted++;
-                            }
-                            else
-                            {
-                                long bytes=source.Item.Files.Sum(x=>x.Length);
-                                string why=bin.Unavailable(path,directory,bytes);
-                                if (why!=null) { result.Kept.Add(source.Outfit.Name+" (the Recycle Bin can't take it: "+why+")"); continue; }
-                                bin.Recycle(path,directory);
-                                if (File.Exists(path) || System.IO.Directory.Exists(path)) { result.Kept.Add(source.Outfit.Name+" (Windows left it in place)"); continue; }
-                                result.Recycled++;
-                            }
-                            OutfitHistory.Changed(HistoryKinds.Uninstall,source.Outfit,null);   // 2.4.1 history
-                            OperationContext.Report("Uninstalling outfit "+(++done)+" of "+sources.Count,done,sources.Count);
+                            if (directory) Safety.DeleteGenerated(path,System.IO.Path.GetDirectoryName(path)); else File.Delete(path);
+                            result.Deleted++;
                         }
-                    }
-                }
-                finally
-                {
-                    if (result.Deleted + result.Recycled > 0)
-                    {
-                        bool deferred;
-                        result.CacheNote = LoaderCostumePak.RetireMissingSource(root, out deferred, engine);
+                        else
+                        {
+                            long bytes=source.Item.Files.Sum(x=>x.Length);
+                            string why=bin.Unavailable(path,directory,bytes);
+                            if (why!=null) { result.Kept.Add(source.Outfit.Name+" (the Recycle Bin can't take it: "+why+")"); continue; }
+                            bin.Recycle(path,directory);
+                            if (File.Exists(path) || System.IO.Directory.Exists(path)) { result.Kept.Add(source.Outfit.Name+" (Windows left it in place)"); continue; }
+                            result.Recycled++;
+                        }
+                        OutfitHistory.Changed(HistoryKinds.Uninstall,source.Outfit,null);   // 2.4.1 history
+                        OperationContext.Report("Uninstalling outfit "+(++done)+" of "+sources.Count,done,sources.Count);
                     }
                 }
                 return result;

@@ -138,7 +138,7 @@ namespace SlotsInstaller
             Work("Renaming " + label + "…", delegate
             {
                 SourceRename.Outcome outcome = SourceRename.Run(source, name, libraries, kept, root, engine == null ? null : (Func<ReplaceEngine>)delegate { return engine; }, sevenZip);
-                ScanResult scan = outcome.Done && !String.Equals(outcome.From, outcome.To, StringComparison.Ordinal) ? WithChangedSources(new ScanResult { Game = LoadGameRows(true), Installed = Installer.ListInstalled(root), Removed = ReadRemovedUsage(root) }) : null;
+                ScanResult scan = outcome.Done && !String.Equals(outcome.From, outcome.To, StringComparison.Ordinal) ? WithChangedSources(new ScanResult { Installed = Installer.ListInstalled(root), Game = LoadGameRows(true), Removed = ReadRemovedUsage(root) }) : null;
                 return new KeyValuePair<SourceRename.Outcome, ScanResult>(outcome, scan);
             }, delegate(KeyValuePair<SourceRename.Outcome, ScanResult> done) { LibraryRenameDone(entry, label, done.Key, done.Value); });
         }

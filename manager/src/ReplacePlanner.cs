@@ -459,13 +459,8 @@ namespace SlotsInstaller
             var prepared = new PreparedInstall { ReplaceId = replaceId, Staging = staging, Others = others };
             try
             {
-                // An explicit install can follow an uninstall while the GUI was closed or SF6 was using its PAK.
-                // Review-only operations still never write to the game.
-                bool deferred;
-                string cacheNote = LoaderCostumePak.RetireMissingSource(Path.Combine(engine.GameRoot, "reframework", "costume_mods"), out deferred, engine);
                 prepared.Plan = Prepare(composition, sevenZip, engine, staging, null, replaceId);
-                if (cacheNote.Length > 0) prepared.Plan.Items.Add(new HealthItem("info", cacheNote));
-                if (!prepared.Plan.CanInstall) throw new IOException((String.Join(" ", prepared.Plan.Errors) + " " + cacheNote).Trim());
+                if (!prepared.Plan.CanInstall) throw new IOException(String.Join(" ", prepared.Plan.Errors));
                 return prepared;
             }
             catch { Discard(prepared); throw; }

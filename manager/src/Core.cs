@@ -1130,9 +1130,6 @@ namespace SlotsInstaller
             string dst=Safety.Under(trash,m.Id+"-"+DateTime.UtcNow.ToString("yyyyMMddHHmmss")+"-"+Guid.NewGuid().ToString("N").Substring(0,6));
             MoveDirectory(outfit.Folder,dst);
             OutfitHistory.Changed(HistoryKinds.Uninstall,outfit,null);   // 2.4.1 history
-            bool deferred;
-            string note = LoaderCostumePak.RetireMissingSource(root, out deferred);
-            if (note.Length > 0) Program.LogLine(note);
             return dst;
         }
         internal static OutfitPatchReport CheckInstalledHealth(InstalledOutfit outfit, string costumeRoot)
