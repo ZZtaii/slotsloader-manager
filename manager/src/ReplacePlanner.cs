@@ -87,12 +87,13 @@ namespace SlotsInstaller
             // 1.0.1: Slotsloader still installs; 1.0.10: plain REFramework too, unless the external manager installed it.
             string externalLock = ReplaceEngine.ExternalLockReason(fluffy, composition.Files.Values.Select(f => f.Asset.DestinationPath));
             if (externalLock != null) plan.Items.Add(new HealthItem("error", externalLock));
-            paks.SetModPaks(state.Mods);   // 2.5.7: installed PAK mods are mods, not the game's patch PAKs
+            paks.SetModPaks(state);
             if (reference.CurrentCrcs.Count == 0) plan.Items.Add(new HealthItem("warn", "Couldn't read the game's colour-file signatures (" + reference.CrcSource + "); outdated colour files are not fixed."));
 
             // 1. Destinations: lower-case natives paths, old texture suffixes upgraded.
             var chosen = new Dictionary<string, PlannedFile>(StringComparer.OrdinalIgnoreCase);
             var renamed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> suppliedPaths = null;
             var modPaks = new List<PlannedFile>();   // 2.5.6: PAK mods (ReplacePakMods.cs)
             foreach (PlannedFile f in composition.Files.Values)
             {
@@ -104,7 +105,8 @@ namespace SlotsInstaller
                 if (upgraded == null && native) upgraded = UpgradeVersionSuffix(dest, reference, paks, state);
                 if (upgraded != null)
                 {
-                    if (composition.Files.Keys.Any(k => String.Equals(ModFixes.NormalizeNativePath(k), upgraded, StringComparison.OrdinalIgnoreCase))) { plan.Items.Add(new HealthItem("info", "Skipped " + Path.GetFileName(dest) + ": the mod also ships the current-version file.")); continue; }
+                    if (suppliedPaths == null) suppliedPaths = new HashSet<string>(composition.Files.Keys.Select(ModFixes.NormalizeNativePath), StringComparer.OrdinalIgnoreCase);
+                    if (suppliedPaths.Contains(upgraded)) { plan.Items.Add(new HealthItem("info", "Skipped " + Path.GetFileName(dest) + ": the mod also ships the current-version file.")); continue; }
                     renamed[upgraded] = dest; dest = upgraded;
                 }
                 if (ReplaceEngine.SkippedProgram(dest, engine.GameRoot)) { plan.Items.Add(new HealthItem("info", "Skipped " + dest + ": programs aren't installed into the game folder.")); continue; }
@@ -235,7 +237,7 @@ namespace SlotsInstaller
                 PakIndex modPak = paks.ModPakContaining(f.Path);   // 2.5.7: an installed PAK mod holds it too: it wins in game
                 if (modPak != null)
                 {
-                    ReplaceMod pakOwner = state.Mods.FirstOrDefault(mod => mod.Files.Any(x => String.Equals(Path.GetFileName(x.Path), Path.GetFileName(modPak.Path), StringComparison.OrdinalIgnoreCase)));
+                    ReplaceMod pakOwner = state.Find(paks.ModPakOwner(modPak).Owner);
                     plan.Items.Add(new HealthItem("warn", Path.GetFileName(f.Path) + " is also in the PAK mod '" + (pakOwner == null ? Path.GetFileName(modPak.Path) : pakOwner.Name) + "' (" + Path.GetFileName(modPak.Path) + "), which wins in game while it's installed."));
                 }
                 PakIndex patch = paks.PatchContaining(f.Path);

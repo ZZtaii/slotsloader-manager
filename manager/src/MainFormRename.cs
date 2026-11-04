@@ -112,6 +112,7 @@ namespace SlotsInstaller
             try { shown = LibraryNames.Set(entry, name); }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); SetPageStatus(libraryPage, "Couldn't save the name: " + ex.Message, Palette.Red); return; }
             foreach (LibraryEntry e in SameSourceEntries(entry)) if (!Object.ReferenceEquals(e, entry)) e.CustomName = entry.CustomName;
+            InvalidateInstalledSearch();
             foreach (ListViewItem item in modList.Items) { var e = item.Tag as LibraryEntry; if (e != null && String.Equals(e.SourcePath, entry.SourcePath, StringComparison.OrdinalIgnoreCase) && item.Text != LibraryRowName(e)) item.Text = LibraryRowName(e); }
             ApplyFilters(); modList.Invalidate();
             SetSharedStatus(entry.CustomName == null ? "Showing " + shown + " again (the mod's own name)." : "Renamed to " + shown + " in the Name view. The file keeps its name.", Palette.Green);
@@ -151,6 +152,7 @@ namespace SlotsInstaller
                 return;
             }
             if (String.Equals(outcome.From, outcome.To, StringComparison.Ordinal)) return;
+            InvalidateInstalledSearch();
             bool wasOpen = package != null && SamePath(package.SourcePath, outcome.From);
             PackageReload reload = wasOpen ? CapturePackageReload(false) : null;
             ReplaceMod editing = wasOpen ? editingReplacement : null;

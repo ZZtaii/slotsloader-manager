@@ -120,6 +120,7 @@ namespace SlotsInstaller
             bool finished = indexWorkerDone && indexQueue.IsEmpty;
             if (applied > 0 && sameList)
             {
+                InvalidateInstalledSearch();
                 indexUiDirty = true;
                 if (finished || previousIdentity < identityTotal && identityApplied >= identityTotal) facetRowsSource = null;
             }

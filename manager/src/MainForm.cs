@@ -2233,6 +2233,7 @@ namespace SlotsInstaller
                 selectingMod = true;
                 bool relist = false;
                 ModPackage own = SourcePackage;   // 1.0.16: the row describes its own archive, not the addons shown with it
+                InvalidateInstalledSearch();
                 foreach (LibraryEntry listed in library.Where(e => String.Equals(e.SourcePath, package.SourcePath, StringComparison.OrdinalIgnoreCase)))
                 {
                     string known = ListedIdentity(listed);
@@ -2922,7 +2923,7 @@ namespace SlotsInstaller
             }
             // The rows to show, in order (a group's slots follow it when expanded).
             var wanted = new List<object>();
-            foreach (object entry in SortInstalledRows(entries, FilterGameRows().ToList()))   // 2.5.5: the sort chips (MainFormInstalledSort.cs)
+            foreach (object entry in SortInstalledRows(entries, FilterGameRows(searchQuery).ToList()))   // 2.5.5: the sort chips (MainFormInstalledSort.cs)
             {
                 wanted.Add(entry);
                 OutfitGroup group = entry as OutfitGroup;
