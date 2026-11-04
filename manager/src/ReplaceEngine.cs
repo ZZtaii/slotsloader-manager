@@ -16,31 +16,32 @@ namespace SlotsInstaller
         internal List<PakIndex> Patches = new List<PakIndex>();
         internal IEnumerable<PakIndex> Writable { get { if (Base != null) yield return Base; foreach (var p in Dlc) yield return p; } }
 
-        internal static GamePaks Load(string gameRoot)
+        internal static GamePaks Load(string gameRoot, bool refreshWritable = false)
         {
             var paks = new GamePaks();
             string basePath = Path.Combine(gameRoot, "re_chunk_000.pak");
-            if (File.Exists(basePath)) paks.Base = Cached(basePath);
+            if (File.Exists(basePath)) paks.Base = Cached(basePath, refreshWritable);
             string dlc = Path.Combine(gameRoot, "dlc");
-            if (Directory.Exists(dlc)) foreach (string f in Directory.GetFiles(dlc, "*.pak").OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) paks.Dlc.Add(Cached(f));
+            if (Directory.Exists(dlc)) foreach (string f in Directory.GetFiles(dlc, "*.pak").OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) paks.Dlc.Add(Cached(f, refreshWritable));
             // 2.5.6: a patch PAK that can't be read (a PAK mod's, say) is skipped, never a reason every change fails.
             if (Directory.Exists(gameRoot))
                 foreach (string f in Directory.GetFiles(gameRoot, "re_chunk_000.pak.patch_*.pak").OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-                    try { paks.Patches.Add(Cached(f)); }
+                    // Patch numbers are reused. A copied replacement can preserve both size and timestamp.
+                    try { paks.Patches.Add(PakIndex.Open(f)); }
                     catch (Exception ex) { if (!(ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException)) throw; Program.LogLine("Unreadable patch PAK skipped: " + Path.GetFileName(f) + " (" + ex.Message + ")"); }
             return paks;
         }
 
         private static readonly object cacheLock = new object();
         private static readonly Dictionary<string, PakIndex> cache = new Dictionary<string, PakIndex>(StringComparer.OrdinalIgnoreCase);
-        internal static PakIndex Cached(string path)
+        internal static PakIndex Cached(string path, bool refresh = false)
         {
             var info = new FileInfo(path);
             string key = Path.GetFullPath(path);
             lock (cacheLock)
             {
                 PakIndex found;
-                if (cache.TryGetValue(key, out found) && found.Length == info.Length && found.LastWriteUtc == info.LastWriteTimeUtc) return found;
+                if (!refresh && cache.TryGetValue(key, out found) && found.Length == info.Length && found.LastWriteUtc == info.LastWriteTimeUtc) return found;
             }
             PakIndex index = PakIndex.Open(path);
             lock (cacheLock) { if (cache.Count > 16) cache.Clear(); cache[key] = index; }
@@ -484,7 +485,23 @@ namespace SlotsInstaller
             Directory.CreateDirectory(DataDir);
             removableDirs = new HashSet<string>(current.CreatedDirs.Concat(journal.CreatedDirs), StringComparer.OrdinalIgnoreCase);
             try { using (InstallMetrics.Measure("journal write")) DurableFile.WriteJson(JournalPath, journal); }
-            catch { if (!JournalPending) Cleanup(journal.CreatedPaths); throw; }
+            catch
+            {
+                // An ordered import already has a preparation journal. Only the newly published
+                // deployment journal can take ownership of this pass's backups.
+                try
+                {
+                    if (!JournalPending) Cleanup(journal.CreatedPaths);
+                    else
+                    {
+                        var published = ReadJsonShared<ReplaceJournal>(JournalPath);
+                        if (published != null && published.Format == journal.Format && !String.IsNullOrEmpty(published.OperationId) && published.OperationId != journal.OperationId)
+                            Cleanup(journal.CreatedPaths.Except(published.CreatedPaths ?? new List<string>(), StringComparer.OrdinalIgnoreCase));
+                    }
+                }
+                catch (Exception readError) { if (readError is OutOfMemoryException) throw; Program.Log(readError); }
+                throw;
+            }
             int step = 0;
             using (OperationContext.NonCancellable())
             {
@@ -995,7 +1012,9 @@ namespace SlotsInstaller
                 string locked = ExternalLockReason(external);   // 1.0.1: nothing the mutation staged is kept (each caller cleans up on a throw)
                 if (locked != null && AddsGameFiles(current, next, options, methodOverride, CurrentMethod(current), external)) throw new IOException(locked);
                 GamePaks paks;
-                using (InstallMetrics.Measure("game PAK load")) paks = GamePaks.Load(GameRoot);
+                // External writers can preserve length and modification time while reassigning a row.
+                // Take a fresh table snapshot under the replacement lock before planning a write.
+                using (InstallMetrics.Measure("game PAK load")) paks = GamePaks.Load(GameRoot, true);
                 if (method == ReplaceMethods.Pak && paks.Base == null && next.Mods.Any(m => m.Enabled && m.Files.Any(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))))
                     throw new IOException("re_chunk_000.pak is missing from the game folder, so the PAK method can't be used.");
                 var messages = new List<string>();

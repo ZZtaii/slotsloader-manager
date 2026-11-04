@@ -45,7 +45,7 @@ namespace SlotsInstaller
         {
             using (InstallMetrics.Measure("prepare extraction and fixes")) return PrepareCore(composition, sevenZip, engine, staging, cache, updateId, null, null);
         }
-        internal static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId, ReplaceState presetState, Func<string> reservePatch, MigrationRow migrationRow = null, string methodOverride = null, bool handoffPreview = false)
+        internal static ReplacePlan PrepareCore(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string staging, PrepareCache cache, string updateId, ReplaceState presetState, Func<string> reservePatch, MigrationRow migrationRow = null, string methodOverride = null, bool handoffPreview = false, ReplaceState onDisk = null)
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
             if (composition == null) throw new ArgumentNullException("composition");
@@ -87,7 +87,8 @@ namespace SlotsInstaller
             // 1.0.1: Slotsloader still installs; 1.0.10: plain REFramework too, unless the external manager installed it.
             string externalLock = ReplaceEngine.ExternalLockReason(fluffy, composition.Files.Values.Select(f => f.Asset.DestinationPath));
             if (externalLock != null) plan.Items.Add(new HealthItem("error", externalLock));
-            paks.SetModPaks(state);
+            onDisk = onDisk ?? state;
+            paks.SetModPaks(onDisk);
             if (reference.CurrentCrcs.Count == 0) plan.Items.Add(new HealthItem("warn", "Couldn't read the game's colour-file signatures (" + reference.CrcSource + "); outdated colour files are not fixed."));
 
             // 1. Destinations: lower-case natives paths, old texture suffixes upgraded.
@@ -118,7 +119,7 @@ namespace SlotsInstaller
             // 2.5.6: each .pak becomes the next patch PAK, after every patch number in use (the game reads them in order).
             if (modPaks.Count > 0)
             {
-                int number = engine.NextPatchNumber(state, updateId);
+                int number = engine.NextPatchNumber(state);
                 // 2.5.7: reinstalling or updating an installed PAK mod (same source, or the record being updated) keeps its numbers.
                 List<string> reuse = state.Mods.Where(m => (presetState == null && !m.PresetLayer && SameSource(m.SourcePath, plan.SourcePath)) || (!String.IsNullOrEmpty(updateId) && String.Equals(m.Id, updateId, StringComparison.OrdinalIgnoreCase)))
                     .SelectMany(m => m.Files).Select(x => x.Path).Where(ReplaceEngine.IsPatchPakPath).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(ReplaceEngine.PatchNumber).ToList();
@@ -237,7 +238,7 @@ namespace SlotsInstaller
                 PakIndex modPak = paks.ModPakContaining(f.Path);   // 2.5.7: an installed PAK mod holds it too: it wins in game
                 if (modPak != null)
                 {
-                    ReplaceMod pakOwner = state.Find(paks.ModPakOwner(modPak).Owner);
+                    ReplaceMod pakOwner = onDisk.Find(paks.ModPakOwner(modPak).Owner);
                     plan.Items.Add(new HealthItem("warn", Path.GetFileName(f.Path) + " is also in the PAK mod '" + (pakOwner == null ? Path.GetFileName(modPak.Path) : pakOwner.Name) + "' (" + Path.GetFileName(modPak.Path) + "), which wins in game while it's installed."));
                 }
                 PakIndex patch = paks.PatchContaining(f.Path);

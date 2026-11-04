@@ -49,13 +49,14 @@ namespace SlotsInstaller
             var row = f.Engine.LoadState().Deployed.Single(d => d.Path == ReplaceChecks.V5).Zeroed.Single();
             string path = Path.Combine(f.Game, row.Pak);
             var pak = PakIndex.Open(path);
+            DateTime writeTime = File.GetLastWriteTimeUtc(path);
             ulong foreign = PakHash.PathHash("natives/stm/another-asset.bin");
             PakWriter.WriteHashes(path, pak.Length, pak.Header, new[] { new PakHashWrite { Index = row.Index, Expected = new byte[8], Value = BitConverter.GetBytes(foreign) } });
-            GamePaks.Forget(path);
+            File.SetLastWriteTimeUtc(path, writeTime);
             ReplaceChecks.Install(f, "modDlc", "Unrelated");
             ReplaceChecks.Require(PakIndex.Open(path).Entry(row.Index).Hash == foreign && !f.Engine.LoadState().Deployed.Single(d => d.Path == ReplaceChecks.V5).Zeroed.Any(), "foreign row still claimed");
             f.Engine.Uninstall(mod.Id);
-            ReplaceChecks.Require(PakIndex.Open(path).Entry(row.Index).Hash == foreign, "foreign row changed on uninstall");
+            ReplaceChecks.Require(!f.Engine.JournalPending && PakIndex.Open(path).Entry(row.Index).Hash == foreign, "foreign row changed on uninstall");
         }
 
         internal static void ReusedName(string root)
@@ -67,16 +68,20 @@ namespace SlotsInstaller
             var mod = ReplaceChecks.Install(f, "first", "First");
             string target = f.Engine.GamePath(mod.Files.Single().Path);
             ReplaceChecks.Require(ReplaceChecks.Check(f, "modB").CanInstall, "verified PAK not classified as managed");
+            DateTime originalTime = File.GetLastWriteTimeUtc(target);
             File.Delete(target);
             WritePak(target, ReplaceChecks.V5, 2);  // same size as our file
             GamePaks.Forget(target);
             var changed = ReplaceChecks.Check(f, "modB");
             ReplaceChecks.Require(!changed.CanInstall && changed.Errors.Any(s => s.Contains("patch PAK")), "different same-size PAK trusted");
-            File.Copy(src, target, true); GamePaks.Forget(target);
+            File.Copy(src, target, true); File.SetLastWriteTimeUtc(target, originalTime); GamePaks.Forget(target);
             f.Engine.SetEnabled(mod.Id, false);
-            WritePak(target, ReplaceChecks.V5, 3);
+            // The foreign archive has a different member, but the same size and modification time.
+            WritePak(target, ReplaceChecks.V1, 3);
+            File.SetLastWriteTimeUtc(target, originalTime);
             var original = ReplaceChecks.Snapshot(f.Game);
-            ReplaceChecks.Refused(delegate { ReplaceChecks.Install(f, "modB", "Blocked"); }, "patch PAK");
+            ReplaceChecks.Require(!ReplaceChecks.Check(f, "modA").CanInstall, "health used the previous patch's member list");
+            ReplaceChecks.Refused(delegate { ReplaceChecks.Install(f, "modA", "Blocked"); }, "patch PAK");
             ReplaceChecks.SameSnapshot(original, ReplaceChecks.Snapshot(f.Game), "blocked overlap with disabled mod's former number");
         }
 
@@ -97,6 +102,13 @@ namespace SlotsInstaller
                 foreach (var file in main.Files.Concat(addon.Files)) ReplaceChecks.Require(ReplaceEngine.Sha(f.Engine.GamePath(file.Path)) == file.Sha256, file.Path + " is not its recorded payload");
                 f.Engine.Uninstall(addon.Id);
                 ReplaceChecks.Require(ReplaceEngine.Sha(f.Engine.GamePath(main.Files.Single().Path)) == main.Files.Single().Sha256, "addon uninstall changed main");
+                f.Engine.SetEnabled(main.Id, false);
+                WritePak(Path.Combine(f.Mod("badPak"), "z.pak"), ReplaceChecks.V6, 13);
+                var upgrade = ReplaceChecks.Install(f, "badPak", "Expanded main");
+                ReplaceChecks.Require(!upgrade.Enabled && upgrade.Files.Count == 2 && upgrade.Files.Select(x => x.Path).Distinct().Count() == 2,
+                    "disabled upgrade lost a PAK payload");
+                f.Engine.SetEnabled(upgrade.Id, true);
+                foreach (var file in upgrade.Files) ReplaceChecks.Require(ReplaceEngine.Sha(f.Engine.GamePath(file.Path)) == file.Sha256, "upgraded payload differs");
             }
             finally { ReplacePlanner.Discard(prepared); }
         }
@@ -118,6 +130,44 @@ namespace SlotsInstaller
                 ReplaceChecks.SameSnapshot(before, ReplaceChecks.Snapshot(f.Engine.BackupDir), "after a refused install");
                 ReplaceChecks.Require(!f.Engine.JournalPending && f.Engine.LoadState().Originals.Count == 0, "refusal committed a backup");
             }
+        }
+
+        private static PresetLayer Layer(string source, string name, int order)
+        {
+            var package = PackageReader.Load(source, "");
+            return new PresetLayer { Package = package, Id = package.Components.Single(c => !c.IsDummy && c.HasFiles(true)).Id,
+                Name = name, Stamp = MainForm.SourceStamp(source), Order = order };
+        }
+
+        internal static void PresetReimport(string root)
+        {
+            var f = ReplaceChecks.Create(root, false, ReplaceMethods.Pak);
+            string source = f.Mod("owned"); Directory.CreateDirectory(source);
+            string pak = Path.Combine(source, "body.pak");
+            WritePak(pak, ReplaceChecks.V5, 1);
+            Func<List<PresetLayer>> layers = delegate { return new List<PresetLayer> { Layer(source, "PAK", 0), Layer(f.Mod("modB"), "Loose", 1) }; };
+            var original = f.Engine.ImportLayers(layers(), "");
+            File.Delete(pak); WritePak(pak, ReplaceChecks.V5, 2);
+            var updated = f.Engine.ImportLayers(layers(), "");
+            ReplaceChecks.Require(updated.Count == 2 && updated[0].Id != original[0].Id && updated[0].Files.Single().Path == original[0].Files.Single().Path &&
+                ReplaceEngine.Sha(f.Engine.GamePath(updated[0].Files.Single().Path)) == ReplaceEngine.Sha(pak), "PAK preset update failed");
+        }
+
+        internal static void PresetBackups(string root)
+        {
+            var f = ReplaceChecks.Create(root, false, ReplaceMethods.Pak);
+            ReplaceChecks.Put(f.Game, ReplaceChecks.V5, new byte[] { 3 });
+            var before = ReplaceChecks.Snapshot(f.Game);
+            ReplaceChecks.Put(f.Engine.BackupDir, "existing.bin", new byte[] { 5 });
+            var backups = ReplaceChecks.Snapshot(f.Engine.BackupDir);
+            FileStream reader = null;
+            ReplaceEngine.BeforeArchivePayloads = delegate { reader = new FileStream(f.Engine.JournalPath, FileMode.Open, FileAccess.Read, FileShare.Read); };
+            try { ReplaceChecks.Refused(delegate { f.Engine.ImportLayers(new List<PresetLayer> { Layer(f.Mod("modB"), "Body", 0) }, ""); }, null); }
+            finally { ReplaceEngine.BeforeArchivePayloads = null; if (reader != null) reader.Dispose(); }
+            ReplaceChecks.Require(reader != null, "journal promotion was not exercised");
+            f.Engine.Recover();
+            ReplaceChecks.SameSnapshot(before, ReplaceChecks.Snapshot(f.Game), "after failed journal promotion");
+            ReplaceChecks.SameSnapshot(backups, ReplaceChecks.Snapshot(f.Engine.BackupDir), "after recovering the preparation journal");
         }
     }
 }

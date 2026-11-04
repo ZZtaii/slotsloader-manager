@@ -82,6 +82,8 @@ namespace SlotsInstaller
                 check("a reused patch filename never proves ownership", delegate { PakOwnershipChecks.ReusedName(Path.Combine(run, "foreign-pak")); });
                 check("separately staged PAKs receive distinct numbers at commit", delegate { PakOwnershipChecks.NumberAllocation(Path.Combine(run, "staged-paks")); });
                 check("a refused install cleans only its own temporary backups", delegate { PakOwnershipChecks.FailedBackups(Path.Combine(run, "failed-backups")); });
+                check("preset reimport verifies PAK ownership against the installed deployment", delegate { PakOwnershipChecks.PresetReimport(Path.Combine(run, "preset-reimport")); });
+                check("an unsuccessful preset journal write keeps its prior journal and drops unclaimed backups", delegate { PakOwnershipChecks.PresetBackups(Path.Combine(run, "preset-backups")); });
                 check("PAK mods (2.5.6): a mod's .pak is added as the next patch PAK (a pre-numbered name too); removing or disabling one below another PAK leaves an empty placeholder, at the top it is deleted; Undo and re-enabling fill the placeholder; a number another PAK took meanwhile is never overwritten; the other mod's patch PAK never changes", delegate { PakMods(Path.Combine(run, "pak-mods")); });
                 check("leftover patch PAKs (1.0.11): a patch PAK nothing claims is a leftover; the Manager's PAK mod (enabled or disabled), PAKs either external-manager root lists, the empty placeholder, Slotsloader's costume pak and an unreadable PAK are not; an unreadable installed.ini means none; status details and replace-status say so; Remove refuses while SF6 or the external manager runs and for a PAK that isn't a leftover; a middle one leaves the empty placeholder, the top one is deleted (no other PAK changes or is renumbered); Undo restores byte for byte, refuses while either runs and once the number holds another PAK; an ended Undo's copy goes to the Recycle Bin", delegate { LeftoverPakChecks.Engine(Path.Combine(run, "leftover-paks"), probe); });
                 check("PAK mods with the loose file loader on (2.5.9): the .pak is still added as the next patch PAK (the method only affects natives files) and uninstalls cleanly", delegate { PakModsLoose(Path.Combine(run, "pak-mods-loose")); });
@@ -631,7 +633,7 @@ namespace SlotsInstaller
             Refused(delegate { ReplaceMod again; f.Engine.RestoreRemoved(folderB, out again); }, "already used by another PAK");
             Require(File.ReadAllBytes(p3).SequenceEqual(Bytes("another tool's pak")), "a foreign PAK was overwritten");
             // The next PAK mod goes above every number in use.
-            Require(f.Engine.NextPatchNumber(f.Engine.LoadState(), null) == 4, "next number: " + f.Engine.NextPatchNumber(f.Engine.LoadState(), null));
+            Require(f.Engine.NextPatchNumber(f.Engine.LoadState()) == 4, "next number: " + f.Engine.NextPatchNumber(f.Engine.LoadState()));
             Require(File.ReadAllBytes(GameFile(f, "re_chunk_000.pak.patch_001.pak")).SequenceEqual(patch1), "the other mod's patch_001 changed");
 
             // 2.5.7: a PAK-method replacement of a file the PAK mod also holds is a warned overlap, never a block (the
