@@ -587,7 +587,7 @@ namespace SlotsInstaller
             ReplaceEngine engine = Engine();
             try
             {
-                if (allowRecovery && engine.JournalPending && !GameProcesses.Probe.IsGameRunning() && !GameProcesses.Probe.IsFluffyRunning()) result.Recovery = engine.Recover();
+                if (allowRecovery && engine.JournalPending && !GameProcesses.Probe.IsGameRunning() && !GameProcesses.Probe.IsFluffyRunning()) result.Recovery = engine.Recover(true);
             }
             catch (Exception ex) { Program.Log(ex); result.Recovery = ex.Message; }
             // 2.1.0: after the app folder was moved, the corrected Data paths are saved once (Data records only).
@@ -681,6 +681,7 @@ namespace SlotsInstaller
 
         private void ApplyGameRows(GameRowsResult result)
         {
+            InvalidateInstalledSearch();
             gameRows = result.Rows; gameStatus = result.Status; gameMethod = result.Method;
             WatchFluffy(result.FluffyRoots, result.FluffyStamp);
             replacedSources.Clear(); foreach (string s in result.Sources) replacedSources.Add(s);
@@ -734,11 +735,11 @@ namespace SlotsInstaller
 
         private GameModRow GetGameRowSelection() { return installedList.SelectedItems.Count == 1 ? installedList.SelectedItems[0].Tag as GameModRow : null; }
 
-        private IEnumerable<GameModRow> FilterGameRows()
+        private IEnumerable<GameModRow> FilterGameRows(InstalledQuery searchQuery)
         {
             if (InstalledKindFilter == "Extra") return new GameModRow[0];
             IEnumerable<GameModRow> rows = gameRows;
-            if (installedSearch != null && installedSearch.Text.Trim().Length > 0) { InstalledQuery searchQuery = ParseInstalledSearch(); rows = rows.Where(r => GameRowMatchesSearch(searchQuery, r)).ToList(); }
+            if (!searchQuery.Empty) rows = rows.Where(r => GameRowMatchesSearch(searchQuery, r));
             if (installedCharacters.Count > 0) rows = rows.Where(r => r.Mod != null && installedCharacters.Any(who => (r.Mod.Affects ?? "").IndexOf(who, StringComparison.OrdinalIgnoreCase) >= 0));
             string state = installedState == null ? "" : Convert.ToString(installedState.SelectedItem);
             rows = rows.Where(r => state == "Enabled" ? (r.Mod == null || r.Mod.Enabled) : state == "Disabled" ? (r.Mod != null && !r.Mod.Enabled) : state == "Managed" ? r.Mod != null : state == "Manual" ? r.Mod == null : true);

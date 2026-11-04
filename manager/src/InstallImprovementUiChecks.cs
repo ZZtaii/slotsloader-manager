@@ -61,27 +61,43 @@ namespace SlotsInstaller
                 foreach (var added in engine.LoadState().Mods.Where(m => ReplacePlanner.SameSource(m.SourcePath, simple)).ToList()) engine.Uninstall(added.Id);
                 queued.Clear(); Call(form, "CloseBatch"); Call(form, "RefreshInstalled", (object)null); WaitIdle(form);
             }
-            InstalledPakSearchUi(form, output);
+            InstalledPakSearchUi(form, f, output);
         }
-        private static void InstalledPakSearchUi(MainForm form, string output)
+        private static void InstalledPakSearchUi(MainForm form, ReplaceChecks.Fixture f, string output)
         {
-            var previous = Get<List<GameModRow>>(form, "gameRows");
             var search = Get<PaddedTextField>(form, "installedSearch"); string text = search.Text;
-            var pak = new GameModRow { Kind = "Pak", Mod = new ReplaceMod { Id = "search-pak", Name = "NULSPACE", Files = new List<ModFile> { new ModFile { Path = "re_chunk_000.pak.patch_002.pak" } } } };
-            var loose = new GameModRow { Kind = "Replacement", Mod = new ReplaceMod { Id = "search-loose", Name = "Loose lighting", Files = new List<ModFile> { new ModFile { Path = "natives/stm/lighting.bin" } } } };
+            var engine = FormEngine(f);
+            string source = f.Mod("installed-pak-search"); Directory.CreateDirectory(source);
+            PakWriter.WriteFixture(Path.Combine(source, "search.pak"), new[] { new KeyValuePair<string, byte[]>("natives/stm/search-fixture.bin", new byte[] { 1 }) }, 0, 0);
+            var package = PackageReader.Load(source, "");
+            ReplacePlan plan;
+            var pak = ReplacePlanner.PrepareAndInstall(Composer.Plan(package, Composer.DefaultSelection(package, true), true), "", engine, "NULSPACE search fixture", false, null, out plan);
+            var library = Get<List<LibraryEntry>>(form, "library");
+            var entry = new LibraryEntry { SourcePath = source, Name = "Search archive", Kind = "Folder" };
+            library.Add(entry);
             try
             {
-                Set(form, "gameRows", new List<GameModRow> { pak, loose });
                 Call(form, "ShowPage", Get<Panel>(form, "installedPage")); Kind(form, "All");
+                Call(form, "RefreshInstalled", (object)null); WaitIdle(form);
                 foreach (string query in new[] { "pak", "pak mods nulspace" })
                 {
                     search.Text = query; Application.DoEvents();
                     var rows = Get<ListView>(form, "installedList").Items.Cast<ListViewItem>().ToList();
-                    Require(rows.Count == 1 && rows[0].Tag == pak, "Installed PAK query: " + query);
+                    Require(rows.Any(i => i.Tag is GameModRow && ((GameModRow)i.Tag).Mod != null && ((GameModRow)i.Tag).Mod.Id == pak.Id), "Installed PAK query: " + query);
+                    if (query == "pak mods nulspace") Require(rows.Count == 1, "query matched an unrelated row");
                 }
                 Render(form, Path.Combine(output, "installed-pak-search.png"));
+                form.RenameDisplayName(entry, "Unique search alias");
+                search.Text = "unique search alias"; Application.DoEvents();
+                Require(Get<ListView>(form, "installedList").Items.Count == 1, "new library alias not searchable after a cached query");
             }
-            finally { Set(form, "gameRows", previous); search.Text = text; Call(form, "FillInstalled"); Call(form, "ShowPage", Get<Panel>(form, "libraryPage")); }
+            finally
+            {
+                library.Remove(entry);
+                engine.Uninstall(pak.Id); Call(form, "RefreshInstalled", (object)null); WaitIdle(form);
+                Require(!Get<ListView>(form, "installedList").Items.Cast<ListViewItem>().Select(i => i.Tag).OfType<GameModRow>().Any(r => r.Mod != null && r.Mod.Id == pak.Id), "uninstalled row survived refresh");
+                search.Text = text; Call(form, "ShowPage", Get<Panel>(form, "libraryPage"));
+            }
         }
     }
 

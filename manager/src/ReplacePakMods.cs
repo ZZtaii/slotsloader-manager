@@ -38,18 +38,52 @@ namespace SlotsInstaller
             return Directory.EnumerateFiles(GameRoot, "re_chunk_000.pak.patch_*.pak").Any(f => PatchNumber(Path.GetFileName(f)) > mine);
         }
 
-        // The first patch number above every one in use: on disk (placeholders included) and recorded for installed
-        // mods (a disabled PAK mod keeps its number). `releasing`: a record being replaced (its numbers may be reused).
-        internal int NextPatchNumber(ReplaceState state, string releasing)
+        // New numbers start above every reservation, even on an upgrade: a disabled PAK's old number
+        // can be absent from disk and already allocated to a different payload in this same plan.
+        internal int NextPatchNumber(ReplaceState state)
         {
             int top = 0;
             if (Directory.Exists(GameRoot))
                 foreach (string f in Directory.EnumerateFiles(GameRoot, "re_chunk_000.pak.patch_*.pak")) top = Math.Max(top, PatchNumber(Path.GetFileName(f)));
             if (state != null)
                 foreach (ReplaceMod m in state.Mods)
-                    if (!String.Equals(m.Id, releasing, StringComparison.OrdinalIgnoreCase))
-                        foreach (ModFile f in m.Files) top = Math.Max(top, PatchNumber(f.Path));
+                    foreach (ModFile f in m.Files) top = Math.Max(top, PatchNumber(f.Path));
             return top + 1;
+        }
+
+        // Plans (including addon plans) can be prepared before another install takes their numbers.
+        // Under the game lock, keep numbers held exclusively by this update and allocate new ones above every claim.
+        private void AllocatePreparedPaks(ReplacePlan plan, ReplaceState state, ReplaceMod existing, ReplaceMod below)
+        {
+            var files = plan.Files.Where(f => IsPatchPakPath(f.Path)).OrderBy(f => PatchNumber(f.Path)).ToList();
+            if (files.Count == 0) return;
+            var reusable = existing == null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
+                new HashSet<string>(existing.Files.Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
+            reusable.ExceptWith(state.Mods.Where(m => m != existing).SelectMany(m => m.Files).Select(f => f.Path));
+            int next = NextPatchNumber(state);
+            // SF6 loads higher patch numbers last. An addon must stay above every main PAK,
+            // including new ones added when the main archive grew. Keep its own PAK order too.
+            int previous = below == null ? 0 : below.Files.Select(f => PatchNumber(f.Path)).DefaultIfEmpty(0).Max();
+            var moves = new List<KeyValuePair<PreparedFile, string>>();
+            foreach (PreparedFile file in files)
+            {
+                int proposed = PatchNumber(file.Path);
+                if (reusable.Contains(file.Path) && proposed > previous) { previous = proposed; continue; }
+                int number = Math.Max(Math.Max(next, proposed), checked(previous + 1));
+                previous = number;
+                next = checked(number + 1);
+                string target = PatchPakName(number);
+                if (target != file.Path) moves.Add(new KeyValuePair<PreparedFile, string>(file, target));
+            }
+            // All moves are upwards. Move the highest first so a shifted range cannot overwrite itself.
+            foreach (var move in moves.AsEnumerable().Reverse())
+            {
+                string target = Safety.Under(plan.StagingFolder, move.Value);
+                File.Move(Safety.Under(plan.StagingFolder, move.Key.Path), target);
+                plan.Items.Add(new HealthItem("info", Path.GetFileName(move.Key.EntryPath) + " uses " + move.Value + " in the installed patch order."));
+                move.Key.Path = move.Value;
+                move.Key.Source = target;
+            }
         }
 
         // 1.0.1: a missing number below the highest patch PAK (left by any tool: an older loader that moved its pak, a

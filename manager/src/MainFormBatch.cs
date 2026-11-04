@@ -509,6 +509,7 @@ namespace SlotsInstaller
             LibraryNames.Forget(gone.Select(e => e.SourcePath).Concat(done.Select(d => d.Value.Full)));
             List<LibraryEntry> before = library;
             library = library.Where(e => !gone.Contains(e)).ToList();
+            InvalidateInstalledSearch();
             if (Object.ReferenceEquals(libraryRowsSource, before)) libraryRowsSource = library;
             foreach (LibraryEntry e in gone) { libraryRows.Remove(e); installStates.Remove(e); libraryRanks.Remove(e); }
             bool previous = selectingMod; selectingMod = true;
