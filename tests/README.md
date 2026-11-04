@@ -35,6 +35,25 @@ their lowercase native path with `/` replaced by `__` as the filename. The
 repair command uses the production dispatch and profile table, and writes
 unchanged bytes when a repair is refused.
 
+## Mod-only dependencies and loose game files (1.10.9)
+
+After `build.bat`, run `python tests/loose_dependencies.py [--old-loader <previous exe>]`.
+The fixture outfit of fluffy_coexistence ships a mod-only texture at a shared path (not its
+slot's folder, not a vanilla asset), like Sakura as Ryu's DriveTech mesh. (a) without a loose
+file the PAK has the outfit's copy and game_colours.tsv probes the path as `none`; (b) a loose
+file there (a replacement installed after the build) rebuilds the PAK, which leaves the path to
+it, the slot still kept; (c) unchanged runs are Up to date, a same-size same-date edit rebuilds,
+removing the loose file brings the outfit's copy back, adding it again leaves it again; (d) a
+loose file there before the first build never goes in the PAK; outfits.json says
+`loose_files_kept`. 27 checks, 28 with `--old-loader` (1.10.8: the outfit's copy covers the
+loose file and the cache is not rebuilt).
+
+`python tests/shared_path_edges.py` (13 checks, from the PR #26 review): the same through the
+slot check. (s) a loose file at a shared texture the outfit ships is never covered; (l) the same
+with a 190-character game folder (loose path past MAX_PATH); (p) a shared texture the outfit
+does not ship, supplied by a loose file at the first build, then removed: rebuilt; (q) missing at
+first (probed), added, removed: rebuilt each time.
+
 ## Colours from the game folder (1.9.8)
 
 After `build.bat`, run `python tests/loose_colours.py [--root <new short folder>]
