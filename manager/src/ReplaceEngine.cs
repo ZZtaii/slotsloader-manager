@@ -281,22 +281,43 @@ namespace SlotsInstaller
         private IDisposable TryLock()
         {
             if (LinuxPlatform.IsLinux) { LinuxPlatform.Status(); LinuxPlatform.CanonicalRoot(GameRoot, "game"); }
+            Mutex data = TryMutex("data", DataDir.TrimEnd(Path.DirectorySeparatorChar));
+            if (data == null) return null;
+            try
+            {
+                Mutex game = TryMutex("game", GameRoot);
+                if (game == null) return null;
+                var held = new Releaser(data, game);
+                data = null;  // ownership transferred to the releaser
+                Interlocked.Increment(ref activeLocks);
+                return held;
+            }
+            finally { if (data != null) { data.ReleaseMutex(); data.Dispose(); } }
+        }
+        private static Mutex TryMutex(string scope, string path)
+        {
             string key;
-            using (var sha = FastHash.Sha256()) key = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(GameRoot.ToUpperInvariant()))).Replace("-", "");
-            var mutex = new Mutex(false, "Local\\SF6SlotsInstaller-game-" + key);
+            using (var sha = FastHash.Sha256()) key = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(path.ToUpperInvariant()))).Replace("-", "");
+            var mutex = new Mutex(false, "Local\\SF6SlotsInstaller-" + scope + "-" + key);
             bool acquired;
             try { acquired = mutex.WaitOne(0); } catch (AbandonedMutexException) { acquired = true; }
             if (!acquired) { mutex.Dispose(); return null; }
-            Interlocked.Increment(ref activeLocks);
-            return new Releaser(mutex);
+            return mutex;
         }
         // 2.3.0: game locks held in this process (the portrait reader waits while a change runs).
         private static int activeLocks;
         internal static int ActiveLocks { get { return Thread.VolatileRead(ref activeLocks); } }
         private sealed class Releaser : IDisposable
         {
-            private Mutex mutex; internal Releaser(Mutex m) { mutex = m; }
-            public void Dispose() { if (mutex != null) { mutex.ReleaseMutex(); mutex.Dispose(); mutex = null; Interlocked.Decrement(ref activeLocks); } }
+            private Mutex data, game;
+            internal Releaser(Mutex data, Mutex game) { this.data = data; this.game = game; }
+            public void Dispose()
+            {
+                if (game == null) return;
+                game.ReleaseMutex(); game.Dispose(); game = null;
+                data.ReleaseMutex(); data.Dispose(); data = null;
+                Interlocked.Decrement(ref activeLocks);
+            }
         }
 
         // ---- Hash helpers
@@ -330,6 +351,7 @@ namespace SlotsInstaller
             LinuxPlatform.RequireClosed("recover an interrupted change");
             ReplaceJournal journal = ReadJsonShared<ReplaceJournal>(JournalPath);
             if (journal == null || journal.Format != "sf6-replace-journal-v1") throw new IOException("The replacement journal is unreadable: " + JournalPath + ". Nothing was changed; inspect it before continuing.");
+            RequireJournalGame(journal);
             RelocateJournal(journal);
             ReplaceState state = LoadState();
             if (state.Generation >= journal.NewGeneration)
@@ -345,6 +367,24 @@ namespace SlotsInstaller
             File.Delete(JournalPath);
             RecordRecovery(journal, false);
             return "Interrupted change '" + journal.Description + "' rolled back; game files match the last saved state.";
+        }
+
+        private void RequireJournalGame(ReplaceJournal journal)
+        {
+            string owner = journal.GameRoot;
+            if (String.IsNullOrEmpty(owner) && StateFileExists())
+            {
+                // Old journals did not store the game root. An active pre-change state pins its
+                // game, as does the state actually committed by this journal. An empty prior state does not.
+                var saved = ReadJsonShared<ReplaceState>(StatePath);
+                if (saved != null && saved.Format == "sf6-replace-state-v1" &&
+                    (saved.Generation == journal.NewGeneration || (saved.Mods != null && saved.Mods.Count > 0) || (saved.Deployed != null && saved.Deployed.Count > 0)))
+                    owner = saved.GameRoot;
+            }
+            if (String.IsNullOrEmpty(owner))
+                throw new IOException("This older replacement journal does not identify its game folder. Recovery needs a verified game folder for " + JournalPath + ". The journal was kept.");
+            if (!String.Equals(Path.GetFullPath(owner).TrimEnd(Path.DirectorySeparatorChar), GameRoot, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("The interrupted replacement belongs to " + owner + ". Select that game folder to recover it.");
         }
 
         internal bool JournalPending { get { return File.Exists(JournalPath); } }
@@ -1019,7 +1059,7 @@ namespace SlotsInstaller
                     throw new IOException("re_chunk_000.pak is missing from the game folder, so the PAK method can't be used.");
                 var messages = new List<string>();
                 deferRenames = gameRunning || fluffyRunning;   // the crash reporter is Fluffy's too: renamed at the next change with both closed
-                var journal = new ReplaceJournal { OperationId = Guid.NewGuid().ToString("N"), Description = description, StartedUtc = DateTime.UtcNow.ToString("o") };
+                var journal = new ReplaceJournal { OperationId = Guid.NewGuid().ToString("N"), GameRoot = GameRoot, Description = description, StartedUtc = DateTime.UtcNow.ToString("o") };
                 var observed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 try
                 {
