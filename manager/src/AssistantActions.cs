@@ -347,8 +347,8 @@ namespace SlotsInstaller
                     var rows = workspace.Installed();
                     var selected = a.InstalledIds.Select(id => FindInstalled(rows, id)).ToList();
                     // 1.0.1: uninstall means uninstall (no kept copy); an outfit with no source goes to the Recycle Bin.
-                    OutfitSetStore.UninstallResult r = OutfitSetStore.UninstallOutfits(root, selected, RecycleBin.Current);
-                    return "Uninstalled " + ReplacePlanner.N(r.Deleted + r.Recycled, "outfit") + (r.Recycled > 0 ? " (" + r.Recycled + " without a source went to the Recycle Bin)" : "") + (r.Kept.Count > 0 ? ". Still installed: " + String.Join("; ", r.Kept) : "") + ".";
+                    OutfitSetStore.UninstallResult r = OutfitSetStore.UninstallOutfits(root, selected, RecycleBin.Current, workspace.Engine());
+                    return ("Uninstalled " + ReplacePlanner.N(r.Deleted + r.Recycled, "outfit") + (r.Recycled > 0 ? " (" + r.Recycled + " without a source went to the Recycle Bin)" : "") + (r.Kept.Count > 0 ? ". Still installed: " + String.Join("; ", r.Kept) : "") + ". " + r.CacheNote).Trim();
                 }
                 case AssistantActionKind.SavePreset:
                 {

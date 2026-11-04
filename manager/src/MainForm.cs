@@ -1597,7 +1597,7 @@ namespace SlotsInstaller
             string[] libraries = config.Libraries.ToArray(); string root = config.CostumeRoot; string sevenZip = config.SevenZipPath;
             // 1.0.6: the quick listing (what the index knows); the rest is read in the background (MainFormIndexing.cs).
             StopIndexing();
-            Work("Scanning libraries and installed outfits…", delegate { List<LibraryEntry> pending, names; List<LibraryEntry> entries = Library.ScanQuick(libraries, sevenZip, out pending, out names); return WithChangedSources(new ScanResult { Entries = entries, Pending = pending, NamesPending = names, Installed = Installer.ListInstalled(root), Game = LoadGameRows(true), Removed = ReadRemovedUsage(root) }); }, delegate(ScanResult result)
+            Work("Scanning libraries and installed outfits…", delegate { List<LibraryEntry> pending, names; List<LibraryEntry> entries = Library.ScanQuick(libraries, sevenZip, out pending, out names); return WithChangedSources(new ScanResult { Entries = entries, Pending = pending, NamesPending = names, Game = LoadGameRows(true), Installed = Installer.ListInstalled(root), Removed = ReadRemovedUsage(root) }); }, delegate(ScanResult result)
             {
                 // 1.0.6: LibraryNames.Apply gives the entries the names typed in the Name view.
                 library = result.Entries; LibraryNames.Apply(library); installed = result.Installed; UseRemovedUsage(result.Removed); changedSources = result.Changed ?? changedSources; ApplyGameRows(result.Game); UpdateModeUi();
@@ -2886,7 +2886,7 @@ namespace SlotsInstaller
         {
             string root = config.CostumeRoot;
             keepUndo = true;   // the refresh reports a result; it is not a new change
-            try { Work("Reading installed outfits…", delegate { using (InstallMetrics.Measure("installed refresh")) return WithChangedSources(new ScanResult { Installed = Installer.ListInstalled(root), Game = LoadGameRows(true), Removed = ReadRemovedUsage(root) }); }, RefreshInstalledDone(completionStatus)); }
+            try { Work("Reading installed outfits…", delegate { using (InstallMetrics.Measure("installed refresh")) return WithChangedSources(new ScanResult { Game = LoadGameRows(true), Installed = Installer.ListInstalled(root), Removed = ReadRemovedUsage(root) }); }, RefreshInstalledDone(completionStatus)); }
             finally { keepUndo = false; }
         }
         private Action<ScanResult> RefreshInstalledDone(string completionStatus)

@@ -131,8 +131,8 @@ namespace SlotsInstaller
                 if (outfits.Count == 0) return message;
                 try
                 {
-                    var result = OutfitSetStore.UninstallOutfits(root, outfits, bin);
-                    return message + " " + ReplacePlanner.N(result.Deleted + result.Recycled, "outfit") + " removed. " + String.Join("; ", result.Kept);
+                    var result = OutfitSetStore.UninstallOutfits(root, outfits, bin, engine);
+                    return (message + " " + ReplacePlanner.N(result.Deleted + result.Recycled, "outfit") + " removed. " + String.Join("; ", result.Kept) + " " + result.CacheNote).Trim();
                 }
                 catch (IOException ex) { return message + " Check remaining extra outfits: " + ex.Message; }
             }, "Uninstalled " + ReplacePlanner.N(ids.Count, "replacement") + ".");
@@ -165,12 +165,12 @@ namespace SlotsInstaller
         private void RemoveOutfitsWithUndo(List<InstalledOutfit> outfits, string done)
         {
             string root = config.CostumeRoot; IRecycleBin bin = RecycleBin.Current;
-            Work("Uninstalling…", delegate { return OutfitSetStore.UninstallOutfits(root, outfits, bin); }, delegate(OutfitSetStore.UninstallResult r)
+            Work("Uninstalling…", delegate { return OutfitSetStore.UninstallOutfits(root, outfits, bin, Engine()); }, delegate(OutfitSetStore.UninstallResult r)
             {
                 string note = (r.Recycled > 0 ? " " + ReplacePlanner.N(r.Recycled, "outfit") + " without a source went to the Recycle Bin." : "")
                     + (r.Kept.Count > 0 ? " Still installed: " + String.Join("; ", r.Kept) + "." : "");
                 if (r.Deleted + r.Recycled == 0) { RefreshInstalled(); SetPageStatus(currentPage, "Nothing uninstalled." + note, Palette.Accent); return; }
-                RefreshInstalled("✓ " + done + "." + note);
+                RefreshInstalled(("✓ " + done + "." + note + " " + r.CacheNote).Trim());
             });
         }
 

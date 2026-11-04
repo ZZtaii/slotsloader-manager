@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -79,6 +80,192 @@ namespace SlotsInstaller
         // Real loader costume paks (not placeholders): they make extra outfits load.
         internal static List<PatchPak> Generated(string gameRoot) { return Scan(gameRoot).Where(p => p.Kind == PatchPakKind.Costume && p.Entries > 1).ToList(); }
 
+        // outfits.json is the native loader's inventory of the last build. A missing input there
+        // also lets us finish an uninstall that happened while SF6 was running or before a restart.
+        private const string DeferredCleanup = "Slotsloader's costume cache will refresh after SF6 and the external mod manager close.";
+
+        internal static string RetireMissingSource(string costumeRoot, out bool afterExit, ReplaceEngine engine = null)
+        {
+            afterExit = false;
+            bool stale = false;
+            if (String.IsNullOrWhiteSpace(costumeRoot)) return "";
+            try
+            {
+                var root = new DirectoryInfo(costumeRoot);
+                if (!root.Name.Equals("costume_mods", StringComparison.OrdinalIgnoreCase) || root.Parent == null || root.Parent.Parent == null ||
+                    !root.Parent.Name.Equals("reframework", StringComparison.OrdinalIgnoreCase) || !root.Exists) return "";
+                string game = root.Parent.Parent.FullName;
+                string report = Path.Combine(root.Parent.FullName, "data", "SF6_Costumes_Data", "outfits.json");
+                if (StalePak(root, report) == null) return "";
+                stale = true;
+                if (GameProcesses.Probe.IsGameRunning() || GameProcesses.Probe.IsFluffyRunning()) { afterExit = true; return DeferredCleanup; }
+                if (engine == null)
+                {
+                    var config = AppConfig.Load();
+                    config.GameRoot = game;
+                    engine = ReplaceEngine.ForConfig(config);
+                }
+                if (!String.Equals(engine.GameRoot, game, StringComparison.OrdinalIgnoreCase)) throw new IOException("The game folder does not match the costume folder.");
+                using (Installer.AcquireMutation(root.FullName))
+                using (engine.Lock())
+                {
+                    if (engine.JournalPending) return "";
+                    string pak = StalePak(root, report);
+                    if (pak == null) return "";
+                    using (var original = File.Open(pak, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+                    {
+                        if (!IsGeneratedCostumeCache(pak)) return "";
+                        string name = Path.GetFileName(pak);
+                        // Even a marker-bearing PAK may have been explicitly installed as a mod.
+                        if (engine.LoadState().Mods.Any(m => m.Files.Any(f => String.Equals(f.Path, name, StringComparison.OrdinalIgnoreCase)))) return "";
+                        var external = engine.Fluffy();
+                        if (external.Owner(name) != null) return "";
+                        if (external.Warnings.Count > 0) throw new IOException("Couldn't verify which PAKs the external mod manager owns. " + String.Join(" ", external.Warnings));
+                        foreach (string externalRoot in external.Roots)
+                        {
+                            var bytes = FluffyInstalls.ReadShared(Path.Combine(externalRoot, "installed.ini"), true);
+                            if (bytes != null && FluffyInstalls.Parse(FluffyInstalls.DecodeIni(bytes), externalRoot, true)
+                                .Any(mod => mod.Files.Any(f => String.Equals(FluffyInstalls.Key(f), name, StringComparison.OrdinalIgnoreCase)))) return "";
+                        }
+                        GameProcesses.RequireIdle("refresh Slotsloader's costume cache");
+                        if (StalePak(root, report) != pak || !RetireCache(pak, original)) return "";
+                        GamePaks.Forget(pak);
+                        return "Cleared Slotsloader's stale costume cache. Remaining extra outfits rebuild the next time SF6 starts.";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex is OutOfMemoryException) throw;
+                Program.Log(ex);
+                // SF6 can start between the first process check and acquisition of the game lock.
+                if (stale)
+                {
+                    try { afterExit = GameProcesses.Probe.IsGameRunning() || GameProcesses.Probe.IsFluffyRunning(); }
+                    catch (Exception probeError) { if (probeError is OutOfMemoryException) throw; Program.Log(probeError); }
+                    if (afterExit) return DeferredCleanup;
+                }
+                return "Couldn't refresh Slotsloader's costume cache: " + ex.Message.TrimEnd('.') + ". Refresh Installed to retry.";
+            }
+        }
+
+        private static string StalePak(DirectoryInfo root, string report)
+        {
+            if (!File.Exists(report)) return null;
+            Safety.NoReparseChain(report);
+            if (new FileInfo(report).Length > 16L * 1024 * 1024) throw new IOException("Slotsloader's build report is too large.");
+            var build = Json.Read<Dictionary<string, object>>(report);
+            string name = NativeModCheck.Value(build, "pak");
+            if (!PatchName.IsMatch(name)) return null;
+            if (!File.Exists(Path.Combine(root.Parent.Parent.FullName, PluginPath))) return null;
+            string path = Safety.Under(root.Parent.Parent.FullName, name);
+            Safety.NoReparseChain(path);
+            var file = new FileInfo(path);
+            if (!file.Exists || file.Length <= PakIndex.HeaderSize + PakIndex.EntrySize + MarkerBytes.Length || file.LastWriteTimeUtc > File.GetLastWriteTimeUtc(report)) return null;
+            var sources = NativeModCheck.Rows(build, "outfits").Select(row => NativeModCheck.Value(row, "source")).Where(s => !String.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase);
+            return sources.Any(s => SourceMissing(root.FullName, s)) ? path : null;
+        }
+
+        private static bool SourceMissing(string root, string source)
+        {
+            string relative = Safety.ArchivePath(source);
+            string path = Safety.Under(root, relative);
+            try { File.GetAttributes(path); return false; }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            Safety.NoReparseChain(path);
+            return true;
+        }
+
+        private static bool IsGeneratedCostumeCache(string path)
+        {
+            var pak = PakIndex.Open(path);
+            if (pak.Count <= 1 || pak.Contains(PakHash.PathHash(StageMarker))) return false;
+            var rows = pak.Find(PakHash.PathHash(CostumeMarker));
+            if (rows.Count != 1) return false;
+            var marker = pak.Entry(rows[0]);
+            return marker.Attributes == 0 && marker.CompressedSize == MarkerBytes.Length && marker.DecompressedSize == MarkerBytes.Length &&
+                pak.ReadRaw(marker).SequenceEqual(MarkerBytes);
+        }
+
+        internal static bool AwaitingRebuild(string game, string name)
+        {
+            if (String.IsNullOrEmpty(game) || String.IsNullOrEmpty(name) || !PatchName.IsMatch(name)) return false;
+            return IsPlaceholder(Safety.Under(game, name));
+        }
+
+        private static bool IsPlaceholder(string path)
+        {
+            try
+            {
+                if (!File.Exists(path) || new FileInfo(path).Length != PakIndex.HeaderSize + PakIndex.EntrySize + MarkerBytes.Length) return false;
+                Safety.NoReparseChain(path);
+                var pak = PakIndex.Open(path);
+                return pak.Count == 1 && pak.Entry(0).Hash == PakHash.PathHash(CostumeMarker) && pak.ReadRaw(pak.Entry(0)).SequenceEqual(MarkerBytes);
+            }
+            catch (IOException) { return false; }
+            catch (InvalidDataException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+        }
+
+        // File.Replace captures exactly the file displaced by the swap, even if another program
+        // reuses the patch number between our last check and the rename. Keep it until verified.
+        private static bool RetireCache(string path, FileStream original)
+        {
+            string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp", previous = tmp + ".previous";
+            Safety.NoReparseChain(tmp); Safety.NoReparseChain(previous);
+            try
+            {
+                WritePlaceholder(tmp);
+                Safety.NoReparseChain(path);
+                if (!SameFile(original, path)) return false;
+                File.Replace(tmp, path, previous);
+                bool verified = false;
+                try { verified = SameFile(original, previous) && IsGeneratedCostumeCache(previous); }
+                finally
+                {
+                    if (verified) File.Delete(previous);
+                    else if (!File.Exists(path)) File.Move(previous, path);
+                    else if (IsPlaceholder(path))
+                    {
+                        string displaced = tmp + ".displaced";
+                        File.Replace(previous, path, displaced);
+                        if (IsPlaceholder(displaced)) File.Delete(displaced);
+                        else throw new IOException("The patch changed during cleanup. Both files were preserved, including " + displaced);
+                    }
+                    else throw new IOException("The patch changed during cleanup. Its previous contents were preserved at " + previous);
+                }
+                return verified;
+            }
+            finally { if (File.Exists(tmp)) File.Delete(tmp); }
+        }
+
+        // BY_HANDLE_FILE_INFORMATION. Keeping the original open prevents in-place writes and
+        // prevents reuse of its file ID. On volumes without IDs, compare the actual bytes.
+        [StructLayout(LayoutKind.Explicit, Size = 52)]
+        private struct FileIdentity
+        {
+            [FieldOffset(28)] internal uint Volume;
+            [FieldOffset(44)] internal uint IndexHigh;
+            [FieldOffset(48)] internal uint IndexLow;
+        }
+        [DllImport("kernel32.dll")]
+        private static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle handle, out FileIdentity info);
+
+        private static bool SameFile(FileStream original, string path)
+        {
+            using (var current = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+            {
+                if (original.Length != current.Length) return false;
+                FileIdentity a, b;
+                if (GetFileInformationByHandle(original.SafeFileHandle, out a) && GetFileInformationByHandle(current.SafeFileHandle, out b) &&
+                    (a.IndexHigh | a.IndexLow) != 0 && (b.IndexHigh | b.IndexLow) != 0)
+                    return a.Volume == b.Volume && a.IndexHigh == b.IndexHigh && a.IndexLow == b.IndexLow;
+                original.Position = 0;
+                using (var hash = FastHash.Sha256()) return hash.ComputeHash(original).SequenceEqual(hash.ComputeHash(current));
+            }
+        }
+
         // Takes the loader's costume paks out of the row (placeholder where a foreign pak sits above, deleted
         // otherwise; stale placeholders above every foreign pak deleted too) and clears the registry's
         // fingerprint so a reinstalled loader rebuilds. Never touches another pak, costume_mods or the
@@ -113,10 +300,15 @@ namespace SlotsInstaller
         // The loader's marker-only pak (common/pak.cpp write_marker_pak): one stored entry, the marker.
         internal static void WritePlaceholder(string path)
         {
-            string tmp = path + ".tmp";
-            if (File.Exists(tmp)) File.Delete(tmp);
-            PakWriter.WriteFixture(tmp, new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>(CostumeMarker, MarkerBytes) }, 0, 0);
-            DurableFile.Publish(tmp, path);
+            string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            bool complete = false;
+            try
+            {
+                PakWriter.WriteFixture(tmp, new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>(CostumeMarker, MarkerBytes) }, 0, 0);
+                complete = true;
+                DurableFile.Publish(tmp, path);
+            }
+            finally { DurableFile.Discard(tmp, path, complete); }
         }
 
         // The loader rebuilds when the fingerprint in registry.json differs (slot numbers and possession stay).

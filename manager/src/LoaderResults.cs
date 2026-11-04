@@ -19,6 +19,7 @@ namespace SlotsInstaller
                 var report=Json.Read<Dictionary<string,object>>(file);
                 var rows=NativeModCheck.Rows(report,"outfits");
                 string generated=NativeModCheck.Value(report,"generated"), build=NativeModCheck.Value(report,"loader");
+                bool rebuilding=LoaderCostumePak.AwaitingRebuild(Path.GetDirectoryName(Path.GetDirectoryName(costumeRoot)),NativeModCheck.Value(report,"pak"));
                 DateTime written=File.GetLastWriteTimeUtc(file);
                 var sources=rows.Where(r=>!String.IsNullOrEmpty(NativeModCheck.Value(r,"source")))
                     .GroupBy(r=>Normalize(NativeModCheck.Value(r,"source")),StringComparer.OrdinalIgnoreCase)
@@ -40,7 +41,7 @@ namespace SlotsInstaller
                     if (File.Exists(outfit.Folder)) sourceWrite=File.GetLastWriteTimeUtc(outfit.Folder);
                     else if (Directory.Exists(outfit.Folder) && Directory.GetLastWriteTimeUtc(outfit.Folder)>sourceWrite) sourceWrite=Directory.GetLastWriteTimeUtc(outfit.Folder);
                     // Older labels are retained as historical information, never presented as a fresh mapping.
-                    outfit.LoaderStatus=sourceWrite>written ? "Restart SF6 to load" : String.IsNullOrEmpty(outfit.LoaderOutfitName) ? "Not loaded by Slotsloader" : "Loaded";
+                    outfit.LoaderStatus=rebuilding ? "Start SF6 to rebuild" : sourceWrite>written ? "Restart SF6 to load" : String.IsNullOrEmpty(outfit.LoaderOutfitName) ? "Not loaded by Slotsloader" : "Loaded";
                 }
             }
             catch (Exception ex)
