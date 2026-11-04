@@ -19,7 +19,8 @@ namespace SlotsInstaller
         internal static GamePaks Load(string gameRoot, bool refreshWritable = false)
         {
             var paks = new GamePaks();
-            paks.LoaderInstalled = File.Exists(Path.Combine(gameRoot, LoaderCostumePak.PluginPath.Replace('/', '\\')));
+            paks.gameRoot = gameRoot;
+            paks.LoaderRebuilds = LoaderCostumePak.Rebuilds(gameRoot);
             string basePath = Path.Combine(gameRoot, "re_chunk_000.pak");
             if (File.Exists(basePath)) paks.Base = Cached(basePath, refreshWritable);
             string dlc = Path.Combine(gameRoot, "dlc");
@@ -92,23 +93,32 @@ namespace SlotsInstaller
         // uninstalled, and for as long as the outfit and a replacement of that path were both installed; every
         // change of such a replacement was refused. Slotsloader 1.10.9 leaves such a path to the replacement's
         // loose file and rebuilds when it changes (loader_core.cpp add_unrelocated_dependencies). Without the
-        // loader (an orphan PAK) nothing rebuilds it, and it is a patch PAK like any other. The slot tables it
-        // rewrites (LoaderCostumePak.IsSlotTable) stay refused: its copy always wins while it has extra outfits,
-        // and their turned-off base row would leave the loader without the game's own table to build from.
-        internal bool LoaderInstalled;
+        // loader nothing rebuilds it (an orphan PAK, or the loader incomplete: LoaderCostumePak.Rebuilds), and it is a
+        // patch PAK like any other. What Slotsloader writes for itself (SlotOwned: the slot tables, its slot scenes and
+        // slot folders) stays refused: its copy always wins while it has extra outfits, and a turned-off table row would
+        // leave the loader without the game's own table to build from.
+        internal bool LoaderRebuilds;
+        private string gameRoot;
+        private List<string> slotFolders;
         private static readonly ulong CostumeMarkerHash = PakHash.PathHash(LoaderCostumePak.CostumeMarker), StageMarkerHash = PakHash.PathHash(LoaderCostumePak.StageMarker);
-        internal bool IsLoaderCache(PakIndex p) { return LoaderInstalled && p.Contains(CostumeMarkerHash) && !p.Contains(StageMarkerHash) && ModPakOwner(p) == null; }
+        internal bool IsLoaderCache(PakIndex p) { return LoaderRebuilds && p.Contains(CostumeMarkerHash) && !p.Contains(StageMarkerHash) && ModPakOwner(p) == null; }
+        internal bool SlotOwned(string relativePath)
+        {
+            if (LoaderCostumePak.IsSlotTable(relativePath) || LoaderCostumePak.IsCostumeScene(relativePath)) return true;
+            if (slotFolders == null) slotFolders = LoaderCostumePak.SlotFolders(gameRoot);
+            string p = PakHash.Normalize(relativePath ?? "").TrimStart('/');
+            return slotFolders.Any(f => p.StartsWith(f, StringComparison.OrdinalIgnoreCase));
+        }
         internal PakIndex LoaderCacheContaining(string relativePath)
         {
-            if (LoaderCostumePak.IsSlotTable(relativePath)) return null;
             ulong h = PakHash.PathHash(relativePath);
-            return Patches.FirstOrDefault(p => p.Contains(h) && IsLoaderCache(p));
+            PakIndex cache = Patches.FirstOrDefault(p => p.Contains(h) && IsLoaderCache(p));
+            return cache == null || SlotOwned(relativePath) ? null : cache;
         }
         internal PakIndex PatchContaining(string relativePath)
         {
             ulong h = PakHash.PathHash(relativePath);
-            bool table = LoaderCostumePak.IsSlotTable(relativePath);
-            return Patches.FirstOrDefault(p => p.Contains(h) && ModPakOwner(p) == null && (table || !IsLoaderCache(p)));
+            return Patches.FirstOrDefault(p => p.Contains(h) && ModPakOwner(p) == null && (!IsLoaderCache(p) || SlotOwned(relativePath)));
         }
         internal bool Vanilla(string relativePath) { ulong h = PakHash.PathHash(relativePath); return Writable.Any(p => p.Contains(h)); }
     }

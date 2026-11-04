@@ -251,8 +251,14 @@ namespace SlotsInstaller
                     plan.Items.Add(new HealthItem("warn", Path.GetFileName(f.Path) + " is also in the PAK mod '" + (pakOwner == null ? Path.GetFileName(modPak.Path) : pakOwner.Name) + "' (" + Path.GetFileName(modPak.Path) + "), which wins in game while it's installed."));
                 }
                 PakIndex patch = paks.PatchContaining(f.Path);
-                if (patch != null && paks.IsLoaderCache(patch))   // 1.0.18: one of the tables Slotsloader rewrites (GamePaks.PatchContaining)
-                    plan.Items.Add(new HealthItem(plan.Method == ReplaceMethods.Pak ? "error" : "warn", Path.GetFileName(f.Path) + " is a table Slotsloader rewrites in its outfit PAK (" + Path.GetFileName(patch.Path) + ") to add outfit slots, so the game reads its copy while Slotsloader has extra outfits" + (plan.Method == ReplaceMethods.Pak ? ": the PAK method can't replace it." : ".")));
+                if (patch != null && paks.IsLoaderCache(patch))   // 1.0.18: written by Slotsloader for itself (GamePaks.SlotOwned)
+                {
+                    string what = Path.GetFileName(f.Path) + (LoaderCostumePak.IsSlotTable(f.Path) ? " is a table Slotsloader rewrites in its outfit PAK (" + Path.GetFileName(patch.Path) + ") to add outfit slots"
+                        : " belongs to one of Slotsloader's own outfit slots, in its outfit PAK (" + Path.GetFileName(patch.Path) + ")");
+                    plan.Items.Add(plan.Method == ReplaceMethods.Pak
+                        ? new HealthItem("error", what + ", so the game reads Slotsloader's copy while it has extra outfits: the PAK method can't replace it.")
+                        : new HealthItem("warn", what + ". REFramework's loose file loader loads this mod's copy instead, so Slotsloader's extra outfits may not show while it's installed."));
+                }
                 else if (patch != null) plan.Items.Add(new HealthItem(plan.Method == ReplaceMethods.Pak ? "error" : "warn", f.Path + " is also in the patch PAK " + Path.GetFileName(patch.Path) + (plan.Method == ReplaceMethods.Pak ? ", which is never modified: the PAK method can't replace it." : "; the loose file loader may still prefer the loose copy.")));
                 else
                 {
@@ -287,9 +293,12 @@ namespace SlotsInstaller
             if (inLoaderCache.Count > 0)
             {
                 string these = inLoaderCache.Count == 1 ? "this file" : "these files";
-                plan.Items.Add(LoaderCostumePak.KeepsLooseFiles(engine.GameRoot, onDisk)
-                    ? new HealthItem("info", FileList(inLoaderCache) + " " + (inLoaderCache.Count == 1 ? "is" : "are") + " also in Slotsloader's outfit PAK (" + loaderCache + "), from an extra outfit or its last build. Slotsloader builds that PAK again the next time SF6 starts and leaves " + these + " to this mod.")
-                    : new HealthItem("warn", FileList(inLoaderCache) + " " + (inLoaderCache.Count == 1 ? "is" : "are") + " also in Slotsloader's outfit PAK (" + loaderCache + "), from an extra outfit or its last build. Until Slotsloader is updated to " + LoaderCostumePak.KeepsLooseFilesFrom + " or later, an extra outfit's copy there can win in game."));
+                string also = FileList(inLoaderCache) + " " + (inLoaderCache.Count == 1 ? "is" : "are") + " also in Slotsloader's outfit PAK (" + loaderCache + "), from an extra outfit or its last build.";
+                plan.Items.Add(plan.Method != ReplaceMethods.Pak
+                    ? new HealthItem("info", also + " REFramework's loose file loader loads this mod's copy.")
+                    : LoaderCostumePak.KeepsLooseFiles(engine.GameRoot, onDisk)
+                    ? new HealthItem("info", also + " Slotsloader builds that PAK again the next time SF6 starts and leaves " + these + " to this mod.")
+                    : new HealthItem("warn", also + " Until Slotsloader is updated to " + LoaderCostumePak.KeepsLooseFilesFrom + " or later, an extra outfit's copy there can win in game."));
             }
 
             // Streaming twins: a replaced texture whose high-resolution copy the mod does not ship.

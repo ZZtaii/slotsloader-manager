@@ -924,8 +924,14 @@ static std::string loose_colour_state(const std::string& pak_path) {
     uint64_t size = 0, mtime = 0;
     if (!loose_game_stat(pak_path, size, mtime)) return "none";
     auto bytes = read_loose_game_bytes(pak_path);
+    // 1.10.9: eight bytes at a time (the probes now include shared meshes and textures, read at every launch)
     uint64_t h = 14695981039346656037ull;
-    for (uint8_t b : bytes) { h ^= b; h *= 1099511628211ull; }
+    size_t i = 0;
+    for (; i + 8 <= bytes.size(); i += 8) {
+        uint64_t w; memcpy(&w, bytes.data() + i, 8);
+        h ^= w; h *= 1099511628211ull; h ^= h >> 29;
+    }
+    for (; i < bytes.size(); i++) { h ^= bytes[i]; h *= 1099511628211ull; }
     char buf[96];
     snprintf(buf, sizeof buf, "loose:%llu:%llu:%016llx", (unsigned long long)size,
              (unsigned long long)mtime, (unsigned long long)h);
@@ -3260,6 +3266,10 @@ static void add_unrelocated_dependencies(PakWriter& writer,
                              const PakReader& base_pak) {
     int added = 0, left = 0;
     size_t bp = strlen(BASE_PFX);
+    // Per shared folder: files left to loose game files, files written from the outfit (a mesh from the
+    // replacement with the outfit's material file may not load together: logged below)
+    std::map<std::string, std::pair<int, int>> folders;
+    auto folder_of = [](const std::string& p) { auto s = p.rfind('/'); return s == std::string::npos ? p : p.substr(0, s); };
     for (auto& [pak_path, mf] : all_mod) {
         if (written_paths.count(pak_path)) continue;
         // Skip streaming/ paths (handled as twins below)
@@ -3277,20 +3287,20 @@ static void add_unrelocated_dependencies(PakWriter& writer,
                        && pak_path.compare(0, bp, BASE_PFX) == 0;
             if (left_to_loose_file(base_pak, pak_path)) {
                 logf("  mod-only dependency left to the game folder's loose file: %s\n", pak_path.c_str());
-                left++;   // its twin too: half the replacement, half the outfit is neither
-                continue;
+                left++; folders[folder_of(pak_path)].first++;
+                continue;   // its twin too: the base decides the pair (half the replacement, half the outfit is neither)
             }
             auto data = mf.read_data();
             writer.add_uncompressed(h, std::move(data));
             written_paths.insert(pak_path);
-            added++;
-            // ...with its high-resolution twin when the mod ships one
+            added++; folders[folder_of(pak_path)].second++;
+            // ...with its high-resolution twin when the mod ships one. The base decides the pair: a loose twin
+            // without its loose base is no use (a twin must match its base's mips), so it goes with the base.
             if (tex) {
                 std::string sp = std::string(STREAM_PFX) + pak_path.substr(bp);
                 auto tw = all_mod.find(sp);
                 if (tw != all_mod.end() && !written_paths.count(sp)
-                    && !writer.is_excluded(pak_path_hash(std::string_view(sp)))
-                    && !left_to_loose_file(base_pak, sp)) {
+                    && !writer.is_excluded(pak_path_hash(std::string_view(sp)))) {
                     auto sd = tw->second.read_data();
                     writer.add_uncompressed(pak_path_hash(std::string_view(sp)), std::move(sd));
                     written_paths.insert(sp);
@@ -3298,6 +3308,11 @@ static void add_unrelocated_dependencies(PakWriter& writer,
             }
         }
     }
+    for (auto& [folder, n] : folders)
+        if (n.first && n.second)
+            logf("  WARN: %s: %d files left to the game folder's loose files, %d from the outfit: a replacement that "
+                 "ships only part of this folder can leave parts that do not load together\n",
+                 folder.c_str(), n.first, n.second);
     printf("  added %d mod-only dependencies, %d left to loose game files; original asset paths left unchanged\n",
            added, left);
 }
@@ -3438,32 +3453,39 @@ struct GameFiles {
     // in natives\ is what the game loads) is there and nowhere in the paks; without this every slot using
     // such a shared texture was left out as "texture missing".
     std::string game_dir;
-    std::string loose(const std::string& p) const {
-        if (game_dir.empty() || p.compare(0, 8, "natives/") != 0) return {};
-        std::string full = game_dir + "\\" + p;
-        std::replace(full.begin(), full.end(), '/', '\\');
-        DWORD a = GetFileAttributesA(full.c_str());
-        return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY) ? full : std::string();
+    // 1.10.9: a shared custom path the check resolves from a loose file, or finds nowhere, is probed with the
+    // game colour files, so a replacement installed or removed there rebuilds the pak (a loose texture an
+    // outfit relied on was never probed, PR #26 review). Vanilla paths (excluded) and paths a PAK holds are
+    // not: the base PAK and the patch PAKs have their own fingerprints. Null in the swatch test.
+    const PakReader* base = nullptr;
+    void probe(uint64_t h, const std::string& p) const {
+        if (base && p.compare(0, 8, "natives/") == 0 && !writer->is_excluded(h)) probe_game_colour(*base, p);
+    }
+    // 1.10.9: through loose_game_stat / read_loose_game_bytes (wide calls, long-path prefix), as the colour
+    // probes and add_unrelocated_dependencies: past MAX_PATH the narrow calls missed the loose file, and the
+    // check restored the outfit's copy over a replacement that add_unrelocated_dependencies had left alone.
+    bool has_loose(const std::string& p, uint64_t* size = nullptr) const {
+        if (game_dir.empty() || p.compare(0, 8, "natives/") != 0) return false;
+        uint64_t s = 0, mtime = 0;
+        if (!loose_game_stat(p, s, mtime)) return false;
+        if (size) *size = s;
+        return true;
     }
     bool exists(const std::string& p) const {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return true;
         for (auto* pk : paks) if (pk->find(h)) return true;
-        return !loose(p).empty();
+        probe(h, p);
+        return has_loose(p);
     }
     std::vector<uint8_t> load(const std::string& p) const {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return writer->get(h);
         for (auto* pk : paks) if (auto* e = pk->find(h)) return pk->read(*e);
-        std::string full = loose(p);
-        if (full.empty()) return {};
-        std::vector<uint8_t> data;
-        if (FILE* f = fopen(full.c_str(), "rb")) {
-            fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-            if (n > 0 && n < (256L << 20)) { data.resize((size_t)n); if (fread(data.data(), 1, data.size(), f) != data.size()) data.clear(); }
-            fclose(f);
-        }
-        return data;
+        probe(h, p);
+        uint64_t size = 0;
+        if (!has_loose(p, &size) || size == 0 || size >= (256ull << 20)) return {};
+        return read_loose_game_bytes(p);
     }
 };
 
@@ -3484,7 +3506,6 @@ struct Ctx {
     GameFiles gf;
     const std::unordered_map<std::string, std::string>* suffixes = nullptr;
     const std::unordered_map<std::string, ModFileRef>* all_mod = nullptr;
-    const PakReader* base = nullptr;   // 1.10.9: for the loose-file probes of shared texture paths
 };
 
 // Why a mesh and its material file cannot be loaded together, or empty
@@ -3524,13 +3545,7 @@ static int restore_missing_textures(Ctx& c, const std::vector<uint8_t>& mdf, con
     for (auto& s : material_textures(mdf)) {
         if (!str_ends_with(str_lower(s), ".tex")) continue;
         std::string p = resource_path(s, *c.suffixes);
-        if (p.empty()) continue;
-        // 1.10.9: a shared custom path (not the slot's own folder) is probed whether a loose file of the
-        // game folder supplies it now or not, so a replacement installed or removed there rebuilds the pak
-        // (as for add_unrelocated_dependencies).
-        if (c.base && p.find(sd) == std::string::npos && !c.gf.writer->is_excluded(pak_path_hash(std::string_view(p))))
-            probe_game_colour(*c.base, p);
-        if (c.gf.exists(p)) continue;
+        if (p.empty() || c.gf.exists(p)) continue;   // 1.10.9: exists() probes a shared path (GameFiles::probe)
         // Repair only private/custom paths. An unavailable original texture must
         // not be republished over a Fluffy replacement under its original hash.
         if (c.gf.writer->is_excluded(pak_path_hash(std::string_view(p)))) continue;
@@ -6129,7 +6144,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         ctx.gf.paks.push_back(&base_pak);   // with the DLC paks over it
         ctx.suffixes = &inv.suffixes;
         ctx.all_mod = &all_mod_files;
-        ctx.base = &base_pak;
+        ctx.gf.base = &base_pak;
         printf("\nChecking slots...\n");
         std::vector<SlotInfo> kept;
         int left_out = 0;
@@ -6351,7 +6366,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         size_t loose = 0;
         for (auto& gc : g_game_colour_probes) if (gc.second.compare(0, 6, "loose:") == 0) loose++;
         if (!g_game_colour_probes.empty())
-            logf("  %zu colour files taken from the game (%zu of them loose files in its natives folder) are watched for changes\n",
+            logf("  %zu game files this pak depends on (colour files taken from the game, shared paths of outfits; %zu of them loose files in its natives folder) are watched for changes\n",
                  g_game_colour_probes.size(), loose);
     }
     registry.fingerprint = new_fp + game_colours_digest(g_game_colour_probes);

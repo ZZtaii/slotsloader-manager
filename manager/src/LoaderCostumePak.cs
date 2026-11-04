@@ -185,12 +185,16 @@ namespace SlotsInstaller
         }
 
         // 1.0.18: whether the next pak Slotsloader builds leaves a loose game file at a shared path to the game
-        // (1.10.9, loader_core.cpp add_unrelocated_dependencies): the last build says so in outfits.json
-        // ("loose_files_kept"), or the Slotsloader this Manager installed is 1.10.9 or later (an update not yet
-        // launched: its new build ID rebuilds the pak the next time SF6 starts).
+        // (1.10.9, loader_core.cpp add_unrelocated_dependencies). The Slotsloader this Manager installed decides
+        // when its version is known (an update or a downgrade not yet launched: its build ID rebuilds the pak at the
+        // next SF6 start); otherwise (another mod manager installed it) the last build's outfits.json says so
+        // ("loose_files_kept").
         internal static readonly Version KeepsLooseFilesFrom = new Version(1, 10, 9);
         internal static bool KeepsLooseFiles(string gameRoot, ReplaceState state)
         {
+            string source, version = InstalledLoader.Version(InstalledLoader.Record(state), out source);
+            Version parsed = UpdateCheck.ParseVersion(version);
+            if (parsed != null) return parsed >= KeepsLooseFilesFrom;
             try
             {
                 string report = System.IO.Path.Combine(gameRoot, "reframework", "data", "SF6_Costumes_Data", "outfits.json");
@@ -202,9 +206,53 @@ namespace SlotsInstaller
                 }
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
-            string source, version = InstalledLoader.Version(InstalledLoader.Record(state), out source);
-            Version parsed = UpdateCheck.ParseVersion(version);
-            return parsed != null && parsed >= KeepsLooseFilesFrom;
+            return false;
+        }
+
+        // 1.0.18: Slotsloader builds its pak again at the next SF6 start: its proxy (which runs the loader), the real AMD
+        // library the proxy forwards to, its plugin and its data folder are all there (ToolStatus.Detect's rule, read
+        // directly: Detect also reads REFramework's build). An incomplete install never rebuilds it.
+        internal static bool Rebuilds(string gameRoot)
+        {
+            try
+            {
+                if (String.IsNullOrEmpty(gameRoot)) return false;
+                var proxy = new FileInfo(System.IO.Path.Combine(gameRoot, "amd_ags_x64.dll"));
+                return proxy.Exists && proxy.Length > 200 * 1024 && File.Exists(System.IO.Path.Combine(gameRoot, "amd_ags_x64_real.dll"))
+                    && File.Exists(System.IO.Path.Combine(gameRoot, PluginPath.Replace('/', '\\')))
+                    && Directory.Exists(System.IO.Path.Combine(gameRoot, "reframework", "data", "SF6_Costumes_Data", "loader"));
+            }
+            catch (Exception ex) { if (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException) return false; throw; }
+        }
+
+        // 1.0.18: a costume scene (charparam/esf/<fighter>/...scn.20). The loader writes none of the game's own (they are
+        // excluded): one in its pak is a slot scene or the Outfit 1 copy it gives unused slot numbers.
+        private static readonly Regex CostumeScenePath = new Regex(@"^natives/stm/product/charparam/esf/esf\d{3}/[^/]+\.scn\.20$", RegexOptions.IgnoreCase);
+        internal static bool IsCostumeScene(string path) { return CostumeScenePath.IsMatch(PakHash.Normalize(path ?? "").TrimStart('/')); }
+
+        // 1.0.18: the model folders of Slotsloader's own slots, from registry.json ("natives/stm/product/model/esf/<fighter>/<folder>/").
+        internal static List<string> SlotFolders(string gameRoot)
+        {
+            var folders = new List<string>();
+            try
+            {
+                string path = System.IO.Path.Combine(gameRoot ?? "", RegistryRelative);
+                if (!File.Exists(path) || new FileInfo(path).Length > 32L * 1024 * 1024) return folders;
+                var registry = Json.Read<Dictionary<string, object>>(path);
+                object slots;
+                if (registry == null || !registry.TryGetValue("slots", out slots) || !(slots is System.Collections.IEnumerable)) return folders;
+                foreach (object o in (System.Collections.IEnumerable)slots)
+                {
+                    var slot = o as Dictionary<string, object>;
+                    object fd, folder;
+                    if (slot == null || !slot.TryGetValue("fighter_dir", out fd) || !slot.TryGetValue("new_folder", out folder)) continue;
+                    string f = Convert.ToString(fd), n = Convert.ToString(folder);
+                    if (Regex.IsMatch(f ?? "", @"^esf\d{3}$") && Regex.IsMatch(n ?? "", @"^\d{3}$"))
+                        folders.Add("natives/stm/product/model/esf/" + f.ToLowerInvariant() + "/" + n + "/");
+                }
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            return folders.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
     }
 
