@@ -52,6 +52,36 @@ namespace SlotsInstaller
             return top + 1;
         }
 
+        // Plans (including addon plans) can be prepared before another install takes their numbers.
+        // Under the game lock, keep numbers held exclusively by this update and allocate new ones above every claim.
+        private void AllocatePreparedPaks(ReplacePlan plan, ReplaceState state, ReplaceMod existing)
+        {
+            var files = plan.Files.Where(f => IsPatchPakPath(f.Path)).OrderBy(f => PatchNumber(f.Path)).ToList();
+            if (files.Count == 0) return;
+            var reusable = existing == null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
+                new HashSet<string>(existing.Files.Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
+            reusable.ExceptWith(state.Mods.Where(m => m != existing).SelectMany(m => m.Files).Select(f => f.Path));
+            int next = NextPatchNumber(state, null);
+            var moves = new List<KeyValuePair<PreparedFile, string>>();
+            foreach (PreparedFile file in files)
+            {
+                if (reusable.Contains(file.Path)) continue;
+                int number = Math.Max(next, PatchNumber(file.Path));
+                next = checked(number + 1);
+                string target = PatchPakName(number);
+                if (target != file.Path) moves.Add(new KeyValuePair<PreparedFile, string>(file, target));
+            }
+            // All moves are upwards. Move the highest first so a shifted range cannot overwrite itself.
+            foreach (var move in moves.AsEnumerable().Reverse())
+            {
+                string target = Safety.Under(plan.StagingFolder, move.Value);
+                File.Move(Safety.Under(plan.StagingFolder, move.Key.Path), target);
+                plan.Items.Add(new HealthItem("info", move.Key.Path + " was taken while the install was prepared. " + Path.GetFileName(move.Key.EntryPath) + " uses " + move.Value + "."));
+                move.Key.Path = move.Value;
+                move.Key.Source = target;
+            }
+        }
+
         // 1.0.1: a missing number below the highest patch PAK (left by any tool: an older loader that moved its pak, a
         // PAK mod disabled at the top before another was added, an external manager) hides every PAK above it, and
         // the game can stop at a black screen. Each gap gets the empty 16-byte placeholder; nothing else is touched.

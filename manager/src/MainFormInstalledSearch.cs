@@ -37,6 +37,14 @@ namespace SlotsInstaller
     internal sealed partial class MainForm
     {
         private Label installedSearchClear;
+        private Dictionary<string, LibraryEntry> installedSearchSources;
+        private readonly Dictionary<object, LibraryEntry> installedSearchRows = new Dictionary<object, LibraryEntry>();
+
+        private void InvalidateInstalledSearch()
+        {
+            installedSearchRows.Clear();
+            installedSearchSources = null;
+        }
 
         // 2.4.1: the Installed page's search uses the Mod library's matching (LibrarySearch): character names and
         // aliases ("aki" = A.K.I, "viper"), a unique start of a name ("cam"), "name, word" terms, costume terms
@@ -54,8 +62,12 @@ namespace SlotsInstaller
             if (q.Empty) return q;
             q.Query = LibrarySearch.Parse(text, SearchCharacterTerm);
             q.Codes = LibrarySearch.CodesFor(q.Query.Characters);
-            q.Library = new Dictionary<string, LibraryEntry>(StringComparer.OrdinalIgnoreCase);
-            foreach (LibraryEntry e in library) if (!String.IsNullOrEmpty(e.SourcePath) && !q.Library.ContainsKey(e.SourcePath)) q.Library[e.SourcePath] = e;
+            if (installedSearchSources == null)
+            {
+                installedSearchSources = new Dictionary<string, LibraryEntry>(StringComparer.OrdinalIgnoreCase);
+                foreach (LibraryEntry e in library) if (!String.IsNullOrEmpty(e.SourcePath) && !installedSearchSources.ContainsKey(e.SourcePath)) installedSearchSources.Add(e.SourcePath, e);
+            }
+            q.Library = installedSearchSources;
             return q;
         }
         private static bool InstalledEntryMatches(LibraryEntry e, InstalledQuery q)
@@ -83,12 +95,16 @@ namespace SlotsInstaller
             if (tool) e.ToolKinds.Add(Library.ToolScript);
             return e;
         }
-        private bool InstalledRowMatches(InstalledQuery q, string name, string character, string sourcePath, IEnumerable<string> files, bool tool)
+        private bool InstalledRowMatches(InstalledQuery q, string name, string character, string sourcePath, IEnumerable<string> files, bool tool, object installedRow = null)
         {
             if (q.Empty) return true;
+            LibraryEntry row;
+            if (installedRow != null && installedSearchRows.TryGetValue(installedRow, out row)) return InstalledEntryMatches(row, q);
             LibraryEntry own;
             q.Library.TryGetValue(sourcePath ?? "", out own);
-            return InstalledEntryMatches(InstalledSearchEntry(InstalledRowEntry(name, character, sourcePath, files, tool), own), q);
+            row = InstalledSearchEntry(InstalledRowEntry(name, character, sourcePath, files, tool), own);
+            if (installedRow != null) installedSearchRows.Add(installedRow, row);
+            return InstalledEntryMatches(row, q);
         }
         internal static LibraryEntry InstalledSearchEntry(LibraryEntry row, LibraryEntry source)
         {
@@ -107,14 +123,14 @@ namespace SlotsInstaller
         }
         private bool OutfitMatchesSearch(InstalledQuery q, InstalledOutfit o)
         {
-            return InstalledRowMatches(q, o.Name, o.Character, o.SourcePath, null, false);
+            return InstalledRowMatches(q, o.Name, o.Character, o.SourcePath, null, false, o);
         }
         private bool GameRowMatchesSearch(InstalledQuery q, GameModRow r)
         {
-            if (r.Mod != null) return InstalledRowMatches(q, r.Name, null, r.Mod.SourcePath, r.Mod.Files.Select(f => f.Path), r.Kind == "Tool");
-            if (r.Fluffy != null) return InstalledRowMatches(q, r.Name, null, null, r.Fluffy.Files, false);
-            if (r.Leftover != null) return InstalledRowMatches(q, r.Name, null, null, new[] { r.Leftover.Name }, false);   // 1.0.11
-            return InstalledRowMatches(q, r.Name, null, null, null, false);
+            if (r.Mod != null) return InstalledRowMatches(q, r.Name, null, r.Mod.SourcePath, r.Mod.Files.Select(f => f.Path), r.Kind == "Tool", r);
+            if (r.Fluffy != null) return InstalledRowMatches(q, r.Name, null, null, r.Fluffy.Files, false, r);
+            if (r.Leftover != null) return InstalledRowMatches(q, r.Name, null, null, new[] { r.Leftover.Name }, false, r);
+            return InstalledRowMatches(q, r.Name, null, null, null, false, r);
         }
     }
 }
