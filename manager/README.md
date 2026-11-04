@@ -11,7 +11,8 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 ## What changed
 
 - 1.0.17:
-  - Installing another mod no longer fails when Slotsloader's outfit PAK also holds a file of a replacement you already have (Sakura as Ryu with an Ingrid mod, for example).
+  - Slotsloader's outfit PAK no longer stops a replacement from installing, updating or being turned back on when it holds one of its files (Sakura as Ryu installed as an extra outfit and as a replacement, or alongside an Ingrid mod, for example).
+  - Includes Slotsloader Fork 1.10.9: an extra outfit no longer covers a replacement's file in game, and Slotsloader rebuilds its outfit PAK when such a replacement is installed, changed or removed.
   - PAK mods keep their load order: an addon's PAK stays above its main mod's, and PAK mods installed one after another always get their own numbers.
   - An interrupted change is only recovered for the game folder it belongs to, and never while another change is running.
   - Faster search on the Installed page.
