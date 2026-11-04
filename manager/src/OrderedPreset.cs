@@ -68,6 +68,9 @@ namespace SlotsInstaller
                     GameProcesses.RequireGameClosed("import preset replacements");
                     if (JournalPending) throw new IOException("Finish the interrupted change before importing a preset.");
                     var legacy = new List<ReplaceMod>();
+                    // Layer planning changes the projected owners. The game still contains the
+                    // original deployment until every layer has been prepared and committed.
+                    ReplaceState onDisk = LoadState();
                     foreach (var source in layers.GroupBy(u => u.Package.SourcePath, StringComparer.OrdinalIgnoreCase))
                     {
                         string stamp = MainForm.SourceStamp(source.Key);
@@ -89,7 +92,7 @@ namespace SlotsInstaller
                     int highestOutside = Directory.EnumerateFiles(GameRoot, "re_chunk_000.pak.patch_*.pak").Select(Path.GetFileName)
                         .Concat(occupied).Where(p => IsPatchPakPath(p) && !available.Contains(p)).Select(PatchNumber).DefaultIfEmpty(0).Max();
                     var patchSlots = new Queue<string>(available.Where(p => PatchNumber(p) > highestOutside).OrderBy(PatchNumber));
-                    int nextPatch = NextPatchNumber(state, null);
+                    int nextPatch = NextPatchNumber(state);
                     Func<string> reservePatch = delegate { return patchSlots.Count > 0 ? patchSlots.Dequeue() : PatchPakName(nextPatch++); };
                     // Record all temporary locations before extraction. A process exit during preparation has
                     // no game operations to undo. Execute atomically replaces this with the deployment journal.
@@ -121,7 +124,7 @@ namespace SlotsInstaller
                         string folder = null;
                         try
                         {
-                            ReplacePlan plan = ReplacePlanner.PrepareCore(payload, sevenZip, this, stage, null, old == null ? null : old.Id, state, reservePatch, migration == null ? null : migration.Rows[i], method);
+                            ReplacePlan plan = ReplacePlanner.PrepareCore(payload, sevenZip, this, stage, null, old == null ? null : old.Id, state, reservePatch, migration == null ? null : migration.Rows[i], method, onDisk: onDisk);
                             if (!plan.CanInstall) throw new IOException(unit.Name + ": " + String.Join(" ", plan.Errors));
                             ReplaceMod mod = PublishPrepared(plan, unit.Name, false, state, out folder, ids[i]);
                             // An unchanged reimport retains the installed store and its ID, including references held by the UI.

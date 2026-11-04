@@ -38,17 +38,16 @@ namespace SlotsInstaller
             return Directory.EnumerateFiles(GameRoot, "re_chunk_000.pak.patch_*.pak").Any(f => PatchNumber(Path.GetFileName(f)) > mine);
         }
 
-        // The first patch number above every one in use: on disk (placeholders included) and recorded for installed
-        // mods (a disabled PAK mod keeps its number). `releasing`: a record being replaced (its numbers may be reused).
-        internal int NextPatchNumber(ReplaceState state, string releasing)
+        // New numbers start above every reservation, even on an upgrade: a disabled PAK's old number
+        // can be absent from disk and already allocated to a different payload in this same plan.
+        internal int NextPatchNumber(ReplaceState state)
         {
             int top = 0;
             if (Directory.Exists(GameRoot))
                 foreach (string f in Directory.EnumerateFiles(GameRoot, "re_chunk_000.pak.patch_*.pak")) top = Math.Max(top, PatchNumber(Path.GetFileName(f)));
             if (state != null)
                 foreach (ReplaceMod m in state.Mods)
-                    if (!String.Equals(m.Id, releasing, StringComparison.OrdinalIgnoreCase))
-                        foreach (ModFile f in m.Files) top = Math.Max(top, PatchNumber(f.Path));
+                    foreach (ModFile f in m.Files) top = Math.Max(top, PatchNumber(f.Path));
             return top + 1;
         }
 
@@ -61,7 +60,7 @@ namespace SlotsInstaller
             var reusable = existing == null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
                 new HashSet<string>(existing.Files.Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
             reusable.ExceptWith(state.Mods.Where(m => m != existing).SelectMany(m => m.Files).Select(f => f.Path));
-            int next = NextPatchNumber(state, null);
+            int next = NextPatchNumber(state);
             var moves = new List<KeyValuePair<PreparedFile, string>>();
             foreach (PreparedFile file in files)
             {
