@@ -53,7 +53,7 @@ namespace SlotsInstaller
 
         // Plans (including addon plans) can be prepared before another install takes their numbers.
         // Under the game lock, keep numbers held exclusively by this update and allocate new ones above every claim.
-        private void AllocatePreparedPaks(ReplacePlan plan, ReplaceState state, ReplaceMod existing)
+        private void AllocatePreparedPaks(ReplacePlan plan, ReplaceState state, ReplaceMod existing, ReplaceMod below)
         {
             var files = plan.Files.Where(f => IsPatchPakPath(f.Path)).OrderBy(f => PatchNumber(f.Path)).ToList();
             if (files.Count == 0) return;
@@ -61,11 +61,16 @@ namespace SlotsInstaller
                 new HashSet<string>(existing.Files.Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
             reusable.ExceptWith(state.Mods.Where(m => m != existing).SelectMany(m => m.Files).Select(f => f.Path));
             int next = NextPatchNumber(state);
+            // SF6 loads higher patch numbers last. An addon must stay above every main PAK,
+            // including new ones added when the main archive grew. Keep its own PAK order too.
+            int previous = below == null ? 0 : below.Files.Select(f => PatchNumber(f.Path)).DefaultIfEmpty(0).Max();
             var moves = new List<KeyValuePair<PreparedFile, string>>();
             foreach (PreparedFile file in files)
             {
-                if (reusable.Contains(file.Path)) continue;
-                int number = Math.Max(next, PatchNumber(file.Path));
+                int proposed = PatchNumber(file.Path);
+                if (reusable.Contains(file.Path) && proposed > previous) { previous = proposed; continue; }
+                int number = Math.Max(Math.Max(next, proposed), checked(previous + 1));
+                previous = number;
                 next = checked(number + 1);
                 string target = PatchPakName(number);
                 if (target != file.Path) moves.Add(new KeyValuePair<PreparedFile, string>(file, target));
@@ -75,7 +80,7 @@ namespace SlotsInstaller
             {
                 string target = Safety.Under(plan.StagingFolder, move.Value);
                 File.Move(Safety.Under(plan.StagingFolder, move.Key.Path), target);
-                plan.Items.Add(new HealthItem("info", move.Key.Path + " was taken while the install was prepared. " + Path.GetFileName(move.Key.EntryPath) + " uses " + move.Value + "."));
+                plan.Items.Add(new HealthItem("info", Path.GetFileName(move.Key.EntryPath) + " uses " + move.Value + " in the installed patch order."));
                 move.Key.Path = move.Value;
                 move.Key.Source = target;
             }
