@@ -237,7 +237,7 @@ namespace SlotsInstaller
             // 3. What it replaces, conflicts and likely mistakes.
             var affects = new List<string>(); var newUnknownFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int newOther = 0;
-            var inLoaderCache = new List<string>(); var inSlotTables = new List<string>(); string loaderCache = null;
+            var inLoaderCache = new List<string>(); string loaderCache = null;
             foreach (PreparedFile f in plan.Files)
             {
                 plan.Bytes += f.Size;
@@ -251,11 +251,13 @@ namespace SlotsInstaller
                     plan.Items.Add(new HealthItem("warn", Path.GetFileName(f.Path) + " is also in the PAK mod '" + (pakOwner == null ? Path.GetFileName(modPak.Path) : pakOwner.Name) + "' (" + Path.GetFileName(modPak.Path) + "), which wins in game while it's installed."));
                 }
                 PakIndex patch = paks.PatchContaining(f.Path);
-                if (patch != null) plan.Items.Add(new HealthItem(plan.Method == ReplaceMethods.Pak ? "error" : "warn", f.Path + " is also in the patch PAK " + Path.GetFileName(patch.Path) + (plan.Method == ReplaceMethods.Pak ? ", which is never modified: the PAK method can't replace it." : "; the loose file loader may still prefer the loose copy.")));
+                if (patch != null && paks.IsLoaderCache(patch))   // 1.0.18: one of the tables Slotsloader rewrites (GamePaks.PatchContaining)
+                    plan.Items.Add(new HealthItem(plan.Method == ReplaceMethods.Pak ? "error" : "warn", Path.GetFileName(f.Path) + " is a table Slotsloader rewrites in its outfit PAK (" + Path.GetFileName(patch.Path) + ") to add outfit slots, so the game reads its copy while Slotsloader has extra outfits" + (plan.Method == ReplaceMethods.Pak ? ": the PAK method can't replace it." : ".")));
+                else if (patch != null) plan.Items.Add(new HealthItem(plan.Method == ReplaceMethods.Pak ? "error" : "warn", f.Path + " is also in the patch PAK " + Path.GetFileName(patch.Path) + (plan.Method == ReplaceMethods.Pak ? ", which is never modified: the PAK method can't replace it." : "; the loose file loader may still prefer the loose copy.")));
                 else
                 {
                     PakIndex loaderPak = paks.LoaderCacheContaining(f.Path);   // 1.0.18: never a refusal (GamePaks.IsLoaderCache)
-                    if (loaderPak != null) { loaderCache = Path.GetFileName(loaderPak.Path); (LoaderCostumePak.IsSlotTable(f.Path) ? inSlotTables : inLoaderCache).Add(f.Path); }
+                    if (loaderPak != null) { loaderCache = Path.GetFileName(loaderPak.Path); inLoaderCache.Add(f.Path); }
                 }
                 var rows = paks.Rows(f.Path);
                 DeployedFile already = deployment(f.Path);
@@ -281,9 +283,7 @@ namespace SlotsInstaller
                 plan.Items.Add(new HealthItem("warn", folder + " is not a vanilla outfit folder, so a replacement there never loads. Use Extra outfit mode, or check the folder number."));
             if (newOther > 0) plan.Items.Add(new HealthItem("info", N(newOther, "new file") + " the game doesn't ship (custom textures or materials the mod uses)."));
             // 1.0.18: Slotsloader's own costume PAK holds some of these files. It is built again from the extra outfits
-            // and the game folder, so it never blocks; what the game reads afterwards depends on the file and the loader.
-            if (inSlotTables.Count > 0)
-                plan.Items.Add(new HealthItem("warn", FileList(inSlotTables) + " " + (inSlotTables.Count == 1 ? "is a table" : "are tables") + " Slotsloader rewrites in its outfit PAK (" + loaderCache + ") to add outfit slots. While Slotsloader has extra outfits, the game reads its copy, not this mod's."));
+            // and the game folder, so it never blocks; what the game reads afterwards depends on the loader.
             if (inLoaderCache.Count > 0)
             {
                 string these = inLoaderCache.Count == 1 ? "this file" : "these files";

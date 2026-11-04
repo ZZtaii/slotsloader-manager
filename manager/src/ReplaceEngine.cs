@@ -92,19 +92,23 @@ namespace SlotsInstaller
         // uninstalled, and for as long as the outfit and a replacement of that path were both installed; every
         // change of such a replacement was refused. Slotsloader 1.10.9 leaves such a path to the replacement's
         // loose file and rebuilds when it changes (loader_core.cpp add_unrelocated_dependencies). Without the
-        // loader (an orphan PAK) nothing rebuilds it, and it is a patch PAK like any other.
+        // loader (an orphan PAK) nothing rebuilds it, and it is a patch PAK like any other. The slot tables it
+        // rewrites (LoaderCostumePak.IsSlotTable) stay refused: its copy always wins while it has extra outfits,
+        // and their turned-off base row would leave the loader without the game's own table to build from.
         internal bool LoaderInstalled;
         private static readonly ulong CostumeMarkerHash = PakHash.PathHash(LoaderCostumePak.CostumeMarker), StageMarkerHash = PakHash.PathHash(LoaderCostumePak.StageMarker);
         internal bool IsLoaderCache(PakIndex p) { return LoaderInstalled && p.Contains(CostumeMarkerHash) && !p.Contains(StageMarkerHash) && ModPakOwner(p) == null; }
         internal PakIndex LoaderCacheContaining(string relativePath)
         {
+            if (LoaderCostumePak.IsSlotTable(relativePath)) return null;
             ulong h = PakHash.PathHash(relativePath);
             return Patches.FirstOrDefault(p => p.Contains(h) && IsLoaderCache(p));
         }
         internal PakIndex PatchContaining(string relativePath)
         {
             ulong h = PakHash.PathHash(relativePath);
-            return Patches.FirstOrDefault(p => p.Contains(h) && ModPakOwner(p) == null && !IsLoaderCache(p));
+            bool table = LoaderCostumePak.IsSlotTable(relativePath);
+            return Patches.FirstOrDefault(p => p.Contains(h) && ModPakOwner(p) == null && (table || !IsLoaderCache(p)));
         }
         internal bool Vanilla(string relativePath) { ulong h = PakHash.PathHash(relativePath); return Writable.Any(p => p.Contains(h)); }
     }

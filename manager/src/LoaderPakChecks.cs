@@ -37,10 +37,10 @@ namespace SlotsInstaller
 
         // 1.0.18: Slotsloader's own costume pak never refuses a PAK-method replacement (GamePaks.IsLoaderCache). It
         // holds an outfit's copy of a new shared path (Sakura as Ryu's DriveTech mesh, 04/11: left from an uninstalled
-        // outfit, or the outfit still installed), a vanilla path an older loader let through, and a slot table.
-        // Install, update, disable, enable and uninstall all go through, the health check says what the game reads,
-        // and no patch pak ever changes. Without the loader (orphan), a stage pak or a Manager PAK mod carrying the
-        // marker, the pak is not Slotsloader's cache and the old rules hold.
+        // outfit, or the outfit still installed) and a vanilla path an older loader let through: install, update,
+        // disable, enable and uninstall all go through, the health check says what the game reads, and no patch pak
+        // ever changes. A slot table it rewrites stays refused, with that reason. Without the loader (orphan), a
+        // stage pak or a Manager PAK mod carrying the marker, the pak is not Slotsloader's cache: the old rules hold.
         internal static void SharedPaths(string root)
         {
             var f = ReplaceChecks.Create(root, true, ReplaceMethods.Pak);
@@ -87,9 +87,9 @@ namespace SlotsInstaller
             f.Engine.SetEnabled(mod.Id, true);
             Require(File.ReadAllBytes(Path.Combine(f.Game, ReplaceChecks.V5.Replace('/', '\\'))).SequenceEqual(B("replacement mesh 2")), "re-enable");
             Require(Hash(cache) == cacheHash, "Slotsloader's pak changed");
-            // A slot table: installs, with the warning that Slotsloader's copy wins while it has extra outfits.
+            // A slot table stays refused, now saying why: Slotsloader's copy always wins while it has extra outfits.
             check = ReplaceChecks.Check(f, "table");
-            Require(check.CanInstall && has(check, "warn", "esf.scn.20 is a table Slotsloader rewrites in its outfit PAK"), "slot table: " + String.Join(" | ", check.Items.Select(i => i.Level + ": " + i.Text)));
+            Require(!check.CanInstall && has(check, "error", "esf.scn.20 is a table Slotsloader rewrites in its outfit PAK (re_chunk_000.pak.patch_002.pak) to add outfit slots"), "slot table: " + String.Join(" | ", check.Items.Select(i => i.Level + ": " + i.Text)));
             f.Engine.Uninstall(mod.Id);
             // The Manager's own list for the loader (ManagerInstalls.cs) is rewritten by every change.
             Func<Dictionary<string, string>, Dictionary<string, string>> game = s => s.Where(kv => !kv.Key.EndsWith("manager_installs.json", StringComparison.OrdinalIgnoreCase)).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
