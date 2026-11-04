@@ -171,7 +171,7 @@ namespace SlotsInstaller
     public sealed class ReplaceJournal
     {
         public string Format = "sf6-replace-journal-v1";
-        public string OperationId = "", Description = "", StartedUtc = "";
+        public string OperationId = "", Description = "", StartedUtc = "", GameRoot;
         public int NewGeneration;
         public List<JournalOp> Ops = new List<JournalOp>();
         public List<string> CreatedPaths = new List<string>();    // deleted when rolled back

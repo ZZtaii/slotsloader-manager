@@ -99,7 +99,7 @@ namespace SlotsInstaller
                     string root = StoreRoot(state);
                     string stage = Path.Combine(root, ".staging-" + preparationId);
                     var ids = layers.Select(u => Guid.NewGuid().ToString("N")).ToList();
-                    var prep = new ReplaceJournal { OperationId = preparationId, Description = "Prepare preset replacements",
+                    var prep = new ReplaceJournal { OperationId = preparationId, GameRoot = GameRoot, Description = "Prepare preset replacements",
                         StartedUtc = DateTime.UtcNow.ToString("o"), NewGeneration = state.Generation + 1 };
                     prep.CreatedPaths.Add(stage);
                     prep.CreatedPaths.AddRange(ids.Select(id => Safety.Under(root, id)));

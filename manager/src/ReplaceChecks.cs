@@ -78,6 +78,7 @@ namespace SlotsInstaller
                 check("a path inside a patch PAK is refused with the PAK method; no change is made", delegate { PatchBlock(Path.Combine(run, "patch")); });
                 check("an unchanged Sakura replacement covered by a later patch PAK allows an unrelated Ingrid install and uninstall", delegate { ExistingPatchedReplacement(Path.Combine(run, "existing-patch")); });
                 check("refresh defers recovery of a live uninstall", delegate { PakOwnershipChecks.LiveJournal(Path.Combine(run, "live-journal")); });
+                check("two game roots sharing Data cannot take over each other's replacement journal", delegate { PakOwnershipChecks.JournalGame(Path.Combine(run, "journal-game")); });
                 check("a reassigned PAK row stays with its new asset", delegate { PakOwnershipChecks.ReassignedRow(Path.Combine(run, "reassigned-row")); });
                 check("a reused patch filename never proves ownership", delegate { PakOwnershipChecks.ReusedName(Path.Combine(run, "foreign-pak")); });
                 check("separately staged PAKs receive distinct numbers at commit", delegate { PakOwnershipChecks.NumberAllocation(Path.Combine(run, "staged-paks")); });

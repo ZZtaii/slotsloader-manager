@@ -42,6 +42,51 @@ namespace SlotsInstaller
             PakWriter.WriteFixture(path, new[] { new KeyValuePair<string, byte[]>(asset, new[] { value }) }, 0, 0);
         }
 
+        internal static void JournalGame(string root)
+        {
+            var first = ReplaceChecks.Create(Path.Combine(root, "a"), false, ReplaceMethods.Pak);
+            var second = ReplaceChecks.Create(Path.Combine(root, "b"), false, ReplaceMethods.Pak);
+            var other = new ReplaceEngine(second.Game, first.Data, first.Engine.Settings);
+            var a = ReplaceChecks.Snapshot(first.Game);
+            var b = ReplaceChecks.Snapshot(second.Game);
+            Exception failure = null;
+            using (first.Engine.Lock())
+            {
+                var t = new Thread(delegate()
+                {
+                    try { ReplaceChecks.Refused(delegate { using (other.Lock()) { } }, "Another Manager task"); }
+                    catch (Exception ex) { failure = ex; }
+                });
+                t.Start(); t.Join();
+            }
+            if (failure != null) throw failure;
+            ReplaceEngine.CrashAfterStep = 1;
+            try { ReplaceChecks.Refused(delegate { ReplaceChecks.Install(first, "modB", "First install"); }, null); }
+            finally { ReplaceEngine.CrashAfterStep = -1; }
+            string journal = File.ReadAllText(first.Engine.JournalPath);
+            ReplaceChecks.Refused(delegate { other.Recover(true); }, first.Game);
+            ReplaceChecks.Require(File.ReadAllText(first.Engine.JournalPath) == journal, "foreign recovery changed the journal");
+            ReplaceChecks.SameSnapshot(b, ReplaceChecks.Snapshot(second.Game), "wrong game after refused recovery");
+            // A legacy first-install journal cannot safely infer its owner from the selected game.
+            var legacy = ReplaceEngine.ReadJsonShared<ReplaceJournal>(first.Engine.JournalPath);
+            legacy.GameRoot = null; DurableFile.WriteJson(first.Engine.JournalPath, legacy);
+            ReplaceChecks.Refused(delegate { other.Recover(); }, "does not identify its game folder");
+            File.WriteAllText(first.Engine.JournalPath, journal);
+            first.Engine.Recover();
+            ReplaceChecks.SameSnapshot(a, ReplaceChecks.Snapshot(first.Game), "correct game after recovery");
+            // A legacy journal from an established installation can use the recorded state's owner.
+            var m = ReplaceChecks.Install(first, "modB", "Established");
+            ReplaceEngine.CrashAfterStep = 1;
+            try { ReplaceChecks.Refused(delegate { first.Engine.Uninstall(m.Id); }, null); }
+            finally { ReplaceEngine.CrashAfterStep = -1; }
+            legacy = ReplaceEngine.ReadJsonShared<ReplaceJournal>(first.Engine.JournalPath);
+            legacy.GameRoot = null; DurableFile.WriteJson(first.Engine.JournalPath, legacy);
+            ReplaceChecks.Refused(delegate { other.Recover(); }, first.Game);
+            first.Engine.Recover();
+            first.Engine.Uninstall(m.Id);
+            ReplaceChecks.SameSnapshot(a, ReplaceChecks.Snapshot(first.Game), "after legacy recovery");
+        }
+
         internal static void ReassignedRow(string root)
         {
             var f = ReplaceChecks.Create(root, false, ReplaceMethods.Pak);
