@@ -112,7 +112,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-11-03-1.10.8-slotsloader-fork";
+static const char* LOADER_BUILD_ID = "2026-11-04-1.10.9-slotsloader-fork";
 
 // ============================================================================
 // Utility
@@ -916,6 +916,8 @@ static std::vector<uint8_t> read_loose_game_file(const std::string& pak_path) {
 // <content hash>" (in the game's natives folder only, the slot has those bytes) or "none" (nowhere).
 // Saved next to the registry; the next launch rebuilds the pak when one of them is no longer so: an
 // entry Fluffy zeroed or restored, a loose file that appeared, changed or went away.
+// 1.10.9: also the shared custom paths an outfit depends on (add_unrelocated_dependencies,
+// slotcheck::restore_missing_textures), whose loose game file, when there is one, wins over the outfit's.
 static std::map<std::string, std::string> g_game_colour_probes;
 
 static std::string loose_colour_state(const std::string& pak_path) {
@@ -1809,7 +1811,9 @@ static void write_outfits_json(const std::string& path, const std::vector<SlotIn
     char when[32];
     SYSTEMTIME st; GetLocalTime(&st);
     sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
-    fprintf(f, "{\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"pak\": \"%s\",\n  \"outfits\": [",
+    // loose_files_kept (1.10.9): this pak never covers a loose game file with an outfit's copy, and a
+    // replacement installed or removed at a path it depends on rebuilds it (SlotsLoader Manager reads it)
+    fprintf(f, "{\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"loose_files_kept\": true,\n  \"pak\": \"%s\",\n  \"outfits\": [",
             when, json_escape(LOADER_BUILD_ID).c_str(), json_escape(pak_name).c_str());
     bool first = true;
     for (auto& sl : slots) {
@@ -3237,10 +3241,24 @@ static void add_slot_files(PakWriter& writer,
 // Dependencies not relocated into a slot
 // ============================================================================
 
+// 1.10.9: a mod-only dependency the game folder already has as a loose file (a replacement a mod
+// manager installed there: SlotsLoader Manager in either method, Fluffy) is left to that file. The
+// game reads the loose copy for that path when no PAK has it, and the extra outfit referencing the
+// path reads it too; writing the outfit's copy here covered the replacement for as long as the
+// outfit was installed, and the Manager refused to change the replacement (04/11: Sakura as Ryu's
+// DriveTech mesh esf001/005/00, installed both ways). Every such path is probed (state saved with
+// the game colour files): a replacement installed, changed or removed there rebuilds the pak.
+static bool left_to_loose_file(const PakReader& base_pak, const std::string& pak_path) {
+    probe_game_colour(base_pak, pak_path);
+    uint64_t size = 0, mtime = 0;
+    return loose_game_stat(pak_path, size, mtime);
+}
+
 static void add_unrelocated_dependencies(PakWriter& writer,
                              std::unordered_set<std::string>& written_paths,
-                             const std::unordered_map<std::string, ModFileRef>& all_mod) {
-    int added = 0;
+                             const std::unordered_map<std::string, ModFileRef>& all_mod,
+                             const PakReader& base_pak) {
+    int added = 0, left = 0;
     size_t bp = strlen(BASE_PFX);
     for (auto& [pak_path, mf] : all_mod) {
         if (written_paths.count(pak_path)) continue;
@@ -3253,18 +3271,26 @@ static void add_unrelocated_dependencies(PakWriter& writer,
         if (writer.is_excluded(h)) continue;
         if ((pak_path.find("/model/esf/") != std::string::npos || is_model_root_file(pak_path))
                    && !g_relocated_mod_paths.count(pak_path)) {
-            // A genuinely new dependency may still be referenced at its supplied path.
+            // A genuinely new dependency may still be referenced at its supplied path,
+            // unless a loose file of the game folder already supplies it (1.10.9).
+            bool tex = str_lower(pak_path).find(".tex.") != std::string::npos
+                       && pak_path.compare(0, bp, BASE_PFX) == 0;
+            if (left_to_loose_file(base_pak, pak_path)) {
+                logf("  mod-only dependency left to the game folder's loose file: %s\n", pak_path.c_str());
+                left++;   // its twin too: half the replacement, half the outfit is neither
+                continue;
+            }
             auto data = mf.read_data();
             writer.add_uncompressed(h, std::move(data));
             written_paths.insert(pak_path);
             added++;
             // ...with its high-resolution twin when the mod ships one
-            if (str_lower(pak_path).find(".tex.") != std::string::npos
-                && pak_path.compare(0, bp, BASE_PFX) == 0) {
+            if (tex) {
                 std::string sp = std::string(STREAM_PFX) + pak_path.substr(bp);
                 auto tw = all_mod.find(sp);
                 if (tw != all_mod.end() && !written_paths.count(sp)
-                    && !writer.is_excluded(pak_path_hash(std::string_view(sp)))) {
+                    && !writer.is_excluded(pak_path_hash(std::string_view(sp)))
+                    && !left_to_loose_file(base_pak, sp)) {
                     auto sd = tw->second.read_data();
                     writer.add_uncompressed(pak_path_hash(std::string_view(sp)), std::move(sd));
                     written_paths.insert(sp);
@@ -3272,7 +3298,8 @@ static void add_unrelocated_dependencies(PakWriter& writer,
             }
         }
     }
-    printf("  added %d mod-only dependencies; original asset paths left unchanged\n", added);
+    printf("  added %d mod-only dependencies, %d left to loose game files; original asset paths left unchanged\n",
+           added, left);
 }
 
 // ============================================================================
@@ -3457,6 +3484,7 @@ struct Ctx {
     GameFiles gf;
     const std::unordered_map<std::string, std::string>* suffixes = nullptr;
     const std::unordered_map<std::string, ModFileRef>* all_mod = nullptr;
+    const PakReader* base = nullptr;   // 1.10.9: for the loose-file probes of shared texture paths
 };
 
 // Why a mesh and its material file cannot be loaded together, or empty
@@ -3496,7 +3524,13 @@ static int restore_missing_textures(Ctx& c, const std::vector<uint8_t>& mdf, con
     for (auto& s : material_textures(mdf)) {
         if (!str_ends_with(str_lower(s), ".tex")) continue;
         std::string p = resource_path(s, *c.suffixes);
-        if (p.empty() || c.gf.exists(p)) continue;
+        if (p.empty()) continue;
+        // 1.10.9: a shared custom path (not the slot's own folder) is probed whether a loose file of the
+        // game folder supplies it now or not, so a replacement installed or removed there rebuilds the pak
+        // (as for add_unrelocated_dependencies).
+        if (c.base && p.find(sd) == std::string::npos && !c.gf.writer->is_excluded(pak_path_hash(std::string_view(p))))
+            probe_game_colour(*c.base, p);
+        if (c.gf.exists(p)) continue;
         // Repair only private/custom paths. An unavailable original texture must
         // not be republished over a Fluffy replacement under its original hash.
         if (c.gf.writer->is_excluded(pak_path_hash(std::string_view(p)))) continue;
@@ -6082,7 +6116,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // Manual-only sources do not replace the originals. Keep only new custom
     // dependencies; never restore assets at paths Fluffy may be replacing.
-    add_unrelocated_dependencies(writer, written_paths, all_mod_files);
+    add_unrelocated_dependencies(writer, written_paths, all_mod_files, base_pak);
 
     // Slot check: every slot must be loadable as the game will load it, else it is left out
     {
@@ -6095,6 +6129,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         ctx.gf.paks.push_back(&base_pak);   // with the DLC paks over it
         ctx.suffixes = &inv.suffixes;
         ctx.all_mod = &all_mod_files;
+        ctx.base = &base_pak;
         printf("\nChecking slots...\n");
         std::vector<SlotInfo> kept;
         int left_out = 0;

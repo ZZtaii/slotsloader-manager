@@ -19,6 +19,7 @@ namespace SlotsInstaller
         internal static GamePaks Load(string gameRoot, bool refreshWritable = false)
         {
             var paks = new GamePaks();
+            paks.LoaderInstalled = File.Exists(Path.Combine(gameRoot, LoaderCostumePak.PluginPath.Replace('/', '\\')));
             string basePath = Path.Combine(gameRoot, "re_chunk_000.pak");
             if (File.Exists(basePath)) paks.Base = Cached(basePath, refreshWritable);
             string dlc = Path.Combine(gameRoot, "dlc");
@@ -84,10 +85,26 @@ namespace SlotsInstaller
             ulong h = PakHash.PathHash(relativePath);
             return Patches.FirstOrDefault(p => p.Contains(h) && ModPakOwner(p) != null);
         }
+        // 1.0.18: Slotsloader's own costume PAK (its marker, as the loader recognises it; LoaderCostumePak) is not a
+        // patch PAK the game was given: with the loader installed it is built again at SF6 start from the extra
+        // outfits and the game folder, so whatever it holds now is never a reason to refuse a replacement. It held
+        // an outfit's copy of a shared path (Sakura as Ryu's DriveTech mesh, 04/11) after that outfit was
+        // uninstalled, and for as long as the outfit and a replacement of that path were both installed; every
+        // change of such a replacement was refused. Slotsloader 1.10.9 leaves such a path to the replacement's
+        // loose file and rebuilds when it changes (loader_core.cpp add_unrelocated_dependencies). Without the
+        // loader (an orphan PAK) nothing rebuilds it, and it is a patch PAK like any other.
+        internal bool LoaderInstalled;
+        private static readonly ulong CostumeMarkerHash = PakHash.PathHash(LoaderCostumePak.CostumeMarker), StageMarkerHash = PakHash.PathHash(LoaderCostumePak.StageMarker);
+        internal bool IsLoaderCache(PakIndex p) { return LoaderInstalled && p.Contains(CostumeMarkerHash) && !p.Contains(StageMarkerHash) && ModPakOwner(p) == null; }
+        internal PakIndex LoaderCacheContaining(string relativePath)
+        {
+            ulong h = PakHash.PathHash(relativePath);
+            return Patches.FirstOrDefault(p => p.Contains(h) && IsLoaderCache(p));
+        }
         internal PakIndex PatchContaining(string relativePath)
         {
             ulong h = PakHash.PathHash(relativePath);
-            return Patches.FirstOrDefault(p => p.Contains(h) && ModPakOwner(p) == null);
+            return Patches.FirstOrDefault(p => p.Contains(h) && ModPakOwner(p) == null && !IsLoaderCache(p));
         }
         internal bool Vanilla(string relativePath) { ulong h = PakHash.PathHash(relativePath); return Writable.Any(p => p.Contains(h)); }
     }

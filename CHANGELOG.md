@@ -1,3 +1,10 @@
+# Unreleased (1.10.9)
+
+Build ID 2026-11-04-1.10.9-slotsloader-fork (the first launch rebuilds the outfit PAK once).
+
+- An extra outfit no longer covers a replacement's file. A file the outfit shares at a path outside its slot (Sakura as Ryu's DriveTech mesh in Ryu's folder 005) went into the outfit PAK even when a replacement had put that path in the game folder, so the replacement didn't show for as long as the outfit was installed, and SlotsLoader Manager refused to update, disable or reinstall it. Such a path is now left to the game folder's file, and installing, changing or removing a replacement there rebuilds the outfit PAK at the next launch. `tests/loose_dependencies.py` (27 checks; 1.10.8 keeps the outfit's copy and is not rebuilt).
+- `outfits.json` says `"loose_files_kept": true` so SlotsLoader Manager knows this build leaves such files to the game.
+
 # 1.10.8 (2026-11-03)
 
 Package `SF6_Slotsloader_Fork_v1.10.8.zip`, build ID 2026-11-03-1.10.8-slotsloader-fork

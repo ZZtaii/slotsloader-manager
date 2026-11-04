@@ -35,6 +35,86 @@ namespace SlotsInstaller
         private static string Fingerprint(ReplaceChecks.Fixture f) { string t = File.ReadAllText(Path.Combine(f.Game, LoaderCostumePak.RegistryRelative)); int i = t.IndexOf("\"fingerprint\": \"") + 16; return t.Substring(i, t.IndexOf('"', i) - i); }
         private static string Hash(string path) { return LoaderRelease.HashFile(path); }
 
+        // 1.0.18: Slotsloader's own costume pak never refuses a PAK-method replacement (GamePaks.IsLoaderCache). It
+        // holds an outfit's copy of a new shared path (Sakura as Ryu's DriveTech mesh, 04/11: left from an uninstalled
+        // outfit, or the outfit still installed), a vanilla path an older loader let through, and a slot table.
+        // Install, update, disable, enable and uninstall all go through, the health check says what the game reads,
+        // and no patch pak ever changes. Without the loader (orphan), a stage pak or a Manager PAK mod carrying the
+        // marker, the pak is not Slotsloader's cache and the old rules hold.
+        internal static void SharedPaths(string root)
+        {
+            var f = ReplaceChecks.Create(root, true, ReplaceMethods.Pak);
+            const string drive = "natives/stm/product/model/esf/esf001/005/00/esf001_005_00.mesh.230110883";
+            const string table = "natives/stm/product/charparam/esf/esf.scn.20";
+            ReplaceChecks.Put(f.Game, LoaderCostumePak.PluginPath, B("fixture loader"));
+            string cache = Pak(f, 2);
+            Func<string, List<KeyValuePair<string, byte[]>>> cacheRows = marker => new List<KeyValuePair<string, byte[]>> {
+                new KeyValuePair<string, byte[]>(marker, marker == LoaderCostumePak.CostumeMarker ? LoaderCostumePak.MarkerBytes : B("stage")),
+                new KeyValuePair<string, byte[]>(drive, B("outfit copy of a new path")),
+                new KeyValuePair<string, byte[]>(ReplaceChecks.V5, B("outfit copy an older loader let through")),
+                new KeyValuePair<string, byte[]>(table, B("slot table")) };
+            PakWriter.WriteFixture(cache, cacheRows(LoaderCostumePak.CostumeMarker), 0, 0);
+            string cacheHash = Hash(cache);
+            ReplaceChecks.Put(f.Mods, "drive/" + drive, B("drive tech fix 1"));
+            ReplaceChecks.Put(f.Mods, "drive/" + ReplaceChecks.V5, B("replacement mesh 1"));
+            ReplaceChecks.Put(f.Mods, "drive2/" + drive, B("drive tech fix 2"));
+            ReplaceChecks.Put(f.Mods, "drive2/" + ReplaceChecks.V5, B("replacement mesh 2"));
+            ReplaceChecks.Put(f.Mods, "table/" + table, B("costume scene mod"));
+            var initial = ReplaceChecks.Snapshot(f.Game);
+            Func<ReplacePlan, string, string, bool> has = (p, level, text) => p.Items.Any(i => i.Level == level && i.Text.Contains(text));
+
+            // An older Slotsloader (no outfits.json flag, no recorded 1.10.9): a warning, never an error.
+            ReplacePlan check = ReplaceChecks.Check(f, "drive");
+            Require(check.CanInstall && has(check, "warn", "esf001_005_00.mesh.230110883 and esf009_002_01.mesh.230110883 are also in Slotsloader's outfit PAK (re_chunk_000.pak.patch_002.pak)")
+                && has(check, "warn", "Until Slotsloader is updated to 1.10.9 or later") && !check.Items.Any(i => i.Level == "error"),
+                "older loader: " + String.Join(" | ", check.Items.Select(i => i.Level + ": " + i.Text)));
+            // The last build was by a 1.10.9 loader: what the game reads afterwards, as information.
+            string report = Path.Combine(f.Game, "reframework", "data", "SF6_Costumes_Data", "outfits.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(report));
+            File.WriteAllText(report, "{\n  \"generated\": \"2026-11-04 20:00\",\n  \"loader\": \"2026-11-04-1.10.9-slotsloader-fork\",\n  \"loose_files_kept\": true,\n  \"pak\": \"re_chunk_000.pak.patch_002.pak\",\n  \"outfits\": []\n}\n");
+            initial = ReplaceChecks.Snapshot(f.Game);
+            check = ReplaceChecks.Check(f, "drive");
+            Require(check.CanInstall && has(check, "info", "leaves these files to this mod") && !has(check, "warn", "Until Slotsloader"), "1.10.9 loader: " + String.Join(" | ", check.Items.Select(i => i.Level + ": " + i.Text)));
+
+            // Install, update (every file changes), disable, enable: no refusal, the cache never changes.
+            ReplaceMod mod = ReplaceChecks.Install(f, "drive", "Sakura as Ryu C1");
+            Require(File.ReadAllBytes(Path.Combine(f.Game, drive.Replace('/', '\\'))).SequenceEqual(B("drive tech fix 1")) && !PakIndex.Open(Path.Combine(f.Game, "re_chunk_000.pak")).Contains(PakHash.PathHash(ReplaceChecks.V5)), "install");
+            ReplacePlan plan;
+            mod = ReplaceChecks.Install(f, "drive2", "Sakura as Ryu C1", false, mod.Id, out plan);
+            Require(File.ReadAllBytes(Path.Combine(f.Game, drive.Replace('/', '\\'))).SequenceEqual(B("drive tech fix 2")), "update");
+            f.Engine.SetEnabled(mod.Id, false);
+            Require(!File.Exists(Path.Combine(f.Game, drive.Replace('/', '\\'))), "disable");
+            f.Engine.SetEnabled(mod.Id, true);
+            Require(File.ReadAllBytes(Path.Combine(f.Game, ReplaceChecks.V5.Replace('/', '\\'))).SequenceEqual(B("replacement mesh 2")), "re-enable");
+            Require(Hash(cache) == cacheHash, "Slotsloader's pak changed");
+            // A slot table: installs, with the warning that Slotsloader's copy wins while it has extra outfits.
+            check = ReplaceChecks.Check(f, "table");
+            Require(check.CanInstall && has(check, "warn", "esf.scn.20 is a table Slotsloader rewrites in its outfit PAK"), "slot table: " + String.Join(" | ", check.Items.Select(i => i.Level + ": " + i.Text)));
+            f.Engine.Uninstall(mod.Id);
+            // The Manager's own list for the loader (ManagerInstalls.cs) is rewritten by every change.
+            Func<Dictionary<string, string>, Dictionary<string, string>> game = s => s.Where(kv => !kv.Key.EndsWith("manager_installs.json", StringComparison.OrdinalIgnoreCase)).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            ReplaceChecks.SameSnapshot(game(initial), game(ReplaceChecks.Snapshot(f.Game)), "after uninstalling the replacement");
+
+            // A Manager PAK mod carrying the marker is a PAK mod (it wins in game), not Slotsloader's cache.
+            string marked = f.Mod("markedPak"); Directory.CreateDirectory(marked);
+            PakWriter.WriteFixture(Path.Combine(marked, "marked.pak"), new List<KeyValuePair<string, byte[]>> {
+                new KeyValuePair<string, byte[]>(LoaderCostumePak.CostumeMarker, LoaderCostumePak.MarkerBytes), new KeyValuePair<string, byte[]>(drive, B("pak mod copy")) }, 0, 0);
+            ReplaceMod pakMod = ReplaceChecks.Install(f, "markedPak", "Marked PAK mod");
+            check = ReplaceChecks.Check(f, "drive");
+            Require(check.CanInstall && has(check, "warn", "is also in the PAK mod 'Marked PAK mod'"), "marked PAK mod: " + String.Join(" | ", check.Items.Select(i => i.Level + ": " + i.Text)));
+            f.Engine.Uninstall(pakMod.Id);
+            // Without the loader nothing rebuilds the pak: a patch pak like any other.
+            File.Delete(Path.Combine(f.Game, LoaderCostumePak.PluginPath.Replace('/', '\\')));
+            check = ReplaceChecks.Check(f, "drive");
+            Require(!check.CanInstall && has(check, "error", "is also in the patch PAK re_chunk_000.pak.patch_002.pak, which is never modified"), "orphan pak");
+            Require(!f.Engine.LoadState().Mods.Any(), "records left");
+            // The stage loader's pak is another tool's.
+            ReplaceChecks.Put(f.Game, LoaderCostumePak.PluginPath, B("fixture loader"));
+            File.Delete(cache); PakWriter.WriteFixture(cache, cacheRows(LoaderCostumePak.StageMarker), 0, 0);
+            check = ReplaceChecks.Check(f, "drive");
+            Require(!check.CanInstall && has(check, "error", "is also in the patch PAK re_chunk_000.pak.patch_002.pak"), "stage pak");
+        }
+
         // Uninstall: sole pak removed, registry stamp cleared (slots kept), costume_mods and other files untouched.
         internal static void SolePak(string root)
         {

@@ -35,6 +35,12 @@ their lowercase native path with `/` replaced by `__` as the filename. The
 repair command uses the production dispatch and profile table, and writes
 unchanged bytes when a repair is refused.
 
+## Mod-only dependencies and loose game files (1.10.9)
+
+After `build.bat`, run `python tests/loose_dependencies.py [--old-loader <previous exe>]`.'s fixture outfit ships a mod-only texture at a shared path (not its slot, a vanilla asset), like Sakura as Ryu's DriveTech mesh. (a) without a loose file the PAK has outfit's copy and game_colours.tsv probes the path as `none`; (b) a loose file there
+(a replacement installed after the build) rebuilds the PAK, which leaves the path to it, the still kept; (c) unchanged runs are Up to date, a same-size same-date edit rebuilds, the loose file brings the outfit's copy back, adding it again leaves it again; (d) a file there before the first build never goes in the PAK; outfits.json says
+`loose_files_kept`. With `--old-loader` (1.10.8) the outfit's copy covers the loose file and cache is not rebuilt.
+
 ## Colours from the game folder (1.9.8)
 
 After `build.bat`, run `python tests/loose_colours.py [--root <new short folder>]

@@ -170,6 +170,42 @@ namespace SlotsInstaller
         // A SlotsLoader is in the game folder (complete, or at least its plugin: it still builds/uses the pak).
         internal static bool LoaderPresent(string gameRoot) { return ToolStatus.Detect(gameRoot).SlotsLoader || File.Exists(System.IO.Path.Combine(gameRoot, PluginPath.Replace('/', '\\'))); }
         internal const string OrphanText = "Slotsloader isn't installed, but its costume pak is still in the game folder, so old extra outfits still load";
+
+        // 1.0.18: the game tables the loader rewrites in its pak to add outfit slots (structural.cpp: the root
+        // fighter scene, the costume table, the version scenes; loader_core.cpp: the costume names). Its copy is
+        // built from the game's own and always wins while it has extra outfits: a replacement of one never shows then.
+        private static readonly Regex VersionScene = new Regex(@"^natives/stm/product/flow/version_update/ver_\d{2}_\d{4}/esf\.scn\.20$", RegexOptions.IgnoreCase);
+        internal static bool IsSlotTable(string path)
+        {
+            string p = PakHash.Normalize(path ?? "").TrimStart('/');
+            return String.Equals(p, "natives/stm/product/charparam/esf/esf.scn.20", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(p, "natives/stm/product/cfncontents/onlineshop/fightercostumeuserdata.user.2", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(p, "natives/stm/product/message/fgm/fighter/fightercostumemessage.msg.21", StringComparison.OrdinalIgnoreCase)
+                || VersionScene.IsMatch(p);
+        }
+
+        // 1.0.18: whether the next pak Slotsloader builds leaves a loose game file at a shared path to the game
+        // (1.10.9, loader_core.cpp add_unrelocated_dependencies): the last build says so in outfits.json
+        // ("loose_files_kept"), or the Slotsloader this Manager installed is 1.10.9 or later (an update not yet
+        // launched: its new build ID rebuilds the pak the next time SF6 starts).
+        internal static readonly Version KeepsLooseFilesFrom = new Version(1, 10, 9);
+        internal static bool KeepsLooseFiles(string gameRoot, ReplaceState state)
+        {
+            try
+            {
+                string report = System.IO.Path.Combine(gameRoot, "reframework", "data", "SF6_Costumes_Data", "outfits.json");
+                if (File.Exists(report) && new FileInfo(report).Length < 16L * 1024 * 1024)
+                {
+                    object kept;
+                    var build = Json.Read<Dictionary<string, object>>(report);
+                    if (build != null && build.TryGetValue("loose_files_kept", out kept) && kept is bool && (bool)kept) return true;
+                }
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            string source, version = InstalledLoader.Version(InstalledLoader.Record(state), out source);
+            Version parsed = UpdateCheck.ParseVersion(version);
+            return parsed != null && parsed >= KeepsLooseFilesFrom;
+        }
     }
 
     // 2.4.0, technical: the per-user marker Data\show_unowned_slots.txt names (first line) a file the Manager
