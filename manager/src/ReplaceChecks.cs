@@ -82,6 +82,7 @@ namespace SlotsInstaller
                 check("a reassigned PAK row stays with its new asset", delegate { PakOwnershipChecks.ReassignedRow(Path.Combine(run, "reassigned-row")); });
                 check("a reused patch filename never proves ownership", delegate { PakOwnershipChecks.ReusedName(Path.Combine(run, "foreign-pak")); });
                 check("separately staged PAKs receive distinct numbers at commit", delegate { PakOwnershipChecks.NumberAllocation(Path.Combine(run, "staged-paks")); });
+                check("addon PAKs retain load order above an expanded main mod", delegate { PakOwnershipChecks.AddonOrder(Path.Combine(run, "addon-pak-order")); });
                 check("a refused install cleans only its own temporary backups", delegate { PakOwnershipChecks.FailedBackups(Path.Combine(run, "failed-backups")); });
                 check("preset reimport verifies PAK ownership against the installed deployment", delegate { PakOwnershipChecks.PresetReimport(Path.Combine(run, "preset-reimport")); });
                 check("an unsuccessful preset journal write keeps its prior journal and drops unclaimed backups", delegate { PakOwnershipChecks.PresetBackups(Path.Combine(run, "preset-backups")); });

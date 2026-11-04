@@ -1126,12 +1126,13 @@ namespace SlotsInstaller
                 {
                     ReplaceMod existing = String.IsNullOrEmpty(replaceId) ? null : state.Find(replaceId);
                     if (!String.IsNullOrEmpty(replaceId) && existing == null) throw new IOException("The replacement to update no longer exists. Refresh and try again.");
-                    AllocatePreparedPaks(plan, state, existing);
+                    ReplaceMod below = String.IsNullOrEmpty(aboveId) ? null : state.Find(aboveId);
+                    if (!String.IsNullOrEmpty(aboveId) && below == null) throw new IOException("The main replacement for this addon no longer exists. Refresh and try again.");
+                    AllocatePreparedPaks(plan, state, existing, below);
                     mod = PublishPrepared(plan, name, test, state, out storeDir);
                     string root = StoreRoot(state);
                     if (existing != null) { int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer; state.Mods[at] = mod; }
                     else state.Mods.Insert(0, mod);
-                    ReplaceMod below = String.IsNullOrEmpty(aboveId) ? null : state.Find(aboveId);
                     if (below != null && !ReferenceEquals(below, mod)) { state.Mods.Remove(mod); state.Mods.Insert(state.Mods.IndexOf(below), mod); historySwitched = existing == null ? null : existing.Id; }
                     if (String.IsNullOrEmpty(state.StoreRoot)) state.StoreRoot = root;
                     return state;

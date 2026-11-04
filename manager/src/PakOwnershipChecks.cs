@@ -177,6 +177,28 @@ namespace SlotsInstaller
             }
         }
 
+        internal static void AddonOrder(string root)
+        {
+            var f = ReplaceChecks.Create(root, false, ReplaceMethods.Pak);
+            var main = ReplaceChecks.Install(f, "badPak", "Main");
+            string folder = f.Mod("addon"); Directory.CreateDirectory(folder);
+            WritePak(Path.Combine(folder, "a.pak"), ReplaceChecks.V5, 1);
+            WritePak(Path.Combine(folder, "b.pak"), ReplaceChecks.V5, 2);
+            var package = PackageReader.Load(folder, "");
+            var composition = Composer.Plan(package, Composer.DefaultSelection(package, true), true);
+            var addon = ReplaceChecks.Install(f, "addon", "Addon");
+            WritePak(Path.Combine(f.Mod("badPak"), "z.pak"), ReplaceChecks.V5, 3);
+            main = ReplaceChecks.Install(f, "badPak", "Expanded main");
+            var prepared = ReplacePlanner.PrepareInstall(composition, "", f.Engine, false, addon.Id);
+            try { addon = ReplacePlanner.CommitInstall(prepared, f.Engine, "Addon", false, main.Id); }
+            finally { ReplacePlanner.Discard(prepared); }
+            int highestMain = main.Files.Max(x => ReplaceEngine.PatchNumber(x.Path));
+            ReplaceChecks.Require(addon.Files.Count == 2 && addon.Files.All(x => ReplaceEngine.PatchNumber(x.Path) > highestMain), "main PAK shadows addon");
+            var order = addon.Files.OrderBy(x => ReplaceEngine.PatchNumber(x.Path)).ToArray();
+            ReplaceChecks.Require(ReplaceEngine.Sha(f.Engine.GamePath(order[0].Path)) == ReplaceEngine.Sha(Path.Combine(folder, "a.pak")) &&
+                ReplaceEngine.Sha(f.Engine.GamePath(order[1].Path)) == ReplaceEngine.Sha(Path.Combine(folder, "b.pak")), "addon payload order changed");
+        }
+
         private static PresetLayer Layer(string source, string name, int order)
         {
             var package = PackageReader.Load(source, "");
