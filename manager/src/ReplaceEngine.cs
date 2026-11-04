@@ -809,8 +809,18 @@ namespace SlotsInstaller
                     if (method == ReplaceMethods.Pak && path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))
                     {
                         PakIndex patch = paks.PatchContaining(path);
-                        if (patch != null) throw new IOException(path + " is in the patch PAK " + Path.GetFileName(patch.Path) + ", which is never modified: the PAK method can't replace it.");
-                        foreach (var row in paks.Rows(path))
+                        var rows = paks.Rows(path);
+                        if (patch != null)
+                        {
+                            // Slotsloader can add this path to a patch after the replacement was installed.
+                            // Carry it through an unrelated change only if neither its file nor its PAK rows need a write.
+                            bool unchanged = rel == null && options.Choice != DriftChoice.Repair && CurrentMethod(current) == ReplaceMethods.Pak &&
+                                was != null && String.Equals(was.Owner, want.Key.Id, StringComparison.OrdinalIgnoreCase) &&
+                                actual == was.Sha256 && actual == want.Value.Sha256 && rows.Count == 0 &&
+                                was.Zeroed.All(z => rowValid(z) && pakByName(z.Pak).Entry(z.Index).Zeroed);
+                            if (!unchanged) throw new IOException(path + " is in the patch PAK " + Path.GetFileName(patch.Path) + ", which is never modified: the PAK method can't replace it.");
+                        }
+                        foreach (var row in rows)
                         {
                             if (zeroedNow.Any(z => String.Equals(z.Pak, RelativeToGame(row.Key.Path), StringComparison.OrdinalIgnoreCase) && z.Index == row.Value)) continue;
                             var e = row.Key.Entry(row.Value);

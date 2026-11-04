@@ -76,6 +76,7 @@ namespace SlotsInstaller
                 });
                 check("DLC PAK entries are invalidated and restored too", delegate { DlcRows(Path.Combine(run, "dlc")); });
                 check("a path inside a patch PAK is refused with the PAK method; no change is made", delegate { PatchBlock(Path.Combine(run, "patch")); });
+                check("an unchanged Sakura replacement covered by a later patch PAK allows an unrelated Ingrid install and uninstall", delegate { ExistingPatchedReplacement(Path.Combine(run, "existing-patch")); });
                 check("PAK mods (2.5.6): a mod's .pak is added as the next patch PAK (a pre-numbered name too); removing or disabling one below another PAK leaves an empty placeholder, at the top it is deleted; Undo and re-enabling fill the placeholder; a number another PAK took meanwhile is never overwritten; the other mod's patch PAK never changes", delegate { PakMods(Path.Combine(run, "pak-mods")); });
                 check("leftover patch PAKs (1.0.11): a patch PAK nothing claims is a leftover; the Manager's PAK mod (enabled or disabled), PAKs either external-manager root lists, the empty placeholder, Slotsloader's costume pak and an unreadable PAK are not; an unreadable installed.ini means none; status details and replace-status say so; Remove refuses while SF6 or the external manager runs and for a PAK that isn't a leftover; a middle one leaves the empty placeholder, the top one is deleted (no other PAK changes or is renumbered); Undo restores byte for byte, refuses while either runs and once the number holds another PAK; an ended Undo's copy goes to the Recycle Bin", delegate { LeftoverPakChecks.Engine(Path.Combine(run, "leftover-paks"), probe); });
                 check("PAK mods with the loose file loader on (2.5.9): the .pak is still added as the next patch PAK (the method only affects natives files) and uninstalls cleanly", delegate { PakModsLoose(Path.Combine(run, "pak-mods-loose")); });
@@ -477,6 +478,59 @@ namespace SlotsInstaller
             SameSnapshot(original, Snapshot(f.Game), "after a refused patch-PAK install");
             Refused(delegate { Install(f, "badTool", "Bad"); }, "programs (.exe)");
             SameSnapshot(original, Snapshot(f.Game), "after refused protected paths");
+        }
+
+        private static void ExistingPatchedReplacement(string root)
+        {
+            Fixture f = Create(root, false, ReplaceMethods.Pak);
+            const string sakura = "natives/stm/product/model/esf/esf001/005/00/esf001_005_00.mesh.230110883";
+            const string sakuraBody = "natives/stm/product/model/esf/esf001/001/01/esf001_001_01.mesh.230110883";
+            const string ingrid = "natives/stm/product/model/esf/esf032/001/01/esf032_001_01.mesh.230110883";
+            string dlc = GameFile(f, "dlc/re_dlc_stm_2.pak");
+            PakWriter.WriteFixture(dlc, new[] {
+                new KeyValuePair<string, byte[]>(sakuraBody, Bytes("Ryu body")),
+                new KeyValuePair<string, byte[]>(ingrid, Bytes("Ingrid body")) }, 1, 0);
+            string dlcOriginal = ReplaceEngine.Sha(dlc);
+            Put(f.Mods, "sakura/" + sakura, Bytes("Sakura mesh"));
+            Put(f.Mods, "sakura/" + sakuraBody, Bytes("Sakura body"));
+            Put(f.Mods, "ingrid/" + ingrid, Bytes("Ingrid sheer"));
+            ReplaceMod existing = Install(f, "sakura", "Sakura as Ryu C1");
+            var held = f.Engine.LoadState().Deployed.Single(d => d.Path == sakuraBody).Zeroed.Single();
+            string patch = GameFile(f, "re_chunk_000.pak.patch_002.pak");
+            PakWriter.WriteFixture(patch, new[] {
+                new KeyValuePair<string, byte[]>(LoaderCostumePak.CostumeMarker, LoaderCostumePak.MarkerBytes),
+                new KeyValuePair<string, byte[]>(sakura, Bytes("generated head")),
+                new KeyValuePair<string, byte[]>(sakuraBody, Bytes("generated body")) }, 0, 0);
+            string patchHash = ReplaceEngine.Sha(patch);
+            var withSakura = Snapshot(f.Game);
+
+            ReplaceMod added = Install(f, "ingrid", "Ingrid C1 Sheer");
+            var state = f.Engine.LoadState();
+            Require(state.Method == ReplaceMethods.Pak && state.Find(existing.Id).Enabled &&
+                state.Deployed.Single(d => d.Path == sakura).Owner == existing.Id, "Sakura lost its PAK deployment");
+            var body = state.Deployed.Single(d => d.Path == sakuraBody);
+            var row = body.Zeroed.Single();
+            Require(body.Owner == existing.Id && row.Pak == held.Pak && row.Index == held.Index && row.Lower == held.Lower && row.Upper == held.Upper &&
+                Zeroed(PakIndex.Open(dlc), sakuraBody), "Sakura lost its restorable row");
+            Require(ReplaceEngine.Sha(patch) == patchHash && File.ReadAllBytes(GameFile(f, sakura)).SequenceEqual(Bytes("Sakura mesh")) &&
+                File.ReadAllBytes(GameFile(f, ingrid)).SequenceEqual(Bytes("Ingrid sheer")) && Zeroed(PakIndex.Open(dlc), ingrid), "incorrect game files after installing Ingrid");
+
+            f.Engine.Uninstall(added.Id);
+            SameSnapshot(withSakura, Snapshot(f.Game), "after removing only Ingrid");
+            // If a tool has restored a base/DLC entry, keeping this replacement would require a PAK write.
+            var dlcIndex = PakIndex.Open(dlc);
+            byte[] rowHash = PakWriter.HashBytes(held.Lower, held.Upper);
+            PakWriter.WriteHashes(dlc, dlcIndex.Length, dlcIndex.Header, new[] { new PakHashWrite { Index = held.Index, Expected = new byte[8], Value = rowHash } });
+            GamePaks.Forget(dlc);
+            var restoredRow = Snapshot(f.Game);
+            Refused(delegate { Install(f, "ingrid", "Ingrid C1 Sheer"); }, "patch PAK");
+            SameSnapshot(restoredRow, Snapshot(f.Game), "after refusing a write to a covered Sakura row");
+            f.Engine.SetEnabled(existing.Id, false);
+            var disabled = Snapshot(f.Game);
+            Refused(delegate { f.Engine.SetEnabled(existing.Id, true); }, "patch PAK");
+            SameSnapshot(disabled, Snapshot(f.Game), "after refusing to redeploy Sakura");
+            Require(!f.Engine.LoadState().Find(existing.Id).Enabled && ReplaceEngine.Sha(dlc) == dlcOriginal && ReplaceEngine.Sha(patch) == patchHash,
+                "Sakura disable or refused re-enable changed the PAKs");
         }
 
         // 2.5.9: the same NULSPACE-style mod with the loose file loader on and the Loose method chosen.
