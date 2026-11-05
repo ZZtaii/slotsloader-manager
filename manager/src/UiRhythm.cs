@@ -22,13 +22,15 @@ namespace SlotsInstaller
     // at the normal UI size, and compact secondary buttons as tall as the page's other small buttons.
     internal sealed class NoticeBanner : Panel
     {
-        internal const int RowHeight = 36, ButtonHeight = 28;
+        // 1.0.18: Gap = the page's space under the banner, so it doesn't sit flush on the search row (the tint
+        // stops above it; the gap is Padding.Bottom - Padding.Top, which scales with the window like the rest).
+        internal const int RowHeight = 36, ButtonHeight = 28, Gap = 10;
         internal static readonly Color Tint = Color.FromArgb(44, 39, 35);
         internal readonly Label Message;
         internal readonly FlowLayoutPanel Actions;
         internal NoticeBanner()
         {
-            Dock = DockStyle.Top; Height = RowHeight; BackColor = Tint; Padding = new Padding(14, 4, 6, 4);
+            Dock = DockStyle.Top; Height = RowHeight + Gap; BackColor = Palette.Background; Padding = new Padding(14, 4, 6, 4 + Gap);
             SetStyle(ControlStyles.ResizeRedraw | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
             Actions = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = Padding.Empty, Margin = Padding.Empty, BackColor = Tint };
             Message = new Label { UseMnemonic = false, Dock = DockStyle.Fill, ForeColor = Palette.Text, Font = Palette.Normal, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, BackColor = Tint };
@@ -43,8 +45,13 @@ namespace SlotsInstaller
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            using (Brush stripe = new SolidBrush(Palette.Accent)) e.Graphics.FillRectangle(stripe, 0, 0, Math.Max(2, DpiMetrics.Px(this, 3)), Height);
+            int band = TintHeight;
+            using (Brush page = new SolidBrush(Palette.Background)) e.Graphics.FillRectangle(page, 0, band, Width, Height - band);
+            using (Brush tint = new SolidBrush(Tint)) e.Graphics.FillRectangle(tint, 0, 0, Width, band);
+            using (Brush stripe = new SolidBrush(Palette.Accent)) e.Graphics.FillRectangle(stripe, 0, 0, Math.Max(2, DpiMetrics.Px(this, 3)), band);
         }
+        // The tinted row (the banner minus the gap under it).
+        internal int TintHeight { get { return Math.Max(0, Height - (Padding.Bottom - Padding.Top)); } }
     }
 
     // A muted note that wraps at word boundaries and draws every line at the same line height, growing to fit

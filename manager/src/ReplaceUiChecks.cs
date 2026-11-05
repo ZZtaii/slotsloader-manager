@@ -1169,7 +1169,7 @@ namespace SlotsInstaller
                     // 2.4.1: the compact banner: one slim row, regular-weight text, compact secondary buttons.
                     {
                         NoticeBanner banner = Get<Panel>(form, "gameBanner") as NoticeBanner;
-                        Require(banner != null && banner.Height == DpiMetrics.Px(form, NoticeBanner.RowHeight) && !banner.Message.Font.Bold && banner.Message.Text.StartsWith("Loose file loader off: SF6 ignores loose replaced files."), "banner: " + (banner == null ? "not a NoticeBanner" : banner.Height + " px, bold " + banner.Message.Font.Bold + ", '" + banner.Message.Text + "'"));
+                        Require(banner != null && banner.Height == DpiMetrics.Px(form, NoticeBanner.RowHeight + NoticeBanner.Gap) && banner.TintHeight == DpiMetrics.Px(form, NoticeBanner.RowHeight) && !banner.Message.Font.Bold && banner.Message.Text.StartsWith("Loose file loader off: SF6 ignores loose replaced files."), "banner: " + (banner == null ? "not a NoticeBanner" : banner.Height + " px, bold " + banner.Message.Font.Bold + ", '" + banner.Message.Text + "'"));
                         foreach (FlatButton b in banner.Actions.Controls.OfType<FlatButton>().Where(b => b.Visible))
                             Require(!b.Primary && b.Height == DpiMetrics.Px(form, NoticeBanner.ButtonHeight) && b.Bottom <= banner.Actions.Height, "banner button '" + b.Text + "': primary " + b.Primary + ", " + b.Height + " px");
                         Require(TextRenderer.MeasureText(banner.Message.Text, banner.Message.Font).Width <= banner.Message.Width, "banner text is cut at " + form.ClientSize);

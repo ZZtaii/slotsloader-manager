@@ -69,7 +69,7 @@ namespace SlotsInstaller
                     NoticeBanner banner = Get<Panel>(form, "gameBanner") as NoticeBanner;
                     FlatButton repair = Get<FlatButton>(form, "bannerRepair");
                     Require(banner != null && banner.Visible && banner.Message.Text == "2 game entries left invalidated by another tool." && repair.Visible && repair.Enabled && repair.Text == "Repair", "banner: " + (banner == null ? "none" : banner.Visible + " '" + banner.Message.Text + "'") + ", Repair visible " + repair.Visible);
-                    Require(banner.Height == DpiMetrics.Px(form, NoticeBanner.RowHeight) && !repair.Primary && repair.Height == DpiMetrics.Px(form, NoticeBanner.ButtonHeight) && TextRenderer.MeasureText(banner.Message.Text, banner.Message.Font).Width <= banner.Message.Width, "banner layout at " + form.DeviceDpi + " DPI");
+                    Require(banner.Height == DpiMetrics.Px(form, NoticeBanner.RowHeight + NoticeBanner.Gap) && banner.TintHeight == DpiMetrics.Px(form, NoticeBanner.RowHeight) && !repair.Primary && repair.Height == DpiMetrics.Px(form, NoticeBanner.ButtonHeight) && TextRenderer.MeasureText(banner.Message.Text, banner.Message.Font).Width <= banner.Message.Width, "banner layout at " + form.DeviceDpi + " DPI");
                     Require(banner.Actions.Controls.OfType<FlatButton>().Count(b => b.Visible) == 1 && String.IsNullOrEmpty(repair.AccessibleDescription), "only Repair is offered (no reason while idle)");
                     Render(form, Path.Combine(dir, "installed-banner-repair-" + form.DeviceDpi + ".png"));
                     // Both Fluffy instances watched.

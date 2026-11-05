@@ -283,12 +283,61 @@ namespace SlotsInstaller
         public string RecordJson = "";
     }
 
+    // 1.0.18: an installed mod the Manager has no copy of for some files, so Enable, Reapply or a rebuild
+    // can't put them back. A mod installed from a library archive keeps no stored copy (the archive is the copy),
+    // so deleting that archive is the usual cause; otherwise the stored copy in Data was deleted.
+    internal sealed class MissingCopies
+    {
+        internal string ModId, Name, Kind, Source, FirstStored;
+        internal int Priority, Files, Total;
+        internal bool SourceGone;   // the archive the files are read from is gone
+        internal bool Enabled;
+        internal bool SourceReplaced;   // the source path now holds another file (a newer download under the same name)
+
+        internal string Reason
+        {
+            get
+            {
+                if (SourceGone) return SourceReplaced ? "its source file was replaced by another version" : "its source file is gone";
+                return "its stored cop" + (Files == 1 ? "y was" : "ies were") + " deleted";
+            }
+        }
+
+        internal static string Summary(List<MissingCopies> mods, int files, string first)
+        {
+            if (mods == null || mods.Count == 0) return files + " stored replacement cop" + (files == 1 ? "y is" : "ies are") + " missing. Reinstall " + (files == 1 ? "that mod" : "those mods") + " (" + first + ")";
+            if (mods.Count == 1)
+            {
+                MissingCopies m = mods[0];
+                return "'" + m.Name + "' can't be reapplied: " + m.Reason + ". Reinstall it or uninstall it.";
+            }
+            bool allGone = mods.All(m => m.SourceGone && !m.SourceReplaced);
+            return mods.Count + " mods can't be reapplied: " + (allGone ? "their source files are gone" : "files they need are missing") + " (" +
+                String.Join(", ", mods.Take(2).Select(m => "'" + m.Name + "'")) + (mods.Count > 2 ? " and " + (mods.Count - 2) + " more" : "") + "). Reinstall or uninstall them.";
+        }
+
+        // The details viewer: one entry per mod with its place in the list, what is missing and where it came from.
+        internal IEnumerable<string> DetailLines()
+        {
+            string which = Total == 1 ? "its only file" : Files == Total ? "all " + Total + " files" : Files + " of " + Total + " files";
+            yield return "'" + Name + "' (" + Kind + ", #" + Priority + "): " + which + " can't be reapplied, " + Reason + ".";
+            if (!String.IsNullOrEmpty(Source)) yield return "    Installed from: " + Source + (SourceGone ? (SourceReplaced ? " (now a different file)" : " (not found)") : "");
+            if (!SourceGone && !String.IsNullOrEmpty(FirstStored)) yield return "    Missing copy: " + FirstStored;
+            yield return (SourceGone ? "    Install it again from that file (or a copy of it), or uninstall it." : "    Install it again from its source, or uninstall it.") +
+                (Enabled ? " Its files stay in the game until then." : "");
+        }
+    }
+
     internal sealed class GameFilesStatus
     {
         internal bool PakChanged, BaseChanged, LooseLoaderOff, JournalPending;
         internal int RowsNotZero, FilesMissing, FilesChanged;
         internal int BackupsRecorded, BackupsMissing, StoredMissing;     // 2.1.0: backups in Data checked on disk
         internal string FirstMissingBackup, FirstMissingStored;
+        internal List<MissingCopies> StoredMissingMods = new List<MissingCopies>();   // 1.0.18: which mods, and why
+        internal readonly HashSet<string> MissingCopyLines = new HashSet<string>();   // their lines in Details
+        // 1.0.18: the missing-copy notice is the one the banner shows (what Summary picks), so Show mod belongs to it.
+        internal bool ShowsMissingCopies { get { return !JournalPending && !NeedsReapply && BackupsMissing == 0 && StoredMissing > 0 && StoredMissingMods.Count > 0; } }
         internal RelocationReport Relocation;                            // paths read from a moved Data folder
         internal List<string> ChangedBy = new List<string>();            // 2.2.0: "amd_ags_x64.dll (by the external mod manager's mod 'X')"
         internal int Released, ForeignCopies;                            // 2.2.0: kept files / other tools' copies kept in Data
@@ -303,9 +352,14 @@ namespace SlotsInstaller
             get
             {
                 if (JournalPending) return "An interrupted change will be rolled back.";
-                if (NeedsReapply) return "Game files changed. Reapply your replacements" + (Details.Count > 0 ? " (" + Details[0] + ")" : "");
+                if (NeedsReapply)
+                {
+                    // 1.0.18 (review P3-4): quote the change, never a missing-copy line ("can't be reapplied").
+                    string first = Details.FirstOrDefault(d => !MissingCopyLines.Contains(d));
+                    return "Game files changed. Reapply your replacements" + (first != null ? " (" + first + ")" : "");
+                }
                 if (BackupsMissing > 0) return BackupsMissing + (BackupsMissing == 1 ? " backup is" : " backups are") + " missing, so uninstalling can't restore the original" + (BackupsMissing == 1 ? "" : "s") + " (" + FirstMissingBackup + ")";
-                if (StoredMissing > 0) return StoredMissing + " stored replacement cop" + (StoredMissing == 1 ? "y is" : "ies are") + " missing. Reinstall " + (StoredMissing == 1 ? "that mod" : "those mods") + " (" + FirstMissingStored + ")";
+                if (StoredMissing > 0) return MissingCopies.Summary(StoredMissingMods, StoredMissing, FirstMissingStored);
                 if (BaseChanged) return "SF6 was updated after your replacements were applied. Run a health check on them.";
                 if (OrphanedRows > 0) return PakRepair.OrphanText(OrphanedRows) + ".";   // 2.4.2: the banner's Repair
                 if (OrphanCostumePaks.Count > 0) return LoaderCostumePak.OrphanText + ".";

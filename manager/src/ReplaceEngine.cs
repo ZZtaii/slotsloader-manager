@@ -1655,7 +1655,7 @@ namespace SlotsInstaller
         // be put back by an uninstall; a missing stored copy cannot be reapplied.
         internal static void CountBackups(ReplaceState state, GameFilesStatus status, Func<ReplaceMod, ModFile, string> storeFile)
         {
-            status.BackupsRecorded = 0; status.BackupsMissing = 0; status.StoredMissing = 0; status.FirstMissingBackup = null; status.FirstMissingStored = null;
+            status.BackupsRecorded = 0; status.BackupsMissing = 0; status.StoredMissing = 0; status.FirstMissingBackup = null; status.FirstMissingStored = null; status.StoredMissingMods.Clear();
             Action<string> backup = delegate(string path)
             {
                 status.BackupsRecorded++;
@@ -1665,15 +1665,63 @@ namespace SlotsInstaller
             foreach (OriginalBackup o in state.Originals) backup(o.Backup);
             foreach (ReleasedFile r in state.Released) if (r.Original != null) backup(r.Original.Backup);
             foreach (PakStamp p in state.Paks.Where(p => !String.IsNullOrEmpty(p.Backup))) backup(p.Backup);
-            foreach (ReplaceMod m in state.Mods)
+            for (int i = 0; i < state.Mods.Count; i++)
+            {
+                ReplaceMod m = state.Mods[i];
+                MissingCopies missing = null;
+                // 1.0.18: the archive serves its files only while it holds what was installed. A new stamp alone (an
+                // Edit bundle save, a restore, a sync tool) is checked by content once, as Reapply would read it (review
+                // P2-1); an archive that can't be read now counts as usable, never as replaced.
+                int archive = -1;   // -1 not read yet, 0 usable, 1 gone, 2 replaced by another file
                 foreach (ModFile f in m.Files)
                 {
-                    string stored = null; bool present;
-                    try { stored = storeFile(m, f); present = File.Exists(stored) || (f.ArchiveEntry != null && File.Exists(m.SourcePath)); } catch { present = false; }
-                    if (!present) { status.StoredMissing++; if (status.FirstMissingStored == null) status.FirstMissingStored = stored ?? (m.Id + "/" + f.Path); }
+                    string stored = null; bool present, sourceGone = false;
+                    try
+                    {
+                        stored = storeFile(m, f);
+                        present = File.Exists(stored);
+                        if (!present && f.ArchiveEntry != null)
+                        {
+                            if (archive < 0)
+                            {
+                                try
+                                {
+                                    if (!File.Exists(m.SourcePath)) archive = 1;
+                                    else if (m.ArchiveStamp == null || SourceReader.Stamp(m.SourcePath) == m.ArchiveStamp) archive = 0;
+                                    else
+                                    {
+                                        long size;
+                                        string sha;
+                                        try { sha = BundleLayout.ArchiveHash(m.SourcePath, out size, m.ArchiveSize); }
+                                        catch (InvalidDataException) { sha = ""; }
+                                        archive = sha == m.ArchiveSha ? 0 : 2;
+                                    }
+                                }
+                                catch (Exception ex) { if (ex is OutOfMemoryException) throw; archive = 0; }
+                            }
+                            present = archive == 0; sourceGone = !present;
+                        }
+                    }
+                    catch { present = false; }
+                    if (present) continue;
+                    status.StoredMissing++; if (status.FirstMissingStored == null) status.FirstMissingStored = stored ?? (m.Id + "/" + f.Path);
+                    // 1.0.18: per mod, so the banner and its details name the mod and the cause.
+                    if (missing == null)
+                    {
+                        missing = new MissingCopies { ModId = m.Id, Name = m.Name, Kind = m.Kind == "Tool" ? "Tool mod" : m.Kind == "Mixed" ? "Tool mod + replacement" : "Replacement",
+                            Source = m.SourcePath, Priority = i + 1, Total = m.Files.Count, Enabled = m.Enabled, SourceGone = true };
+                        status.StoredMissingMods.Add(missing);
+                    }
+                    missing.Files++;
+                    missing.SourceGone &= sourceGone;
+                    if (sourceGone && archive == 2) missing.SourceReplaced = true;
+                    if (!sourceGone && missing.FirstStored == null) missing.FirstStored = stored;
                 }
+            }
             if (status.BackupsMissing > 0) status.Details.Add(status.BackupsMissing + " of " + ReplacePlanner.N(status.BackupsRecorded, "backup") + " missing on disk (first: " + status.FirstMissingBackup + ")");
-            if (status.StoredMissing > 0) status.Details.Add(status.StoredMissing + " stored replacement copies missing (first: " + status.FirstMissingStored + ")");
+            status.MissingCopyLines.Clear();
+            foreach (MissingCopies missing in status.StoredMissingMods)
+                foreach (string line in missing.DetailLines()) { status.Details.Add(line); status.MissingCopyLines.Add(line); }
         }
         private void CountBackups(ReplaceState state, GameFilesStatus status) { CountBackups(state, status, delegate(ReplaceMod m, ModFile f) { return StoreFile(state, m, f); }); }
 

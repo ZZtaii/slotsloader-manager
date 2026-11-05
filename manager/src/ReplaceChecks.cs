@@ -118,6 +118,7 @@ namespace SlotsInstaller
                 check("CLI: replace-plan, replace-install (PAK and loose), replace-status, replace-method, replace-uninstall and replace-restore-all on a fixture game", delegate { CommandLineFlow(Path.Combine(run, "cli")); });
                 check("conflicts (2.0.1): same outfit with shared files names the mod with counts, same outfit without shared files stacks, disabled mods, other-area overrides, unknown loose files, an external mod blocks with the lockout (1.0.1); installs never remove other mods", delegate { Conflicts(Path.Combine(run, "conflicts")); });
                 check("recoverable uninstall (2.0.1): the removed replacement is kept and Undo restores files, enabled state and priority byte for byte; test reverts keep nothing", delegate { RecoverableUninstall(Path.Combine(run, "removed")); });
+                check("Source archive deleted: intact files kept as the copy, notice names the mod; covered, moved, twin, locked, same-name and disabled cases (1.0.18)", delegate { SourceGone(Path.Combine(run, "source-gone")); });
                 check("Archive storage: compaction, rename, library move, ambiguous copies, impostor, recovery, disable, undo and uninstall", delegate { ArchiveStorage(Path.Combine(run, "archive-storage")); });
                 check("automatic-check cache (2.0.1): a re-check of an archive reuses extracted and fixed files, results identical; a changed archive is read again", delegate { CheckCache(Path.Combine(run, "cache")); });
                 // 2.4.2: the 2.0.1 code-review follow-ups (ReviewFollowupChecks.cs)
@@ -1335,6 +1336,194 @@ namespace SlotsInstaller
                 Require(!Directory.Exists(backups) || Directory.GetFiles(backups).Length == 0, "the rolled-back install left its backup in the new folder at step " + k);
                 Require(!Directory.Exists(oldApp), "recovery recreated the old app folder (install step " + k + ")");
             }
+        }
+
+        // 1.0.18: a mod's archive deleted after install. Intact installed files become its stored copy at the next
+        // relink (Reapply works again, no notice); a changed one can't be, and the notice names the mod and the cause.
+        private static void SourceGone(string root)
+        {
+            var f = Create(Path.Combine(root, "intact"), false, ReplaceMethods.Pak);
+            f.Engine.SourceConfig = new AppConfig { GameRoot = f.Game, Libraries = new List<string> { f.Mods } };
+            string zip = f.Mod("Gone.zip");
+            System.IO.Compression.ZipFile.CreateFromDirectory(f.Mod("modB"), zip);
+            ReplaceMod mod = Install(f, "Gone.zip", "Gone Mod");
+            var file = mod.Files.Single(x => x.Path == V5);
+            string store = f.Engine.StoreFile(f.Engine.LoadState(), mod, file), live = f.Engine.GamePath(V5);
+            Require(file.ArchiveEntry != null && !File.Exists(store), "fixture: archive-backed install");
+            File.Copy(zip, Path.Combine(root, "gone-copy.zip")); File.Delete(zip);
+            GameFilesStatus before = f.Engine.Status();
+            Require(before.StoredMissingMods.Count == 1 && before.StoredMissingMods[0].Name == "Gone Mod" && before.StoredMissingMods[0].SourceGone &&
+                before.Summary.StartsWith("'Gone Mod' can't be reapplied: its source file is gone") && before.Details.Any(d => d.Contains("Installed from: " + zip + " (not found)")), "notice before rescue: " + before.Summary + " / " + String.Join(" | ", before.Details));
+            f.Engine.RelinkArchives();
+            ReplaceMod after = f.Engine.LoadState().Find(mod.Id);
+            Require(ReplaceEngine.Sha(store) == file.Sha256 && after.Files.All(x => x.ArchiveEntry == null) && after.ArchiveSha == mod.ArchiveSha, "intact files were not kept as the stored copy (archive identity kept)");
+            Require(f.Engine.Status().StoredMissing == 0 && f.Engine.Status().Summary == "", "notice after rescue: " + f.Engine.Status().Summary);
+            File.Delete(live); f.Engine.Reapply();
+            Require(ReplaceEngine.Sha(live) == file.Sha256, "reapply from the rescued copy");
+            // The same archive found again later (another name) is relinked, since the identity was kept.
+            string again = Path.Combine(f.Mods, "Found again.zip");
+            File.Copy(Path.Combine(root, "gone-copy.zip"), again);
+            f.Engine.RelinkArchives();
+            Require(f.Engine.LoadState().Find(mod.Id).SourcePath == again, "a fully rescued mod relinks to its archive found again");
+
+            var g = Create(Path.Combine(root, "changed"), false, ReplaceMethods.Pak);
+            g.Engine.SourceConfig = new AppConfig { GameRoot = g.Game, Libraries = new List<string> { g.Mods } };
+            string zip2 = g.Mod("Gone.zip");
+            System.IO.Compression.ZipFile.CreateFromDirectory(g.Mod("modB"), zip2);
+            ReplaceMod mod2 = Install(g, "Gone.zip", "Changed Mod");
+            string live2 = g.Engine.GamePath(V5), store2 = g.Engine.StoreFile(g.Engine.LoadState(), mod2, mod2.Files.Single(x => x.Path == V5));
+            File.Delete(zip2); File.WriteAllText(live2, "changed by another tool");
+            g.Engine.RelinkArchives();
+            GameFilesStatus changed = g.Engine.Status();
+            Require(!File.Exists(store2) && changed.StoredMissingMods.Any(m => m.Name == "Changed Mod" && m.SourceGone), "a changed file must not be kept as the copy: " + changed.Summary);
+
+            SourceGoneEdges(Path.Combine(root, "edges"));
+        }
+
+        private const string GoneX = "natives/stm/product/model/esf/esf009/002/01/custom_x.tex.241101895", GoneY = "natives/stm/product/model/esf/esf009/002/01/custom_y.tex.241101895";
+        private static string ZipMod(Fixture f, string folder, string zipName, params string[] pathsAndText)
+        {
+            for (int i = 0; i + 1 < pathsAndText.Length; i += 2) Put(f.Mod(folder), pathsAndText[i], Bytes(pathsAndText[i + 1]));
+            Put(f.Mod(folder), "modinfo.ini", Bytes("name=" + folder + "\r\n"));
+            string zip = f.Mod(zipName);
+            System.IO.Compression.ZipFile.CreateFromDirectory(f.Mod(folder), zip);
+            Directory.Delete(f.Mod(folder), true);
+            return zip;
+        }
+
+        // 1.0.18 edge cases of the gone-source rescue.
+        private static void SourceGoneEdges(string root)
+        {
+            var f = Create(root, false, ReplaceMethods.Pak);
+            string lib2 = Path.Combine(root, "second"); Directory.CreateDirectory(lib2);
+            string aside = Path.Combine(root, "aside"); Directory.CreateDirectory(aside);
+            f.Engine.SourceConfig = new AppConfig { GameRoot = f.Game, Libraries = new List<string> { f.Mods, lib2 } };
+            Func<ReplaceMod, string, string> store = (m, path) => { var s = f.Engine.LoadState(); var r = s.Find(m.Id); return f.Engine.StoreFile(s, r, r.Files.Single(x => x.Path == path)); };
+            string liveX = f.Engine.GamePath(GoneX), liveY = f.Engine.GamePath(GoneY);
+
+            // 1. Covered by a newer install: the cover's install already stored the covered file, so deleting the
+            // archive leaves nothing missing, and uninstalling the cover puts it back.
+            string coveredZip = ZipMod(f, "covered", "Covered.zip", GoneX, "covered x", GoneY, "covered y");
+            ReplaceMod covered = Install(f, "Covered.zip", "Covered");
+            Put(f.Mod("cover"), GoneY, Bytes("cover y")); Put(f.Mod("cover"), "modinfo.ini", Bytes("name=Cover\r\n"));
+            ReplaceMod cover = Install(f, "cover", "Cover");
+            Require(File.ReadAllText(liveY) == "cover y" && File.ReadAllText(liveX) == "covered x", "fixture: the newer install covers y");
+            File.Delete(coveredZip);
+            f.Engine.RelinkArchives();
+            Require(File.ReadAllText(store(covered, GoneY)) == "covered y" && File.ReadAllText(store(covered, GoneX)) == "covered x" && f.Engine.Status().StoredMissing == 0, "covered: nothing missing");
+            f.Engine.UninstallForGood(cover.Id, DriftChoice.Refuse, null);
+            Require(File.ReadAllText(liveY) == "covered y", "covered: the covered file comes back");
+            f.Engine.UninstallForGood(covered.Id, DriftChoice.Refuse, null);
+
+            // 2. Partly kept: a file changed by another tool can't be kept, the intact one is; the archive identity
+            // stays for the rest, and once the archive is back in a library a repair reads the changed file from it.
+            string baseZip = ZipMod(f, "base", "Base.zip", GoneX, "base x", GoneY, "base y");
+            ReplaceMod baseMod = Install(f, "Base.zip", "Base");
+            File.Copy(baseZip, Path.Combine(aside, "Base.zip")); File.Delete(baseZip);
+            File.WriteAllText(liveY, "changed by another tool");
+            f.Engine.RelinkArchives();
+            ReplaceMod b1 = f.Engine.LoadState().Find(baseMod.Id);
+            Require(File.ReadAllText(store(baseMod, GoneX)) == "base x" && b1.Files.Single(x => x.Path == GoneX).ArchiveEntry == null, "partial: the intact file is kept");
+            Require(!File.Exists(store(baseMod, GoneY)) && b1.Files.Single(x => x.Path == GoneY).ArchiveEntry != null && b1.ArchiveSha != null, "partial: the changed file still needs the archive");
+            GameFilesStatus partial = f.Engine.Status();
+            Require(partial.StoredMissingMods.Count == 1 && partial.StoredMissingMods[0].Name == "Base" && partial.StoredMissingMods[0].Files == 1 && partial.StoredMissingMods[0].Total == 2 &&
+                partial.Details.Any(d => d.Contains("1 of 2 files")), "partial notice: " + partial.Summary + " / " + String.Join(" | ", partial.Details));
+            File.Copy(Path.Combine(aside, "Base.zip"), Path.Combine(lib2, "Base moved.zip"));
+            f.Engine.RelinkArchives();
+            Require(f.Engine.LoadState().Find(baseMod.Id).SourcePath == Path.Combine(lib2, "Base moved.zip") && f.Engine.Status().StoredMissing == 0, "partial: the archive found again is relinked");
+            f.Engine.Reapply();
+            Require(File.ReadAllText(liveY) == "base y" && File.ReadAllText(liveX) == "base x", "partial: reapply repairs from the relinked archive and the kept copy");
+            f.Engine.UninstallForGood(baseMod.Id, DriftChoice.Refuse, null);
+
+            // 3. Moved, not deleted: relinked, nothing copied into the store.
+            string movedZip = ZipMod(f, "moved", "Moved.zip", GoneX, "moved x");
+            ReplaceMod moved = Install(f, "Moved.zip", "Moved");
+            File.Move(movedZip, Path.Combine(lib2, "Moved elsewhere.zip"));
+            f.Engine.RelinkArchives();
+            ReplaceMod m2 = f.Engine.LoadState().Find(moved.Id);
+            Require(m2.SourcePath == Path.Combine(lib2, "Moved elsewhere.zip") && m2.ArchiveSha != null && !File.Exists(store(moved, GoneX)), "moved archive: relink, no rescue");
+            f.Engine.UninstallForGood(moved.Id, DriftChoice.Refuse, null);
+
+            // 4. Two identical copies elsewhere: not relinked (ambiguous) and not rescued; repairs read either copy.
+            string twinZip = ZipMod(f, "twin", "Twin.zip", GoneX, "twin x");
+            ReplaceMod twin = Install(f, "Twin.zip", "Twin");
+            File.Copy(twinZip, Path.Combine(lib2, "Twin 1.zip")); File.Move(twinZip, Path.Combine(lib2, "Twin 2.zip"));
+            f.Engine.RelinkArchives();
+            Require(!File.Exists(store(twin, GoneX)) && f.Engine.LoadState().Find(twin.Id).ArchiveSha != null, "identical copies: no rescue");
+            File.Delete(liveX); f.Engine.Reapply();
+            Require(File.ReadAllText(liveX) == "twin x", "identical copies: repair reads one");
+            f.Engine.UninstallForGood(twin.Id, DriftChoice.Refuse, null);
+            File.Delete(Path.Combine(lib2, "Twin 1.zip")); File.Delete(Path.Combine(lib2, "Twin 2.zip"));
+
+            // 5. A locked file (SF6 running) is not given up on: the next refresh keeps it.
+            string lockZip = ZipMod(f, "locked", "Locked.zip", GoneX, "locked x");
+            ReplaceMod locked = Install(f, "Locked.zip", "Locked");
+            File.Delete(lockZip);
+            using (new FileStream(liveX, FileMode.Open, FileAccess.Read, FileShare.None)) f.Engine.RelinkArchives();
+            Require(!File.Exists(store(locked, GoneX)), "locked: nothing kept while the file can't be read");
+            f.Engine.RelinkArchives();
+            Require(File.ReadAllText(store(locked, GoneX)) == "locked x" && f.Engine.Status().StoredMissing == 0, "locked: kept at the next refresh");
+            f.Engine.UninstallForGood(locked.Id, DriftChoice.Refuse, null);
+
+            // 6. A newer download saved under the same name: flagged as replaced, then the installed files are kept.
+            string sameZip = ZipMod(f, "same", "Same.zip", GoneX, "old x");
+            ReplaceMod same = Install(f, "Same.zip", "Same");
+            File.Delete(sameZip); ZipMod(f, "same2", "Same.zip", GoneX, "new version x", GoneY, "new file");
+            GameFilesStatus replaced = f.Engine.Status();
+            Require(replaced.StoredMissingMods.Count == 1 && replaced.StoredMissingMods[0].SourceReplaced && replaced.Summary.Contains("replaced by another version"), "same name, new file: " + replaced.Summary);
+            f.Engine.RelinkArchives();
+            Require(File.ReadAllText(store(same, GoneX)) == "old x" && f.Engine.Status().StoredMissing == 0, "same name, new file: the installed version is kept");
+            File.Delete(liveX); f.Engine.Reapply();
+            Require(File.ReadAllText(liveX) == "old x", "same name, new file: reapply puts the installed version back");
+            f.Engine.UninstallForGood(same.Id, DriftChoice.Refuse, null);
+
+            // 7. Disabled before the archive went: Disable already stored it; no notice, enable works.
+            string offZip = ZipMod(f, "off", "Off.zip", GoneX, "off x");
+            ReplaceMod off = Install(f, "Off.zip", "Off");
+            f.Engine.SetEnabled(off.Id, false); File.Delete(offZip);
+            f.Engine.RelinkArchives();
+            Require(f.Engine.Status().StoredMissing == 0, "disabled: no notice");
+            f.Engine.SetEnabled(off.Id, true);
+            Require(File.ReadAllText(liveX) == "off x", "disabled: enable from the stored copy");
+            f.Engine.UninstallForGood(off.Id, DriftChoice.Refuse, null);
+
+            // 8. Review P1-1: a library offline (drive unplugged) is not a gone archive: nothing copied, nothing
+            // dropped, and the mod works as before once the library is back.
+            string offlineZip = Path.Combine(lib2, "Offline.zip");
+            File.Move(ZipMod(f, "offline", "Offline.zip", GoneX, "offline x"), offlineZip);
+            ReplaceMod offline = Install(f, offlineZip, "Offline");   // an absolute path: f.Mod keeps it as is
+            string lib2Away = lib2 + " (unplugged)";
+            Directory.Move(lib2, lib2Away);
+            f.Engine.RelinkArchives();
+            ReplaceMod o1 = f.Engine.LoadState().Find(offline.Id);
+            Require(!File.Exists(store(offline, GoneX)) && o1.Files.All(x => x.ArchiveEntry != null) && o1.ArchiveSha != null, "offline library: no rescue");
+            Directory.Move(lib2Away, lib2);
+            f.Engine.RelinkArchives();
+            Require(f.Engine.Status().StoredMissing == 0 && !File.Exists(store(offline, GoneX)), "offline library back: nothing missing, nothing copied");
+
+            // 9. Review P1-1/P2-1: the archive touched (same contents, new time) and locked during the refresh: not
+            // rescued, and the status never calls it replaced. A stamp-only change without any relink (the CLI) is
+            // checked by content and is fine.
+            File.SetLastWriteTimeUtc(offlineZip, DateTime.UtcNow.AddMinutes(-5));
+            using (new FileStream(offlineZip, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                f.Engine.RelinkArchives();
+                Require(!File.Exists(store(offline, GoneX)) && f.Engine.LoadState().Find(offline.Id).ArchiveSha != null && f.Engine.Status().StoredMissing == 0, "locked archive: no rescue, no notice");
+            }
+            Require(f.Engine.Status().StoredMissing == 0, "touched archive, no relink yet: no false 'replaced' notice");
+            File.Delete(liveX); f.Engine.Reapply();
+            Require(File.ReadAllText(liveX) == "offline x", "touched archive: reapply reads it");
+            f.Engine.UninstallForGood(offline.Id, DriftChoice.Refuse, null);
+
+            // 10. Review P3-1: a store copy already there (an earlier interrupted rescue) is adopted.
+            string halfZip = ZipMod(f, "half", "Half.zip", GoneX, "half x", GoneY, "half y");
+            ReplaceMod half = Install(f, "Half.zip", "Half");
+            string halfStore = store(half, GoneX);
+            Directory.CreateDirectory(Path.GetDirectoryName(halfStore)); File.Copy(liveX, halfStore);
+            File.Delete(halfZip);
+            f.Engine.RelinkArchives();
+            ReplaceMod h1 = f.Engine.LoadState().Find(half.Id);
+            Require(h1.Files.All(x => x.ArchiveEntry == null) && File.ReadAllText(store(half, GoneY)) == "half y", "existing store copy adopted, the other file rescued");
         }
 
         private static void ArchiveStorage(string root)
