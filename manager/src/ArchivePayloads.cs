@@ -202,6 +202,8 @@ namespace SlotsInstaller
                 List<LibraryEntry> entries = null;
                 var moves = new List<KeyValuePair<string,string>>();
                 bool updated = false;
+                try
+                {
                 foreach (ReplaceMod m in state.Mods.Where(m => m.ArchiveSha != null))
                 {
                     string current = IsLibraryArchive(m.SourcePath) ? StampOrNone(m.SourcePath) : null;
@@ -213,9 +215,31 @@ namespace SlotsInstaller
                     // Rewritten in place (an Edit bundle save keeps the files): only the stamp is new.
                     string path = current != null && MatchesArchive(m.SourcePath, m) ? m.SourcePath : MovedArchive(m, entries);
                     lock (relinkMisses) { if (path == null) relinkMisses[m.Id] = signature; else relinkMisses.Remove(m.Id); }
-                    if (path == null) continue;
+                    if (path == null)
+                    {
+                        // 1.0.18: the archive is gone and no library copy holds it. Its files that are still intact in
+                        // the game become the stored copy (as Disable does), so Enable, Reapply and rebuilds keep working.
+                        // Not while identical copies exist (only the relink needs one; repairs read any of them), and
+                        // only when the archive is provably gone or replaced, never because a drive or library is
+                        // offline or the file can't be read right now (review P1-1).
+                        if (MovedArchive(m, entries, false) == null && SourceGoneForGood(m))
+                        {
+                            bool retry;
+                            if (RescueFromGame(state, m, out retry)) updated = true;
+                            // A game file it couldn't read (SF6 running) is tried again at the next refresh.
+                            if (retry) lock (relinkMisses) relinkMisses.Remove(m.Id);
+                        }
+                        continue;
+                    }
                     if (!ReplacePlanner.SameSource(path, m.SourcePath)) moves.Add(new KeyValuePair<string,string>(m.SourcePath, path));
                     m.SourcePath = path; m.ArchiveStamp = SourceReader.Stamp(path); updated = true;
+                }
+                }
+                catch
+                {
+                    // 1.0.18 (review P2-2): a cancel or error later in the loop keeps what was already rescued.
+                    if (updated) { state.Generation++; DurableFile.WriteJson(StatePath, state); }
+                    throw;
                 }
                 if (!updated) return;
                 state.Generation++;
@@ -224,6 +248,76 @@ namespace SlotsInstaller
                     if (!ReplacePlanner.SameSource(move.Key, move.Value) && !File.Exists(move.Key))
                         OutfitSetStore.RenameSource(SourceConfig.CostumeRoot, move.Key, move.Value);
             }
+        }
+
+        // 1.0.18 (review P1-1): the recorded archive is really gone, not just out of reach. A file still at the path
+        // must be read and hold other contents (a newer download under the same name); an unreadable one is not
+        // proof. A missing file counts only while its folder and every configured library are there, so an unplugged
+        // drive, a sleeping network share or a library folder renamed for a moment never triggers a rescue.
+        private bool SourceGoneForGood(ReplaceMod m)
+        {
+            string path = m.SourcePath;
+            if (String.IsNullOrEmpty(path) || SourceConfig == null) return false;
+            try
+            {
+                if (SourceConfig.Libraries.Any(l => !String.IsNullOrEmpty(l) && !Directory.Exists(l))) return false;
+                if (File.Exists(path))
+                {
+                    long size; string sha;
+                    try { sha = BundleLayout.ArchiveHash(path, out size, m.ArchiveSize); }
+                    catch (InvalidDataException) { return true; }   // not an archive any more
+                    return sha != m.ArchiveSha;
+                }
+                string folder = Path.GetDirectoryName(path);
+                return !String.IsNullOrEmpty(folder) && Directory.Exists(folder);
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException || ex is OperationCanceledException) throw; return false; }
+        }
+
+        // 1.0.18: copies a mod's archive-backed files whose installed bytes still match the record into the store and
+        // stops reading them from the archive. A file another mod covers, or one changed in the game, is left alone
+        // (the missing-copy notice names the mod). The record keeps its archive identity (review P1-1, P2-3), so the
+        // archive found again later is relinked, and presets still tell this version from another one.
+        // retry: an installed file could not be read (SF6 running). A failed copy (disk full) is not retried until the
+        // next start or a library change, so a large copy that can't fit isn't repeated at every refresh.
+        // Records only what is verified in the store, so a copy that fails part-way keeps the files it finished; a
+        // store copy that is already there and verifies is adopted (review P3-1).
+        // Two destinations of one archive member are each checked against their own installed file.
+        internal bool RescueFromGame(ReplaceState state, ReplaceMod m, out bool retry)
+        {
+            retry = false;
+            var rescue = new List<ModFile>();
+            var kept = new List<ModFile>();
+            foreach (ModFile f in m.Files.Where(f => f.ArchiveEntry != null))
+            {
+                try
+                {
+                    string stored = StoreFile(state, m, f);
+                    if (File.Exists(stored) && Verified(stored, f)) kept.Add(f);
+                    else if (Verified(GamePath(f.Path), f)) rescue.Add(f);
+                }
+                catch (Exception ex) { if (ex is OutOfMemoryException || ex is OperationCanceledException) throw; retry = true; }
+            }
+            if (rescue.Count > 0)
+            {
+                try { Hydrate(state, m, rescue); }
+                catch (Exception ex)
+                {
+                    if (ex is OutOfMemoryException || ex is OperationCanceledException) throw;
+                    Program.LogLine("Keeping the installed files of '" + m.Name + "' (source gone) stopped: " + ex.Message);
+                }
+                foreach (ModFile f in rescue)
+                {
+                    try { if (Verified(StoreFile(state, m, f), f)) kept.Add(f); }
+                    catch (Exception ex) { if (ex is OutOfMemoryException || ex is OperationCanceledException) throw; }
+                }
+            }
+            if (kept.Count == 0) return false;
+            foreach (ModFile f in kept) f.ArchiveEntry = null;
+            int still = m.Files.Count(f => f.ArchiveEntry != null);
+            Program.LogLine("Source of '" + m.Name + "' is gone; kept " + ReplacePlanner.N(kept.Count, "installed file") + " as its stored copy" +
+                (still == 0 ? "." : ", " + still + " still need the archive."));
+            return true;
         }
 
         internal bool CanReclaimArchiveStore(ReplaceState state)

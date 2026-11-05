@@ -56,6 +56,7 @@ namespace SlotsInstaller
         private string InstalledKindFilter { get { return installedKind == null ? "All" : InstalledKinds[installedKind.SelectedIndex]; } }
         private Panel gameBanner;
         private FlatButton bannerRemovePak;   // 2.4.0
+        private FlatButton bannerShowMod;     // 1.0.18: selects the mod a missing-copy notice names
         private Label gameBannerText;
         private FlatButton bannerReapply, bannerRestore, bannerLoader, bannerPak, moveUpButton, moveDownButton;
         private List<GameModRow> gameRows = new List<GameModRow>();
@@ -602,7 +603,7 @@ namespace SlotsInstaller
             // 1.0.1: the keep rule is "only what a live Undo needs": nothing else can use a copy any more.
             if (allowRecovery)
             {
-                try { engine.RelinkArchives(); } catch (IOException ex) { Program.Log(ex); }
+                try { engine.RelinkArchives(); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }   // 1.0.18: it also keeps installed files of a gone source
                 try { string trash = engine.RetryTrash(); if (trash != null && String.IsNullOrEmpty(result.Recovery)) result.Recovery = trash; }
                 catch (Exception ex) { Program.Log(ex); }
                 try { engine.DeleteRemovedExcept(ProtectedRemovedFolders()); }
@@ -704,10 +705,12 @@ namespace SlotsInstaller
             bannerLoader = banner.Add(Button("Turn loose file loader on", false, 190, delegate { SetLooseLoader(true); }));
             bannerRemovePak = banner.Add(Button("Remove it", false, 90, delegate { RemoveOrphanedCostumePak(); })); bannerRemovePak.AccessibleName = "Remove the leftover Slotsloader costume pak";
             bannerRepair = banner.Add(Button("Repair", false, 76, delegate { RepairGameEntries(); })); bannerRepair.AccessibleName = "Repair the game entries another tool left invalidated";   // 2.4.2 (MainFormPakRepair.cs)
+            bannerShowMod = banner.Add(Button("Show mod", false, 96, delegate { ShowMissingCopyMod(); })); bannerShowMod.AccessibleName = "Select the mod this notice is about";
             gameBannerText = banner.Message;
-            // 2.4.0 (no tooltips): clicking the banner text lists every detail.
+            // 2.4.0 (no tooltips): clicking the banner text lists every detail. 1.0.18: indented lines continue the
+            // entry above them (no bullet).
             gameBannerText.Cursor = Cursors.Hand;
-            gameBannerText.Click += delegate { if (gameStatus != null && gameStatus.Details.Count > 0) ThemedMessageBox.Show(this, gameStatus.Summary + "\n\n" + String.Join("\n", gameStatus.Details.Select(d => "• " + d)), "Game files", MessageBoxButtons.OK, MessageBoxIcon.Information); };
+            gameBannerText.Click += delegate { if (gameStatus != null && gameStatus.Details.Count > 0) ThemedMessageBox.Show(this, gameStatus.Summary + "\n\n" + String.Join("\n", gameStatus.Details.Select(d => d.StartsWith("    ") ? d : "• " + d)), "Game files", MessageBoxButtons.OK, MessageBoxIcon.Information); };
             return gameBanner;
         }
 
@@ -716,13 +719,17 @@ namespace SlotsInstaller
             if (gameBanner == null) return;
             string text = gameStatus == null ? "" : gameStatus.Summary;
             gameBanner.Visible = text.Length > 0;
-            gameBannerText.Text = text; gameBannerText.AccessibleDescription = gameStatus == null ? "" : String.Join("; ", gameStatus.Details);
+            gameBannerText.Text = text; gameBannerText.AccessibleDescription = gameStatus == null ? "" : String.Join("; ", gameStatus.Details.Select(d => d.Trim()));
             bool idle = !busy && !gameRunning;
             bannerReapply.Visible = gameStatus != null && (gameStatus.NeedsReapply || gameStatus.BaseChanged);
             bannerLoader.Visible = gameStatus != null && gameStatus.LooseLoaderOff;
             bannerPak.Visible = bannerLoader.Visible; bannerPak.Enabled = idle && !fluffyRunning;   // 2.4.1: or convert the loose installs
             bannerRemovePak.Visible = gameStatus != null && gameStatus.OrphanCostumePaks.Count > 0;
             bannerRemovePak.Enabled = idle;
+            bannerShowMod.Visible = gameStatus != null && gameStatus.ShowsMissingCopies;
+            bannerShowMod.Text = gameStatus != null && gameStatus.StoredMissingMods.Count > 1 ? "Show next" : "Show mod";
+            bannerShowMod.AccessibleName = gameStatus != null && gameStatus.StoredMissingMods.Count > 1
+                ? "Select the next of the " + gameStatus.StoredMissingMods.Count + " mods this notice names" : "Select the mod this notice is about";
             UpdateRepairButton();   // 2.4.2
             // 2.4.1: Restore original game files only where it fits: game files changed or SF6 was updated, with
             // replacements or tool mods to restore. It is not the answer to the loose file loader or a leftover pak
@@ -731,6 +738,25 @@ namespace SlotsInstaller
             bannerLoader.Enabled = idle;
             bannerReapply.Enabled = bannerRestore.Enabled = idle && !FluffyBlocksPak;
             UpdateGameFilesToast();   // 1.0.10: the same notice on the other pages (MainFormGameNotice.cs)
+        }
+
+        // 1.0.18: the banner's Show mod. Selects the first mod the missing-copy notice names (the next one on the next
+        // click), so its Reinstall/Uninstall buttons are one click away. A row the filters hide is named in the status.
+        private void ShowMissingCopyMod()
+        {
+            if (gameStatus == null || gameStatus.StoredMissingMods.Count == 0) return;
+            var ids = gameStatus.StoredMissingMods.Select(m => m.ModId).ToList();
+            GameModRow current = GetGameRowSelection();
+            int at = current != null && current.Mod != null ? ids.IndexOf(current.Mod.Id) : -1;
+            string id = ids[(at + 1) % ids.Count];
+            ListViewItem item = installedList.Items.Cast<ListViewItem>().FirstOrDefault(r => r.Tag is GameModRow && ((GameModRow)r.Tag).Mod != null && ((GameModRow)r.Tag).Mod.Id == id);
+            if (item == null)
+            {
+                SetSharedStatus("'" + gameStatus.StoredMissingMods[ids.IndexOf(id)].Name + "' isn't in the list right now. Clear the search and filters to see it.", Palette.Accent);
+                return;
+            }
+            foreach (ListViewItem other in installedList.SelectedItems.Cast<ListViewItem>().ToList()) if (other != item) other.Selected = false;
+            item.Selected = true; item.Focused = true; item.EnsureVisible(); installedList.Focus();
         }
 
         private GameModRow GetGameRowSelection() { return installedList.SelectedItems.Count == 1 ? installedList.SelectedItems[0].Tag as GameModRow : null; }

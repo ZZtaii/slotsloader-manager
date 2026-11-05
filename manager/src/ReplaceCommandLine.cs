@@ -351,7 +351,7 @@ namespace SlotsInstaller
             if (status.OrphanCostumePaks.Count > 0) Console.WriteLine(LoaderCostumePak.OrphanText + ": " + String.Join(", ", status.OrphanCostumePaks) + " (remove it: loader-pak-remove, or the Installed page's Remove it).");
             if (status.OrphanedRows > 0) Console.WriteLine(PakRepair.OrphanText(status.OrphanedRows) + ": " + String.Join(", ", status.OrphanedRowsWhere.Take(12)) + (status.OrphanedRowsWhere.Count > 12 ? ", …" : "") + " (repair: pak-repair, or the Installed page's Repair).");   // 2.4.2
             if (status.LeftoverPaks.Count > 0) Console.WriteLine(ReplaceEngine.LeftoverStatusText(status.LeftoverPaks) + " (remove: select it on the Installed page, then Remove PAK).");   // 1.0.11
-            Console.WriteLine("Status: " + (status.Summary.Length == 0 ? "OK" : status.Summary) + (status.Details.Count > 1 ? " · " + String.Join(" · ", status.Details) : ""));
+            Console.WriteLine("Status: " + (status.Summary.Length == 0 ? "OK" : status.Summary) + (status.Details.Count > 1 ? " · " + String.Join(" · ", status.Details.Select(d => d.Trim())) : ""));
             return 0;
         }
 
