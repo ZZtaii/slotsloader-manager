@@ -80,7 +80,7 @@ namespace SlotsInstaller
                 ModPackage addon = addons[n];
                 var part = new AddonPart { Prefix = PrefixHead + n + ":", SourcePath = addon.SourcePath, Package = addon };
                 merged.AddonParts.Add(part);
-                var dropped = new HashSet<string>(addon.Components.Where(c => c.IsDummy && c.ParentId == null && SameName(c.Name, main.Name)).Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+                HashSet<string> dropped = DroppedRoots(main, addon);
                 foreach (ModComponent c in addon.Components)
                 {
                     if (dropped.Contains(c.Id)) continue;
@@ -97,6 +97,33 @@ namespace SlotsInstaller
             }
             merged.PrepareChoices();
             return merged;
+        }
+
+        // An addon's dummy roots named like the main mod ("00 Menu"): its options go under the main's root instead.
+        private static HashSet<string> DroppedRoots(ModPackage main, ModPackage addon)
+        {
+            return new HashSet<string>(addon.Components.Where(c => c.IsDummy && c.ParentId == null && SameName(c.Name, main.Name)).Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+        }
+
+        // 1.0.18 (Install all variants with addons, ArchiveCombine.cs): the addon's files that go into the combined copy of
+        // the main archive, as (entry in the addon, path in the copy). Each file belongs to its deepest option or group
+        // folder; files of a dropped root (Merge leaves it out too) and loose files outside every folder of the addon (a
+        // README) are left out. Options at the addon's top level (no folder of their own) get a folder named after the
+        // addon file, so they don't land on the main mod's top level.
+        internal static List<KeyValuePair<string, string>> CombinedEntries(ModPackage main, ModPackage addon, IEnumerable<string> entries)
+        {
+            HashSet<string> dropped = DroppedRoots(main, addon);
+            List<string> owners = addon.Components.Select(c => c.Id).Where(id => id != null && !id.StartsWith(":", StringComparison.Ordinal)).Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(id => id.Length).ToList();
+            string wrap = Path.GetFileNameWithoutExtension(addon.SourcePath ?? "").Trim();
+            var result = new List<KeyValuePair<string, string>>();
+            foreach (string path in entries ?? new string[0])
+            {
+                string owner = owners.FirstOrDefault(id => id.Length == 0 || path.StartsWith(id + "/", StringComparison.OrdinalIgnoreCase));
+                if (owner == null || dropped.Contains(owner)) continue;
+                if (owner.Length == 0 && wrap.Length == 0) continue;
+                result.Add(new KeyValuePair<string, string>(path, owner.Length == 0 ? wrap + "/" + path : path));
+            }
+            return result;
         }
 
         internal static AddonPart PartOf(ModPackage merged, string id)

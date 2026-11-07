@@ -149,6 +149,7 @@ Extra outfits need REFramework and Slotsloader in the game folder. In Extra outf
 
 ### Install all variants
 For an archive with several options, **Install all variants** copies the whole archive into `reframework\costume_mods\<Character>\`, as if you dropped it there yourself. Slotsloader then builds usually one outfit per combination (up to 50 per mod). Mods made for an external mod manager get one per shape option.
+When a ZIP mod shows options from an add-on archive (marked **Add-on** in the list), the copy includes them, so their combinations are built too. Right-click an option to open its archive in Explorer.
 
 ### Add to outfit
 **Add to outfit…** copies only the ticked options (one hair option of a bundle, for example) into an extra outfit the Manager already installed. Files with the same names are replaced and nothing else changes. Files made for another outfit slot can't go on it, so those outfits can't be picked.

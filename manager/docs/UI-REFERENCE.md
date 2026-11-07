@@ -47,6 +47,15 @@ Source: [LibraryCode.cs](../src/LibraryCode.cs) (the kinds), [FilterPanel.cs](..
 - **Index.** Stored as `CodeKinds` in index v4 records. Older records keep their identity: those with tool kinds are read again once in the background ("· READING n%"), the rest get none without a read. Until then scripts, plugins and REFramework files without natives count; a plain DLL doesn't.
 - Search: `injector`, `injectors`, `code injector(s)` list the Code injectors kind.
 
+## Unreleased: add-ons in Install all variants, 2026-11-07
+
+Source: [MainFormAddons.cs](../src/MainFormAddons.cs) (tag, description line, options menu), [MainFormAllVariants.cs](../src/MainFormAllVariants.cs), [ArchiveCombine.cs](../src/ArchiveCombine.cs). Checks: `--replace-ui-check` ("addon all variants (1.0.18)", "addon all variants in the window (1.0.18)").
+
+- **Add-on tag.** An option (or group) that comes from an add-on archive shown inside its main mod has a muted **Add-on** pill at the right end of its row (Tiny font, `Raised` fill, `Border` when the row is hovered or selected); the name gives way to it.
+- **Description.** Under the option's description: "Add-on from <file>. Right-click the option to open it in Explorer."
+- **Options menu** (right-click an option row, or the menu key on the selected one): **Open add-on in Explorer (<file>)** on add-on rows only, then **Open main mod in Explorer** (**Open mod in Explorer** when no add-on is shown). Both select the archive in Explorer.
+- **Install all variants** of a ZIP mod shown with add-ons copies one archive with the add-ons' options in it; the status reads "Installed every variant of <mod> with <add-on> for <fighter>." Its accessible description names the add-on files. The option count that shows the button includes the add-on options. A RAR or 7Z main mod is copied as before and the status says the add-ons were not added.
+
 ## Unreleased: migrate installed mods, 2026-11-01
 
 Source: [MigrationForm.cs](../src/MigrationForm.cs) (the window), [ModMigration.cs](../src/ModMigration.cs) (the plan). Checks: `--replace-check` ("migration: …"), `--replace-ui-check` ("Migration wizard previews, pauses, resumes and completes a fixture handoff").
