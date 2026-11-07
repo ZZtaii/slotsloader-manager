@@ -807,6 +807,7 @@ namespace SlotsInstaller
             componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font("Segoe UI", 10.5F) };
             componentTree.EmptyText = "Choose a mod from the library, or drop an archive (ZIP, RAR, 7Z) or mod folder anywhere in this window.\n\nCtrl+O opens an archive · Ctrl+F searches the library";
             componentTree.DrawNode += DrawComponentNode;
+            componentTree.ContextMenuStrip = BuildOptionMenu();   // 1.0.18: open the option's archive (an addon's own) in Explorer
             // OptionTree paints the background, indicator and text together;
             // no native TreeView hot tracking/state images can overpaint them.
             // 2.4.1: Enter toggles the focused option (Space installs, see ProcessCmdKey).
@@ -1406,7 +1407,12 @@ namespace SlotsInstaller
             bool choice = component.IsDummy && IsChoiceGroup(component);
             string name = component.Name + (component.BundleRule == "Required" ? "  ·  Required" : choice && !required && !component.InferredChoice ? "  ·  Choose one" : "");
             Font nameFont = component.IsDummy ? Palette.Strong : componentTree.Font;
-            int available = Math.Max(1, row.Width - x - Px(8));
+            // 1.0.18 (the user: show which options came from an addon): a quiet "Add-on" tag at the row's right end; the
+            // option's description names the file and right-click opens it in Explorer (MainFormAddons.cs).
+            ModPackage shown = package;
+            bool fromAddon = shown != null && LibraryAddons.IsAddonId(shown, component.Id);
+            int addonTagWidth = fromAddon ? MeasuredWidth(AddonTag, Palette.Tiny) + Px(16) : 0;
+            int available = Math.Max(1, row.Width - x - Px(8) - (fromAddon ? addonTagWidth + Px(12) : 0));
             int pillWidth = 0; string pill = component.InferredChoice ? "Choose an option" : "Required · choose one";
             if (required) pillWidth = MeasuredWidth(pill, Palette.Tiny) + Px(20);
             int nameWidth = required ? Math.Min(MeasuredWidth(name, nameFont), Math.Max(Px(40), available - pillWidth - Px(10))) : available;
@@ -1420,6 +1426,12 @@ namespace SlotsInstaller
                 var badge = new Rectangle(x + Px(3) + nameWidth + Px(10), row.Y + (row.Height - Px(22)) / 2, pillWidth, Px(22));
                 Glyphs.FillRounded(e.Graphics, Color.FromArgb(64, 44, 27), badge, badge.Height / 2F);
                 TextRenderer.DrawText(e.Graphics, pill, Palette.Tiny, badge, Palette.Accent, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+            if (fromAddon)
+            {
+                var tag = new Rectangle(row.Right - Px(12) - addonTagWidth, row.Y + (row.Height - Px(20)) / 2, addonTagWidth, Px(20));
+                Glyphs.FillRounded(e.Graphics, selected || hovered ? Palette.Border : Palette.Raised, tag, tag.Height / 2F);
+                TextRenderer.DrawText(e.Graphics, AddonTag, Palette.Tiny, tag, Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             if (selected && componentTree.Focused) Glyphs.DrawRounded(e.Graphics, Color.FromArgb(170, Palette.Accent), Math.Max(1F, DeviceDpi / 96F), new RectangleF(Px(4), row.Y + Px(2), Math.Max(1, row.Width - Px(8)), row.Height - Px(4)), Px(4));
             }
@@ -2417,7 +2429,7 @@ namespace SlotsInstaller
             int generation = ++previewGeneration;
             inspectedComponentId = component.Id;
             componentTitle.Text = component.Name;
-            packageDescription.Text = String.IsNullOrWhiteSpace(component.Description) ? component.Name : component.Description;
+            packageDescription.Text = (String.IsNullOrWhiteSpace(component.Description) ? component.Name : component.Description) + AddonSourceLine(component);
             List<string> own = Library.CleanAuthors(new[] { component.Author });
             SetByline(own.Count > 0 ? own : PackageAuthors());   // an option by someone else names them; otherwise the mod's author
             SetVersion(String.IsNullOrWhiteSpace(component.Version) ? PackageVersion() : component.Version);

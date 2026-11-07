@@ -27,6 +27,7 @@ namespace SlotsInstaller
         public string Character = "", Folder = "", Name = "", Mode = "", SourcePath = "", SourceStamp = "";   // Mode: composed | all_variants
         public List<string> SelectedIds = new List<string>();
         public List<PresetPartPointer> Parts = new List<PresetPartPointer>();   // Add to outfit, in the order they were added
+        public List<string> AddonSources;   // 1.0.18: all_variants combined with these addon archives (null = a plain copy); older Managers ignore it
     }
     public sealed class PresetPartPointer { public string SourcePath = "", SourceStamp = "", Mod = ""; public List<string> SelectedIds = new List<string>(); }
     public sealed class PresetReplacementPointer
@@ -66,7 +67,13 @@ namespace SlotsInstaller
             if (!HasSource(o)) { why = !o.Managed && !o.WholeArchive ? ManualDrop : SourceExists(o.SourcePath) ? "" : NotFound(o.SourcePath); return null; }
             string source = System.IO.Path.GetFullPath(o.SourcePath), folder = System.IO.Path.GetFileName(o.Folder.TrimEnd('\\'));
             if (o.WholeArchive)
-                return new PresetOutfitPointer { Character = o.Character, Folder = folder, Name = folder, Mode = ModeAllVariants, SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "" };
+            {
+                // 1.0.18: a copy combined with addons comes back the same way only while every addon is there; else it is copied
+                string gone = (o.AddonSources ?? new List<string>()).FirstOrDefault(a => !SourceExists(a));
+                if (gone != null) { why = "add-on not found at " + gone; return null; }
+                return new PresetOutfitPointer { Character = o.Character, Folder = folder, Name = folder, Mode = ModeAllVariants, SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "",
+                    AddonSources = o.AddonSources == null || o.AddonSources.Count == 0 ? null : o.AddonSources.Select(System.IO.Path.GetFullPath).ToList() };
+            }
             if (!o.Managed || o.SelectedIds == null || o.SelectedIds.Count == 0) return null;
             var pointer = new PresetOutfitPointer { Character = o.Character, Folder = folder, Name = String.IsNullOrWhiteSpace(o.Name) ? folder : o.Name, Mode = ModeComposed, SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "", SelectedIds = o.SelectedIds.ToList() };
             InstallManifest manifest;
@@ -380,7 +387,9 @@ namespace SlotsInstaller
                 if (there != null || Exists(destination) || alreadyCopied)
                 {
                     bool same = alreadyCopied || (there != null && there.Enabled && SamePointed(there, p));
+                    InstalledOutfit match = alreadyCopied ? copied : there;
                     if (same && !alreadyCopied && p.Mode == ModeComposed && !SameParts(there, p.Parts)) result.Notes.Add(label + ": installed, but its added parts differ from the preset; left as is.");
+                    else if (same && p.Mode == ModeAllVariants && match != null && match.WholeArchive && !SameIds(match.AddonSources, p.AddonSources)) result.Notes.Add(label + ": installed, but its add-ons differ from the preset; left as is.");
                     else if (same) result.Skipped++;
                     else result.Notes.Add(label + ": a different outfit is installed there; left as is.");
                     continue;
@@ -394,7 +403,11 @@ namespace SlotsInstaller
                     // back as the plain copy it was saved from.
                     if (p.Mode == ModeAllVariants && installed.Any(o => o.WholeArchive && String.Equals(o.Character, p.Character, StringComparison.OrdinalIgnoreCase) && ReplacePlanner.SameSource(o.SourcePath, p.SourcePath) && !String.Equals(full(o.Folder), destination, StringComparison.OrdinalIgnoreCase)))
                         CopyArchive(p.SourcePath, destination);
-                    else if (p.Mode == ModeAllVariants) ArchiveInstalls.Install(p.SourcePath, root, p.Character, p.Name, SavedArchiveName(p));
+                    else if (p.Mode == ModeAllVariants)
+                    {
+                        InstallResult copiedAll = ArchiveInstalls.Install(p.SourcePath, root, p.Character, p.Name, SavedArchiveName(p), p.AddonSources, sevenZip);
+                        if (!String.IsNullOrEmpty(copiedAll.PartsNote)) notes.Add(copiedAll.PartsNote.TrimEnd('.'));
+                    }
                     else
                     {
                         ModPackage package = PackageReader.Load(p.SourcePath, sevenZip);
