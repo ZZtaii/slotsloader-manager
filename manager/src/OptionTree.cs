@@ -137,28 +137,27 @@ namespace SlotsInstaller
                 if(node!=null)
                 {
                     Rectangle bounds=node.Bounds;
-                    if(node.Nodes.Count>0 && e.X>=bounds.X-DpiMetrics.Px(this,20) && e.X<bounds.X)
+                    var component=node.Tag as ModComponent;
+                    // 1.0.18 (the user: the expand click box should be the
+                    // whole header line): a group header row (no option of
+                    // its own) expands or collapses wherever it is clicked.
+                    bool header=node.Nodes.Count>0 && (component==null || component.IsDummy);
+                    if(header) {SelectedNode=node; if(node.IsExpanded) node.Collapse(); else node.Expand();}
+                    else if(node.Nodes.Count>0 && e.X>=bounds.X-DpiMetrics.Px(this,20) && e.X<bounds.X)
                     {if(node.IsExpanded) node.Collapse(); else node.Expand();}
                     else
                     {
                         SelectedNode=node;
                         // Every point in an option row activates the same
                         // choice; the separate disclosure arrow only expands.
-                        var component=node.Tag as ModComponent;
                         if(component!=null && !component.IsDummy) node.Checked=!node.Checked;
                     }
                 }
             }
             base.OnMouseDown(e);
         }
-        protected override void OnMouseDoubleClick(MouseEventArgs e)
-        {
-            var node=GetNodeAt(e.Location);
-            var component=node==null ? null : node.Tag as ModComponent;
-            if(Enabled && e.Button==MouseButtons.Left && node!=null && node.Nodes.Count>0 && (component==null || component.IsDummy) && e.X>=node.Bounds.X+DpiMetrics.Px(this,18))
-            {if(node.IsExpanded) node.Collapse(); else node.Expand();}
-            base.OnMouseDoubleClick(e);
-        }
+        // 1.0.18: no double-click expand any more; a header's single click
+        // already toggles it (a double-click's second press is ignored above).
         protected override bool IsInputKey(Keys keyData)
         {
             Keys key=keyData & Keys.KeyCode;
