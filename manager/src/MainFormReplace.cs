@@ -27,7 +27,7 @@ namespace SlotsInstaller
 
     internal sealed class RowShare
     {
-        internal string Other = "";
+        internal string Other = "", OtherId = "";   // 1.0.18 OtherId: Move up/down updates who wins at once
         internal int OtherPriority, Count;
         internal bool OtherEnabled, ThisWins;
         internal List<string> Paths = new List<string>();
@@ -639,7 +639,7 @@ namespace SlotsInstaller
                         if (j == i) continue;
                         ReplaceMod o = state.Mods[j];
                         var shared = o.Files.Select(f => f.Path).Where(pathSets[m.Id].Contains).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
-                        if (shared.Count > 0) row.Shares.Add(new RowShare { Other = o.Name, OtherPriority = j + 1, OtherEnabled = o.Enabled, Count = shared.Count, ThisWins = i < j, Paths = shared });
+                        if (shared.Count > 0) row.Shares.Add(new RowShare { Other = o.Name, OtherId = o.Id, OtherPriority = j + 1, OtherEnabled = o.Enabled, Count = shared.Count, ThisWins = i < j, Paths = shared });
                     }
                     row.Conflicts = row.Shares.Where(s => s.OtherEnabled).Sum(s => s.Count);
                     // Outfits (and other areas) changed by several enabled mods: the stacking is visible on the row.
@@ -903,7 +903,6 @@ namespace SlotsInstaller
         }
 
         private void ToggleGameRow(GameModRow row) { if (row.Mod == null) return; string id = row.Mod.Id; bool enable = !row.Mod.Enabled; ChangeGameRow(enable ? "Enabling replacement" : "Disabling replacement", delegate(ReplaceEngine e) { return e.SetEnabled(id, enable); }, (enable ? "Enabled " : "Disabled ") + row.Name + ".", delegate(ReplaceEngine e) { return e.SetEnabled(id, !enable); }); }
-        private void MoveGameRow(int delta) { GameModRow row = GetGameRowSelection(); if (row == null || row.Mod == null) return; string id = row.Mod.Id; ChangeGameRow("Changing priority", delegate(ReplaceEngine e) { return e.Move(id, delta); }, row.Name + " moved " + (delta < 0 ? "up." : "down."), delegate(ReplaceEngine e) { return e.Move(id, -delta); }); }
         // 2.4.1: no confirmation. 1.0.1: no copy kept and no Undo (uninstall means uninstall; the source reinstalls it).
         private void UninstallGameRow(GameModRow row)
         {

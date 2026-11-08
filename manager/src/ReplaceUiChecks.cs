@@ -337,6 +337,16 @@ namespace SlotsInstaller
                 Application.DoEvents(); Call(form, "MoveGameRow", 1); WaitIdle(form); refresh();
                 Require(order() != start && form.UndoLabel.Contains("moved"), "move: " + order());
                 undo(); Require(order() == start, "Undo of Move: " + order() + " (was " + start + ")");
+                // 1.0.18: the row moves at once (the list follows the priority) and clicks before the save are one save:
+                // down and back up again saves nothing new and offers no Undo.
+                foreach (ListViewItem item in list.Items) item.Selected = item.Tag is GameModRow && ((GameModRow)item.Tag).Mod != null && ((GameModRow)item.Tag).Mod.SourcePath == f.Mod("modA");
+                Application.DoEvents(); int priorityBefore = row("modA").Priority;
+                Call(form, "MoveGameRow", priorityBefore == 1 ? 1 : -1);
+                List<int> shown = list.Items.Cast<ListViewItem>().Select(i => i.Tag as GameModRow).Where(g => g != null && g.Mod != null).Select(g => g.Priority).ToList();
+                Require(row("modA").Priority != priorityBefore && shown.SequenceEqual(shown.OrderBy(p => p)) && form.Working && order() == start && Get<FlatButton>(form, priorityBefore == 1 ? "moveUpButton" : "moveDownButton").Enabled,
+                    "move shown before the save: #" + row("modA").Priority + ", list " + String.Join(",", shown) + ", state " + order());
+                Call(form, "MoveGameRow", priorityBefore == 1 ? -1 : 1); WaitIdle(form); refresh();
+                Require(order() == start && row("modA").Priority == priorityBefore && !form.UndoAvailable, "two clicks: " + order() + " (was " + start + "), Undo " + form.UndoLabel);
                 // A second record of modA (2.4.0 could leave duplicates), the newest one disabled.
                 Load(form, f, "modA"); WaitReview(form);
                 CompositionPlan comp = Get<CompositionPlan>(form, "plan");
@@ -772,6 +782,18 @@ namespace SlotsInstaller
                         Kind(form, "All");
                         var list = Get<ListView>(form, "installedList");
                         foreach (ListViewItem row in list.Items) row.Selected = row.Tag is GameModRow && ((GameModRow)row.Tag).Mod != null;
+                        Call(form, "ShowInstalledSelection"); Application.DoEvents();
+                        // 1.0.18 (the user): several replacements get Move up/down (first row), Disable selection, Uninstall last.
+                        FlatButton up = Get<FlatButton>(form, "moveUpButton"), down = Get<FlatButton>(form, "moveDownButton"), off = Get<FlatButton>(form, "disableInstalledButton"), uninstall = Get<FlatButton>(form, "removeInstalledButton");
+                        Require(up.Visible && down.Visible && up.Top == down.Top && off.Visible && off.Text == "Disable selection" && off.Enabled && up.Top < off.Top && off.Top < uninstall.Top && uninstall.Left == up.Left && uninstall.Right == down.Right,
+                            "multi-select actions: up " + up.Visible + "@" + up.Top + ", disable " + off.Visible + " '" + off.Text + "'@" + off.Top + ", uninstall @" + uninstall.Top);
+                        Require(!up.Enabled && !down.Enabled, "every replacement is selected, so neither can move past an unselected one");
+                        off.PerformClick(); WaitIdle(form);
+                        Require(engine.LoadState().Mods.Count == 2 && engine.LoadState().Mods.All(m => !m.Enabled) && form.UndoAvailable, "Disable selection: " + String.Join(",", engine.LoadState().Mods.Select(m => m.Name + (m.Enabled ? "+" : "-"))));
+                        form.PerformUndo(); WaitIdle(form);
+                        Require(engine.LoadState().Mods.All(m => m.Enabled), "Undo of Disable selection");
+                        Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                        foreach (ListViewItem row in list.Items) row.Selected = row.Tag is GameModRow && ((GameModRow)row.Tag).Mod != null;
                         Call(form, "ShowInstalledSelection");
                     }
                     Application.DoEvents();
@@ -1113,13 +1135,13 @@ namespace SlotsInstaller
                     Require(pak != null && form.LastLooseLoaderChoice == 1 && st.Method == ReplaceMethods.Pak && zeroed(st) > 0 && File.ReadAllText(configPath) == original, "Not now under Automatic: method " + st.Method + ", zeroed " + zeroed(st) + ", choice " + form.LastLooseLoaderChoice);
                     Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
                     Require(!engine.Status().LooseLoaderOff && Get<Label>(form, "statusText").Text.Contains("PAK method") || !engine.Status().LooseLoaderOff, "PAK installs must not show the loader-off banner");
-                    // The same source again is a switch: one record, no warning, no question, the priority kept.
+                    // The same source again is a switch: one record, no warning, no question; 1.0.18: it goes to the top (what is installed last wins).
                     install("tool");   // a second record so the priority position can be seen (the tool goes on top)
                     int at = engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modA"));
                     install("modA");
-                    Require(engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modA")) == 1 && engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modA")) == at, "same options: not one record at its place");
+                    Require(engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modA")) == 1 && engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modA")) == 0 && at > 0, "same options: not one record at the top (was #" + (at + 1) + ")");
                     // Another option set of an installed mod (a multi-option pack) is a switch: no warning about itself,
-                    // one muted "Replaces installed" line, one record kept at its place.
+                    // one muted "Replaces installed" line, one record, at the top (1.0.18).
                     WriteMulti(f);
                     ReplaceMod multi = install("modMulti");
                     int multiAt = engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modMulti"));
@@ -1128,7 +1150,7 @@ namespace SlotsInstaller
                     ReplacePlan variant = Get<ReplacePlan>(form, "replacePlan");
                     Require(!variant.Items.Any(i => i.Level == "warn" && i.Text.Contains(multi.Name)) && variant.Items.Any(i => i.Level == "info" && i.Text.StartsWith("Replaces installed: ")) && variant.ConflictList.All(c => !String.Equals(c.ModName, multi.Name, StringComparison.OrdinalIgnoreCase)), "a variant of the installed mod warned: " + String.Join(" | ", variant.Items.Select(i => i.Level + " " + i.Text)));
                     Call(form, "InstallCurrent"); WaitIdle(form);
-                    Require(engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modMulti")) == 1 && engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modMulti")) == multiAt, "variant switch: " + engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modMulti")) + " records");
+                    Require(engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modMulti")) == 1 && engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modMulti")) == 0 && multiAt >= 0, "variant switch: " + engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modMulti")) + " records");
                     // Two existing duplicates (2.4.0 could leave them) collapse to one on the next install; 1.0.1: the other leaves no copy (its source is in the library).
                     {
                         Load(form, f, "modA"); WaitReview(form);

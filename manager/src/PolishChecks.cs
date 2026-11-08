@@ -150,7 +150,10 @@ namespace SlotsInstaller
         {
             ModPackage package = PackageReader.Load(source, "");
             Set(form, "package", package);
-            Call(form, "FillComponents", Composer.DefaultSelection(package));
+            // 1.0.18: the defaults now tick a choice in each required group; this check starts from the main files alone.
+            var defaults = Composer.DefaultSelection(package);
+            Require(Composer.UnresolvedChoiceGroups(package, defaults).Count == 0, "The default selection left a required group open.");
+            Call(form, "FillComponents", defaults.Where(id => Composer.IsBase(package.Find(id))).ToList());
             var tree = Get<OptionTree>(form, "componentTree"); tree.ExpandAll();
             var unresolved = Get<List<ModComponent>>(form, "unresolvedChoices");
             var order = Get<List<string>>(form, "selectedOrder");
@@ -305,7 +308,8 @@ namespace SlotsInstaller
             manualItem.Selected = true; Application.DoEvents();
             var manual = (InstalledOutfit)manualItem.Tag;
             var visible = buttons.Where(b => b.Visible).ToArray();
-            Require(visible.Length == 2 && visible[0].Top == visible[1].Top && visible[0].Width == visible[1].Width && !visible[0].Bounds.IntersectsWith(visible[1].Bounds), "Manual outfit actions are staggered or overlap.");
+            // 1.0.18 (the user): Uninstall is always the last row, so Open folder and Uninstall each take the full width.
+            Require(visible.Length == 2 && visible[0] == buttons[0] && visible[1] == buttons[4] && visible[1].Top > visible[0].Bottom && visible[0].Width == visible[1].Width && visible[0].Left == visible[1].Left, "Manual outfit actions: Open folder, then Uninstall alone below it.");
             var title = Get<ClampedLabel>(form, "installedTitle");
             int line; using (Graphics g = title.CreateGraphics()) line = TextRenderer.MeasureText(g, "Ag", title.Font).Height;
             Require(title.Height <= line * 2 + title.Padding.Vertical + 2 && title.Height >= line, "Installed title is not limited to two lines: " + title.Height + " vs line " + line);
@@ -318,7 +322,7 @@ namespace SlotsInstaller
                 && visible[4].Top > visible[3].Top && visible[4].Left == visible[0].Left && visible[4].Right == visible[1].Right, "Managed outfit actions are not an aligned grid.");
             foreach (var button in visible) Require(button.Parent.ClientRectangle.Contains(button.Bounds), "Installed action is clipped: " + button.Text);
             using (var image = new Bitmap(installed.Width, installed.Height)) { installed.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(root, "polish-installed-" + installed.DeviceDpi + ".png"), ImageFormat.Png); }
-            report.Add("PASS: installed details: two-line title, character/state chips, path row with copy action, actions packed into an aligned two-column grid (manual: 2 in one row, managed: 2x2) without clipping.");
+            report.Add("PASS: installed details: two-line title, character/state chips, path row with copy action, actions in an aligned two-column grid with Uninstall last (manual: 2 full-width rows, managed: 2x2 + Uninstall) without clipping.");
         }
 
         private static void CheckSettingsLibraries(MainForm form, string root, List<string> report)
