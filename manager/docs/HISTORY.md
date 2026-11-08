@@ -1,6 +1,6 @@
 # Development history
 
-## Unreleased
+## 1.0.18: last install wins, instant Move up/down, sensible default options, add-ons in Install all variants
 
 - Installed page actions in a fixed order (the user): Move up · Move down first, then Open folder · Edit options, Health · Disable, Reinstall when the source changed, and Uninstall alone on the last row (it was in the middle). Several selected replacements or tool mods now get Move up/down (they move one place together; a row against the edge or another selected row waits), Disable selection / Enable selection (one change, Undo) and Uninstall selection (ReplaceEngine.SetEnabled(ids)). Checked by ui-polish (manual outfit: Open folder, then Uninstall below) and eplace-ui (multi-select actions).
 - Move up/down is instant (the user, 08/11: "move up and down needs to be more smooth", and the order looked wrong afterwards). The row moves in the list at once and stays selected and in view, its #n and the who-wins lines follow, and the new order is saved 350 ms after the last click as one change (ReplaceEngine.SetOrder), without the busy look: no progress bar, the list and the Move buttons keep working, other actions wait until it is saved. Undo puts back the order from before the first click. Before, each click ran a change and a full refresh with the busy look, and the row didn't move because the list is sorted by install date (MainFormMove.cs).
