@@ -807,6 +807,7 @@ namespace SlotsInstaller
             componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font(UiFonts.Family, 10.5F) };
             componentTree.EmptyText = "Choose a mod from the library, or drop an archive (ZIP, RAR, 7Z) or mod folder anywhere in this window.\n\nCtrl+O opens an archive · Ctrl+F searches the library";
             componentTree.DrawNode += DrawComponentNode;
+            componentTree.ContextMenuStrip = BuildOptionMenu();   // 1.0.18: open the option's archive (an addon's own) in Explorer
             // OptionTree paints the background, indicator and text together;
             // no native TreeView hot tracking/state images can overpaint them.
             // 2.4.1: Enter toggles the focused option (Space installs, see ProcessCmdKey).
@@ -1406,7 +1407,12 @@ namespace SlotsInstaller
             bool choice = component.IsDummy && IsChoiceGroup(component);
             string name = component.Name + (component.BundleRule == "Required" ? "  ·  Required" : choice && !required && !component.InferredChoice ? "  ·  Choose one" : "");
             Font nameFont = component.IsDummy ? Palette.Strong : componentTree.Font;
-            int available = Math.Max(1, row.Width - x - Px(8));
+            // 1.0.18 (the user: show which options came from an addon): a quiet "Add-on" tag at the row's right end; the
+            // option's description names the file and right-click opens it in Explorer (MainFormAddons.cs).
+            ModPackage shown = package;
+            bool fromAddon = shown != null && LibraryAddons.IsAddonId(shown, component.Id);
+            int addonTagWidth = fromAddon ? MeasuredWidth(AddonTag, Palette.Tiny) + Px(16) : 0;
+            int available = Math.Max(1, row.Width - x - Px(8) - (fromAddon ? addonTagWidth + Px(12) : 0));
             int pillWidth = 0; string pill = component.InferredChoice ? "Choose an option" : "Required · choose one";
             if (required) pillWidth = MeasuredWidth(pill, Palette.Tiny) + Px(20);
             int nameWidth = required ? Math.Min(MeasuredWidth(name, nameFont), Math.Max(Px(40), available - pillWidth - Px(10))) : available;
@@ -1420,6 +1426,12 @@ namespace SlotsInstaller
                 var badge = new Rectangle(x + Px(3) + nameWidth + Px(10), row.Y + (row.Height - Px(22)) / 2, pillWidth, Px(22));
                 Glyphs.FillRounded(e.Graphics, Color.FromArgb(64, 44, 27), badge, badge.Height / 2F);
                 TextRenderer.DrawText(e.Graphics, pill, Palette.Tiny, badge, Palette.Accent, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+            if (fromAddon)
+            {
+                var tag = new Rectangle(row.Right - Px(12) - addonTagWidth, row.Y + (row.Height - Px(20)) / 2, addonTagWidth, Px(20));
+                Glyphs.FillRounded(e.Graphics, selected || hovered ? Palette.Border : Palette.Raised, tag, tag.Height / 2F);
+                TextRenderer.DrawText(e.Graphics, AddonTag, Palette.Tiny, tag, Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             if (selected && componentTree.Focused) Glyphs.DrawRounded(e.Graphics, Color.FromArgb(170, Palette.Accent), Math.Max(1F, DeviceDpi / 96F), new RectangleF(Px(4), row.Y + Px(2), Math.Max(1, row.Width - Px(8)), row.Height - Px(4)), Px(4));
             }
@@ -2374,8 +2386,8 @@ namespace SlotsInstaller
                     if (c != null && !c.IsDummy && c.HasFiles(IsReplaceMode) && !ancestor.Checked) { ancestor.Checked = true; if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
                 }
                 // 1.0.16: an addon option's Requirement=Main files ticks the main mod's option of that name.
-                if (LibraryAddons.IsAddonId(package, component.Id))
-                    foreach (ModComponent need in LibraryAddons.Requirements(package, component))
+                // 1.0.18: and a Requirement= naming an option of the same archive ticks that option.
+                foreach (ModComponent need in LibraryAddons.IsAddonId(package, component.Id) ? LibraryAddons.Requirements(package, component) : package.RequiredOptions(component))
                     {
                         OptionNode required;
                         if (need.HasFiles(IsReplaceMode) && componentNodes.TryGetValue(need.Id, out required) && !required.Checked) { required.Checked = true; if (!selectedOrder.Contains(need.Id)) selectedOrder.Insert(0, need.Id); }
@@ -2417,7 +2429,7 @@ namespace SlotsInstaller
             int generation = ++previewGeneration;
             inspectedComponentId = component.Id;
             componentTitle.Text = component.Name;
-            packageDescription.Text = String.IsNullOrWhiteSpace(component.Description) ? component.Name : component.Description;
+            packageDescription.Text = (String.IsNullOrWhiteSpace(component.Description) ? component.Name : component.Description) + AddonSourceLine(component);
             List<string> own = Library.CleanAuthors(new[] { component.Author });
             SetByline(own.Count > 0 ? own : PackageAuthors());   // an option by someone else names them; otherwise the mod's author
             SetVersion(String.IsNullOrWhiteSpace(component.Version) ? PackageVersion() : component.Version);
@@ -2937,7 +2949,26 @@ namespace SlotsInstaller
             try
             {
                 var currentKeys = installedList.Items.Cast<ListViewItem>().Select(i => InstalledRowKey(i.Tag)).ToList();
-                if (!currentKeys.SequenceEqual(wantedKeys, StringComparer.OrdinalIgnoreCase))
+                // 1.0.18: the same rows in another order (Move up/down): the items take their new rows in place, so the
+                // list keeps its scroll position and nothing is removed or added (MainFormMove.cs).
+                if (!currentKeys.SequenceEqual(wantedKeys, StringComparer.OrdinalIgnoreCase) && currentKeys.Count == wantedKeys.Count &&
+                    new HashSet<string>(currentKeys, StringComparer.OrdinalIgnoreCase).SetEquals(wantedKeys) && currentKeys.Distinct(StringComparer.OrdinalIgnoreCase).Count() == currentKeys.Count)
+                {
+                    installedList.BeginUpdate();
+                    try
+                    {
+                        for (int i = 0; i < wanted.Count; i++)
+                        {
+                            ListViewItem item = installedList.Items[i];
+                            if (String.Equals(InstalledRowKey(item.Tag), wantedKeys[i], StringComparison.OrdinalIgnoreCase)) continue;
+                            item.Tag = wanted[i]; item.Text = InstalledRowText(wanted[i]);
+                            bool selected = selectedPaths.Contains(wantedKeys[i]); if (item.Selected != selected) item.Selected = selected;
+                            installedList.RedrawItems(i, i, true);
+                        }
+                    }
+                    finally { installedList.EndUpdate(); }
+                }
+                else if (!currentKeys.SequenceEqual(wantedKeys, StringComparer.OrdinalIgnoreCase))
                 {
                     changed = true; installedList.BeginUpdate();
                     try
@@ -3016,7 +3047,10 @@ namespace SlotsInstaller
             InstalledOutfit outfit = GetInstalledSelection();
             GameModRow gameRow = GetGameRowSelection();
             ShowVariants(outfit);   // 2.5.0: a manual archive/folder with several variants (MainFormVariants.cs)
-            moveUpButton.Visible = moveDownButton.Visible = gameRow != null && gameRow.Mod != null;
+            List<GameModRow> movable = MovableSelection();   // 1.0.18: one row or several (multi-select)
+            moveUpButton.Visible = moveDownButton.Visible = movable.Count > 0;
+            bool canMoveNow = movable.Count > 0 && (RowChangesAllowed || (busy && MovePending));   // Move up/down keep working while the order is saved (MainFormMove.cs)
+            moveUpButton.Enabled = canMoveNow && CanMoveSelection(-1); moveDownButton.Enabled = canMoveNow && CanMoveSelection(1);
             if (gameRow != null)
             {
                 bool idle = RowChangesAllowed;
@@ -3031,7 +3065,6 @@ namespace SlotsInstaller
                 removeInstalledButton.Visible = own || gameRow.Fluffy != null || leftover;
                 string fluffyBlocker = gameRow.Fluffy != null ? FluffyUninstallBlocker(gameRow.Fluffy) : leftover ? LeftoverBlocker : null;
                 editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = own && !busy && (gameRow.Mod.Enabled || idle); removeInstalledButton.Enabled = own ? idle : leftover ? !busy : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
-                moveUpButton.Enabled = idle && own && gameRow.Priority > 1; moveDownButton.Enabled = idle && own && gameRow.Priority < gameRows.Count(r => r.Mod != null);
                 editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Health" : "Enable"; removeInstalledButton.Text = leftover ? LeftoverRemoveText : "Uninstall";
                 disableInstalledButton.Visible = own && gameRow.Mod.Enabled; disableInstalledButton.Enabled = idle && own; disableInstalledButton.Text = "Disable";
                 reinstallButton.Visible = own && SourceChanged(gameRow.Mod.SourcePath); reinstallButton.Enabled = idle && own;
@@ -3050,7 +3083,11 @@ namespace SlotsInstaller
                 installedHelp.Text = blocker ?? "Uninstall the selected copies from the game. Their library sources stay available.";
                 installedChips.SetChips(new ChipStrip.Chip[0]);
                 removeInstalledButton.Visible = true; removeInstalledButton.Text = "Uninstall selection"; removeInstalledButton.Enabled = !busy && blocker == null;
-                editInstalledButton.Visible = toggleInstalledButton.Visible = disableInstalledButton.Visible = reinstallButton.Visible = false;
+                editInstalledButton.Visible = reinstallButton.Visible = false;
+                // 1.0.18 (the user: multi-select had no Move up/down or Disable): replacements and tool mods only.
+                bool anyOn = movable.Any(r => r.Mod.Enabled), anyOff = movable.Any(r => !r.Mod.Enabled);
+                disableInstalledButton.Visible = anyOn; disableInstalledButton.Text = "Disable selection"; disableInstalledButton.Enabled = RowChangesAllowed;
+                toggleInstalledButton.Visible = anyOff; toggleInstalledButton.Text = "Enable selection"; toggleInstalledButton.Enabled = RowChangesAllowed;
                 openInstalledButton.Enabled = false; clearInstalledSelectionButton.Enabled = selectAllInstalledButton.Enabled = presetsButton.Enabled = !busy;
                 LayoutInstalledActions(); return;
             }
@@ -3125,21 +3162,17 @@ namespace SlotsInstaller
             return String.Join("\r\n\r\n", blocks) + "\r\n\r\n";
         }
 
-        // Visible actions pack into two equal columns. Move up and Move down always share a row; an action left
-        // alone on its row takes the full width, so hidden actions never leave a gap.
+        // Visible actions in fixed rows of two equal columns (1.0.18, the user's order): Move up · Move down, Open folder ·
+        // Edit options, Health/Enable · Disable, Reinstall, Uninstall last. An action left alone on its row takes the full
+        // width, and a row with nothing shown is skipped, so hidden actions never leave a gap.
         private void LayoutInstalledActions()
         {
             if (installedActions == null) return;
-            var buttons = new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, moveUpButton, moveDownButton };
+            var groups = new[] {
+                new[] { moveUpButton, moveDownButton }, new[] { openInstalledButton, editInstalledButton },
+                new[] { toggleInstalledButton, disableInstalledButton }, new[] { reinstallButton }, new[] { removeInstalledButton } };
             // Control.Visible reads false while the page is hidden; use the requested state.
-            var rows = new List<List<FlatButton>>(); var current = new List<FlatButton>();
-            foreach (FlatButton b in buttons.Where(b => InstalledActionShown(b)))
-            {
-                if (b == moveUpButton && current.Count == 1) { rows.Add(current); current = new List<FlatButton>(); }
-                current.Add(b);
-                if (current.Count == 2) { rows.Add(current); current = new List<FlatButton>(); }
-            }
-            if (current.Count > 0) rows.Add(current);
+            var rows = groups.Select(g => g.Where(b => InstalledActionShown(b)).ToList()).Where(r => r.Count > 0).ToList();
             int gap = Px(8), height = Px(38), top = installedActions.Padding.Top;
             int width = Math.Max(Px(60), (installedActions.ClientSize.Width - gap) / 2);
             for (int r = 0; r < rows.Count; r++)
@@ -3154,6 +3187,15 @@ namespace SlotsInstaller
             var outfit = GetInstalledSelection(); int count = installedList == null ? 0 : installedList.SelectedItems.Count;
             if (button == openInstalledButton) return true;
             GameModRow gameRow = installedList == null ? null : GetGameRowSelection();
+            // 1.0.18: several replacements or tool mods: Move up/down, Enable/Disable selection, Open folder (off), Uninstall selection.
+            List<GameModRow> movable = MovableSelection();
+            if (count > 1 && movable.Count > 1)
+            {
+                if (button == moveUpButton || button == moveDownButton || button == removeInstalledButton || button == openInstalledButton) return true;
+                if (button == disableInstalledButton) return movable.Any(r => r.Mod.Enabled);
+                if (button == toggleInstalledButton) return movable.Any(r => !r.Mod.Enabled);
+                return false;
+            }
             if (button == reinstallButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && SourceChanged(gameRow.Mod.SourcePath) : outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath));
             if (button == disableInstalledButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && gameRow.Mod.Enabled : outfit != null && outfit.Managed && outfit.Enabled);
             if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && (gameRow.Fluffy != null || gameRow.Leftover != null));
@@ -3173,6 +3215,7 @@ namespace SlotsInstaller
         private void InspectOrToggleInstalled()
         {
             if (busy) return;
+            if (SetSelectionEnabled(true)) return;   // 1.0.18: several replacements
             GameModRow gameRow = GetGameRowSelection();
             if (gameRow != null)
             {
@@ -3217,6 +3260,7 @@ namespace SlotsInstaller
         private void DisableInstalled()
         {
             if (busy) return;
+            if (SetSelectionEnabled(false)) return;   // 1.0.18: several replacements
             GameModRow gameRow = GetGameRowSelection();
             if (gameRow != null) { if (gameRow.Mod != null && gameRow.Mod.Enabled && RowChangesAllowed) ToggleGameRow(gameRow); return; }
             InstalledOutfit outfit = GetInstalledSelection(); if (outfit == null || !outfit.Managed || !outfit.Enabled) return;

@@ -78,10 +78,10 @@ Choose in **Settings → Game files & replacements → Replacement method**:
 Changing the method converts installed replacements; **Undo** converts them back.
 
 ### Priority and conflicts
-- On the Installed page, the **Installed** type lists replacements and tool mods in priority order. Higher in the list wins files that several mods share. A new install goes to the top; **Move up** and **Move down** change the order.
+- On the Installed page, the **Installed** type lists replacements and tool mods in priority order. Higher in the list wins files that several mods share. What you install last goes to the top, so it wins; **Move up** and **Move down** change the order (the row moves at once and the order is saved a moment after your last click).
 - Before you install, **REPLACES** in the inspector and the footer name any installed mod for the same outfit. The link **Uninstall 'name'** removes that other mod.
 - The **N shared files** chip on the Installed page shows which mods share files and which one wins.
-- Installing another option set of a mod you already installed replaces it in place.
+- Installing another option set of a mod you already installed replaces it and puts it at the top. **Reinstall** after the source changed keeps its place.
 
 ### The Health report
 
@@ -139,6 +139,7 @@ Extra outfits need REFramework and Slotsloader in the game folder. In Extra outf
 
 ### Install all variants
 For an archive with several options, **Install all variants** copies the whole archive into `reframework\costume_mods\<Character>\`, as if you dropped it there yourself. Slotsloader then builds usually one outfit per combination (up to 50 per mod). Mods made for an external mod manager get one per shape option.
+When a ZIP mod shows options from an add-on archive (marked **Add-on** in the list), the copy includes them, so their combinations are built too. Right-click an option to open its archive in Explorer.
 
 ### Add to outfit
 **Add to outfit…** copies only the ticked options (one hair option of a bundle, for example) into an extra outfit the Manager already installed. Files with the same names are replaced and nothing else changes. Files made for another outfit slot can't go on it, so those outfits can't be picked.

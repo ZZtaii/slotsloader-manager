@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -9,6 +10,7 @@ namespace SlotsInstaller
     // 2.5.4: Install all variants (Extra outfit mode, an archive with several options): the archive is copied unchanged
     // into costume_mods\<character>\ like a manual drop, and SlotsLoader builds every variant (ArchiveInstalls.cs).
     // It is linked to its library mod: ✓ Full, the footer's Uninstall / Ctrl and Undo remove it.
+    // 1.0.18: a ZIP mod shown with its addon archives is copied with their options added (ArchiveCombine.cs).
     internal sealed partial class MainForm
     {
         private Panel allVariantsRow;
@@ -44,7 +46,10 @@ namespace SlotsInstaller
             }
         }
 
-        private int VariantOptionCount { get { return package == null ? 0 : SourcePackage.Components.Count(c => !c.IsDummy && c.Assets.Count > 0); } }   // 1.0.16: the archive's own options
+        // 1.0.16: the archive's own options; 1.0.18: with the addons shown inside it when they go into the copy (a ZIP mod)
+        private int VariantOptionCount { get { return package == null ? 0 : (CombinesAddons ? package : SourcePackage).Components.Count(c => !c.IsDummy && c.Assets.Count > 0); } }
+        private bool CombinesAddons { get { return package != null && package.AddonParts != null && package.AddonParts.Count > 0 && ArchiveCombine.IsZip(package.SourcePath); } }
+        private List<string> ShownAddonSources() { return package == null || package.AddonParts == null ? new List<string>() : package.AddonParts.Select(p => p.SourcePath).ToList(); }
 
         private void UpdateAllVariants()
         {
@@ -55,6 +60,8 @@ namespace SlotsInstaller
             bool installedAll = LinkedOutfits(package.SourcePath).Any(o => o.WholeArchive);
             string text = installedAll ? "Reinstall all variants" : "Install all variants";
             if (allVariantsButton.Text != text) allVariantsButton.Text = text;
+            string described = CombinesAddons ? "Copies the archive with its add-ons (" + String.Join(", ", ShownAddonSources().Select(Path.GetFileName)) + ") into costume_mods, so every variant is built" : "Copies the whole archive into costume_mods, like dropping it there";
+            if (allVariantsButton.AccessibleDescription != described) allVariantsButton.AccessibleDescription = described;
             allVariantsButton.Enabled = !busy && targetCharacter.SelectedIndex >= 0;
         }
 
@@ -65,8 +72,9 @@ namespace SlotsInstaller
         }
         private void InstallAllVariantsFresh()
         {
-            string source = package.SourcePath, name = package.Name, character = Convert.ToString(targetCharacter.SelectedItem), root = config.CostumeRoot;
-            Work("Installing every variant of " + name + "…", delegate { return ArchiveInstalls.Install(source, root, character, name); }, delegate(InstallResult result)
+            string source = package.SourcePath, name = package.Name, character = Convert.ToString(targetCharacter.SelectedItem), root = config.CostumeRoot, sevenZip = config.SevenZipPath;
+            List<string> addons = ShownAddonSources();   // 1.0.18: combined into the copy (a RAR/7Z main says why they were left out)
+            Work("Installing every variant of " + name + "…", delegate { return ArchiveInstalls.Install(source, root, character, name, null, addons, sevenZip); }, delegate(InstallResult result)
             {
                 AllVariantsInstalls++;
                 RefreshInstalled("✓ " + result.Message);

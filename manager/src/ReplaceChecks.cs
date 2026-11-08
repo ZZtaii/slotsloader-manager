@@ -74,6 +74,7 @@ namespace SlotsInstaller
                     f.Engine.UninstallForGood(a.Id, DriftChoice.Refuse, null);
                     SameSnapshot(clean, Snapshot(f.Game), "after selected replacements");
                 });
+                check("priority (1.0.18): an install with other options goes to the top, the same options from an edited source keep their place, SetOrder saves several moves in one change", delegate { InstallImprovementChecks.PriorityOrder(Create(Path.Combine(run, "priority-order"), false, ReplaceMethods.Pak)); });
                 check("DLC PAK entries are invalidated and restored too", delegate { DlcRows(Path.Combine(run, "dlc")); });
                 check("a path inside a patch PAK is refused with the PAK method; no change is made", delegate { PatchBlock(Path.Combine(run, "patch")); });
                 check("an unchanged Sakura replacement covered by a later patch PAK allows an unrelated Ingrid install and uninstall", delegate { ExistingPatchedReplacement(Path.Combine(run, "existing-patch")); });

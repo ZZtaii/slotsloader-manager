@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Windows.Forms;
 
 namespace SlotsInstaller
 {
@@ -16,6 +19,61 @@ namespace SlotsInstaller
         private AddonSplit CurrentSplit() { return LibraryAddons.Split(package, selectedOrder, IsReplaceMode); }
         // The main mod's ids of the current ticks (fill-ins included): what its record is installed with.
         private List<string> MainSelection() { return CurrentSplit().MainIds; }
+
+        // 1.0.18 (the user asked for an indicator that an option came from an addon, and an Open in Explorer for that
+        // addon's source): addon rows carry this tag (DrawComponentNode), the option's description
+        // names the file, and the options' right-click menu opens the addon (or the main mod) in Explorer.
+        internal const string AddonTag = "Add-on";
+        internal static Action<string> RevealHook;   // tests: the path Explorer would select
+        private string AddonSourceLine(ModComponent component)
+        {
+            AddonPart part = component == null ? null : LibraryAddons.PartOf(package, component.Id);
+            return part == null ? "" : "\n\nAdd-on from " + part.FileName + ". Right-click the option to open it in Explorer.";
+        }
+        private ContextMenuStrip BuildOptionMenu()
+        {
+            var menu = new ContextMenuStrip { BackColor = Palette.Surface, ForeColor = Palette.Text, ShowImageMargin = false, Font = Palette.Normal, Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors()) };
+            var addonItem = new ToolStripMenuItem("Open add-on in Explorer");
+            var mainItem = new ToolStripMenuItem("Open mod in Explorer");
+            addonItem.Click += delegate { RevealSource(addonItem.Tag as string); };
+            mainItem.Click += delegate { RevealSource(mainItem.Tag as string); };
+            menu.Items.Add(addonItem); menu.Items.Add(mainItem);
+            menu.Opening += delegate(object sender, CancelEventArgs e)
+            {
+                ModPackage shown = package;
+                if (shown == null || String.IsNullOrEmpty(shown.SourcePath)) { e.Cancel = true; return; }
+                OptionMenuTargets(OptionMenuNode(), addonItem, mainItem);
+            };
+            return menu;
+        }
+        // The row under the pointer (a right-click), else the selected one (the menu key).
+        private OptionNode OptionMenuNode()
+        {
+            Point at = componentTree.PointToClient(Cursor.Position);
+            return (componentTree.ClientRectangle.Contains(at) ? componentTree.GetNodeAt(at) : null) ?? componentTree.SelectedNode;
+        }
+        private void OptionMenuTargets(OptionNode node, ToolStripMenuItem addonItem, ToolStripMenuItem mainItem)
+        {
+            ModComponent c = node == null ? null : node.Tag as ModComponent;
+            AddonPart part = c == null ? null : LibraryAddons.PartOf(package, c.Id);
+            addonItem.Visible = part != null;
+            addonItem.Tag = part == null ? null : part.SourcePath;
+            addonItem.Text = part == null ? "Open add-on in Explorer" : "Open add-on in Explorer (" + part.FileName + ")";
+            mainItem.Tag = package == null ? null : package.SourcePath;
+            mainItem.Text = package != null && package.AddonParts != null && package.AddonParts.Count > 0 ? "Open main mod in Explorer" : "Open mod in Explorer";
+        }
+        private void RevealSource(string path)
+        {
+            if (String.IsNullOrEmpty(path)) return;
+            try
+            {
+                string full = Path.GetFullPath(path);
+                if (!File.Exists(full) && !Directory.Exists(full)) throw new IOException("Mod not found: " + full);
+                if (RevealHook != null) { RevealHook(full); return; }
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", "/select," + ProcessUtil.Quote(full)) { UseShellExecute = true });
+            }
+            catch (Exception e) { Error(e); }
+        }
 
         // A library row as the worker sees it (copied on the UI thread).
         private sealed class AddonCandidate { internal string SourcePath, Name; internal List<string> OptionNames; }

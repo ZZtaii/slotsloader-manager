@@ -249,7 +249,7 @@ namespace SlotsInstaller
                 CompositionPlan composition = Composer.SavedPlan(source2, ids, true);
                 if (!composition.CanInstall) throw new IOException("Couldn't reinstall " + name + ": " + String.Join(" ", composition.Errors));
                 ReplacePlan prepared;
-                ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, id, out prepared);
+                ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, id, true, out prepared);   // 1.0.18: the same options again keep their place
                 return SavedChoiceNote(composition);
             }, delegate(string note) { RefreshInstalled("✓ Reinstalled " + name + " from the edited source." + note + " Restart SF6 to see changes."); });
         }

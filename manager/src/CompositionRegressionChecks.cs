@@ -148,7 +148,8 @@ namespace SlotsInstaller
             Require(Plan(package,"A-main","A-skin").CanInstall,"Inactive Bundle B blocked a complete Bundle A.");
             CompositionPlan missing=Plan(package,"A-main");
             Require(!missing.CanInstall && missing.Errors.Any(e=>e.Contains("A skin")) && missing.Errors.All(e=>!e.Contains("B skin")),"Independent branch requirements escaped their scope.");
-            Require(Composer.DefaultSelection(package).SequenceEqual(new[]{"A-main"}),"Default selection crossed bundle branches.");
+            // 1.0.18: A's required skin group gets its option ticked too; nothing of Bundle B.
+            Require(Composer.DefaultSelection(package).SequenceEqual(new[]{"A-main","A-skin"}),"Default selection crossed bundle branches: "+String.Join(",",Composer.DefaultSelection(package)));
         }
         private static void NestedBranches(string root)
         {

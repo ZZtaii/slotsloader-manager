@@ -844,6 +844,8 @@ namespace SlotsInstaller
         public static LibraryInstallState InstallState(LibraryEntry entry, IEnumerable<InstalledOutfit> outfits)
         {
             if (entry == null || String.IsNullOrWhiteSpace(entry.SourcePath) || outfits == null) return LibraryInstallState.None;
+            // 1.0.18: an addon archive combined into an Install all variants copy of its main mod has every option installed
+            if (outfits.Any(o => o.Enabled && o.WholeArchive && o.AddonSources != null && o.AddonSources.Any(a => String.Equals(a, entry.SourcePath, StringComparison.OrdinalIgnoreCase)))) return LibraryInstallState.Full;
             List<InstalledOutfit> matches = outfits.Where(o => (o.Managed || o.WholeArchive) && !String.IsNullOrWhiteSpace(o.SourcePath) && String.Equals(o.SourcePath, entry.SourcePath, StringComparison.OrdinalIgnoreCase)).ToList();
             List<InstalledOutfit> active = matches.Where(o => o.Enabled).ToList();
             if (active.Count == 0) return matches.Count > 0 ? LibraryInstallState.Disabled : LibraryInstallState.None;
@@ -927,6 +929,7 @@ namespace SlotsInstaller
         internal bool VariantsUnsupported;      // 2.5.0: several SlotsLoader outfits but no variants.json (an older SlotsLoader)
         internal bool WholeArchive;             // 2.5.4: a manual archive the Manager copied from SourcePath (Install all variants, ArchiveInstalls.cs)
         internal List<PartGraft> Parts;         // 1.0.16: the manifest's added parts (an addon archive's ticks come back from them)
+        internal List<string> AddonSources;     // 1.0.18: a WholeArchive copy's combined addon archives (ArchiveInstalls/ArchiveCombine), or null
     }
     public sealed class InstallManifest
     {

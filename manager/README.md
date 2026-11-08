@@ -1,4 +1,4 @@
-# Slotsloader Manager 1.0.17
+# Slotsloader Manager 1.0.18
 
 A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
@@ -9,6 +9,15 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 **Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
+
+- 1.0.18:
+  - What you install last wins: a mod installed again with other options goes to the top, like a new install.
+  - Move up and Move down are instant, with Undo. Several selected replacements move, disable or enable together.
+  - The Installed list shows replacements in priority order; Uninstall is the last button.
+  - Options that replace each other are no longer all ticked; a Required group gets its first option ticked.
+  - A mod packed twice in one archive shows its options once.
+  - Install all variants includes add-on zips; add-on options are marked.
+  - An option with Requirement= goes on top of the option it needs.
 
 - 1.0.17:
   - Slotsloader's outfit PAK no longer stops a replacement from installing, updating or being turned back on when it holds one of its files (Sakura as Ryu installed as an extra outfit and as a replacement, or alongside an Ingrid mod, for example).

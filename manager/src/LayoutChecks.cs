@@ -699,11 +699,16 @@ namespace SlotsInstaller
                     ClickOption(tree,new Point(group.Bounds.X-DpiMetrics.Px(tree,10),group.Bounds.Y+tree.ItemHeight/2),0x201);
                     Require(group.IsExpanded!=expanded && !group.Checked,context+": disclosure arrow did not remain an expansion-only action.");
                     Require(AllNodes(tree.Nodes).Where(n=>n.Checked).Select(n=>((ModComponent)n.Tag).Id).SequenceEqual(before),context+": expanding a category changed checked options.");
-                    group.EnsureVisible();
+                    group.EnsureVisible(); expanded=group.IsExpanded;
                     ClickOption(tree,new Point(tree.ClientSize.Width-DpiMetrics.Px(tree,3),group.Bounds.Y+tree.ItemHeight/2),0x201);
                     Require(!group.Checked,context+": category text became a checked option.");
+                    // 1.0.18: the whole header line expands or collapses (its text and far edge too), changing no ticks.
+                    Require(group.IsExpanded!=expanded && AllNodes(tree.Nodes).Where(n=>n.Checked).Select(n=>((ModComponent)n.Tag).Id).SequenceEqual(before),context+": a click on the header line did not expand or collapse it.");
+                    group.EnsureVisible(); expanded=group.IsExpanded;
+                    ClickOption(tree,new Point(group.Bounds.X+DpiMetrics.Px(tree,20),group.Bounds.Y+tree.ItemHeight/2),0x201);
+                    Require(group.IsExpanded!=expanded && !group.Checked,context+": a click on the header's name did not expand or collapse it.");
                 }
-                report.Add("PASS: "+context+" native full-row clicks (padding, marker, text and far edge) toggle once; double-click does not undo the choice; radio exclusivity and separate disclosure arrows remain intact.");
+                report.Add("PASS: "+context+" native full-row clicks (padding, marker, text and far edge) toggle once; double-click does not undo the choice; radio exclusivity and disclosure arrows remain intact; a header expands from anywhere on its line.");
             }
             finally
             {

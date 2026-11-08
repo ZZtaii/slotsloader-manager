@@ -102,6 +102,8 @@ namespace SlotsInstaller
                         check("Undo position (2.4.2): after another program installs a mod over the same files, the window's Undo of Restore original game files puts the removed mods back below it", delegate { UndoBelowNewer(form, f); });
                         check("addon archives (1.0.16): opened from the library, the main mod shows its addon's Barefoot inside Outfit next to Full (choose one, its preview from the addon; the addon alone unchanged; bundle layouts never merged); Install in Replace original makes two records, the addon directly above the main one, the main record valid alone with Full as the fill-in; reopening restores Barefoot ticked and Full unticked; unticking Barefoot removes the addon's record; the footer's Uninstall removes both; Extra outfit adds Barefoot as a part of the outfit and unticking takes it out", delegate { AddonArchives(form, f, Path.Combine(root, "addon-library")); });
                         check("addon archives, PR #22 review fixes (1.0.16): an addon record installed first or disabled is shown ticked (a disabled one stays disabled) and only a record shown ticked is uninstalled; a changed addon archive stops the install before the main record, a late failure is named in the status, the addon goes directly above the main record without a Move; addon ticks count in \"already installed\" in both modes; the main record is named after the addon option, not the fill-in; in Extra outfit a part that can't be added leaves the outfit as it was", delegate { AddonReviewFixes(form, f, Path.Combine(root, "addon-review")); });
+                        check("addon all variants (1.0.18): Install all variants of a ZIP mod shown with its addon writes one ZIP, the main ZIP's bytes unchanged up to its directory plus the addon's option folders (its menu and loose files left out, a top-level option in a folder named after the addon), Barefoot inside Outfit when read back; a clash is refused with no file left; a RAR/7Z main, a gone addon and a mod that is no addon are named and left out", delegate { AddonCombine(Path.Combine(root, "addon-combine")); });
+                        check("addon all variants in the window (1.0.18): the button names the addon; the copy has Barefoot and Full, is linked to the main mod with the addon recorded, the addon's library row counts as installed, a reinstall keeps one copy; a preset saves the addon and copies the outfit once the addon is gone; Barefoot's description names the addon file and the options' menu opens the addon (or the main mod) in Explorer", delegate { AddonAllVariants(form, Path.Combine(root, "addon-variants")); });
                         string realAddons = "";
                         check("addon archives (1.0.16), the user's real zips when tests.local.json names addonMain and addonPart (read only)", delegate { realAddons = RealAddonArchives(); });
                         report.Add("    " + realAddons);
@@ -335,6 +337,16 @@ namespace SlotsInstaller
                 Application.DoEvents(); Call(form, "MoveGameRow", 1); WaitIdle(form); refresh();
                 Require(order() != start && form.UndoLabel.Contains("moved"), "move: " + order());
                 undo(); Require(order() == start, "Undo of Move: " + order() + " (was " + start + ")");
+                // 1.0.18: the row moves at once (the list follows the priority) and clicks before the save are one save:
+                // down and back up again saves nothing new and offers no Undo.
+                foreach (ListViewItem item in list.Items) item.Selected = item.Tag is GameModRow && ((GameModRow)item.Tag).Mod != null && ((GameModRow)item.Tag).Mod.SourcePath == f.Mod("modA");
+                Application.DoEvents(); int priorityBefore = row("modA").Priority;
+                Call(form, "MoveGameRow", priorityBefore == 1 ? 1 : -1);
+                List<int> shown = list.Items.Cast<ListViewItem>().Select(i => i.Tag as GameModRow).Where(g => g != null && g.Mod != null).Select(g => g.Priority).ToList();
+                Require(row("modA").Priority != priorityBefore && shown.SequenceEqual(shown.OrderBy(p => p)) && form.Working && order() == start && Get<FlatButton>(form, priorityBefore == 1 ? "moveUpButton" : "moveDownButton").Enabled,
+                    "move shown before the save: #" + row("modA").Priority + ", list " + String.Join(",", shown) + ", state " + order());
+                Call(form, "MoveGameRow", priorityBefore == 1 ? -1 : 1); WaitIdle(form); refresh();
+                Require(order() == start && row("modA").Priority == priorityBefore && !form.UndoAvailable, "two clicks: " + order() + " (was " + start + "), Undo " + form.UndoLabel);
                 // A second record of modA (2.4.0 could leave duplicates), the newest one disabled.
                 Load(form, f, "modA"); WaitReview(form);
                 CompositionPlan comp = Get<CompositionPlan>(form, "plan");
@@ -770,6 +782,18 @@ namespace SlotsInstaller
                         Kind(form, "All");
                         var list = Get<ListView>(form, "installedList");
                         foreach (ListViewItem row in list.Items) row.Selected = row.Tag is GameModRow && ((GameModRow)row.Tag).Mod != null;
+                        Call(form, "ShowInstalledSelection"); Application.DoEvents();
+                        // 1.0.18 (the user): several replacements get Move up/down (first row), Disable selection, Uninstall last.
+                        FlatButton up = Get<FlatButton>(form, "moveUpButton"), down = Get<FlatButton>(form, "moveDownButton"), off = Get<FlatButton>(form, "disableInstalledButton"), uninstall = Get<FlatButton>(form, "removeInstalledButton");
+                        Require(up.Visible && down.Visible && up.Top == down.Top && off.Visible && off.Text == "Disable selection" && off.Enabled && up.Top < off.Top && off.Top < uninstall.Top && uninstall.Left == up.Left && uninstall.Right == down.Right,
+                            "multi-select actions: up " + up.Visible + "@" + up.Top + ", disable " + off.Visible + " '" + off.Text + "'@" + off.Top + ", uninstall @" + uninstall.Top);
+                        Require(!up.Enabled && !down.Enabled, "every replacement is selected, so neither can move past an unselected one");
+                        off.PerformClick(); WaitIdle(form);
+                        Require(engine.LoadState().Mods.Count == 2 && engine.LoadState().Mods.All(m => !m.Enabled) && form.UndoAvailable, "Disable selection: " + String.Join(",", engine.LoadState().Mods.Select(m => m.Name + (m.Enabled ? "+" : "-"))));
+                        form.PerformUndo(); WaitIdle(form);
+                        Require(engine.LoadState().Mods.All(m => m.Enabled), "Undo of Disable selection");
+                        Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                        foreach (ListViewItem row in list.Items) row.Selected = row.Tag is GameModRow && ((GameModRow)row.Tag).Mod != null;
                         Call(form, "ShowInstalledSelection");
                     }
                     Application.DoEvents();
@@ -1111,13 +1135,13 @@ namespace SlotsInstaller
                     Require(pak != null && form.LastLooseLoaderChoice == 1 && st.Method == ReplaceMethods.Pak && zeroed(st) > 0 && File.ReadAllText(configPath) == original, "Not now under Automatic: method " + st.Method + ", zeroed " + zeroed(st) + ", choice " + form.LastLooseLoaderChoice);
                     Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
                     Require(!engine.Status().LooseLoaderOff && Get<Label>(form, "statusText").Text.Contains("PAK method") || !engine.Status().LooseLoaderOff, "PAK installs must not show the loader-off banner");
-                    // The same source again is a switch: one record, no warning, no question, the priority kept.
+                    // The same source again is a switch: one record, no warning, no question; 1.0.18: it goes to the top (what is installed last wins).
                     install("tool");   // a second record so the priority position can be seen (the tool goes on top)
                     int at = engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modA"));
                     install("modA");
-                    Require(engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modA")) == 1 && engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modA")) == at, "same options: not one record at its place");
+                    Require(engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modA")) == 1 && engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modA")) == 0 && at > 0, "same options: not one record at the top (was #" + (at + 1) + ")");
                     // Another option set of an installed mod (a multi-option pack) is a switch: no warning about itself,
-                    // one muted "Replaces installed" line, one record kept at its place.
+                    // one muted "Replaces installed" line, one record, at the top (1.0.18).
                     WriteMulti(f);
                     ReplaceMod multi = install("modMulti");
                     int multiAt = engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modMulti"));
@@ -1126,7 +1150,7 @@ namespace SlotsInstaller
                     ReplacePlan variant = Get<ReplacePlan>(form, "replacePlan");
                     Require(!variant.Items.Any(i => i.Level == "warn" && i.Text.Contains(multi.Name)) && variant.Items.Any(i => i.Level == "info" && i.Text.StartsWith("Replaces installed: ")) && variant.ConflictList.All(c => !String.Equals(c.ModName, multi.Name, StringComparison.OrdinalIgnoreCase)), "a variant of the installed mod warned: " + String.Join(" | ", variant.Items.Select(i => i.Level + " " + i.Text)));
                     Call(form, "InstallCurrent"); WaitIdle(form);
-                    Require(engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modMulti")) == 1 && engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modMulti")) == multiAt, "variant switch: " + engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modMulti")) + " records");
+                    Require(engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modMulti")) == 1 && engine.LoadState().Mods.FindIndex(m => m.SourcePath == f.Mod("modMulti")) == 0 && multiAt >= 0, "variant switch: " + engine.LoadState().Mods.Count(m => m.SourcePath == f.Mod("modMulti")) + " records");
                     // Two existing duplicates (2.4.0 could leave them) collapse to one on the next install; 1.0.1: the other leaves no copy (its source is in the library).
                     {
                         Load(form, f, "modA"); WaitReview(form);

@@ -431,10 +431,13 @@ namespace SlotsInstaller
                 ordered[0].SelectedIds.SequenceEqual(composition.Layers.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
             return wholeMod ? null : "This archive has options installed from an ordered preset. Reimport the preset to update them, or uninstall the archive from the library before switching options.";
         }
-        internal static ReplaceMod PrepareAndInstall(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string name, bool test, string replaceId, out ReplacePlan plan)
+        internal static ReplaceMod PrepareAndInstall(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string name, bool test, string replaceId, out ReplacePlan plan) { return PrepareAndInstall(composition, sevenZip, engine, name, test, replaceId, false, out plan); }
+        // 1.0.18: keepPlace: the record keeps its priority (ReplaceEngine.Install); otherwise it goes to the top.
+        internal static ReplaceMod PrepareAndInstall(CompositionPlan composition, string sevenZip, ReplaceEngine engine, string name, bool test, string replaceId, bool keepPlace, out ReplacePlan plan)
         {
             plan = null;
             PreparedInstall prepared = PrepareInstall(composition, sevenZip, engine, test, replaceId);
+            prepared.KeepPlace = keepPlace;
             try
             {
                 plan = prepared.Plan;
@@ -448,7 +451,7 @@ namespace SlotsInstaller
         // 1.0.16 (PR #22 review, F2): PrepareAndInstall in its two steps, so a main mod's addon records are staged and
         // checked (a changed archive, a plan error, a refused health check) before the main record is written, and go in
         // afterwards. Others: the other records of that source the switch uninstalls (left to the caller). Discard always.
-        internal sealed class PreparedInstall { internal ReplacePlan Plan; internal string ReplaceId, Staging; internal List<ReplaceMod> Others = new List<ReplaceMod>(); }
+        internal sealed class PreparedInstall { internal ReplacePlan Plan; internal string ReplaceId, Staging; internal bool KeepPlace; internal List<ReplaceMod> Others = new List<ReplaceMod>(); }
         internal static void Discard(PreparedInstall prepared)
         {
             if (prepared == null) return;
@@ -457,7 +460,7 @@ namespace SlotsInstaller
         internal static ReplaceMod CommitInstall(PreparedInstall prepared, ReplaceEngine engine, string name, bool test, string aboveId)
         {
             ReplaceMod installed;
-            using (InstallMetrics.Measure("engine install")) installed = engine.Install(prepared.Plan, name, test, prepared.ReplaceId, aboveId);
+            using (InstallMetrics.Measure("engine install")) installed = engine.Install(prepared.Plan, name, test, prepared.ReplaceId, aboveId, prepared.KeepPlace);
             if (LoaderCostumePak.IsLoaderMod(installed)) SwapRepairFlag.Ensure(engine.GameRoot);
             return installed;
         }

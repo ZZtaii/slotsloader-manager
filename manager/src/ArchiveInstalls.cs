@@ -13,6 +13,9 @@ namespace SlotsInstaller
     {
         public string Id, Path, SourcePath, Character, CreatedUtc, Sha256;
         public long Size, WriteTicks;
+        // 1.0.18: the addon archives combined into this copy (ArchiveCombine.cs); null or empty = a plain copy of SourcePath.
+        // Older Managers ignore the field.
+        public List<string> AddonSources;
     }
     public sealed class ArchiveInstallFile
     {
@@ -84,6 +87,7 @@ namespace SlotsInstaller
                     for (int i = records.Count - 1; i >= 0 && r == null; i--) if (Matches(records[i], o.Folder, ref touched)) r = records[i];
                     if (r == null) continue;
                     o.WholeArchive = true; o.SourcePath = r.SourcePath;
+                    o.AddonSources = r.AddonSources == null || r.AddonSources.Count == 0 ? null : r.AddonSources.ToList();
                     DateTime created;
                     if (DateTime.TryParse(r.CreatedUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out created)) o.InstalledUtc = created.ToUniversalTime();
                 }
@@ -110,7 +114,12 @@ namespace SlotsInstaller
                 ArchiveInstallFile records = Load();
                 int changed = 0;
                 foreach (ArchiveInstallRecord r in records.Records)
+                {
                     if (String.Equals(System.IO.Path.GetFullPath(r.SourcePath), System.IO.Path.GetFullPath(from), StringComparison.OrdinalIgnoreCase)) { r.SourcePath = System.IO.Path.GetFullPath(to); changed++; }
+                    // 1.0.18: a renamed addon stays part of the copies it was combined into
+                    for (int i = 0; r.AddonSources != null && i < r.AddonSources.Count; i++)
+                        if (SamePath(r.AddonSources[i], from)) { r.AddonSources[i] = System.IO.Path.GetFullPath(to); changed++; }
+                }
                 if (changed > 0) Save(records);
                 return changed;
             }
@@ -170,10 +179,46 @@ namespace SlotsInstaller
         }
 
         internal static InstallResult Install(string source, string costumeRoot, string character, string modName) { return Install(source, costumeRoot, character, modName, null); }
-        internal static InstallResult Install(string source, string costumeRoot, string character, string modName, string fileName)
+        internal static InstallResult Install(string source, string costumeRoot, string character, string modName, string fileName) { return Install(source, costumeRoot, character, modName, fileName, null, null); }
+
+        // 1.0.18: the addons of `source` that go into its copy, each with its files (LibraryAddons.CombinedEntries). One that
+        // can't go in (gone, no longer an addon of this mod, a main mod that isn't a ZIP) is named in `notes` and left out.
+        internal static List<ArchiveCombine.Addon> AddonsFor(string source, IEnumerable<string> addonSources, string sevenZip, List<string> notes)
+        {
+            var result = new List<ArchiveCombine.Addon>();
+            List<string> wanted = (addonSources ?? new string[0]).Where(s => !String.IsNullOrWhiteSpace(s) && !SamePath(s, source)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (wanted.Count == 0) return result;
+            if (!ArchiveCombine.IsZip(source))
+            {
+                notes.Add(String.Join(", ", wanted.Select(System.IO.Path.GetFileName)) + (wanted.Count == 1 ? " was" : " were") + " not added: add-ons can only be combined with a ZIP mod");
+                return result;
+            }
+            ModPackage main = PackageReader.Load(source, sevenZip);
+            foreach (string path in wanted)
+            {
+                OperationContext.ThrowIfCancellationRequested();
+                string name = System.IO.Path.GetFileName(path);
+                if (!File.Exists(path) && !Directory.Exists(path)) { notes.Add(name + " was not added: it is not in your libraries any more"); continue; }
+                using (var reader = new SourceReader(path, sevenZip))
+                {
+                    ModPackage addon = PackageReader.Load(path, reader, false);
+                    if (!LibraryAddons.IsAddonOf(main, addon)) { notes.Add(name + " was not added: it is no longer an add-on of " + System.IO.Path.GetFileName(source)); continue; }
+                    var part = new ArchiveCombine.Addon { SourcePath = System.IO.Path.GetFullPath(path), Files = LibraryAddons.CombinedEntries(main, addon, reader.Entries.Keys) };
+                    if (part.Files.Count == 0) { notes.Add(name + " was not added: it has no option files"); continue; }
+                    result.Add(part);
+                }
+            }
+            return result;
+        }
+
+        // 1.0.18: `addonSources` (Install all variants of a mod shown with its addons, a preset's saved addons) are combined
+        // into the copy (ArchiveCombine.cs); the result's PartsNote names any left out.
+        internal static InstallResult Install(string source, string costumeRoot, string character, string modName, string fileName, IEnumerable<string> addonSources, string sevenZip)
         {
             if (!IsArchive(source)) throw new IOException("Install all variants needs a ZIP, RAR or 7Z archive.");
             if (!Characters.Names.Contains(character)) throw new IOException("Choose a known character.");
+            var notes = new List<string>();
+            List<ArchiveCombine.Addon> addons = AddonsFor(source, addonSources, sevenZip, notes);
             using (Installer.AcquireMutation(costumeRoot))
             {
                 string dest = Destination(costumeRoot, character, source, fileName);
@@ -189,7 +234,8 @@ namespace SlotsInstaller
                 string temp = System.IO.Path.Combine(folder, "." + name + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".partial");
                 try
                 {
-                    File.Copy(source, temp, false);
+                    if (addons.Count > 0) ArchiveCombine.Write(source, addons, temp, sevenZip);
+                    else File.Copy(source, temp, false);
                     OperationContext.ThrowIfCancellationRequested();
                     using (OperationContext.NonCancellable())
                     {
@@ -199,7 +245,8 @@ namespace SlotsInstaller
                 }
                 finally { try { if (File.Exists(temp)) File.Delete(temp); } catch { } }
                 var info = new FileInfo(dest);
-                var record = new ArchiveInstallRecord { Id = previous != null ? previous.Id : Guid.NewGuid().ToString("N"), Path = info.FullName, SourcePath = System.IO.Path.GetFullPath(source), Character = character, CreatedUtc = DateTime.UtcNow.ToString("o"), Size = info.Length, WriteTicks = info.LastWriteTimeUtc.Ticks, Sha256 = Hash(dest) };
+                var record = new ArchiveInstallRecord { Id = previous != null ? previous.Id : Guid.NewGuid().ToString("N"), Path = info.FullName, SourcePath = System.IO.Path.GetFullPath(source), Character = character, CreatedUtc = DateTime.UtcNow.ToString("o"), Size = info.Length, WriteTicks = info.LastWriteTimeUtc.Ticks, Sha256 = Hash(dest),
+                    AddonSources = addons.Count == 0 ? null : addons.Select(a => a.SourcePath).ToList() };
                 lock (Sync)
                 {
                     records = Load();
@@ -208,7 +255,10 @@ namespace SlotsInstaller
                     Save(records);
                 }
                 OutfitHistory.Installed(new InstallManifest { Id = record.Id, Name = name, Character = character, SourcePath = record.SourcePath }, null, modName);   // never throws
-                return new InstallResult { Folder = dest, FileCount = 1, Bytes = info.Length, Message = (previous != null ? "Reinstalled " : "Installed ") + "every variant of " + (modName ?? name) + " for " + character + ". Restart SF6 to load them." };
+                string with = addons.Count == 0 ? "" : " with " + String.Join(", ", addons.Select(a => System.IO.Path.GetFileNameWithoutExtension(a.SourcePath)));
+                string note = notes.Count == 0 ? "" : String.Join("; ", notes) + ".";
+                return new InstallResult { Folder = dest, FileCount = 1, Bytes = info.Length, PartsNote = note,
+                    Message = (previous != null ? "Reinstalled " : "Installed ") + "every variant of " + (modName ?? name) + with + " for " + character + ". Restart SF6 to load them." + (note.Length > 0 ? " " + Char.ToUpperInvariant(note[0]) + note.Substring(1) : "") };
             }
         }
     }
