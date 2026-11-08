@@ -48,8 +48,74 @@ namespace SlotsInstaller
                 return selected.Select(c=>c.Id).ToList();
             }
             var bases=real.Where(IsBase).ToList();
-            if (bases.Count>0) return bases.Where(c=>String.Equals(c.ParentId,bases[0].ParentId,StringComparison.OrdinalIgnoreCase)).Select(c=>c.Id).ToList();
-            return real.Count==1 ? new List<string>{real[0].Id} : real.Where(c=>c.ParentId==null).Select(c=>c.Id).ToList();
+            List<string> ids;
+            if (bases.Count>0) ids=bases.Where(c=>String.Equals(c.ParentId,bases[0].ParentId,StringComparison.OrdinalIgnoreCase)).Select(c=>c.Id).ToList();
+            else ids=real.Count==1 ? new List<string>{real[0].Id} : WithoutAlternatives(package,real.Where(c=>c.ParentId==null).ToList(),replaceMode).Select(c=>c.Id).ToList();
+            return WithRequiredChoices(package,ids,replaceMode);
+        }
+        // 1.0.18 (the user: "the mods that are required tag be ticked by default"): each "Required · choose one" group in
+        // play gets its "· Default" option, else its first option with files (looking into sub-groups), as the install
+        // queue did. With nothing ticked yet, the required groups under menus only are in play. Groups the Manager only
+        // inferred from shared files ("Choose an option") stay for the user to pick.
+        private static List<string> WithRequiredChoices(ModPackage package,List<string> ids,bool replaceMode)
+        {
+            for (int round=0; round<10; round++)
+            {
+                IEnumerable<ModComponent> open = ids.Count>0 ? UnresolvedChoiceGroups(package,ids,replaceMode)
+                    : package.Components.Where(g => package.IsChoice(g) && g.RequiresChoice && UnderMenusOnly(package,g));
+                bool added=false;
+                foreach (ModComponent group in open.Where(g => !g.InferredChoice).ToList())
+                {
+                    ModComponent pick=FirstChoice(package,group,replaceMode);
+                    if (pick!=null && !ids.Contains(pick.Id,StringComparer.OrdinalIgnoreCase)) { ids.Add(pick.Id); added=true; }
+                }
+                if (!added) break;
+            }
+            return ids;
+        }
+        private static bool UnderMenusOnly(ModPackage package,ModComponent group)
+        {
+            var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (ModComponent p=package.Find(group.ParentId); p!=null && seen.Add(p.Id); p=package.Find(p.ParentId))
+                if (!p.IsDummy || package.IsChoice(p)) return false;
+            return true;
+        }
+        // A choose-one group's default choice, else its first option with files (looking into sub-groups), in menu order.
+        internal static ModComponent FirstChoice(ModPackage package,ModComponent group,bool replaceMode)
+        {
+            var children=package.Components.Where(c=>String.Equals(c.ParentId,group.Id,StringComparison.OrdinalIgnoreCase)).ToList();
+            ModComponent best=children.FirstOrDefault(c=>c.IsDefaultChoice && !c.IsDummy && c.HasFiles(replaceMode)) ?? children.FirstOrDefault(c=>!c.IsDummy && c.HasFiles(replaceMode));
+            if (best!=null) return best;
+            var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase){group.Id};
+            foreach (ModComponent child in children.Where(c=>c.IsDummy))
+                if (seen.Add(child.Id)) { ModComponent deeper=FirstChoice(package,child,replaceMode); if (deeper!=null) return deeper; }
+            return null;
+        }
+        // 1.0.18 (the user: "enabling all options automatically ... when they are not all supposed to be enabled"):
+        // top-level options that write the same files are alternatives (two collars, two hairstyles), so only the first in
+        // menu order (a "· Default" one first) is ticked; the others stay unticked for the user to pick. An option that
+        // names a ticked one in Requirement= goes on top of it and is ticked too. Options with files of their own stay.
+        internal static List<ModComponent> WithoutAlternatives(ModPackage package,List<ModComponent> options,bool replaceMode)
+        {
+            if (options.Count<2) return options;
+            var kept=new List<ModComponent>(); var taken=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (ModComponent c in options.Select((c,i)=>new{c,i}).OrderByDescending(x=>x.c.IsDefaultChoice).ThenBy(x=>x.i).Select(x=>x.c))
+            {
+                var mine=(replaceMode ? c.Assets.Concat(c.RootAssets) : c.Assets).Select(a=>a.DestinationPath).ToList();
+                if (kept.Count>0 && mine.Any(taken.Contains) && !package.RequiredOptions(c).Any(kept.Contains)) continue;
+                kept.Add(c); taken.UnionWith(mine);
+            }
+            return options.Where(kept.Contains).ToList();
+        }
+        // 1.0.18: an option named in another selected option's Requirement= goes under it, whatever the tick order,
+        // so the one needing it wins the files they share (Alt hairstyle over Swimsuit Sakura C2's hair).
+        private static List<ModComponent> RequirementsFirst(ModPackage package,List<ModComponent> layers)
+        {
+            var result=new List<ModComponent>(); var visiting=new HashSet<ModComponent>();
+            Action<ModComponent> place=null;
+            place=c => { if (!visiting.Add(c)) return; foreach (ModComponent need in package.RequiredOptions(c)) if (layers.Contains(need)) place(need); result.Add(c); };
+            foreach (ModComponent c in layers) place(c);
+            return result;
         }
         public static CompositionPlan Plan(ModPackage package,IEnumerable<string> selectedIds) { return Plan(package,selectedIds,false); }
         // replaceMode: files outside natives are included (game-root destinations) and the
@@ -65,7 +131,7 @@ namespace SlotsInstaller
             p.Warnings.AddRange(replaceMode ? package.Warnings.Where(w=>!w.Contains("outside natives and will not be installed") && !w.Contains("no loose natives files")) : package.Warnings);
             var selected=selectedIds.Distinct(StringComparer.OrdinalIgnoreCase).Select(id=>package.Find(id)).ToList();
             if (selected.Any(c=>c==null)) p.Errors.Add("An option no longer exists in this mod. Reload it.");
-            p.Layers=selected.Where(c=>c!=null && !c.IsDummy && c.HasFiles(replaceMode)).OrderBy(c=>IsBase(c) ? 0 : 1).ToList();
+            p.Layers=RequirementsFirst(package,selected.Where(c=>c!=null && !c.IsDummy && c.HasFiles(replaceMode)).OrderBy(c=>IsBase(c) ? 0 : 1).ToList());
             if (package.HasBundleLayout)
             {
                 var byId = p.Layers.ToDictionary(c=>c.Id,StringComparer.OrdinalIgnoreCase);
@@ -97,6 +163,8 @@ namespace SlotsInstaller
                 ModComponent parent=c.ParentId==null ? null : package.Find(c.ParentId);
                 while (parent != null && parent.IsDummy && (package.HasBundleLayout || parent.Id.StartsWith(":hair-choice:", StringComparison.Ordinal)) && parent.ParentId != null) parent = package.Find(parent.ParentId);
                 if (parent!=null && !parent.IsDummy && parent.HasFiles(replaceMode) && !p.Layers.Contains(parent)) p.Errors.Add("'"+c.Name+"' needs its parent '"+parent.Name+"'.");
+                foreach (ModComponent need in package.RequiredOptions(c))
+                    if (need.HasFiles(replaceMode) && !IsBase(need) && !p.Layers.Contains(need)) p.Errors.Add("'"+c.Name+"' needs '"+need.Name+"'.");
             }
             foreach (ModComponent main in package.Components.Where(c=>!c.IsDummy && c.HasFiles(replaceMode) && IsBase(c) && ScopeIsActive(package,c.ParentId,p.Layers)))
                 if (!p.Layers.Contains(main)) p.Errors.Add("Include main files: "+main.Name);

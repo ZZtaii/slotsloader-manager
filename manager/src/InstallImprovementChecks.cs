@@ -14,6 +14,9 @@ namespace SlotsInstaller
         {
             Directory.CreateDirectory(root);
             Options(Path.Combine(root, "options"));
+            RequirementOverlay(Path.Combine(root, "requirement"));
+            PackedTwice(Path.Combine(root, "packed-twice"));
+            DefaultAlternatives(Path.Combine(root, "default-alternatives"));
             BundleEditing(root);
             StoredBundleEditing(root);
             StoredRealArchive(Path.Combine(root, "stored-real"));
@@ -188,6 +191,140 @@ namespace SlotsInstaller
                 for (int f = 0; f < 29; f++) ReplaceChecks.Put(root, "level" + i + "/natives/stm/lighting/file" + f + ".bin", new[] { (byte)i, (byte)f });
             }
             return root;
+        }
+        // 1.0.18: "Swimsuit Sakura as Ryu C2": under a dummy menu, the main option (not named "Main files") and an
+        // "Alt hairstyle" with Requirement=<main> that replaces 3 of its files. They are main + overlay, not choose-one;
+        // two hairstyles needing the same main are still alternatives.
+        private static void RequirementOverlay(string root)
+        {
+            const string model = "natives/stm/product/model/esf/esf001/002/";
+            Action<string, string> ini = (folder, text) => ReplaceChecks.Put(root, folder + "/modinfo.ini", Encoding.UTF8.GetBytes(text.Replace("\n", "\r\n")));
+            Action<string, string, string> file = (folder, path, text) => ReplaceChecks.Put(root, folder + "/" + model + path, Encoding.ASCII.GetBytes(text));
+            ini("00 Menu", "name=Swimsuit Test\nDummyMod=true\nMenuPriority=0\n");
+            ini("01 Main", "name=Swimsuit C2\nAddonFor=Swimsuit Test\nMenuPriority=100\n");
+            foreach (string p in new[] { "01/body.mesh.230110883", "01/body_v00.mdf2.31", "02/hair.mesh.230110883", "02/hair_v00.mdf2.31", "hair_chain.chain.52" }) file("01 Main", p, "main " + p);
+            ini("02 Alt", "name=Alt hairstyle\nAddonFor=Swimsuit Test\nRequirement=Swimsuit C2\nMenuPriority=90\n");
+            foreach (string p in new[] { "02/hair.mesh.230110883", "02/hair_v00.mdf2.31", "hair_chain.chain.52", "02/alt_albd.tex.241101895" }) file("02 Alt", p, "alt " + p);
+            ini("10 Misc", "name=Misc\nAddonFor=Swimsuit Test\nDummyMod=true\nMenuPriority=70\n");
+            ini("11 Portrait", "name=Portrait\nAddonFor=Misc\n");
+            ReplaceChecks.Put(root, "11 Portrait/natives/stm/product/gui/portrait.tex.241101895", Encoding.ASCII.GetBytes("portrait"));
+            var package = PackageReader.Load(root, "");
+            ModComponent menu = package.Components.Single(c => c.Name == "Swimsuit Test"), main = package.Components.Single(c => c.Name == "Swimsuit C2"), alt = package.Components.Single(c => c.Name == "Alt hairstyle");
+            Require(main.ParentId == menu.Id && alt.ParentId == menu.Id && !package.IsChoice(menu) && !package.Components.Any(c => c.InferredChoice), "Requirement overlay was made a choose-one: menu choice " + package.IsChoice(menu));
+            Require(package.RequiredOptions(alt).Single() == main && package.RequiredOptions(main).Count == 0, "Requirement= did not name the main option");
+            // Ticked in either order, the main goes under its overlay: the alt hair wins the shared files.
+            foreach (var order in new[] { new[] { main.Id, alt.Id }, new[] { alt.Id, main.Id } })
+            {
+                var plan = Composer.Plan(package, order, true);
+                Require(plan.CanInstall && plan.Layers.SequenceEqual(new[] { main, alt }) && plan.Files[model + "02/hair.mesh.230110883"].Component == alt && plan.Files[model + "01/body.mesh.230110883"].Component == main && plan.Overrides.Count == 3,
+                    "main + overlay plan (" + String.Join(",", order) + "): " + String.Join(" / ", plan.Errors) + " layers " + String.Join(",", plan.Layers.Select(c => c.Name)));
+            }
+            Require(Composer.Plan(package, new[] { alt.Id }, true).Errors.Contains("'Alt hairstyle' needs 'Swimsuit C2'."), "the overlay alone was accepted");
+            Require(Composer.Plan(package, new[] { main.Id }, true).CanInstall, "the main option alone was refused");
+            // A second hairstyle needing the same main: the two hairstyles are alternatives again, the main stays outside.
+            ini("03 Alt2", "name=Short hairstyle\nAddonFor=Swimsuit Test\nRequirement=Swimsuit C2\nMenuPriority=80\n");
+            foreach (string p in new[] { "02/hair.mesh.230110883", "02/hair_v00.mdf2.31" }) file("03 Alt2", p, "alt2 " + p);
+            package = PackageReader.Load(root, "");
+            menu = package.Components.Single(c => c.Name == "Swimsuit Test"); main = package.Components.Single(c => c.Name == "Swimsuit C2");
+            ModComponent alt1 = package.Components.Single(c => c.Name == "Alt hairstyle"), alt2 = package.Components.Single(c => c.Name == "Short hairstyle");
+            Require(package.IsChoice(menu) && !package.IsChoiceBranch(menu, main) && package.IsChoiceBranch(menu, alt1) && package.IsChoiceBranch(menu, alt2), "two overlays of one main: choice " + package.IsChoice(menu) + " main " + package.IsChoiceBranch(menu, main));
+            Require(Composer.Plan(package, new[] { main.Id, alt2.Id }, true).CanInstall && !Composer.Plan(package, new[] { main.Id, alt1.Id, alt2.Id }, true).CanInstall, "two overlays of one main: plans");
+        }
+        // 1.0.18: "Ingrid C1 Loose Hair 1.01": the whole mod at the top of the archive and again in "C1 Loose Hair/" (that
+        // copy adds a chain file). Every group name was ambiguous, so all options were loose and all ticked. Two outfits
+        // with the same option names but other files ("Costume 1", "Costume 2") are not copies.
+        private static void PackedTwice(string root)
+        {
+            const string model = "natives/stm/product/model/esf/esf032/001/";
+            Action<string, string> ini = (folder, text) => ReplaceChecks.Put(root, folder + "/modinfo.ini", Encoding.UTF8.GetBytes(text.Replace("\n", "\r\n")));
+            Action<string, string, string> file = (folder, path, text) => ReplaceChecks.Put(root, folder + "/" + path, Encoding.ASCII.GetBytes(text));
+            foreach (string copy in new[] { "", "C1 Loose Hair/" })
+            {
+                ini(copy + "000 Ingrid", "name=Ingrid C1 Loose Hair\nDummymod=True\n");
+                ini(copy + "020 Outfit", "name=01) Outfit variations\nAddonFor=Ingrid C1 Loose Hair\nDummymod=True\n");
+                ini(copy + "021 Open", "name=Open Collar\nAddonFor=01) Outfit variations\n");
+                ini(copy + "022 Closed", "name=Closed Collar\nAddonFor=01) Outfit variations\n");
+                ini(copy + "030 Hair", "name=02) Hair Variations\nAddonFor=Ingrid C1 Loose Hair\nDummymod=True\n");
+                ini(copy + "031 Braid", "name=Loose Hair (with Braid)\nAddonFor=02) Hair variations\n");   // the author's lower-case v
+                ini(copy + "032 Bangs", "name=Loose Hair (with Bangs)\nAddonFor=02) Hair variations\n");
+                foreach (string o in new[] { "021 Open", "022 Closed" }) file(copy + o, model + "01/esf032_001_01.mesh.230110883", copy + o);
+                foreach (string o in new[] { "031 Braid", "032 Bangs" }) file(copy + o, model + "02/esf032_001_02.mesh.230110883", copy + o);
+            }
+            foreach (string o in new[] { "031 Braid", "032 Bangs" }) file("C1 Loose Hair/" + o, "natives/stm/product/weather/wind/mode/032/esf032_001_02_chain.chain.52", o);
+            var package = PackageReader.Load(root, "");
+            Require(package.Components.Count == 7 && package.Components.All(c => c.Id.StartsWith("C1 Loose Hair/", StringComparison.Ordinal)) && package.Warnings.Any(w => w.StartsWith("This archive holds the mod twice", StringComparison.Ordinal)) && !package.Warnings.Any(w => w.StartsWith("Cannot uniquely", StringComparison.Ordinal)),
+                "packed twice: " + package.Components.Count + " options (" + String.Join(", ", package.Components.Select(c => c.Id)) + ") / " + String.Join(" / ", package.Warnings));
+            ModComponent outfit = package.Components.Single(c => c.Name == "01) Outfit variations"), hair = package.Components.Single(c => c.Name == "02) Hair Variations");
+            Require(package.IsChoice(outfit) && package.IsChoice(hair) && package.Components.Where(c => !c.IsDummy).All(c => c.ParentId == outfit.Id || c.ParentId == hair.Id), "packed twice: groups not resolved");
+            Require(Composer.DefaultSelection(package, true).Count == 0, "packed twice: options were ticked for the user: " + String.Join(", ", Composer.DefaultSelection(package, true)));
+            Require(!Composer.Plan(package, package.Components.Where(c => c.ParentId == outfit.Id).Select(c => c.Id), true).CanInstall, "packed twice: both collars at once were accepted");
+            Require(Composer.Plan(package, new[] { package.Components.Single(c => c.Name == "Closed Collar").Id, package.Components.Single(c => c.Name == "Loose Hair (with Bangs)").Id }, true).Files.Count == 3, "packed twice: a collar and a hairstyle don't install from the fuller copy");
+            // Two outfits, same option names, other files: both stay.
+            string costumes = Path.Combine(root, "..", "packed-costumes");
+            foreach (string costume in new[] { "001", "002" })
+            {
+                ReplaceChecks.Put(costumes, "Costume " + costume + "/Hair A/modinfo.ini", Encoding.UTF8.GetBytes("name=Hair A\r\n"));
+                ReplaceChecks.Put(costumes, "Costume " + costume + "/Hair A/natives/stm/product/model/esf/esf032/" + costume + "/hair.mesh.230110883", Encoding.ASCII.GetBytes("a" + costume));
+                ReplaceChecks.Put(costumes, "Costume " + costume + "/Hair B/modinfo.ini", Encoding.UTF8.GetBytes("name=Hair B\r\n"));
+                ReplaceChecks.Put(costumes, "Costume " + costume + "/Hair B/natives/stm/product/model/esf/esf032/" + costume + "/body.mesh.230110883", Encoding.ASCII.GetBytes("b" + costume));
+            }
+            var two = PackageReader.Load(costumes, "");
+            Require(two.Components.Count(c => !c.IsDummy) == 4 && !two.Warnings.Any(w => w.StartsWith("This archive holds", StringComparison.Ordinal)), "two costumes taken for one mod packed twice");
+        }
+        // 1.0.18: with no main files and no saved layout, top-level options that write the same files are alternatives:
+        // the first in menu order is ticked, the others wait for the user. Independent options and a Requirement= overlay stay ticked.
+        private static void DefaultAlternatives(string root)
+        {
+            const string model = "natives/stm/product/model/esf/esf001/002/";
+            Action<string, string, string[]> option = (folder, text, files) =>
+            {
+                ReplaceChecks.Put(root, folder + "/modinfo.ini", Encoding.UTF8.GetBytes(text.Replace("\n", "\r\n")));
+                foreach (string f in files) ReplaceChecks.Put(root, folder + "/" + model + f, Encoding.ASCII.GetBytes(folder + f));
+            };
+            // Options are listed by name: "A" is first in menu order.
+            option("1 Collar open", "name=A Collar open\n", new[] { "01/body.mesh.230110883" });
+            option("2 Collar closed", "name=B Collar closed\n", new[] { "01/body.mesh.230110883" });
+            option("3 Nails", "name=C Nails\n", new[] { "01/nails_albd.tex.241101895" });
+            option("4 Collar fix", "name=D Collar fix\nRequirement=A Collar open\n", new[] { "01/body.mesh.230110883", "01/fix.tex.241101895" });
+            // A "Required · choose one" group gets its first option ticked (the user: required ones ticked by default).
+            option("5 Color", "name=Color\nDummyMod=true\ndescription=Choose one color\n", new string[0]);
+            option("6 Red", "name=Color Red\nAddonFor=Color\n", new[] { "01/body_albd.tex.241101895" });
+            option("7 Blue", "name=Color Blue\nAddonFor=Color\n", new[] { "01/body_albd.tex.241101895" });
+            var package = PackageReader.Load(root, "");
+            Require(package.Find("5 Color").RequiresChoice && package.IsChoice(package.Find("5 Color")), "fixture: Color is not a required choose-one");
+            var picked = Composer.DefaultSelection(package, true).Select(id => package.Find(id).Name).OrderBy(n => n, StringComparer.Ordinal).ToList();
+            Require(picked.SequenceEqual(new[] { "A Collar open", "C Nails", "Color Blue", "D Collar fix" }), "default alternatives: " + String.Join(", ", picked));
+            Require(Composer.Plan(package, Composer.DefaultSelection(package, true), true).CanInstall, "default alternatives: the default selection can't install");
+            // Only a menu with a required group (nothing ticked otherwise): its first option is ticked.
+            string menu = Path.Combine(root, "..", "default-required-menu");
+            ReplaceChecks.Put(menu, "0 Menu/modinfo.ini", Encoding.UTF8.GetBytes("name=Hair pack\r\nDummyMod=true\r\n"));
+            ReplaceChecks.Put(menu, "1 Hair/modinfo.ini", Encoding.UTF8.GetBytes("name=Hair\r\nAddonFor=Hair pack\r\nDummyMod=true\r\ndescription=Select one hairstyle\r\n"));
+            foreach (string h in new[] { "Hair long", "Hair short" })
+            {
+                ReplaceChecks.Put(menu, "2 " + h + "/modinfo.ini", Encoding.UTF8.GetBytes("name=" + h + "\r\nAddonFor=Hair\r\n"));
+                ReplaceChecks.Put(menu, "2 " + h + "/" + model + "02/hair.mesh.230110883", Encoding.ASCII.GetBytes(h));
+            }
+            var hairs = PackageReader.Load(menu, "");
+            var hairPick = Composer.DefaultSelection(hairs, true).Select(id => hairs.Find(id).Name).ToList();
+            Require(hairPick.SequenceEqual(new[] { "Hair long" }) && Composer.Plan(hairs, Composer.DefaultSelection(hairs, true), true).CanInstall, "required menu: " + String.Join(", ", hairPick));
+        }
+        // 1.0.18: an install of an installed mod with other options goes to the top like a new install; the same options
+        // from an edited source (keepPlace) stay; SetOrder saves several Move clicks as one change.
+        internal static void PriorityOrder(ReplaceChecks.Fixture f)
+        {
+            ReplaceMod a = ReplaceChecks.Install(f, "modA", "A"), b = ReplaceChecks.Install(f, "modB", "B");
+            Func<string> order = () => String.Join(",", f.Engine.LoadState().Mods.Select(m => m.Name));
+            Require(order().StartsWith("B,A", StringComparison.Ordinal), "fixture order: " + order());
+            var package = PackageReader.Load(f.Mod("modA"), "");
+            var composition = Composer.Plan(package, Composer.DefaultSelection(package, true), true);
+            ReplacePlan plan;
+            ReplaceMod again = ReplacePlanner.PrepareAndInstall(composition, "", f.Engine, "A2", false, a.Id, true, out plan);
+            Require(order().StartsWith("B,A2", StringComparison.Ordinal), "keepPlace moved the record: " + order());
+            again = ReplacePlanner.PrepareAndInstall(composition, "", f.Engine, "A3", false, again.Id, out plan);
+            Require(order().StartsWith("A3,B", StringComparison.Ordinal), "a switch stayed below: " + order());
+            f.Engine.SetOrder(new[] { b.Id, again.Id }, new[] { b.Id });
+            Require(order().StartsWith("B,A3", StringComparison.Ordinal), "SetOrder: " + order());
+            f.Engine.Uninstall(again.Id); f.Engine.Uninstall(b.Id);
         }
         private static ModComponent Peer(string id, string bundle, string path, bool rootFile)
         {

@@ -99,7 +99,19 @@ namespace SlotsInstaller
             var keyed = all.Select((row, index) => new { Row = row, Index = index, Ticks = InstalledSortTicks(row) }).ToList();
             var dated = keyed.Where(x => x.Ticks > 0);
             dated = installedSortAscending ? dated.OrderBy(x => x.Ticks).ThenBy(x => x.Index) : dated.OrderByDescending(x => x.Ticks).ThenBy(x => x.Index);
-            return dated.Concat(keyed.Where(x => x.Ticks <= 0).OrderBy(x => x.Index)).Select(x => x.Row).ToList();
+            return InPriorityOrder(dated.Concat(keyed.Where(x => x.Ticks <= 0).OrderBy(x => x.Index)).Select(x => x.Row).ToList());
+        }
+        // 1.0.18 (the user: after Move up/down the order looked wrong): the places the date sort gives replacements and
+        // tool mods are filled in priority order (#1 first when newest first, last when oldest first), so the list shows
+        // which one wins and Move up/down visibly moves a row. New installs go to the top of the priority, so this
+        // matches the date order until something is moved. Extra outfits and external manager rows keep their places.
+        private List<object> InPriorityOrder(List<object> rows)
+        {
+            var places = new List<int>(); var own = new List<GameModRow>();
+            for (int i = 0; i < rows.Count; i++) { GameModRow g = rows[i] as GameModRow; if (g != null && g.Mod != null) { places.Add(i); own.Add(g); } }
+            own = installedSortAscending ? own.OrderByDescending(g => g.Priority).ToList() : own.OrderBy(g => g.Priority).ToList();
+            for (int k = 0; k < places.Count; k++) rows[places[k]] = own[k];
+            return rows;
         }
         // 1.0.1 (the user: no info on when it was installed; not detailed): "installed today / yesterday / 3d ago /
         // 12 Oct" after a row's meta line, from the same time the Installed sort uses; null when the row has none.

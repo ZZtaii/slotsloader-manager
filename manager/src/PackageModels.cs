@@ -98,6 +98,10 @@ namespace SlotsInstaller
                     // A shared file between main files and an overlay is expected.
                     // Only peer variants participate in inferred exclusivity.
                     var children = directChildren.Where(c => !c.IsDummy && c.Assets.Count > 0 && !Composer.IsBase(c)).ToList();
+                    // 1.0.18: an option another one names in Requirement= is what that one goes on top of
+                    // (Swimsuit Sakura C2 under its Alt hairstyle), whatever its name: never its alternative.
+                    var required = new HashSet<ModComponent>(children.SelectMany(RequiredOptions));
+                    children.RemoveAll(required.Contains);
                     if (children.Count > 1)
                     {
                         var common = new HashSet<string>(children[0].Assets.Select(a => a.DestinationPath),StringComparer.OrdinalIgnoreCase);
@@ -111,6 +115,20 @@ namespace SlotsInstaller
                 }
             }
             choiceGroups = choices;
+        }
+        // 1.0.18: Fluffy's Requirement=<option name>[, ...]: the options of this package the component needs.
+        // A name matching no option or several (another mod, a typo) is skipped.
+        internal List<ModComponent> RequiredOptions(ModComponent component)
+        {
+            var result = new List<ModComponent>();
+            string wanted;
+            if (component == null || component.Metadata == null || !component.Metadata.TryGetValue("requirement", out wanted)) return result;
+            foreach (string name in (wanted ?? "").Split(',', ';').Select(s => s.Trim()).Where(s => s.Length > 0))
+            {
+                List<ModComponent> named = Components.Where(c => c != component && !c.IsDummy && String.Equals((c.Name ?? "").Trim(), name, StringComparison.OrdinalIgnoreCase)).Take(2).ToList();
+                if (named.Count == 1 && !result.Contains(named[0])) result.Add(named[0]);
+            }
+            return result;
         }
         internal bool IsChoice(ModComponent component)
         {

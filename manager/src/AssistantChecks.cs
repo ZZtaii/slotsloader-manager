@@ -647,7 +647,7 @@ namespace SlotsInstaller
                     Require(engine.LoadState().Mods.Count == 2, "a queued install changed the installed set before approval");
                     Require(Items(queued["replaces_installed"]).Count() == 0, "a different source listed in replaces_installed");
                     // A variant of an installed source: replaces_installed names it, no conflict with it, and running the
-                    // action switches it in place (one record of that source, its priority kept).
+                    // action switches it (one record of that source; 1.0.18: at the top, what is installed last wins).
                     {
                         ModPackage original = PackageReader.Load(h.F.CammyPack, "");
                         ReplacePlanner.PrepareAndInstall(Composer.Plan(original, new[] { "Main Files", "Color/White" }, true), "", engine, "Cammy White", false, null, out prepared);
@@ -659,7 +659,7 @@ namespace SlotsInstaller
                         variant.ModName = "Cammy Barefoot Pack"; variant.OptionNames = new List<string> { "Main Files", "Crimson" };
                         runner.Execute(variant);
                         var after = engine.LoadState().Mods;
-                        Require(after.Count(m => String.Equals(m.SourcePath, h.F.CammyPack, StringComparison.OrdinalIgnoreCase)) == 1 && after.FindIndex(m => String.Equals(m.SourcePath, h.F.CammyPack, StringComparison.OrdinalIgnoreCase)) == at && after.Count == 3, "variant switch through the Assistant: " + String.Join(", ", after.Select(m => m.Name)));
+                        Require(after.Count(m => String.Equals(m.SourcePath, h.F.CammyPack, StringComparison.OrdinalIgnoreCase)) == 1 && after.FindIndex(m => String.Equals(m.SourcePath, h.F.CammyPack, StringComparison.OrdinalIgnoreCase)) == 0 && at >= 0 && after.Count == 3, "variant switch through the Assistant: " + String.Join(", ", after.Select(m => m.Name)));
                     }
                     // The app Data is shared with the next suites: leave no replacement recorded.
                     engine.RestoreAll();

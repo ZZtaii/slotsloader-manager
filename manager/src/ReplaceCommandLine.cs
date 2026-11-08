@@ -453,7 +453,7 @@ namespace SlotsInstaller
             a.Source = file.Path;
             CompositionPlan composition = Compose(a);
             ReplacePlan plan;
-            ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, a.SevenZip, engine, composition.Package.Name, false, record == null ? null : record.Id, out plan);
+            ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, a.SevenZip, engine, composition.Package.Name, false, record == null ? null : record.Id, true, out plan);   // 1.0.18: an update keeps its place
             UnownedSlotsFlag.Ensure(engine.GameRoot);
             Console.WriteLine(ReplacePlanner.Report(plan));
             Console.WriteLine((record == null ? "Installed" : "Updated") + " Slotsloader " + pin.Version + " (id " + mod.Id.Substring(0, 8) + ", " + ReplacePlanner.N(mod.Files.Count, "file") + ").");

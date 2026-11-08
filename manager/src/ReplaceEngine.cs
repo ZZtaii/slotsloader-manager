@@ -1141,7 +1141,12 @@ namespace SlotsInstaller
         // 1.0.16 (PR #22 review, F2): aboveId: the record goes directly above that one (a main mod's addon record, new or
         // switched in place) in this same change: one Reconcile and one history entry (an in-place switch that moved is
         // still an Update), where a Move used to follow.
-        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId, string aboveId)
+        // 1.0.18 (the user: "mods that are enabled last overwrite others"): a switch in place (same source with other
+        // options, another build of a tool) goes to the top as a new install does, so what was installed last wins shared
+        // files; Move up/down is for the exceptions. keepPlace: the same selection again (Reinstall from an edited source,
+        // a Slotsloader update) stays where it is, and so does a record an ordered preset placed.
+        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId, string aboveId) { return Install(plan, name, test, replaceId, aboveId, false); }
+        internal ReplaceMod Install(ReplacePlan plan, string name, bool test, string replaceId, string aboveId, bool keepPlace)
         {
             if (plan == null || !plan.CanInstall) throw new IOException(plan == null ? "Nothing to install." : String.Join(" ", plan.Errors));
             ReplaceMod mod = null; string storeDir = null;
@@ -1156,7 +1161,12 @@ namespace SlotsInstaller
                     AllocatePreparedPaks(plan, state, existing, below);
                     mod = PublishPrepared(plan, name, test, state, out storeDir);
                     string root = StoreRoot(state);
-                    if (existing != null) { int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer; state.Mods[at] = mod; }
+                    if (existing != null)
+                    {
+                        int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer;
+                        if (keepPlace || existing.PresetLayer) state.Mods[at] = mod;
+                        else { state.Mods.RemoveAt(at); state.Mods.Insert(0, mod); historySwitched = existing.Id; }   // still an Update in History
+                    }
                     else state.Mods.Insert(0, mod);
                     if (below != null && !ReferenceEquals(below, mod)) { state.Mods.Remove(mod); state.Mods.Insert(state.Mods.IndexOf(below), mod); historySwitched = existing == null ? null : existing.Id; }
                     if (String.IsNullOrEmpty(state.StoreRoot)) state.StoreRoot = root;
@@ -1196,6 +1206,11 @@ namespace SlotsInstaller
         {
             return Change((enabled ? "Enable" : "Disable") + " replacement", true, delegate(ReplaceState s) { ReplaceMod m = Need(s, id); m.Enabled = enabled; return s; }, false, null);
         }
+        // 1.0.18: several selected rows on the Installed page, one change.
+        internal string SetEnabled(IList<string> ids, bool enabled)
+        {
+            return Change((enabled ? "Enable" : "Disable") + " replacements", true, delegate(ReplaceState s) { foreach (string id in ids) Need(s, id).Enabled = enabled; return s; }, false, null);
+        }
         internal string Move(string id, int delta)
         {
             int from = -1, target = -1;
@@ -1206,6 +1221,27 @@ namespace SlotsInstaller
                 s.Mods.RemoveAt(at); s.Mods.Insert(to, m); return s;
             }, false, null);
             RecordMove(id, from, target);   // 2.4.1 history
+            return result;
+        }
+        // 1.0.18: the Installed page's Move up/down clicks, saved together (MainFormMove.cs): the records in this order
+        // (ids no longer installed are skipped; a record missing from it keeps its index), one change, one history entry
+        // per moved record.
+        internal string SetOrder(IList<string> order, IEnumerable<string> moved)
+        {
+            var from = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase); var to = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var movedIds = (moved ?? new string[0]).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            string result = Change("Change replacement priority", true, delegate(ReplaceState s)
+            {
+                var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < order.Count; i++) if (!rank.ContainsKey(order[i])) rank[order[i]] = i;
+                foreach (string id in movedIds) from[id] = s.Mods.FindIndex(m => String.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase));
+                var listed = s.Mods.Where(m => rank.ContainsKey(m.Id)).OrderBy(m => rank[m.Id]).ToList();
+                var slots = Enumerable.Range(0, s.Mods.Count).Where(i => rank.ContainsKey(s.Mods[i].Id)).ToList();
+                for (int k = 0; k < slots.Count; k++) s.Mods[slots[k]] = listed[k];
+                foreach (string id in movedIds) to[id] = s.Mods.FindIndex(m => String.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase));
+                return s;
+            }, false, null);
+            foreach (string id in movedIds) { int a, b; if (from.TryGetValue(id, out a) && to.TryGetValue(id, out b) && a >= 0 && b >= 0) RecordMove(id, a, b); }
             return result;
         }
         // Uninstall keeps a recoverable copy (see RestoreRemoved); a reverted test install does not.

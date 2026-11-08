@@ -65,6 +65,7 @@ namespace SlotsInstaller
                 // Keep the listing's fighter identity when opening, including REFramework colour data.
                 p.CharacterCodes = identity.Finish();
                 CollectRootFiles(p, r, componentsById, metadata.Select(e => Dir(e.Path)).ToList());
+                DropDuplicateCopy(p, componentsById);   // 1.0.18
                 p.RebuildIndexes();
                 var componentsByName = p.Components.GroupBy(c=>c.Name.Trim(),StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g=>g.Key,g=>g.ToList(),StringComparer.OrdinalIgnoreCase);
@@ -77,6 +78,8 @@ namespace SlotsInstaller
                     {
                         List<ModComponent> named;
                         var parents=componentsByName.TryGetValue(c.AddonFor.Trim(),out named) ? named.Where(x=>x!=c).ToList() : new List<ModComponent>();
+                        // 1.0.18: one group name in several folders: the one beside this option is its group.
+                        if (parents.Count>1) { var beside=parents.Where(x=>String.Equals(Dir(x.Id),Dir(c.Id),StringComparison.OrdinalIgnoreCase)).ToList(); if (beside.Count==1) parents=beside; }
                         if (parents.Count==1) c.ParentId=parents[0].Id;
                         else p.Warnings.Add("Cannot uniquely resolve group '"+c.AddonFor+"' for "+c.Name+".");
                     }
@@ -201,6 +204,45 @@ namespace SlotsInstaller
         }
         private static string Get(Dictionary<string,string> d,string key,string def) { string v; return d.TryGetValue(key,out v) ? v : def; }
         private static string Dir(string path) { int i=path.LastIndexOf('/'); return i<0 ? "" : path.Substring(0,i); }
+        // 1.0.18 (Ingrid C1 Loose Hair 1.01: the whole mod at the top and again in "C1 Loose Hair/"): two folders whose
+        // options have the same names, each pair writing the same files (one may add a few), are one mod packed twice.
+        // Every group name was then ambiguous, so no option found its group and all of them were ticked. The copy with
+        // more files is kept (the other's options are not listed or installed) and a note says so. Different outfits
+        // with the same option names ("Costume 1/Hair A", "Costume 2/Hair A") write different files and stay.
+        private static void DropDuplicateCopy(ModPackage p, Dictionary<string,ModComponent> componentsById)
+        {
+            Func<ModComponent,HashSet<string>> files = c => new HashSet<string>(c.Assets.Select(a => a.DestinationPath).Concat(c.RootAssets.Select(a => a.DestinationPath)), StringComparer.OrdinalIgnoreCase);
+            var folders = p.Components.Where(c => c.Id.Length > 0 && c.Metadata != null && c.Metadata.Count > 0)
+                .GroupBy(c => Dir(c.Id), StringComparer.OrdinalIgnoreCase).Where(g => g.Count() >= 2)
+                .Select(g => new { Folder = g.Key, Options = g.ToList(), Names = g.Select(c => (c.Name ?? "").Trim()).ToList() })
+                .Where(g => g.Names.Distinct(StringComparer.OrdinalIgnoreCase).Count() == g.Names.Count).ToList();
+            var dropped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < folders.Count; i++)
+                for (int j = i + 1; j < folders.Count; j++)
+                {
+                    var a = folders[i]; var b = folders[j];
+                    if (dropped.Contains(a.Folder) || dropped.Contains(b.Folder) || a.Options.Count != b.Options.Count) continue;
+                    bool same = true; int withFiles = 0;
+                    foreach (ModComponent x in a.Options)
+                    {
+                        ModComponent y = b.Options.FirstOrDefault(o => String.Equals((o.Name ?? "").Trim(), (x.Name ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+                        if (y == null || x.IsDummy != y.IsDummy || !String.Equals((x.AddonFor ?? "").Trim(), (y.AddonFor ?? "").Trim(), StringComparison.OrdinalIgnoreCase)) { same = false; break; }
+                        HashSet<string> fx = files(x), fy = files(y);
+                        if (fx.Count == 0 && fy.Count == 0) continue;
+                        if (fx.Count == 0 || fy.Count == 0 || !(fx.IsSubsetOf(fy) || fy.IsSubsetOf(fx))) { same = false; break; }
+                        withFiles++;
+                    }
+                    if (!same || withFiles == 0) continue;
+                    int filesA = a.Options.Sum(c => c.Assets.Count + c.RootAssets.Count), filesB = b.Options.Sum(c => c.Assets.Count + c.RootAssets.Count);
+                    var keep = filesB > filesA ? b : a; var drop = keep == a ? b : a;
+                    dropped.Add(drop.Folder);
+                    foreach (ModComponent c in drop.Options) { p.Components.Remove(c); componentsById.Remove(c.Id); }
+                    if (drop.Folder.Length > 0)   // natives folders without a modinfo.ini inside the dropped copy go too
+                        foreach (ModComponent c in p.Components.Where(c => c.Id.StartsWith(drop.Folder + "/", StringComparison.OrdinalIgnoreCase) && (c.Metadata == null || c.Metadata.Count == 0)).ToList()) { p.Components.Remove(c); componentsById.Remove(c.Id); }
+                    Func<string,string> label = f => f.Length == 0 ? "at the top of the archive" : "in '" + f + "'";
+                    p.Warnings.Add("This archive holds the mod twice (" + label(a.Folder) + " and " + label(b.Folder) + "). The copy " + label(keep.Folder) + " is used" + (filesA == filesB ? "." : ": it has more files."));
+                }
+        }
         private static string Last(string path,string fallback) { return path.Length==0 ? fallback : path.Split('/').Last(); }
         // Authors sometimes describe a hair choice on each add-on while the main
         // component also owns independent body toggles. Keep source component IDs.
