@@ -239,7 +239,7 @@ namespace SlotsInstaller
             if (blocker != null) { SetPageStatus(currentPage, blocker, Palette.Accent); return; }
             if (!GameIdle("reinstall " + mod.Name)) return;
             string source = mod.SourcePath, sevenZip = config.SevenZipPath, id = mod.Id, name = mod.Name;
-            List<string> selection = (mod.SelectedIds ?? new List<string>()).ToList();
+            List<string> selection = (mod.SelectedIds ?? new List<string>()).ToList(), onlyParts = (mod.OnlyParts ?? new List<string>()).ToList();
             ReplaceEngine engine = Engine();
             Work("Reinstalling " + name + "…", delegate
             {
@@ -247,7 +247,8 @@ namespace SlotsInstaller
                 List<string> dropped; List<string> ids = MapSelection(source2, selection.Select(s => new KeyValuePair<string, string>(s, "")).ToList(), out dropped);
                 if (dropped.Count > 0) throw new IOException("Saved options are missing: " + String.Join(", ", dropped) + ". Edit options before reinstalling.");
                 if (selection.Count == 0) ids = Composer.DefaultSelection(source2, true);
-                CompositionPlan composition = Composer.SavedPlan(source2, ids, true);
+                // 1.0.18: a record of only some parts of its options (a recipe layer) keeps them.
+                CompositionPlan composition = ReplacePlanner.WithParts(source2, ids, onlyParts, sevenZip, Composer.SavedPlan(source2, ids, true));
                 if (!composition.CanInstall) throw new IOException("Couldn't reinstall " + name + ": " + String.Join(" ", composition.Errors));
                 ReplacePlan prepared;
                 ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, name, false, id, true, out prepared);   // 1.0.18: the same options again keep their place

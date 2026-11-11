@@ -136,6 +136,9 @@ namespace SlotsInstaller
     {
         public string Id = "", Name = "", SourcePath = "", Kind = "", InstalledUtc = "", Description = "";
         public List<string> SelectedIds = new List<string>();
+        // 1.0.18: only these parts of the options were installed (OutfitParts; a recipe layer that takes the hair of a
+        // mod). Empty = all. A reinstall and a preset keep them.
+        public List<string> OnlyParts = new List<string>();
         public bool Enabled = true, Test, PresetLayer;
         public string ArchiveSha, ArchiveStamp;
         public long ArchiveSize;
@@ -244,6 +247,7 @@ namespace SlotsInstaller
     {
         internal string ModName = "", SourcePath = "", Kind = "", Method = "";
         internal List<string> SelectedIds = new List<string>();
+        internal List<string> OnlyParts = new List<string>();   // 1.0.18: CompositionPlan.OnlyParts, kept on the record
         internal List<PreparedFile> Files = new List<PreparedFile>();
         internal List<string> Affects = new List<string>();
         internal List<HealthItem> Items = new List<HealthItem>();

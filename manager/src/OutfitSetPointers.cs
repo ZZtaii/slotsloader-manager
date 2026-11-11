@@ -34,6 +34,7 @@ namespace SlotsInstaller
     {
         public string Name = "", SourcePath = "", SourceStamp = "", Kind = "";
         public List<string> SelectedIds = new List<string>();
+        public List<string> OnlyParts = new List<string>();   // 1.0.18: ReplaceMod.OnlyParts
         public bool PresetLayer;
         public string ArchiveSha;
         public long ArchiveSize;
@@ -97,7 +98,7 @@ namespace SlotsInstaller
             // 1.0.10: a recorded source that is gone (renamed or moved outside the Manager) is not guessed; it is copied and says so.
             if (!SourceExists(m.SourcePath)) { why = NotFound(m.SourcePath); return null; }
             string source = System.IO.Path.GetFullPath(m.SourcePath);
-            return new PresetReplacementPointer { ArchiveSha = m.ArchiveSha, ArchiveSize = m.ArchiveSize, PresetLayer = m.PresetLayer, Name = m.Name ?? "", SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "", Kind = m.Kind ?? "", SelectedIds = (m.SelectedIds ?? new List<string>()).ToList() };
+            return new PresetReplacementPointer { ArchiveSha = m.ArchiveSha, ArchiveSize = m.ArchiveSize, PresetLayer = m.PresetLayer, Name = m.Name ?? "", SourcePath = source, SourceStamp = MainForm.SourceStamp(source) ?? "", Kind = m.Kind ?? "", SelectedIds = (m.SelectedIds ?? new List<string>()).ToList(), OnlyParts = (m.OnlyParts ?? new List<string>()).ToList() };
         }
         internal const string ManualDrop = "manual drop";
         internal static string NotFound(string path) { return String.IsNullOrWhiteSpace(path) ? "" : "not found at " + path; }
@@ -309,7 +310,7 @@ namespace SlotsInstaller
                         result.ReplacementsRestored++;
                         continue;
                     }
-                    CompositionPlan composition = Composer.SavedPlan(package, ids, true);
+                    CompositionPlan composition = ReplacePlanner.WithParts(package, ids, p.OnlyParts, sevenZip, Composer.SavedPlan(package, ids, true));
                     if (!composition.CanInstall) throw new IOException(String.Join(" ", composition.Errors.DefaultIfEmpty("Its options changed.")));
                     ReplacePlan plan;
                     ReplaceMod done = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, p.Name, false, null, out plan);

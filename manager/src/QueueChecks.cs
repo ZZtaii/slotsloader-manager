@@ -537,6 +537,30 @@ namespace SlotsInstaller
             bool allOffRefused = false; try { OutfitRecipes.Install(longRecipe, costumes, "Nothing", ""); } catch (IOException ex) { allOffRefused = ex.Message.Contains("is turned off"); }
             Require(longRecipe.Effective() == null && allOffRefused, "a recipe with everything off");
             var twoOptions = new RecipeLayer { SourcePath = donorMod, Mod = "Hair Bundle", SelectedIds = new List<string> { hair.Id, donorBody.Id }, OptionNames = new List<string> { "Hair B", "Main Files" }, OffIds = new List<string> { donorBody.Id } };
+            // 1.0.18 (review of PR 28): an outfit installed from a saved recipe carries the recipe's id; Update rebuilds it
+            // in place in one transaction, so a recipe that can't be built leaves the outfit exactly as it was, and one
+            // that can replaces its parts with the recipe's (none of the old ones kept); a renamed recipe keeps its id.
+            string linkData = Path.Combine(root, "recipe-links");
+            var linkDraft = new RecipeDraft("Juri", "016", "");
+            Require((linkDraft.AddLayer(baseMod, "Juri Base", null) ?? linkDraft.AddLayer(fullMod, "Juri Full", null, new[] { OutfitParts.Hair })) == null, "the linked recipe's layers");
+            OutfitRecipe linked = OutfitRecipes.Save(linkData, linkDraft.ToRecipe("Linked"));
+            OutfitRecipes.Install(linked, costumes, "Linked", "");
+            InstalledOutfit linkedOutfit = Installer.ListInstalled(costumes).Single(o => o.Name == "Linked");
+            Func<string, string> readLinked = delegate(string rel) { string f = Path.Combine(linkedOutfit.Folder, rel.Replace('/', '\\')); return File.Exists(f) ? File.ReadAllText(f) : null; };
+            Require(linkedOutfit.RecipeId == linked.Id && linked.Id.Length == 32 && readLinked(m + "02/esf016_001_02.mesh.230110883") == "full hair", "an outfit installed from a recipe does not carry its id: " + linkedOutfit.RecipeId);
+            linked.Base.Parts = new List<string> { OutfitParts.Body };   // the body layer cut to parts: can't be an extra outfit
+            bool updateRefused = false; try { OutfitRecipes.Install(linked, costumes, "Linked", "", true); } catch (IOException ex) { updateRefused = ex.Message.Contains("goes in whole"); }
+            InstalledOutfit stillThere = Installer.ListInstalled(costumes).SingleOrDefault(o => o.Name == "Linked");
+            Require(updateRefused && stillThere != null && stillThere.Id == linkedOutfit.Id && stillThere.Parts.Count == 1 && readLinked(m + "02/esf016_001_02.mesh.230110883") == "full hair" && readLinked(m + "01/esf016_001_01.mesh.230110883") == "base body",
+                "an Update that can't be built did not leave the outfit as it was");
+            linked.Base.Parts = new List<string>(); linked.Parts[0].Off = true;
+            InstallResult updatedInPlace = OutfitRecipes.Install(linked, costumes, "Linked", "", true);
+            InstalledOutfit afterUpdate = Installer.ListInstalled(costumes).Single(o => o.Name == "Linked");
+            Require(updatedInPlace.Message.StartsWith("Updated Linked from the recipe Linked") && afterUpdate.Id == linkedOutfit.Id && afterUpdate.RecipeId == linked.Id && (afterUpdate.Parts == null || afterUpdate.Parts.Count == 0)
+                && readLinked(m + "02/esf016_001_02.mesh.230110883") == "base hair" && readLinked(longFolder + "hair_albd.tex.241101895") == null, "Update in place: " + updatedInPlace.Message + " / parts " + (afterUpdate.Parts == null ? 0 : afterUpdate.Parts.Count));
+            string linkedId = linked.Id; linked.Name = "Linked Again";
+            Require(OutfitRecipes.Save(linkData, linked).Id == linkedId && OutfitRecipes.List(linkData).Count == 1 && OutfitRecipes.List(linkData)[0].Name == "Linked Again", "a renamed recipe did not keep its id");
+            Directory.Delete(afterUpdate.Folder, true);
             Require(twoOptions.Effective().SelectedIds.SequenceEqual(new[] { hair.Id }) && twoOptions.Effective().OptionNames.SequenceEqual(new[] { "Hair B" }) && new RecipeLayer { SelectedIds = new List<string> { hair.Id }, OffIds = new List<string> { hair.Id } }.Effective() == null, "an option turned off");
             Func<string, string, LibraryEntry> libraryMod = delegate(string path, string name) { return new LibraryEntry { SourcePath = path, Name = name, Character = "Juri", CharacterCodes = new List<string> { "016" } }; };
             LibraryEntry baseEntry = libraryMod(baseMod, "Juri Base"), donorEntry = libraryMod(donorMod, "Juri Hair Bundle"), c2Entry = libraryMod(otherMod, "Juri C2 Hair"), sharedEntry = libraryMod(skinMod, "Juri Skin");

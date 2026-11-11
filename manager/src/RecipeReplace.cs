@@ -52,8 +52,11 @@ namespace SlotsInstaller
                 else
                 {
                     step.Twice = true;
-                    // One record per mod: its layers' parts together, or all of it when one layer takes all.
-                    if (all || step.OnlyParts == null) step.OnlyParts = null; else step.OnlyParts.UnionWith(layer.Parts);
+                    // One record per mod, so two layers of it are one install of their options together. That is only
+                    // the recipe when neither is cut to parts, or both to the same ones: otherwise each layer's options
+                    // would bring the other's parts too.
+                    bool sameParts = all ? step.OnlyParts == null : step.OnlyParts != null && step.OnlyParts.SetEquals(layer.Parts);
+                    if (!sameParts) throw new IOException("This recipe uses " + step.Mod + " more than once, taking different parts of it each time. As replacements a mod is one install, so that can't be kept apart. Install the recipe as an extra outfit instead.");
                     if (!step.IsBase) { steps.Remove(step); steps.Add(step); }   // a part used again counts where it is used last; the base stays underneath
                 }
                 foreach (string id in layer.SelectedIds) if (!step.Ids.Contains(id, StringComparer.OrdinalIgnoreCase)) step.Ids.Add(id);

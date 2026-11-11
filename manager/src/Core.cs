@@ -912,6 +912,7 @@ namespace SlotsInstaller
         internal bool WholeArchive;             // 2.5.4: a manual archive the Manager copied from SourcePath (Install all variants, ArchiveInstalls.cs)
         internal List<PartGraft> Parts;         // 1.0.16: the manifest's added parts (an addon archive's ticks come back from them)
         internal List<PartGraft> OffParts;      // 1.0.18: added parts that are turned off (InstallManifest.OffParts), or null
+        internal string RecipeId;               // 1.0.18: the recipe it was installed from (InstallManifest.RecipeId), or null
         internal List<string> AddonSources;     // 1.0.18: a WholeArchive copy's combined addon archives (ArchiveInstalls/ArchiveCombine), or null
     }
     public sealed class InstallManifest
@@ -924,6 +925,9 @@ namespace SlotsInstaller
         // 1.0.18 (the user: "I don't see any options to manage it, like toggle or untoggle it"): added parts that are
         // turned off: their files are not in the outfit, and the record stays so a tick puts them back. Null = none.
         public List<PartGraft> OffParts;
+        // 1.0.18: the outfit recipe this outfit was installed from (OutfitRecipe.Id), or null. Uninstall and Update of a
+        // recipe act on the outfits that carry its id, never on one that only looks like it.
+        public string RecipeId;
         public Dictionary<string,string> RebuiltSwatches;
     }
     public static partial class Installer
@@ -1014,7 +1018,10 @@ namespace SlotsInstaller
                 var manifest=new InstallManifest {Id=oldManifest==null ? Guid.NewGuid().ToString("N") : oldManifest.Id,Name=outfitName,Character=character,SourcePath=fresh.SourcePath,CreatedUtc=DateTime.UtcNow.ToString("o"),SelectedIds=current.Layers.Select(c=>c.Id).ToList()};
                 manifest.Sha256=hashes; if (rebuiltSwatches.Count > 0) manifest.RebuiltSwatches=rebuiltSwatches; if (keptParts.Count+addedParts.Count>0) manifest.Parts=keptParts.Concat(addedParts).ToList();
                 // 1.0.18: parts that are turned off stay remembered across a rebuild (Edit options, a changed part list).
-                if (oldManifest!=null && oldManifest.OffParts!=null && oldManifest.OffParts.Count>0) manifest.OffParts=oldManifest.OffParts.Where(g=>g!=null).ToList();
+                // Not when another mod fills the outfit: it starts without the old one's parts, on or off.
+                if (oldManifest!=null && oldManifest.OffParts!=null && oldManifest.OffParts.Count>0 && String.Equals(oldManifest.SourcePath,fresh.SourcePath,StringComparison.OrdinalIgnoreCase)) manifest.OffParts=oldManifest.OffParts.Where(g=>g!=null).ToList();
+                // 1.0.18: the recipe an outfit was installed from stays its recipe across a rebuild (OutfitRecipes.Install sets it).
+                if (oldManifest!=null && !String.IsNullOrEmpty(oldManifest.RecipeId)) manifest.RecipeId=oldManifest.RecipeId;
                 File.WriteAllText(Path.Combine(stage,"modinfo.ini"),"name="+outfitName+"\r\nauthor="+CleanMetadata(String.Join(", ",current.Layers.Select(c=>c.Author).Where(s=>!String.IsNullOrWhiteSpace(s)).Distinct()))+"\r\ndescription="+CleanMetadata("Composed with Slotsloader Manager. "+String.Join(" + ",current.Layers.Select(c=>c.Name)))+"\r\nversion=1.0\r\n",new UTF8Encoding(false));
                 Json.Write(Path.Combine(stage,ManifestName),manifest);
                 OperationContext.ThrowIfCancellationRequested();
@@ -1204,7 +1211,7 @@ namespace SlotsInstaller
         {
             DateTime created;
             if (m==null || !DateTime.TryParse(m.CreatedUtc,null,System.Globalization.DateTimeStyles.RoundtripKind,out created)) created=DateTime.MinValue;
-            return new InstalledOutfit {Folder=folder,Name=m==null ? Path.GetFileName(folder) : m.Name,Character=character,Enabled=enabled,Managed=m!=null,Id=m==null ? "" : m.Id,SourcePath=m==null ? "" : m.SourcePath,SelectedIds=m==null ? new List<string>() : m.SelectedIds,Parts=m==null ? null : m.Parts,OffParts=m==null ? null : m.OffParts,InstalledUtc=created==DateTime.MinValue ? created : created.ToUniversalTime(),SnapshotStamp=OutfitSnapshotStamp(folder)};
+            return new InstalledOutfit {Folder=folder,Name=m==null ? Path.GetFileName(folder) : m.Name,Character=character,Enabled=enabled,Managed=m!=null,Id=m==null ? "" : m.Id,SourcePath=m==null ? "" : m.SourcePath,SelectedIds=m==null ? new List<string>() : m.SelectedIds,Parts=m==null ? null : m.Parts,OffParts=m==null ? null : m.OffParts,RecipeId=m==null ? null : m.RecipeId,InstalledUtc=created==DateTime.MinValue ? created : created.ToUniversalTime(),SnapshotStamp=OutfitSnapshotStamp(folder)};
         }
         internal static string OutfitSnapshotStamp(string path)
         {

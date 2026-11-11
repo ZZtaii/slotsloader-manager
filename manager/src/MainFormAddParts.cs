@@ -153,6 +153,9 @@ namespace SlotsInstaller
             InstalledOutfit outfit; PartGraft part; bool isOn; List<PartGraft> on, off;
             if (!AddedPartLists(index, out outfit, out part, out isOn, out on, out off)) return;
             List<PartGraft> wantOn = on.ToList(), wantOff = off.ToList();
+            // A part whose mod is gone could never be turned on again: off would be a removal with no way back, so it
+            // is refused and the cross (which says what it does) is the way to take it off.
+            if (isOn && PartSourceGone(part)) { SetPageStatus(installedPage, "Can't turn " + Installer.GraftText(part) + " off: its mod is no longer in the library, so it could not be turned on again. Use the cross to remove it.", Palette.Accent); return; }
             if (isOn) { part.Place = on.IndexOf(part); wantOn.Remove(part); wantOff.Add(part); }
             else
             {
@@ -190,7 +193,13 @@ namespace SlotsInstaller
                 {
                     InstalledOutfit fresh = Installer.ListInstalled(root).FirstOrDefault(o => o.Managed && o.Id == id);
                     if (fresh == null) throw new System.IO.IOException(name + " is no longer installed.");
-                    Installer.SetOffParts(fresh, root, offList);
+                    // A part the rebuild could not put back (its mod changed, say) is named in the result; it stays in
+                    // the list as off instead of vanishing from both lists.
+                    List<PartGraft> onNow = (fresh.Parts ?? new List<PartGraft>()).Where(g => g != null).ToList();
+                    List<PartGraft> record = offList.ToList();
+                    foreach (PartGraft wantedPart in list)
+                        if (!onNow.Any(g => Installer.SamePart(g, wantedPart)) && !record.Any(g => Installer.SamePart(g, wantedPart))) record.Add(wantedPart);
+                    Installer.SetOffParts(fresh, root, record);
                 }
                 return made;
             };
