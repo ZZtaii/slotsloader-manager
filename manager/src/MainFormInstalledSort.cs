@@ -102,14 +102,16 @@ namespace SlotsInstaller
             return InPriorityOrder(dated.Concat(keyed.Where(x => x.Ticks <= 0).OrderBy(x => x.Index)).Select(x => x.Row).ToList());
         }
         // 1.0.18 (the user: after Move up/down the order looked wrong): the places the date sort gives replacements and
-        // tool mods are filled in priority order (#1 first when newest first, last when oldest first), so the list shows
+        // tool mods are filled in priority order (#1 first), so the list shows
         // which one wins and Move up/down visibly moves a row. New installs go to the top of the priority, so this
         // matches the date order until something is moved. Extra outfits and external manager rows keep their places.
         private List<object> InPriorityOrder(List<object> rows)
         {
             var places = new List<int>(); var own = new List<GameModRow>();
             for (int i = 0; i < rows.Count; i++) { GameModRow g = rows[i] as GameModRow; if (g != null && g.Mod != null) { places.Add(i); own.Add(g); } }
-            own = installedSortAscending ? own.OrderByDescending(g => g.Priority).ToList() : own.OrderBy(g => g.Priority).ToList();
+            // #1 always comes first, oldest first included: "higher in the list wins" and Move up (towards #1, up the
+            // screen) then hold in both directions of the date sort (the user: which mod loads first/last was unclear).
+            own = own.OrderBy(g => g.Priority).ToList();
             for (int k = 0; k < places.Count; k++) rows[places[k]] = own[k];
             return rows;
         }
@@ -126,6 +128,7 @@ namespace SlotsInstaller
             string when = days <= 0 ? "today" : days == 1 ? "yesterday" : days < 30 ? days + "d ago" : local.ToString(local.Year == today.Year ? "d MMM" : "MMM yyyy", CultureInfo.InvariantCulture);
             return "installed " + when;
         }
+        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<InstalledOutfit, long[]> folderTimes = new System.Runtime.CompilerServices.ConditionalWeakTable<InstalledOutfit, long[]>();
         private long InstalledSortTicks(object row)
         {
             OutfitGroup group = row as OutfitGroup;
@@ -138,8 +141,13 @@ namespace SlotsInstaller
             if (outfit != null)
             {
                 if (outfit.InstalledUtc != DateTime.MinValue) return outfit.InstalledUtc.Ticks;
-                try { return File.Exists(outfit.Folder) ? File.GetCreationTimeUtc(outfit.Folder).Ticks : Directory.Exists(outfit.Folder) ? Directory.GetCreationTimeUtc(outfit.Folder).Ticks : 0; }
-                catch (Exception) { return 0; }
+                // A manually added outfit has no install time: its folder's creation time, read once per row object
+                // (this runs for every repaint of the row and every sort; a refresh builds new rows and reads again).
+                return ((long[])folderTimes.GetValue(outfit, delegate(InstalledOutfit o)
+                {
+                    try { return new[] { File.Exists(o.Folder) ? File.GetCreationTimeUtc(o.Folder).Ticks : Directory.Exists(o.Folder) ? Directory.GetCreationTimeUtc(o.Folder).Ticks : 0 }; }
+                    catch (Exception) { return new long[] { 0 }; }
+                }))[0];
             }
             if (game != null && game.Mod != null)
             {

@@ -117,6 +117,7 @@ namespace SlotsInstaller
             else if (root != null) p.Name=root.Name;
             if (p.CharacterCodes.Count>0) p.Character=p.CharacterCodes.Count==1 && Characters.ByCode.ContainsKey(p.CharacterCodes[0]) ? Characters.ByCode[p.CharacterCodes[0]] : "";
             if (p.Components.Sum(x=>x.Assets.Count)==0) p.Warnings.Add("This mod has no loose natives files, so it can't be an extra outfit.");
+            Composer.DropTwinMains(p);
             RootOptionChoices.Add(p); // after original package naming and source option ordering
             p.PrepareChoices();
             if (readLayout && BundleLayout.IsStored(p.SourcePath) && File.Exists(p.SourcePath)) BundleLayout.ReadStored(p);   // 1.0.16: RAR/7Z, from the Data folder

@@ -125,7 +125,7 @@ namespace SlotsInstaller
         }
 
         // Library archives that can be this record's archive: the same size, or a ZIP up to a ZIP comment's 64 KB
-        // larger (an Edit bundle layout).
+        // larger (an Reorder bundle layout).
         private static IEnumerable<LibraryEntry> Candidates(ReplaceMod m, IEnumerable<LibraryEntry> library)
         {
             return library.Where(e => (e.Size == m.ArchiveSize || (BundleLayout.IsZip(e.SourcePath) && e.Size > m.ArchiveSize && e.Size - m.ArchiveSize <= UInt16.MaxValue)) && IsLibraryArchive(e.SourcePath));
@@ -212,7 +212,7 @@ namespace SlotsInstaller
                     string signature = m.ArchiveSha + "|" + current + "|" + String.Join("|", Candidates(m, entries).Select(e => e.SourcePath + ">" + StampOrNone(e.SourcePath)));
                     string missed;
                     lock (relinkMisses) if (relinkMisses.TryGetValue(m.Id, out missed) && missed == signature) continue;
-                    // Rewritten in place (an Edit bundle save keeps the files): only the stamp is new.
+                    // Rewritten in place (an Reorder bundle save keeps the files): only the stamp is new.
                     string path = current != null && MatchesArchive(m.SourcePath, m) ? m.SourcePath : MovedArchive(m, entries);
                     lock (relinkMisses) { if (path == null) relinkMisses[m.Id] = signature; else relinkMisses.Remove(m.Id); }
                     if (path == null)

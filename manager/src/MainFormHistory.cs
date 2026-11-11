@@ -157,6 +157,14 @@ namespace SlotsInstaller
             refreshHolder.Controls.Add(refreshInstalledButton);
             heading.Controls.Add(refreshHolder);
             heading.Controls.SetChildIndex(refreshHolder, 1);   // docks after History, so it sits to its left
+            // 1.0.18 (the user: "how do i see all the recipes, is there a button somewhere?"): Recipes, always there, left of Refresh.
+            var recipesHolder = new Panel { Dock = DockStyle.Right, Width = 50, Padding = new Padding(0, 0, 8, 10) };
+            recipesIconButton = Button("", false, 42, delegate { if (!busy) ShowRecipes(); });
+            recipesIconButton.Dock = DockStyle.Fill; recipesIconButton.Margin = Padding.Empty; recipesIconButton.Name = "recipesIconButton"; recipesIconButton.AccessibleName = "Recipes";
+            recipesIconButton.Glyph = ButtonGlyph.Recipes; IconHint(recipesIconButton, "Recipes");
+            recipesHolder.Controls.Add(recipesIconButton);
+            heading.Controls.Add(recipesHolder);
+            heading.Controls.SetChildIndex(recipesHolder, 1);   // docks after Refresh, so it sits to its left
             Shown += delegate { if (!Program.Headless) StartHistory(); };
             FormClosing += delegate { if (historySessions != null) historySessions.Close(History.Now); };
         }

@@ -14,6 +14,10 @@ namespace SlotsInstaller
         public List<string> SelectedIds = new List<string>();
         public List<string> Options = new List<string>();
         public List<string> Files = new List<string>();
+        // 1.0.18: only these parts of the options were taken (OutfitParts: "hair", "body" ...); empty = all of them.
+        public List<string> Parts = new List<string>();
+        // 1.0.18: where a part that is turned off was among the added parts (0 = applied first), so it goes back there.
+        public int Place = -1;
     }
 
     // 1.0.6 (the user): Add to outfit copies exactly the options ticked in the Mod library into an extra outfit the
@@ -42,6 +46,16 @@ namespace SlotsInstaller
             if (plan.Files.Count == 0 && plan.Errors.Count == 0) plan.Errors.Add("Tick the options to add; they need files under natives.");
             return plan;
         }
+
+        // 1.0.18: the same, keeping only these parts of the files (OutfitParts.Keep; none named = all of them).
+        internal static CompositionPlan SelectionFiles(ModPackage package, IEnumerable<string> ids, IList<string> parts, string sevenZipPath)
+        {
+            CompositionPlan plan = SelectionFiles(package, ids);
+            if (parts == null || parts.Count == 0 || plan.Errors.Count > 0) return plan;
+            using (var reader = new SourceReader(package.SourcePath, sevenZipPath)) OutfitParts.Keep(plan, parts, reader);
+            return plan;
+        }
+        private static bool SameParts(IEnumerable<string> a, IEnumerable<string> b) { return new HashSet<string>(a ?? new string[0], StringComparer.OrdinalIgnoreCase).SetEquals(b ?? new string[0]); }
 
         // Fighter codes and costume folders ("001", "000") the files' model paths use.
         internal static HashSet<string> SelectionCodes(CompositionPlan plan)
@@ -106,12 +120,12 @@ namespace SlotsInstaller
                 // The outfit as installed (its own source may be gone), then the selection on top.
                 var hashes = new Dictionary<string, string>(m.Sha256, StringComparer.OrdinalIgnoreCase);
                 CopyTree(outfit.Folder, stage);
-                var graft = new PartGraft { SourcePath = selection.Package.SourcePath, Mod = selection.Package.Name ?? "", AddedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => c.Name).ToList() };
+                var graft = new PartGraft { SourcePath = selection.Package.SourcePath, Mod = selection.Package.Name ?? "", AddedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => c.Name).ToList(), Parts = (selection.OnlyParts ?? new List<string>()).ToList() };
                 ApplyGraft(stage, hashes, graft, transaction, sevenZipPath, selection);
                 // The same options of the same mod added again replace that entry.
                 var grafts = (m.Parts ?? new List<PartGraft>()).Where(g => !(String.Equals(g.SourcePath, graft.SourcePath, StringComparison.OrdinalIgnoreCase) && new HashSet<string>(g.SelectedIds ?? new List<string>(), StringComparer.OrdinalIgnoreCase).SetEquals(graft.SelectedIds))).ToList();
                 grafts.Add(graft);
-                var manifest = new InstallManifest { Id = m.Id, Name = m.Name, Character = m.Character, SourcePath = m.SourcePath, CreatedUtc = m.CreatedUtc, SelectedIds = m.SelectedIds, Sha256 = hashes, Parts = grafts };
+                var manifest = new InstallManifest { Id = m.Id, Name = m.Name, Character = m.Character, SourcePath = m.SourcePath, CreatedUtc = m.CreatedUtc, SelectedIds = m.SelectedIds, Sha256 = hashes, Parts = grafts, OffParts = m.OffParts };
                 Json.Write(Path.Combine(stage, ManifestName), manifest);
                 OperationContext.ThrowIfCancellationRequested();
                 using (OperationContext.NonCancellable())
@@ -151,7 +165,7 @@ namespace SlotsInstaller
                 if (codes.Any(c => c != code)) throw new IOException(from + ": these files belong to " + String.Join(", ", codes.Where(c => c != code).Select(c => Characters.ByCode.ContainsKey(c) ? Characters.ByCode[c] : "esf" + c)) + "; the Manager can't retarget mods.");
                 string mismatch = FolderMismatch(SelectionFolders(selection), folders);
                 if (mismatch != null) throw new IOException("Can't add " + OptionText(selection) + " from " + from + ": these files are made for " + mismatch + (folders.Count == 0 ? "" : " and the outfit is built on " + SlotText(folders)) + ". Materials point at their own outfit slot's files.");
-                var graft = new PartGraft { SourcePath = selection.Package.SourcePath, Mod = selection.Package.Name ?? "", AddedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => c.Name).ToList() };
+                var graft = new PartGraft { SourcePath = selection.Package.SourcePath, Mod = selection.Package.Name ?? "", AddedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => c.Name).ToList(), Parts = (selection.OnlyParts ?? new List<string>()).ToList() };
                 ApplyGraft(stage, hashes, graft, transaction, sevenZipPath, selection);
                 var ids = new HashSet<string>(graft.SelectedIds, StringComparer.OrdinalIgnoreCase);
                 kept.RemoveAll(g => String.Equals(g.SourcePath, graft.SourcePath, StringComparison.OrdinalIgnoreCase) && ids.SetEquals(g.SelectedIds ?? new List<string>()));
@@ -175,6 +189,7 @@ namespace SlotsInstaller
             {
                 ModPackage fresh = PackageReader.Load(graft.SourcePath, reader, false);
                 CompositionPlan current = SelectionFiles(fresh, graft.SelectedIds);
+                if (current.Errors.Count == 0 && graft.Parts != null && graft.Parts.Count > 0) OutfitParts.Keep(current, graft.Parts, reader);   // 1.0.18
                 if (current.Errors.Count > 0) throw new IOException(String.Join(" ", current.Errors));
                 if (opened != null && (current.Files.Count != opened.Files.Count || current.Files.Any(k => !opened.Files.ContainsKey(k.Key) || opened.Files[k.Key].Asset.Size != k.Value.Asset.Size || opened.Files[k.Key].Asset.EntryPath != k.Value.Asset.EntryPath)))
                     throw new IOException("The mod changed after it was opened. Reload it and try again.");
@@ -185,6 +200,44 @@ namespace SlotsInstaller
                 graft.Files = copied.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
                 graft.Options = current.Layers.Select(c => c.Name).ToList();
                 if (String.IsNullOrEmpty(graft.Mod)) graft.Mod = fresh.Name ?? "";
+            }
+        }
+        // 1.0.18: the same addition (its mod and exactly these options), as AddToOutfit tells them apart.
+        internal static bool SamePart(PartGraft a, PartGraft b)
+        {
+            return a != null && b != null && String.Equals(a.SourcePath, b.SourcePath, StringComparison.OrdinalIgnoreCase)
+                && new HashSet<string>(a.SelectedIds ?? new List<string>(), StringComparer.OrdinalIgnoreCase).SetEquals(b.SelectedIds ?? new List<string>()) && SameParts(a.Parts, b.Parts);
+        }
+        // 1.0.18 (user request): takes one added part off an outfit. Its files replaced the outfit's own or were new, so
+        // the outfit is put together again from its mod (`plan`: the options it was installed with) and every other added
+        // part goes back on top, in the order they were added. Nothing changes when the rebuild fails.
+        internal static InstallResult RemovePart(InstalledOutfit outfit, string costumeRoot, CompositionPlan plan, PartGraft part, string sevenZipPath)
+        {
+            if (outfit == null || !outfit.Managed || part == null) throw new IOException("Select an outfit the Manager installed.");
+            if (outfit.Parts == null || !outfit.Parts.Any(g => SamePart(g, part))) throw new IOException("That part is no longer on the outfit. Refresh and try again.");
+            InstallResult result = Install(plan, costumeRoot, outfit.Character, outfit.Name, sevenZipPath, true, null, null, g => SamePart(g, part));
+            result.Message = "Removed " + GraftText(part) + " from " + outfit.Name + result.PartsNote + ". Restart SF6 to load it.";
+            return result;
+        }
+        // 1.0.18 (user request): the Added parts window's Save. The outfit is put together again from its mod (`plan`)
+        // with exactly these parts on top, applied in this order, so the last one wins a file two of them share. A part
+        // whose mod is gone or changed is left out and named in the result, as on any reinstall.
+        internal static InstallResult SetParts(InstalledOutfit outfit, string costumeRoot, CompositionPlan plan, IList<PartGraft> parts, string sevenZipPath)
+        {
+            if (outfit == null || !outfit.Managed) throw new IOException("Select an outfit the Manager installed.");
+            InstallResult result = Install(plan, costumeRoot, outfit.Character, outfit.Name, sevenZipPath, true, null, null, null, parts ?? new List<PartGraft>());
+            result.Message = "Saved the added parts of " + outfit.Name + result.PartsNote.Replace(" · kept ", " · on it: ") + ". Restart SF6 to load it.";
+            return result;
+        }
+        // 1.0.18: the added parts that are turned off (the record only: their files are not in the outfit). Written
+        // into the outfit's install record; the outfit's files and its other fields are not touched.
+        internal static void SetOffParts(InstalledOutfit outfit, string costumeRoot, IList<PartGraft> off)
+        {
+            using (AcquireMutation(costumeRoot))
+            {
+                string root = ValidateRoot(costumeRoot); InstallManifest m = ValidateOutfit(outfit, root);
+                m.OffParts = off == null || off.Count == 0 ? null : off.Where(g => g != null).ToList();
+                Json.Write(Path.Combine(outfit.Folder, ManifestName), m);
             }
         }
         internal static string GraftText(PartGraft g)

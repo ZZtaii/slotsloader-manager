@@ -11,7 +11,7 @@ namespace SlotsInstaller
 {
     // Vector glyphs drawn with anti-aliased GDI+ at the control's device DPI.
     // Font glyphs such as "⌄" fall back to a plain letter in Segoe UI.
-    internal enum ButtonGlyph { None, Gear, Coffee, Bug, Chat, GitHub, Patreon, Nexus, ColorSync, History, Presets, Refresh }
+    internal enum ButtonGlyph { None, Gear, Coffee, Bug, Chat, GitHub, Patreon, Nexus, ColorSync, History, Presets, Refresh, Recipes }
     internal enum ChevronDirection { Right, Down, Up }
 
     internal static class Glyphs
@@ -110,6 +110,22 @@ namespace SlotsInstaller
                     var tip = new PointF(x + (float)(Math.Cos(end) * r), y + (float)(Math.Sin(end) * r));
                     graphics.DrawLines(pen, new[] { new PointF(tip.X - 3.2F * s, tip.Y - 0.6F * s), tip, new PointF(tip.X + 0.4F * s, tip.Y - 3.4F * s) });
                     graphics.DrawLines(pen, new[] { new PointF(x, y - 4F * s), new PointF(x, y), new PointF(x + 3F * s, y + 2F * s) });
+                }
+                graphics.SmoothingMode = previous;
+            }
+            else if (glyph == ButtonGlyph.Recipes)
+            {
+                // 1.0.18 Installed-page Recipes icon: a card with a ticked list (one outfit written down), History's size.
+                SmoothingMode previous = graphics.SmoothingMode; graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                float s = scale, x = center.X, y = center.Y, w = 6.5F * s, h = 8F * s;
+                using (var pen = new Pen(color, stroke) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                {
+                    using (GraphicsPath card = Rounded(new RectangleF(x - w, y - h, w * 2, h * 2), 2.2F * s)) graphics.DrawPath(pen, card);
+                    foreach (float dy in new[] { -4F * s, 0F, 4F * s })
+                    {
+                        graphics.DrawLine(pen, x - 3.6F * s, y + dy, x - 3.2F * s, y + dy);   // the bullet
+                        graphics.DrawLine(pen, x - 0.6F * s, y + dy, x + 3.6F * s, y + dy);   // the line
+                    }
                 }
                 graphics.SmoothingMode = previous;
             }

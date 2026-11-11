@@ -29,7 +29,7 @@ namespace SlotsInstaller
         public List<PresetPartPointer> Parts = new List<PresetPartPointer>();   // Add to outfit, in the order they were added
         public List<string> AddonSources;   // 1.0.18: all_variants combined with these addon archives (null = a plain copy); older Managers ignore it
     }
-    public sealed class PresetPartPointer { public string SourcePath = "", SourceStamp = "", Mod = ""; public List<string> SelectedIds = new List<string>(); }
+    public sealed class PresetPartPointer { public string SourcePath = "", SourceStamp = "", Mod = ""; public List<string> SelectedIds = new List<string>(); public List<string> OnlyParts = new List<string>(); }   // 1.0.18: OnlyParts (PartGraft.Parts)
     public sealed class PresetReplacementPointer
     {
         public string Name = "", SourcePath = "", SourceStamp = "", Kind = "";
@@ -86,7 +86,7 @@ namespace SlotsInstaller
                     if (part != null && !SourceExists(part.SourcePath) && !String.IsNullOrWhiteSpace(part.SourcePath)) why = "added part not found at " + part.SourcePath;
                     return null;
                 }
-                pointer.Parts.Add(new PresetPartPointer { SourcePath = System.IO.Path.GetFullPath(part.SourcePath), SourceStamp = MainForm.SourceStamp(part.SourcePath) ?? "", Mod = part.Mod ?? "", SelectedIds = part.SelectedIds.ToList() });
+                pointer.Parts.Add(new PresetPartPointer { SourcePath = System.IO.Path.GetFullPath(part.SourcePath), SourceStamp = MainForm.SourceStamp(part.SourcePath) ?? "", Mod = part.Mod ?? "", SelectedIds = part.SelectedIds.ToList(), OnlyParts = (part.Parts ?? new List<string>()).ToList() });
             }
             return pointer;
         }
@@ -428,7 +428,7 @@ namespace SlotsInstaller
                                 var partPackage = PackageReader.Load(part.SourcePath, sevenZip);
                                 string partNote;
                                 var partIds = Composer.RestoreSelection(partPackage, part.SelectedIds, out partNote);
-                                Installer.AddToOutfit(fresh, root, Installer.SelectionFiles(partPackage, partIds), sevenZip);
+                                Installer.AddToOutfit(fresh, root, Installer.SelectionFiles(partPackage, partIds, part.OnlyParts, sevenZip), sevenZip);
                                 if (partNote.Length > 0) notes.Add(partNote);
                             }
                             catch (Exception ex) { if (Fatal(ex)) throw; notes.Add("the part from " + partName + " was not added: " + ex.Message); }

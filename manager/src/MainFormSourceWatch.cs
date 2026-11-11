@@ -178,6 +178,7 @@ namespace SlotsInstaller
         internal void ClosePackage()
         {
             if (reviewCancel != null) try { reviewCancel.Cancel(); } catch (ObjectDisposedException) { }
+            CloseRecipe();
             package = null; plan = null; replacePlan = null; packageStamp = null; editingReplacement = null; forcedReplaceReason = null;
             changingChecks = true;
             try { componentTree.BeginUpdate(); componentTree.Nodes.Clear(); componentTree.EndUpdate(); }
@@ -200,7 +201,7 @@ namespace SlotsInstaller
             {
                 if (String.IsNullOrEmpty(path) || installedUtc.Year < 2001) return false;
                 DateTime limit = installedUtc.ToUniversalTime().AddSeconds(2);
-                if (File.Exists(path)) return File.GetLastWriteTimeUtc(path) > limit && !BundleEdits.LayoutOnlySince(path, limit);   // 1.0.15: an Edit bundle save changes no installed file
+                if (File.Exists(path)) return File.GetLastWriteTimeUtc(path) > limit && !BundleEdits.LayoutOnlySince(path, limit);   // 1.0.15: an Reorder bundle save changes no installed file
                 if (!Directory.Exists(path)) return false;
                 return new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories).Any(f => f.LastWriteTimeUtc > limit);
             }

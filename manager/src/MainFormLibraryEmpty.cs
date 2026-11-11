@@ -5,7 +5,7 @@ using System.Windows.Forms;
 namespace SlotsInstaller
 {
     // 1.0.12 (23 Oct) (the user): a first start has no mod libraries, so the library list was just blank. Once a scan finds no
-    // mods, the list gives way to a short note and a link to Settings → Mod libraries (its Add… button focused).
+    // mods, the list gives way to a short note and a link to Settings → Mod libraries (its Add button focused).
     internal sealed partial class MainForm
     {
         private Panel libraryEmpty;

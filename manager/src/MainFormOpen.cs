@@ -107,7 +107,7 @@ namespace SlotsInstaller
 
         // ---- Archives read this session
         // 1.0.16: Layouts is BundleStore.Version before the read. A RAR/7Z layout save leaves the archive's stamp as it
-        // was, so its kept package must not survive the save (Edit bundle reopens the mod at once).
+        // was, so its kept package must not survive the save (Reorder bundle reopens the mod at once).
         private sealed class CachedPackage { internal string Stamp; internal ModPackage Package; internal long Bytes, Used, Layouts; }
         private const int PackageCacheCount = 12;
         private const long PackageCacheBytes = 96L * 1024 * 1024;   // preloaded previews of the kept packages
@@ -151,7 +151,7 @@ namespace SlotsInstaller
             lock (packageCacheGate)
             {
                 packageCache[path] = new CachedPackage { Stamp = stamp, Layouts = layouts, Package = package, Bytes = package.PreloadedPreviews.Values.Sum(b => (long)b.Length), Used = ++packageCacheClock };
-                while (packageCache.Count > PackageCacheCount || (packageCache.Count > 1 && packageCache.Values.Sum(c => c.Bytes) > PackageCacheBytes))
+                while (packageCache.Count > PackageCacheCount || (packageCache.Count > 1 && packageCache.Values.Sum(c => c.Package.PreloadedBytes()) > PackageCacheBytes))
                     packageCache.Remove(packageCache.OrderBy(kv => kv.Value.Used).First().Key);
             }
         }

@@ -18,10 +18,33 @@ namespace SlotsInstaller
         public List<string> Errors=new List<string>(),Warnings=new List<string>();
         public long TotalBytes { get { return Files.Values.Sum(x=>x.Asset.Size); } }
         public bool CanInstall { get { return Errors.Count==0 && Files.Count>0; } }
+        // In-scope main files that are not selected: an error when the bundle marks them Required, else a warning.
+        internal List<ModComponent> MissingMains=new List<ModComponent>();
+        // 1.0.18: only these parts of the selection were kept (OutfitParts.Keep); empty = all of it.
+        internal List<string> OnlyParts=new List<string>();
     }
     public static partial class Composer
     {
-        internal static bool IsBase(ModComponent c) { return c.BundleRule == "Required" || (c.BundleRule != "Optional" && (c.AuthorBase ?? Regex.IsMatch(c.Name ?? "",@"\b(main\s*(files?)?|base|mandatory|required)\b",RegexOptions.IgnoreCase))); }
+        // "Main menu", "main screen" and "main theme" name a place in the game, not the mod's main files
+        // ("TRUE Faster StartUp (MAIN MENU)" next to "(TRAINING)": two alternatives, neither needs the other).
+        // "(base costume boots)" describes which boots an option keeps; "Base costume" by itself is still main files.
+        internal static bool IsBase(ModComponent c) { return c.BundleRule == "Required" || (c.BundleRule != "Optional" && (c.AuthorBase ?? NamedLikeMain(c.Name))); }
+        internal static bool NamedLikeMain(string name) { return Regex.IsMatch(name ?? "",@"\b(main(?![\s_-]*(menu|screen|theme)\b)\s*(files?)?|base(?!\s+(costume|outfit|game)\s+\w)|mandatory|required)\b",RegexOptions.IgnoreCase); }
+        // Main files the bundle's own layout marks Required. IsBase also holds for a name that only looks like main
+        // files: that guess orders layers, ticks defaults and shows a "Main files" label, but never blocks an install.
+        internal static bool IsRequired(ModComponent c) { return c.BundleRule == "Required"; }
+        // Options named like main files that write exactly the same files as a sibling are alternatives ("C1 L base",
+        // "C1 XL base", "C1 XXL - Base": three sizes of one mesh), so none of them is required with the others.
+        // Main files of different outfits ("C1 - Main files", "C2 - Main files") write different files and stay.
+        internal static void DropTwinMains(ModPackage package)
+        {
+            var named=package.Components.Where(c=>!c.IsDummy && c.AuthorBase==null && c.BundleRule==null && IsBase(c)).ToList();
+            foreach (var siblings in named.GroupBy(c=>c.ParentId ?? "\0",StringComparer.OrdinalIgnoreCase).Where(g=>g.Count()>1))
+            {
+                var files=siblings.ToDictionary(c=>c,RootOptionChoices.Destinations);
+                foreach (ModComponent c in siblings.Where(c=>files[c].Count>0 && siblings.Any(o=>o!=c && files[c].SetEquals(files[o]))).ToList()) c.AuthorBase=false;
+            }
+        }
         public static List<string> DefaultSelection(ModPackage package) { return DefaultSelection(package,false); }
         // replaceMode also counts files outside natives (Fluffy-style game-root files).
         public static List<string> DefaultSelection(ModPackage package,bool replaceMode)
@@ -99,7 +122,9 @@ namespace SlotsInstaller
         {
             if (options.Count<2) return options;
             var kept=new List<ModComponent>(); var taken=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (ModComponent c in options.Select((c,i)=>new{c,i}).OrderByDescending(x=>x.c.IsDefaultChoice).ThenBy(x=>x.i).Select(x=>x.c))
+            // Among alternatives, one named "base" or "main" is the plain one ("C1 L base" before "C1 L + Chest"), so it is
+            // the one ticked, even when DropTwinMains found it is not main files.
+            foreach (ModComponent c in options.Select((c,i)=>new{c,i}).OrderByDescending(x=>x.c.IsDefaultChoice).ThenByDescending(x=>NamedLikeMain(x.c.Name)).ThenBy(x=>x.i).Select(x=>x.c))
             {
                 var mine=(replaceMode ? c.Assets.Concat(c.RootAssets) : c.Assets).Select(a=>a.DestinationPath).ToList();
                 if (kept.Count>0 && mine.Any(taken.Contains) && !package.RequiredOptions(c).Any(kept.Contains)) continue;
@@ -164,10 +189,17 @@ namespace SlotsInstaller
                 while (parent != null && parent.IsDummy && (package.HasBundleLayout || parent.Id.StartsWith(":hair-choice:", StringComparison.Ordinal)) && parent.ParentId != null) parent = package.Find(parent.ParentId);
                 if (parent!=null && !parent.IsDummy && parent.HasFiles(replaceMode) && !p.Layers.Contains(parent)) p.Errors.Add("'"+c.Name+"' needs its parent '"+parent.Name+"'.");
                 foreach (ModComponent need in package.RequiredOptions(c))
-                    if (need.HasFiles(replaceMode) && !IsBase(need) && !p.Layers.Contains(need)) p.Errors.Add("'"+c.Name+"' needs '"+need.Name+"'.");
+                    if (need.HasFiles(replaceMode) && !IsRequired(need) && !p.Layers.Contains(need)) p.Errors.Add("'"+c.Name+"' needs '"+need.Name+"'.");
             }
+            // The user: main files guessed from a name get a label, not a requirement, so a wrong guess ("(MAIN MENU)")
+            // can no longer block an install. Only an option the bundle marks Required must be included.
             foreach (ModComponent main in package.Components.Where(c=>!c.IsDummy && c.HasFiles(replaceMode) && IsBase(c) && ScopeIsActive(package,c.ParentId,p.Layers)))
-                if (!p.Layers.Contains(main)) p.Errors.Add("Include main files: "+main.Name);
+            {
+                if (p.Layers.Contains(main)) continue;
+                p.MissingMains.Add(main);
+                if (IsRequired(main)) p.Errors.Add("Include main files: "+main.Name);
+                else p.Warnings.Add("'"+main.Name+"' looks like this mod's main files and is not selected. Most options need them.");
+            }
             foreach (ModComponent group in package.Components.Where(package.IsChoice))
             {
                 if (!ScopeIsActive(package,group.ParentId,p.Layers) && !p.Layers.Any(c=>IsDescendant(package,c,group))) continue;
