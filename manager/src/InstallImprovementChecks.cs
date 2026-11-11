@@ -165,7 +165,7 @@ namespace SlotsInstaller
             Require(Encoding.UTF8.GetString(layoutComment).Contains("Slotsloader Manager option layout") && PackageReader.Load(path,"").HasBundleLayout,"readable layout trailer");
             Require(BundleEdits.LayoutOnlySince(path,DateTime.UtcNow.AddMinutes(1)) && !BundleEdits.LayoutOnlySince(path,new DateTime(2001,1,2,0,0,0,DateTimeKind.Utc)),"layout-only save not recorded");
             // A layout that no longer fits its ZIP (here another ZIP's, as when files are added in another program)
-            // opens with the author layout and a note, and Edit bundle can save over it.
+            // opens with the author layout and a note, and Reorder bundle can save over it.
             foreach (string option in new[] { "A", "B" })
             {
                 Directory.CreateDirectory(Path.Combine(root, "other-options", option, "natives", "stm"));

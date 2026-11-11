@@ -50,7 +50,7 @@ namespace SlotsInstaller
             // Scale the complete control tree together, including the fixed toolbar and field rows.
             SuspendLayout();
             AutoScaleDimensions=new SizeF(96,96); AutoScaleMode=AutoScaleMode.Dpi;
-            Text="Edit bundle · " + package.Name; Font=Palette.Normal; BackColor=Palette.Surface; ForeColor=Palette.Text;
+            Text="Reorder bundle · " + package.Name; Font=Palette.Normal; BackColor=Palette.Surface; ForeColor=Palette.Text;
             ClientSize=new Size(1040,720); Padding=new Padding(16);
             StartPosition=FormStartPosition.CenterParent; ShowInTaskbar=false; AppBranding.Apply(this);
             var grid=new TableLayoutPanel {Dock=DockStyle.Fill, ColumnCount=2, RowCount=4};

@@ -132,7 +132,7 @@ namespace SlotsInstaller
             return merged.AddonParts.FirstOrDefault(p => id.StartsWith(p.Prefix, StringComparison.Ordinal));
         }
         internal static bool IsAddonId(ModPackage merged, string id) { return PartOf(merged, id) != null; }
-        // The ids the main package knows (the ticks of a feature that works on the main mod alone: Add to outfit…).
+        // The ids the main package knows (the ticks of a feature that works on the main mod alone: Add to outfit).
         internal static List<string> MainOnly(ModPackage merged, IEnumerable<string> ids) { return (ids ?? new string[0]).Where(id => !IsAddonId(merged, id)).ToList(); }
 
         internal static string OptionNames(ModPackage package, IEnumerable<string> ids)

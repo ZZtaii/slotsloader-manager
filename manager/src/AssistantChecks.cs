@@ -150,7 +150,9 @@ namespace SlotsInstaller
         private static void KnowledgePack()
         {
             string pack = AssistantPrompt.Knowledge;
-            Require(pack.Length > 20000 && pack.Length / 4 <= 26000, "pack size " + pack.Length + " characters");
+            // 1.0.18: 26,000 to 26,250 tokens (about 105,000 characters) for the Help of Outfit order and Turn outfit mods off.
+            // 1.0.18: to 26,750 tokens for the outfit recipes lines of What changed.
+            Require(pack.Length > 20000 && pack.Length / 4 <= 26750, "pack size " + pack.Length + " characters");
             foreach (string heading in new[] { "# Source: Slotsloader Manager README", "## What changed", "# Source: Slotsloader Manager screens", "# Source: Slotsloader CLI.exe", "# Source: Slotsloader (the loader) README", "# Source: Slotsloader compatibility notes" })
                 Require(pack.Contains(heading), "missing section " + heading);
             foreach (string banned in new[] { "show_unowned", "unowned_slots", "opt-out marker", "private opt-out", "owned-outfit opt-out", "CostumeSlots_data", "DEVELOPMENT.md checks", "## 2.4.0 checks", "Bumping the Slotsloader pin", "HANDOFF" })

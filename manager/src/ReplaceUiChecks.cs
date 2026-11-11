@@ -617,7 +617,7 @@ namespace SlotsInstaller
                 Require(engine.CheckInstalledFiles(mod.Id).Any(i => i.Text == "Missing · " + mod.Files.First().Path), "missing file unreported");
             }
             finally { File.WriteAllBytes(target, original); }
-            Require(Get<ChipStrip>(form, "installedChips").Chips.Any(c => c.Text == "#1") && Get<ChipStrip>(form, "installedChips").Chips.Any(c => c.Text == "Enabled"), "replacement chips");
+            Require(Get<ChipStrip>(form, "installedChips").Chips.Any(c => c.Text == "#1 of 1") && Get<ChipStrip>(form, "installedChips").Chips.Any(c => c.Text == "Enabled"), "replacement chips: " + String.Join(" | ", Get<ChipStrip>(form, "installedChips").Chips.Select(c => c.Text)));
             }
             finally { File.WriteAllText(ini, saved); Kind(form, "All"); Call(form, "RefreshInstalled", (string)null); WaitIdle(form); }
             var restoredEngine = FormEngine(f);
@@ -823,7 +823,7 @@ namespace SlotsInstaller
             Call(form, "InstallCurrent"); WaitReview(form);
             ReplaceMod mod = engine.LoadState().Mods.Single();
             ListView list = Get<ListView>(form, "modList"); ContextMenuStrip menu = list.ContextMenuStrip;
-            // The uninstall items follow the menu's first separator (Open, Open in Explorer, Rename, Edit bundle… come before it).
+            // The uninstall items follow the menu's first separator (Open, Open in Explorer, Rename, Reorder bundle come before it).
             int uninstalls = menu.Items.IndexOf(menu.Items.OfType<ToolStripSeparator>().First()) + 1;
             var outfitItem = (ToolStripMenuItem)menu.Items[uninstalls]; var replacementItem = (ToolStripMenuItem)menu.Items[uninstalls + 1];
             FlatButton button = Get<FlatButton>(form, "libraryUninstallButton");
@@ -1596,7 +1596,10 @@ namespace SlotsInstaller
             Require(ReplacePlanner.ReFrameworkUpdateTarget(new[] { plainRecord }, new[] { "dinput8.dll", "reframework/plugins/x.dll" }) == null, "a bundle would replace the plain REFramework record");
             string dll = Path.Combine(f.Game, "dinput8.dll"), dir = Path.Combine(f.Game, "reframework"); bool hadDir = Directory.Exists(dir);
             Func<string> notice = delegate { Call(form, "SetInstallMode", InstallModes.Slot, true); return Get<Label>(form, "modeNotice").Text; };
-            Action<string> putDll = delegate(string text) { File.WriteAllBytes(dll, Encoding.ASCII.GetBytes(text)); File.SetLastWriteTimeUtc(dll, DateTime.UtcNow.AddSeconds(-new Random().Next(10, 100000))); };
+            // One Random for every write: a new Random() per call is seeded from the tick count, so two writes inside one
+            // timer tick got the same time (and these texts the same length), and the poll saw no change.
+            var dllTimes = new Random();
+            Action<string> putDll = delegate(string text) { File.WriteAllBytes(dll, Encoding.ASCII.GetBytes(text)); File.SetLastWriteTimeUtc(dll, DateTime.UtcNow.AddSeconds(-dllTimes.Next(10, 100000))); };
             using (var server = new LoaderChecks.LoopbackServer())
             {
                 try

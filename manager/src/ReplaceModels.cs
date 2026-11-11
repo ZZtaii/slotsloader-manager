@@ -75,11 +75,22 @@ namespace SlotsInstaller
         public List<ForeignCopy> ForeignCopies = new List<ForeignCopy>();  // 2.2.0: other tools' files replaced by "Restore original", kept in Data
         public string UpdatedUtc = "";
         public List<string> PreviousStoreRoots = new List<string>();     // 2.4.2: earlier store roots (their .removed copies stay listed)
+        public ModsOffRecord ModsOff;                                    // 1.0.18: outfit mods are switched off (ReplaceEngineModsOff.cs); null = on
 
         internal ReplaceMod Find(string id) { return Mods.FirstOrDefault(m => String.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)); }
         internal DeployedFile Deployment(string path) { return Deployed.FirstOrDefault(d => String.Equals(d.Path, path, StringComparison.OrdinalIgnoreCase)); }
         internal OriginalBackup Original(string path) { return Originals.FirstOrDefault(o => String.Equals(o.Path, path, StringComparison.OrdinalIgnoreCase)); }
         internal ReleasedFile Release(string path) { return Released.FirstOrDefault(r => String.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)); }
+    }
+
+    // 1.0.18 (user request: play vanilla for a while, then get everything back): what "Turn outfit mods off" switched
+    // off, so "Turn outfit mods back on" enables exactly those again. Tool mods are never in it.
+    public sealed class ModsOffRecord
+    {
+        public string SinceUtc = "";
+        public List<string> ReplacementIds = new List<string>();   // replacements and PAK mods that were enabled
+        public string LoaderId = "";                                // the Manager's Slotsloader record, when it was enabled
+        public List<string> KeptOn = new List<string>();            // names of tool mods that also replace outfit files (left on)
     }
 
     // 2.2.0: a game file another tool overwrote after this app installed it, kept by "Keep current file". This
@@ -125,6 +136,9 @@ namespace SlotsInstaller
     {
         public string Id = "", Name = "", SourcePath = "", Kind = "", InstalledUtc = "", Description = "";
         public List<string> SelectedIds = new List<string>();
+        // 1.0.18: only these parts of the options were installed (OutfitParts; a recipe layer that takes the hair of a
+        // mod). Empty = all. A reinstall and a preset keep them.
+        public List<string> OnlyParts = new List<string>();
         public bool Enabled = true, Test, PresetLayer;
         public string ArchiveSha, ArchiveStamp;
         public long ArchiveSize;
@@ -233,6 +247,7 @@ namespace SlotsInstaller
     {
         internal string ModName = "", SourcePath = "", Kind = "", Method = "";
         internal List<string> SelectedIds = new List<string>();
+        internal List<string> OnlyParts = new List<string>();   // 1.0.18: CompositionPlan.OnlyParts, kept on the record
         internal List<PreparedFile> Files = new List<PreparedFile>();
         internal List<string> Affects = new List<string>();
         internal List<HealthItem> Items = new List<HealthItem>();
@@ -347,6 +362,14 @@ namespace SlotsInstaller
         internal List<string> OrphanedRowsWhere = new List<string>();    // "re_chunk_000.pak #11886"
         internal List<string> LeftoverPaks = new List<string>();         // 1.0.11: patch PAKs no mod manager lists (ReplaceLeftoverPaks.cs)
         internal bool NeedsReapply { get { return PakChanged || RowsNotZero > 0 || FilesMissing > 0 || FilesChanged > 0; } }
+        internal ModsOffRecord ModsOff;                                  // 1.0.18: outfit mods are switched off
+        internal static string ModsOffText(ModsOffRecord off)
+        {
+            var parts = new List<string>();
+            if (off.ReplacementIds.Count > 0) parts.Add(ReplacePlanner.N(off.ReplacementIds.Count, "replacement"));
+            if (off.LoaderId.Length > 0) parts.Add("all extra outfits");
+            return "Outfit mods are off" + (parts.Count == 0 ? "" : ": " + String.Join(" and ", parts) + " wait to be turned back on") + ". Tool mods still load.";
+        }
         internal string Summary
         {
             get
@@ -358,6 +381,7 @@ namespace SlotsInstaller
                     string first = Details.FirstOrDefault(d => !MissingCopyLines.Contains(d));
                     return "Game files changed. Reapply your replacements" + (first != null ? " (" + first + ")" : "");
                 }
+                if (ModsOff != null) return ModsOffText(ModsOff);   // 1.0.18: the banner's Turn mods back on
                 if (BackupsMissing > 0) return BackupsMissing + (BackupsMissing == 1 ? " backup is" : " backups are") + " missing, so uninstalling can't restore the original" + (BackupsMissing == 1 ? "" : "s") + " (" + FirstMissingBackup + ")";
                 if (StoredMissing > 0) return MissingCopies.Summary(StoredMissingMods, StoredMissing, FirstMissingStored);
                 if (BaseChanged) return "SF6 was updated after your replacements were applied. Run a health check on them.";

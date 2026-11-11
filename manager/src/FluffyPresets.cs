@@ -186,13 +186,8 @@ namespace SlotsInstaller
                 foreach (string x in chain) if (!result.Contains(x, StringComparer.OrdinalIgnoreCase)) result.Add(x);
             }
             CompositionPlan plan = Composer.Plan(package, result, true);
-            foreach (string error in plan.Errors.ToList())
-            {
-                Match m = Regex.Match(error, @"^Include main files: (.+)$");
-                if (!m.Success) continue;
-                ModComponent main = package.Components.FirstOrDefault(x => x.Name == m.Groups[1].Value && Composer.IsBase(x));
-                if (main != null && !result.Contains(main.Id, StringComparer.OrdinalIgnoreCase)) result.Insert(0, main.Id);
-            }
+            foreach (ModComponent main in plan.MissingMains)
+                if (!result.Contains(main.Id, StringComparer.OrdinalIgnoreCase)) result.Insert(0, main.Id);
             return result;
         }
 

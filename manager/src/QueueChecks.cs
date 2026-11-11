@@ -42,6 +42,7 @@ namespace SlotsInstaller
                 check("library index (1.0.6): a scan reads the display name and option names; a cached record keeps them; a record without them keeps its identity and only its names are read", delegate { IndexNames(root); });
                 check("background index (1.0.6): the quick listing returns every mod at once (unread ones Pending, with their file-name fighter); reading one gives the same identity as a full scan; a 1.0.5 record (no names) keeps its identity without a relist and only its names are read; names fill the display name and option names", delegate { BackgroundIndex(root); });
                 check("queue defaults (1.0.6): alternative top-level variants keep the first (the Default one first); a required choose-one group gets its default/first option; optional add-ons stay off; the plan installs", delegate { QueueDefaults(root); });
+                check("outfit order (1.0.18): one fighter's extra outfits change places within the same slots (number, folder and scene move together), another fighter is untouched, the fingerprint is cleared, the report is renumbered and renamed, the equipped slot follows its outfit, Undo restores the files; a stale list and a running SF6 are refused; the window lists the slots and a moved row changes the order", delegate { OutfitOrderCheck(root); });
                 check("add to outfit (1.0.6): exactly the ticked options' files go into the installed outfit (a lone hair option without main files is fine); nothing else is added or removed; recorded once; a reinstall of the same mod puts them back; files for another outfit slot are refused; the picker window renders", delegate { AddPart(root); });
                 SynchronizationContext previous = SynchronizationContext.Current; bool previousAuto = WindowsFormsSynchronizationContext.AutoInstall;
                 WindowsFormsSynchronizationContext.AutoInstall = false;
@@ -236,6 +237,66 @@ namespace SlotsInstaller
         }
 
         // ---- Add a part ----------------------------------------------------------------------------------------------
+        private static void OutfitOrderCheck(string root)
+        {
+            string game = Path.Combine(root, "order-game"), data = Path.Combine(game, OutfitOrder.DataRelative), statePath = Path.Combine(game, OutfitOrder.StateRelative);
+            Directory.CreateDirectory(data); Directory.CreateDirectory(Path.GetDirectoryName(statePath));
+            Func<string, int, string, int, string> slot = delegate(string mod, int fighter, string dir, int no)
+            { return "    {\n      \"mod_id\": \"" + mod + "\",\n      \"fighter\": " + fighter + ",\n      \"fighter_dir\": \"" + dir + "\",\n      \"original_costume_no\": 0,\n      \"original_folder\": \"001\",\n      \"new_costume_no\": " + no + ",\n      \"new_folder\": \"" + (no + 1).ToString("D3") + "\",\n      \"scene_name\": \"" + dir + "v" + no.ToString("D2") + "\"\n    }"; };
+            string registry = "{\n  \"version\": 1,\n  \"fingerprint\": \"abc123\",\n  \"slots\": [\n" + String.Join(",\n", new[] { slot("ryu", 1, "esf001", 5), slot("aaa", 16, "esf016", 5), slot("bbb", 16, "esf016", 6), slot("ccc", 16, "esf016", 8) })
+                + "\n  ],\n  \"next_ids\": {},\n  \"possession\": [\n    {\n      \"fighter\": 16,\n      \"fighter_dir\": \"esf016\",\n      \"costume_no\": 5,\n      \"name\": \"Outfit I\",\n      \"swatches\": [[1,2],[3,4]]\n    }\n  ]\n}\n";
+            Func<int, string, int, string, string, string> row = delegate(int fighter, string dir, int no, string name, string source)
+            { return "    {\"fighter\": " + fighter + ", \"fighter_dir\": \"" + dir + "\", \"costume_no\": " + no + ", \"name\": \"" + name + "\", \"based_on\": 0, \"label\": \"" + source + "\", \"kind\": \"folder\", \"source\": \"" + source + "\"}"; };
+            string report = "{\n  \"generated\": \"2026-11-08 16:57\",\n  \"loader\": \"test\",\n  \"outfits\": [\n" + String.Join(",\n", new[] { row(1, "esf001", 5, "Outfit I", "Ryu/Gi"), row(16, "esf016", 5, "Outfit I", "Juri/Alpha"), row(16, "esf016", 6, "Outfit II", "Juri/Beta"), row(16, "esf016", 8, "Outfit III", "Juri/Gamma") })
+                + "\n  ],\n  \"left_out\": [\n    {\"fighter\": 16, \"label\": \"Juri/Delta\", \"reason\": \"no mesh\"}\n  ]\n}\n";
+            string state = "{\n    \"fighters\": {\n        \"1\": { \"slot\": 5, \"color\": 1 },\n        \"16\": { \"slot\": 8, \"color\": 2 },\n        \"30\": { \"slot\": false }\n    }\n}\n";
+            string registryPath = Path.Combine(data, "registry.json"), reportPath = Path.Combine(data, "outfits.json");
+            File.WriteAllText(registryPath, registry); File.WriteAllText(reportPath, report); File.WriteAllText(statePath, state);
+            List<OutfitSlot> slots = OutfitOrder.Slots(game, "esf016");
+            Require(slots.Select(s => s.CostumeNo).SequenceEqual(new[] { 5, 6, 8 }) && slots[2].Name == "Outfit III" && slots[2].Source == "Juri/Gamma" && OutfitOrder.Counts(game)["esf016"] == 3 && OutfitOrder.Counts(game)["esf001"] == 1, "slots read: " + String.Join(",", slots.Select(s => s.CostumeNo + " " + s.Source)));
+            string undo = Path.Combine(root, "order-undo");
+            Require(OutfitOrder.Apply(game, "esf016", new[] { 5, 6, 8 }, undo) == null && File.ReadAllText(registryPath) == registry, "the same order wrote something");
+            // Gamma first: the outfit in slot 8 takes slot 5, Alpha 6, Beta 8.
+            string backup = OutfitOrder.Apply(game, "esf016", new[] { 8, 5, 6 }, undo);
+            string next = File.ReadAllText(registryPath);
+            Func<string, string> block = delegate(string mod) { int at = next.IndexOf("\"mod_id\": \"" + mod + "\""); return next.Substring(at, next.IndexOf('}', at) - at); };
+            Require(block("ccc").Contains("\"new_costume_no\": 5,") && block("ccc").Contains("\"new_folder\": \"006\"") && block("ccc").Contains("\"scene_name\": \"esf016v05\"")
+                && block("aaa").Contains("\"new_costume_no\": 6,") && block("aaa").Contains("\"new_folder\": \"007\"") && block("bbb").Contains("\"new_costume_no\": 8,") && block("bbb").Contains("\"scene_name\": \"esf016v08\""), "the slots did not change places: " + next);
+            Require(block("ryu").Contains("\"new_costume_no\": 5,") && block("ryu").Contains("\"scene_name\": \"esf001v05\"") && next.Contains("\"fingerprint\": \"\"") && next.Contains("\"swatches\": [[1,2],[3,4]]") && next.Contains("\"original_folder\": \"001\""), "another fighter, the fingerprint or the rest of the registry: " + next);
+            List<OutfitSlot> after = OutfitOrder.Slots(game, "esf016");
+            Require(after.Select(s => s.Source).SequenceEqual(new[] { "Juri/Gamma", "Juri/Alpha", "Juri/Beta" }) && after.Select(s => s.Name).SequenceEqual(new[] { "Outfit I", "Outfit II", "Outfit III" }) && File.ReadAllText(reportPath).Contains("\"left_out\"") && OutfitOrder.Slots(game, "esf001").Single().Source == "Ryu/Gi", "the report was not renumbered: " + File.ReadAllText(reportPath));
+            string nextState = File.ReadAllText(statePath);
+            Require(nextState.Contains("\"16\": { \"slot\": 5, \"color\": 2 }") && nextState.Contains("\"1\": { \"slot\": 5, \"color\": 1 }") && nextState.Contains("\"30\": { \"slot\": false }"), "the equipped slot did not follow: " + nextState);
+            bool stale = false; try { OutfitOrder.Apply(game, "esf016", new[] { 5, 6, 7 }, undo); } catch (IOException) { stale = true; }
+            Require(stale, "a list that no longer matches was accepted");
+            IProcessProbe probe = GameProcesses.Probe;
+            try
+            {
+                GameProcesses.Probe = new FakeProcessProbe { Game = true };
+                bool refused = false; try { OutfitOrder.Apply(game, "esf016", new[] { 6, 5, 8 }, undo); } catch (IOException) { refused = true; }
+                Require(refused, "the order changed while SF6 runs");
+            }
+            finally { GameProcesses.Probe = probe; }
+            OutfitOrder.Restore(game, backup);
+            Require(File.ReadAllText(registryPath) == registry.Replace("abc123", "") && File.ReadAllText(reportPath) == report && File.ReadAllText(statePath) == state, "Undo did not restore the files");
+            // The window: the fighter's slots as rows; moving the last row to the top gives the order Apply takes.
+            using (var form = new OutfitOrderForm(game, "Juri", new[] { new KeyValuePair<string, string>("001", "Ryu"), new KeyValuePair<string, string>("016", "Juri") }, null, OutfitOrder.Counts(game), delegate { return new List<string> { "Juri Omega" }; }, false))
+            {
+                Require(form.FighterDir == "esf016" && form.RowsForTest.Count == 3 && !form.Changed, "window rows: " + form.FighterDir + " / " + form.RowsForTest.Count);
+                form.RowsForTest.MoveTo(2, 0);
+                Require(form.Changed && form.Order.SequenceEqual(new[] { 8, 5, 6 }) && form.RowsForTest.SelectedIndex == 0, "moved row: " + String.Join(",", form.Order));
+                // The drag itself: the top row lifted and dropped on the last place moves there in one step, on release.
+                int rowPixels = form.RowsForTest.Height / form.RowsForTest.Count;
+                form.RowsForTest.DragForTest(0, 2 * rowPixels + rowPixels / 2);
+                Require(!form.Changed && form.Order.SequenceEqual(new[] { 5, 6, 8 }) && form.RowsForTest.SelectedIndex == 2 && !form.RowsForTest.Dragging, "a row dragged to the last place: " + String.Join(",", form.Order));
+                form.RowsForTest.DragForTest(1, rowPixels + rowPixels / 2 + 2);
+                Require(!form.Changed, "a press without a real move changed the order");
+                Require(LabelShortener.Short(new[] { "Main Files - X", "Main Files - X + Option 01 - A", "Other" }).SequenceEqual(new[] { "Main Files - X", "+ Option 01 - A", "Other" }), "names that add to another are not shortened");
+                form.Load("esf001", "Ryu");
+                Require(form.RowsForTest.Count == 1 && !form.Changed && !form.RowsForTest.CanMove(1), "another fighter in the window");
+            }
+        }
+
         private static void AddPart(string root)
         {
             string game = Path.Combine(root, "parts-game"), costumes = Path.Combine(game, "reframework", "costume_mods");
@@ -261,7 +322,7 @@ namespace SlotsInstaller
             ModPackage donor = PackageReader.Load(donorMod, "");
             ModComponent hair = donor.Components.Single(c => c.Name == "Hair B");
             CompositionPlan selection = Installer.SelectionFiles(donor, new[] { hair.Id });
-            Require(selection.Errors.Count == 0 && selection.Files.Count == 3 && !Composer.Plan(donor, new[] { hair.Id }).CanInstall, "a lone option: " + selection.Files.Count + " " + String.Join(" ", selection.Errors));
+            Require(selection.Errors.Count == 0 && selection.Files.Count == 3 && Composer.Plan(donor, new[] { hair.Id }).MissingMains.Count == 1, "a lone option: " + selection.Files.Count + " " + String.Join(" ", selection.Errors));
             Require(Installer.OutfitFolders(outfit).SequenceEqual(new[] { "001" }) && Installer.FolderMismatch(Installer.SelectionFolders(selection), Installer.OutfitFolders(outfit)) == null, "outfit folders");
             InstallResult added = Installer.AddToOutfit(outfit, costumes, selection, "");
             string folder = Path.Combine(costumes, "Juri", "Goth Slot");
@@ -270,6 +331,335 @@ namespace SlotsInstaller
             Require(read(m + "02/esf016_001_02_chain.chain.48") == "base chain" && read(m + "01/esf016_001_01.mesh.230110883") == "base body" && read(m + "01/esf016_001_01_v00.mdf2.31") == "base body material", "files outside the selection changed");
             InstallManifest manifest = Json.Read<InstallManifest>(Path.Combine(folder, ".slots-installer.json"));
             Require(manifest.Parts != null && manifest.Parts.Count == 1 && manifest.Parts[0].Files.Count == 3 && manifest.Parts[0].Options.SequenceEqual(new[] { "Hair B" }) && manifest.Sha256.ContainsKey(m + "01/esf016_001_01_hairB_albd.tex.241101895") && manifest.Sha256.ContainsKey(m + "02/esf016_001_02_chain.chain.48"), "manifest");
+            // 1.0.18: the Installed page says what was added (row text and details), and nothing for an outfit without parts.
+            InstalledOutfit grafted = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot");
+            string partDetails = MainForm.AddedPartsDetails(grafted);
+            Require(MainForm.AddedPartsShort(grafted) == "+ Hair B" && partDetails.StartsWith("ADDED FROM OTHER MODS") && partDetails.Contains("• Hair B from ") && partDetails.Contains(" · 3 files · added ") && !partDetails.Contains("no longer in the library"), "added parts shown: " + MainForm.AddedPartsShort(grafted) + " / " + partDetails);
+            Require(MainForm.AddedPartsShort(outfit) == null && MainForm.AddedPartsDetails(outfit) == "" && MainForm.AddedPartsShort(new InstalledOutfit { Parts = new List<PartGraft> { new PartGraft { Options = new List<string> { "A", "B", "C" } } } }) == "+ 3 added options", "added parts text for none or many");
+            // 1.0.18: Remove added part puts the outfit's own files back (a replaced file, a new file gone), drops the
+            // record and leaves the rest alone; a part that is not on the outfit is refused. Added again for the steps below.
+            InstallResult removed = Installer.RemovePart(grafted, costumes, Composer.Plan(basePkg, Composer.DefaultSelection(basePkg)), grafted.Parts[0], "");
+            InstalledOutfit bare = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot");
+            Require(removed.Message.StartsWith("Removed Hair B from ") && (bare.Parts == null || bare.Parts.Count == 0) && MainForm.AddedPartsShort(bare) == null && bare.Id == grafted.Id, "part not removed: " + removed.Message);
+            Require(read(m + "02/esf016_001_02.mesh.230110883") == "base hair" && read(m + "02/esf016_001_02_v00.mdf2.31") == "base hair material" && read(m + "01/esf016_001_01_hairB_albd.tex.241101895") == null
+                && read(m + "02/esf016_001_02_chain.chain.48") == "base chain" && read(m + "01/esf016_001_01.mesh.230110883") == "base body", "the outfit's own files did not come back");
+            bool removeRefused = false; try { Installer.RemovePart(bare, costumes, Composer.Plan(basePkg, Composer.DefaultSelection(basePkg)), grafted.Parts[0], ""); } catch (IOException) { removeRefused = true; }
+            Require(removeRefused, "removing a part that is not on the outfit was not refused");
+            Installer.AddToOutfit(bare, costumes, Installer.SelectionFiles(donor, new[] { hair.Id }), "");
+            // 1.0.18 Added parts window: Save rebuilds the outfit with exactly the listed parts in the listed order (the
+            // last one applied wins); a part left out gives the outfit's own file back; the window shows the winner first.
+            ModComponent donorBody = donor.Components.Single(c => c.Name == "Main Files");
+            Installer.AddToOutfit(Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot"), costumes, Installer.SelectionFiles(donor, new[] { donorBody.Id }), "");
+            InstalledOutfit two = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot");
+            Require(two.Parts.Count == 2 && two.Parts[0].Options.SequenceEqual(new[] { "Hair B" }) && two.Parts[1].Options.SequenceEqual(new[] { "Main Files" }) && read(m + "01/esf016_001_01.mesh.230110883") == "donor body", "two parts: " + String.Join(" | ", two.Parts.Select(Installer.GraftText)));
+            // 1.0.18 ticks on added parts: a part that is turned off leaves the outfit (its own file is back) and stays in
+            // the record as OffParts; a later rebuild keeps that record; turned on again it is applied where it was.
+            CompositionPlan gothPlan = Composer.Plan(basePkg, Composer.DefaultSelection(basePkg));
+            Installer.SetParts(two, costumes, gothPlan, new List<PartGraft> { two.Parts[0] }, "");
+            Installer.SetOffParts(Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot"), costumes, new List<PartGraft> { two.Parts[1] });
+            InstalledOutfit oneOff = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot");
+            Require(oneOff.Parts.Count == 1 && oneOff.OffParts != null && oneOff.OffParts.Count == 1 && oneOff.OffParts[0].Options.SequenceEqual(new[] { "Main Files" }) && read(m + "01/esf016_001_01.mesh.230110883") == "base body" && read(m + "02/esf016_001_02.mesh.230110883") == "donor hair",
+                "a part turned off: on " + oneOff.Parts.Count + " / off " + (oneOff.OffParts == null ? 0 : oneOff.OffParts.Count) + " / body " + read(m + "01/esf016_001_01.mesh.230110883"));
+            Installer.SetParts(oneOff, costumes, Composer.Plan(basePkg, Composer.DefaultSelection(basePkg)), new List<PartGraft> { oneOff.Parts[0], oneOff.OffParts[0] }, "");
+            InstalledOutfit backOn = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot");
+            Require(backOn.Parts.Count == 2 && backOn.OffParts != null && backOn.OffParts.Count == 1 && read(m + "01/esf016_001_01.mesh.230110883") == "donor body", "a rebuild lost the record of the parts that are off");
+            Installer.SetOffParts(backOn, costumes, null);
+            two = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot");
+            Require(two.OffParts == null && two.Parts.Count == 2 && two.Parts[0].Options.SequenceEqual(new[] { "Hair B" }) && two.Parts[1].Options.SequenceEqual(new[] { "Main Files" }), "the parts are not as before: " + String.Join(" | ", two.Parts.Select(Installer.GraftText)));
+            // 1.0.18: the outfit's own mod is the last row of the window (its name, its options, fixed at the bottom).
+            using (var ownRow = new AddedPartsForm("Goth Slot", two.Parts, delegate { return false; }, null, "Juri Base", "Main files"))
+                Require(ownRow.OwnModTextForTest == "Juri Base | The outfit's own mod · Main files · always at the bottom", "the outfit's own mod in the Added parts window: " + ownRow.OwnModTextForTest);
+            using (var partsForm = new AddedPartsForm("Goth Slot", two.Parts, delegate { return false; }))
+            {
+                Require(partsForm.RowsForTest.Count == 2 && partsForm.RowsForTest.Parts[0] == two.Parts[1] && !partsForm.Changed, "the window does not show the winner (the last part applied) first");
+                partsForm.RowsForTest.MoveTo(0, 1);
+                Require(partsForm.Changed && partsForm.Wanted.SequenceEqual(new[] { two.Parts[1], two.Parts[0] }), "a moved row did not change the order to apply");
+                partsForm.RowsForTest.Select(0); partsForm.RowsForTest.RemoveSelected();
+                Require(partsForm.RowsForTest.Count == 1 && partsForm.Wanted.SequenceEqual(new[] { two.Parts[1] }), "Remove did not take the selected part off the list");
+            }
+            Func<CompositionPlan> basePlan = delegate { return Composer.Plan(basePkg, Composer.DefaultSelection(basePkg)); };
+            Installer.SetParts(two, costumes, basePlan(), new List<PartGraft> { two.Parts[1], two.Parts[0] }, "");
+            InstalledOutfit swapped = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot");
+            Require(swapped.Parts.Count == 2 && swapped.Parts[0].Options.SequenceEqual(new[] { "Main Files" }) && swapped.Parts[1].Options.SequenceEqual(new[] { "Hair B" }) && read(m + "01/esf016_001_01.mesh.230110883") == "donor body" && read(m + "02/esf016_001_02.mesh.230110883") == "donor hair", "the saved order was not applied");
+            InstallResult onlyHair = Installer.SetParts(swapped, costumes, basePlan(), new List<PartGraft> { swapped.Parts[1] }, "");
+            InstalledOutfit one = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot");
+            Require(onlyHair.Message.StartsWith("Saved the added parts of Goth Slot") && one.Parts.Count == 1 && one.Parts[0].Options.SequenceEqual(new[] { "Hair B" }) && read(m + "01/esf016_001_01.mesh.230110883") == "base body" && read(m + "02/esf016_001_02.mesh.230110883") == "donor hair", "a part left out did not give the outfit's own file back: " + onlyHair.Message);
+            // 1.0.18 outfit recipes: an installed outfit is written down (base, options, parts in order), found again as
+            // that recipe, and installing the recipe makes a second outfit with the same files; the same name saved again
+            // replaces it; a recipe whose mod is gone is refused; Delete removes only the recipe.
+            string recipeData = Path.Combine(root, "recipe-data");
+            OutfitRecipes.Save(recipeData, OutfitRecipes.FromOutfit(one, "Juri Base", null, new string[0]));
+            OutfitRecipes.Save(recipeData, OutfitRecipes.FromOutfit(one, "Juri Base", null, new string[0]));
+            List<OutfitRecipe> savedRecipes = OutfitRecipes.List(recipeData);
+            Require(savedRecipes.Count == 1 && savedRecipes[0].Name == "Goth Slot" && savedRecipes[0].Character == "Juri" && savedRecipes[0].Parts.Count == 1 && savedRecipes[0].Summary == "Juri Base + Hair B"
+                && OutfitRecipes.Of(savedRecipes, one) == savedRecipes[0] && OutfitRecipes.Missing(savedRecipes[0]).Count == 0, "recipe saved: " + savedRecipes.Count + " / " + String.Join(" | ", savedRecipes.Select(r => r.Name + ": " + r.Summary)));
+            InstallResult fromRecipe = OutfitRecipes.Install(savedRecipes[0], costumes, "Goth Recipe", "");
+            InstalledOutfit made = Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Recipe");
+            Func<string, string> readMade = delegate(string rel) { string f = Path.Combine(made.Folder, rel.Replace('/', '\\')); return File.Exists(f) ? File.ReadAllText(f) : null; };
+            Require(fromRecipe.Message.StartsWith("Installed Goth Recipe from the recipe Goth Slot") && made.Parts != null && made.Parts.Count == 1 && readMade(m + "02/esf016_001_02.mesh.230110883") == "donor hair" && readMade(m + "01/esf016_001_01.mesh.230110883") == "base body"
+                && OutfitRecipes.Of(savedRecipes, made) == savedRecipes[0] && OutfitRecipes.Of(savedRecipes, new InstalledOutfit { Managed = true, Character = "Juri", SourcePath = one.SourcePath, SelectedIds = one.SelectedIds }) == null, "installed from the recipe: " + fromRecipe.Message);
+            // 1.0.18: opened from an outfit that can't be saved as it is (every variant of an archive), the window is about
+            // its mod: the recipes that use it are counted, and the wide button starts a new recipe with it.
+            using (var aboutMod = new RecipesForm(delegate { return OutfitRecipes.List(recipeData); }, null, null, null, "Sakura as Ryu C1", "Sakura as Ryu C1", r => r.Name == "Goth Slot"))
+            {
+                Require(aboutMod.NewButtonForTest == "New recipe with Sakura as Ryu C1" && aboutMod.NoteForTest.StartsWith("1 recipe uses Sakura as Ryu C1, listed first."), "the recipes window for an outfit's mod: " + aboutMod.NewButtonForTest + " / " + aboutMod.NoteForTest);
+                aboutMod.RequestNew();
+                Require(aboutMod.NewRequested, "New recipe with the mod did not ask for the builder");
+            }
+            using (var noOutfit = new RecipesForm(delegate { return OutfitRecipes.List(recipeData); }, null, null, null))
+                Require(noOutfit.NewButtonForTest == "New recipe", "the recipes window without an outfit: " + noOutfit.NewButtonForTest);
+            // 1.0.18 (the user: no instant "Save as recipe"): from an installed outfit the one button asks for the builder
+            // and saves nothing itself; the builder then starts with the outfit's mod and its added parts, as a new recipe.
+            using (var fromOutfit = new RecipesForm(delegate { return OutfitRecipes.List(recipeData); }, one, null, null))
+            {
+                fromOutfit.RequestNew();
+                Require(fromOutfit.NewButtonForTest == "New recipe from Goth Slot" && fromOutfit.NewRequested && OutfitRecipes.List(recipeData).Count == 1, "New recipe from an outfit: " + fromOutfit.NewButtonForTest);
+            }
+            // 1.0.18: Edit recipe asks for the builder with the selected recipe; it is off while nothing is listed.
+            using (var editing = new RecipesForm(delegate { return OutfitRecipes.List(recipeData); }, null, null, null))
+            {
+                editing.RequestEdit();
+                Require(editing.EditEnabledForTest && editing.EditRequested && editing.Selected != null && editing.Selected.Name == "Goth Slot" && !editing.NewRequested, "Edit recipe in the recipes window");
+            }
+            using (var nothing = new RecipesForm(delegate { return new List<OutfitRecipe>(); }, null, null, null))
+            {
+                nothing.RequestEdit();
+                Require(!nothing.EditEnabledForTest && !nothing.EditRequested, "Edit recipe with no recipe");
+            }
+            using (var prefilled = new RecipeBuilderForm("Ryu", new[] { new KeyValuePair<string, string>("016", "Juri"), new KeyValuePair<string, string>("001", "Ryu") }, null, new List<LibraryEntry>(), ""))
+            {
+                prefilled.StartFrom(OutfitRecipes.FromOutfit(one, "Juri Base", null, new string[0]));
+                Require(prefilled.Text == "New outfit recipe" && prefilled.Draft.Character == "Juri" && prefilled.Draft.Layers.Count == 2 && prefilled.Draft.Layers[0].Options.SequenceEqual(new[] { "Hair B" }) && prefilled.Draft.Layers[1].Mod == "Juri Base" && prefilled.Recipe == null,
+                    "the builder from an installed outfit: " + prefilled.Text + " / " + String.Join(" > ", prefilled.Draft.Layers.Select(RecipeDraft.Shown)));
+            }
+            using (var recipesForm = new RecipesForm(delegate { return OutfitRecipes.List(recipeData); }, one, delegate(InstalledOutfit o) { return "saved"; }, delegate(OutfitRecipe r) { OutfitRecipes.Delete(recipeData, r.Id); }))
+            {
+                Require(recipesForm.ListForTest.Items.Count == 1 && recipesForm.Selected != null && recipesForm.Selected.Name == "Goth Slot", "the recipes window does not list the recipe");
+                var gone = new OutfitRecipe { Name = "Gone", Character = "Juri", Base = new RecipeLayer { SourcePath = Path.Combine(root, "no such mod.zip"), Mod = "Lost Mod" } };
+                Require(OutfitRecipes.Missing(gone).SequenceEqual(new[] { "Lost Mod" }), "a missing mod was not named");
+                bool recipeRefused = false; try { OutfitRecipes.Install(gone, costumes, "Gone", ""); } catch (IOException) { recipeRefused = true; }
+                Require(recipeRefused, "a recipe whose mod is gone was installed");
+                recipesForm.DeleteSelected();
+                Require(recipesForm.ListForTest.Items.Count == 0 && OutfitRecipes.List(recipeData).Count == 0 && Directory.Exists(made.Folder), "Delete recipe: " + recipesForm.ListForTest.Items.Count);
+            }
+            Directory.Delete(made.Folder, true);
+            // 1.0.18 recipe builder (the user: no base, "it all depends on load orders"): a recipe is its mods in load
+            // order, the newest on top; it says what replaces what and when two bring a body; files for another outfit
+            // slot or another fighter are refused; the recipe it makes installs with the layers applied in order; the
+            // window lists the fighter's mods and builds the same draft.
+            var builder = new RecipeDraft("Juri", "016", "");
+            Require(builder.AddLayer(baseMod, "Juri Base", null) == null && builder.Layers.Count == 1 && builder.Layers[0].Files.Count == 5 && builder.Notes().Count == 0 && builder.Slots().SequenceEqual(new[] { "001" }), "the first mod: " + builder.Layers.Count + " / " + String.Join(" | ", builder.Notes()));
+            Require(builder.AddLayer(donorMod, "Hair Bundle", new[] { hair.Id }) == null && builder.Layers.Count == 2 && builder.Notes().SequenceEqual(new[] { "Hair B from Hair Bundle replaces 2 files of the layers below it." }), "hair on top: " + String.Join(" | ", builder.Notes()));
+            Require(builder.AddLayer(donorMod, "Hair Bundle", new[] { donorBody.Id }) == null && builder.Layers.Count == 3 && builder.Layers[0].Options.SequenceEqual(new[] { "Main Files" })
+                && builder.Notes()[0] == "More than one layer brings a complete body (Main Files from Hair Bundle; Juri Base). Only the top one will show.", "a second body: " + String.Join(" | ", builder.Notes()));
+            string c2HairId = PackageReader.Load(otherMod, "").Components.Single(c => c.Name == "C2 Hair").Id;
+            string wrongSlot = builder.AddLayer(otherMod, "C2 Hair", new[] { c2HairId });
+            Require(wrongSlot != null && wrongSlot.Contains("made for Outfit 2") && builder.Layers.Count == 3, "files for another outfit slot: " + wrongSlot);
+            string wrongFighter = new RecipeDraft("Ryu", "001", "").AddLayer(baseMod, "Juri Base", null);
+            Require(wrongFighter != null && wrongFighter.Contains("belong to Juri"), "another fighter's mod: " + wrongFighter);
+            OutfitRecipe mixed = builder.ToRecipe(" Mix ");
+            Require(mixed.Name == "Mix" && mixed.Character == "Juri" && mixed.Parts.Count == 2 && mixed.Parts[0].Options.SequenceEqual(new[] { "Hair B" }) && mixed.Parts[1].Options.SequenceEqual(new[] { "Main Files" }) && mixed.Summary == "Juri Base + Hair B + Main Files", "recipe from the builder: " + mixed.Summary);
+            OutfitRecipes.Install(mixed, costumes, "Mix", "");
+            InstalledOutfit mix = Installer.ListInstalled(costumes).Single(o => o.Name == "Mix");
+            Func<string, string> readMix = delegate(string rel) { string f = Path.Combine(mix.Folder, rel.Replace('/', '\\')); return File.Exists(f) ? File.ReadAllText(f) : null; };
+            Require(mix.Parts.Count == 2 && readMix(m + "01/esf016_001_01.mesh.230110883") == "donor body" && readMix(m + "02/esf016_001_02.mesh.230110883") == "donor hair" && readMix(m + "02/esf016_001_02_chain.chain.48") == "base chain", "the built recipe did not install as built");
+            Directory.Delete(mix.Folder, true);
+            // Other options for a layer keep its place.
+            Require(builder.ChangeLayer(builder.Layers[1], new[] { hair.Id, donorBody.Id }) == null && builder.Layers.Count == 3 && builder.Layers[1].Options.SequenceEqual(new[] { "Hair B", "Main Files" }) && builder.Layers[2].Mod == "Juri Base", "other options for a layer: " + String.Join(" > ", builder.Layers.Select(RecipeDraft.Shown)));
+            // The order is the user's: a mod without a body may be at the bottom. As an extra outfit the recipe is then
+            // built on the lowest mod that brings a body; that works when the mods under it share no file with it
+            // (the same files come out), and is refused with the reason when they do.
+            const string sharedSkin = "natives/stm/product/model/esf/esf016/000/00/esf016_000_00_skin_albd.tex.241101895";
+            string skinMod = Path.Combine(root, "Juri Skin.zip");
+            Zip(skinMod, new Dictionary<string, string> { { "Skin/modinfo.ini", "name=Juri Skin\r\n" }, { "Skin/" + sharedSkin, "oily skin" } });
+            var skinFirst = new RecipeDraft("Juri", "016", "");
+            string skinAdded = skinFirst.AddLayer(skinMod, "Juri Skin", null);
+            Require(skinAdded == null && skinFirst.OutfitProblem() != null && skinFirst.OutfitProblem().StartsWith("No layer brings a complete body"), "a recipe without a body: " + skinAdded + " / " + skinFirst.OutfitProblem());
+            Require(skinFirst.AddLayer(baseMod, "Juri Base", null) == null && skinFirst.OutfitProblem() == null && skinFirst.Notes().Count == 0, "the body above a shared mod: " + String.Join(" | ", skinFirst.Notes()));
+            OutfitRecipe skinRecipe = skinFirst.ToRecipe("Skin First");
+            Require(skinRecipe.Base.ModName == "Juri Skin" && skinRecipe.Parts.Count == 1 && skinRecipe.Parts[0].ModName == "Juri Base", "the bottom layer is saved first: " + skinRecipe.Summary);
+            OutfitRecipes.Install(skinRecipe, costumes, "Skin First", "");
+            InstalledOutfit skinOutfit = Installer.ListInstalled(costumes).Single(o => o.Name == "Skin First");
+            Func<string, string> readSkin = delegate(string rel) { string f = Path.Combine(skinOutfit.Folder, rel.Replace('/', '\\')); return File.Exists(f) ? File.ReadAllText(f) : null; };
+            Require(ReplacePlanner.SameSource(skinOutfit.SourcePath, baseMod) && skinOutfit.Parts != null && skinOutfit.Parts.Count == 1 && readSkin(sharedSkin) == "oily skin" && readSkin(m + "01/esf016_001_01.mesh.230110883") == "base body", "a recipe whose bottom mod has no body: built on " + skinOutfit.SourcePath);
+            Directory.Delete(skinOutfit.Folder, true);
+            var upsideDown = new RecipeDraft("Juri", "016", "");
+            Require(upsideDown.AddLayer(donorMod, "Hair Bundle", new[] { hair.Id }) == null && upsideDown.AddLayer(baseMod, "Juri Base", null) == null && upsideDown.OutfitProblem() != null && upsideDown.OutfitProblem().Contains("Juri Base has to be below Hair B from Hair Bundle"), "a body over a mod it shares files with: " + upsideDown.OutfitProblem());
+            bool orderRefused = false; try { OutfitRecipes.Install(upsideDown.ToRecipe("Upside"), costumes, "Upside", ""); } catch (IOException ex) { orderRefused = ex.Message.Contains("has to be below"); }
+            Require(orderRefused && Installer.ListInstalled(costumes).All(o => o.Name != "Upside"), "an order that can't be an extra outfit was installed");
+            // 1.0.18: the textures a material file names (MaterialCheck.cs), as natives paths without the version; no game, no verdict.
+            List<string> named = MaterialCheck.Textures(System.Text.Encoding.Unicode.GetBytes("MDF\0esf_Body00\0Product/Model/esf/esf016/swm/bikini_ALBD.tex\0BaseColor\0systems/rendering/NullBlack.tex\0Product/Model/esf/esf016/swm/bikini_ALBD.tex\0"));
+            Require(named.SequenceEqual(new[] { "natives/stm/product/model/esf/esf016/swm/bikini_albd.tex", "natives/stm/systems/rendering/nullblack.tex" }), "textures of a material file: " + String.Join(", ", named));
+            Require(MaterialCheck.Notes(MaterialCheck.Layers(upsideDown), "", "").Count == 0 && MaterialCheck.Read(MaterialCheck.Layers(upsideDown), "", null).Count == 0, "the material check judged without a game");
+            // 1.0.18 parts (OutfitParts.cs): 00 is the head, 01 the body, 02 the hair; a name that says what it is wins.
+            Require(OutfitParts.Of(m + "02/esf016_001_02.mesh.230110883") == OutfitParts.Hair && OutfitParts.Of(m + "01/x.tex.1") == OutfitParts.Body && OutfitParts.Of("natives/STM/streaming/Product/Model/esf/esf016/000/00/h.tex.1") == OutfitParts.Head
+                && OutfitParts.Of(m + "esf016_001_cmd_001.user.2") == OutfitParts.Colours && OutfitParts.Of(m + "30/a.mesh.1") == OutfitParts.Other && OutfitParts.Of("natives/stm/product/model/esf/esf016/long/hair_albd.tex.1") == OutfitParts.Other, "the part of a file");
+            Require(OutfitParts.Kinds("Ponytail B", new[] { m + "01/a.mesh.1" }).SequenceEqual(new[] { OutfitParts.Hair }) && OutfitParts.Kinds("Juri Full", new[] { m + "02/a.mesh.1", m + "01/a.mesh.1", "natives/stm/product/model/esf/esf016/long/x.tex.1" }).SequenceEqual(new[] { OutfitParts.Body, OutfitParts.Hair })
+                && OutfitParts.Kinds("Chair cover", new[] { m + "01/a.mesh.1" }).SequenceEqual(new[] { OutfitParts.Body }) && OutfitParts.Labels(new[] { "hair", "body" }) == "Body + Hair", "what an option is: " + String.Join(",", OutfitParts.Kinds("Ponytail B", new[] { m + "01/a.mesh.1" })));
+            // A mod with the hair built in (no hair option): a recipe takes only its hair. The hair's folder comes whole,
+            // and the textures its material file names come along from the mod's own folder; the body and its textures stay out.
+            string fullMod = Path.Combine(root, "Juri Full");
+            Action<string, byte[]> writeFull = delegate(string rel, byte[] bytes) { string file = Path.Combine(fullMod, "Full", rel.Replace('/', '\\')); Directory.CreateDirectory(Path.GetDirectoryName(file)); File.WriteAllBytes(file, bytes); };
+            Func<string, byte[]> plain = System.Text.Encoding.UTF8.GetBytes, wide = System.Text.Encoding.Unicode.GetBytes;
+            const string longFolder = "natives/stm/product/model/esf/esf016/long/", longStream = "natives/stm/streaming/product/model/esf/esf016/long/";
+            writeFull("modinfo.ini", plain("name=Juri Full\r\n"));
+            writeFull(m + "01/esf016_001_01.mesh.230110883", plain("full body")); writeFull(m + "01/esf016_001_01_v00.mdf2.31", wide("MDF\0Product/Model/esf/esf016/long/body_ALBD.tex\0"));
+            writeFull(m + "02/esf016_001_02.mesh.230110883", plain("full hair")); writeFull(m + "02/esf016_001_02_v00.mdf2.31", wide("MDF\0Product/Model/esf/esf016/long/hair_ALBD.tex\0"));
+            writeFull(longFolder + "hair_albd.tex.241101895", plain("full hair texture")); writeFull(longStream + "hair_albd.tex.241101895", plain("full hair texture hi")); writeFull(longFolder + "body_albd.tex.241101895", plain("full body texture"));
+            var hairOnly = new RecipeDraft("Juri", "016", "");
+            string hairWhy = hairOnly.AddLayer(baseMod, "Juri Base", null) ?? hairOnly.AddLayer(fullMod, "Juri Full", null, new[] { OutfitParts.Hair });
+            Require(hairWhy == null && hairOnly.Layers.Count == 2 && hairOnly.Layers[0].Files.Count == 4 && hairOnly.Layers[0].Parts.SequenceEqual(new[] { OutfitParts.Hair }) && hairOnly.OutfitProblem() == null
+                && hairOnly.Suppliers() == "Body: Juri Base   ·   Hair: Juri Full" && hairOnly.PartsOf(hairOnly.Layers[0]).SequenceEqual(new[] { OutfitParts.Body, OutfitParts.Hair, OutfitParts.Other }),
+                "only the hair of a full mod: " + hairWhy + " / " + (hairOnly.Layers.Count > 0 ? hairOnly.Layers[0].Files.Count + " files" : "") + " / " + hairOnly.Suppliers());
+            OutfitRecipe longRecipe = hairOnly.ToRecipe("Long");
+            Require(longRecipe.Parts.Count == 1 && longRecipe.Parts[0].Parts.SequenceEqual(new[] { OutfitParts.Hair }), "the parts are saved with the layer");
+            OutfitRecipes.Install(longRecipe, costumes, "Long", "");
+            InstalledOutfit longOutfit = Installer.ListInstalled(costumes).Single(o => o.Name == "Long");
+            Func<string, string> readLong = delegate(string rel) { string f = Path.Combine(longOutfit.Folder, rel.Replace('/', '\\')); return File.Exists(f) ? File.ReadAllText(f) : null; };
+            Require(readLong(m + "01/esf016_001_01.mesh.230110883") == "base body" && readLong(m + "02/esf016_001_02.mesh.230110883") == "full hair" && readLong(longFolder + "hair_albd.tex.241101895") == "full hair texture" && readLong(longStream + "hair_albd.tex.241101895") == "full hair texture hi"
+                && readLong(longFolder + "body_albd.tex.241101895") == null && readLong(m + "02/esf016_001_02_chain.chain.48") == "base chain" && longOutfit.Parts.Count == 1 && longOutfit.Parts[0].Parts.SequenceEqual(new[] { OutfitParts.Hair }) && longOutfit.Parts[0].Files.Count == 4,
+                "hair only installed: body " + readLong(m + "01/esf016_001_01.mesh.230110883") + " / hair " + readLong(m + "02/esf016_001_02.mesh.230110883") + " / parts " + longOutfit.Parts.Count);
+            Directory.Delete(longOutfit.Folder, true);
+            // The whole layer again, and a layer that brings the body can't be cut for an extra outfit.
+            Require(hairOnly.ChangeParts(hairOnly.Layers[0], null) == null && hairOnly.Layers[0].Parts.Count == 0 && hairOnly.Layers[0].Files.Count == 7 && hairOnly.Suppliers() == "Body: Juri Full   ·   Hair: Juri Full", "all parts again: " + hairOnly.Layers[0].Files.Count + " / " + hairOnly.Suppliers());
+            Require(hairOnly.ChangeParts(hairOnly.Layers[1], new[] { OutfitParts.Body }) == null && hairOnly.ChangeParts(hairOnly.Layers[0], new[] { OutfitParts.Hair }) == null && hairOnly.OutfitProblem() != null && hairOnly.OutfitProblem().Contains("goes in whole"), "a cut body layer: " + hairOnly.OutfitProblem());
+            bool cutRefused = false; try { OutfitRecipes.Install(hairOnly.ToRecipe("Cut"), costumes, "Cut", ""); } catch (IOException ex) { cutRefused = ex.Message.Contains("goes in whole"); }
+            Require(cutRefused && Installer.ListInstalled(costumes).All(o => o.Name != "Cut"), "a cut body layer was installed as an extra outfit");
+            // 1.0.18 ticks: a layer that is off is left out at install; an option that is off too; all off is nothing to install.
+            longRecipe.Parts[0].Off = true;
+            OutfitRecipe longOn = longRecipe.Effective();
+            Require(longRecipe.AnyOff && longOn != null && longOn.Parts.Count == 0 && longOn.Base.ModName == "Juri Base", "a layer turned off");
+            OutfitRecipes.Install(longRecipe, costumes, "Long Off", "");
+            InstalledOutfit longOff = Installer.ListInstalled(costumes).Single(o => o.Name == "Long Off");
+            Require((longOff.Parts == null || longOff.Parts.Count == 0) && File.ReadAllText(Path.Combine(longOff.Folder, (m + "02/esf016_001_02.mesh.230110883").Replace('/', '\\'))) == "base hair", "a layer that is off was installed");
+            Directory.Delete(longOff.Folder, true);
+            longRecipe.Base.Off = true;
+            bool allOffRefused = false; try { OutfitRecipes.Install(longRecipe, costumes, "Nothing", ""); } catch (IOException ex) { allOffRefused = ex.Message.Contains("is turned off"); }
+            Require(longRecipe.Effective() == null && allOffRefused, "a recipe with everything off");
+            var twoOptions = new RecipeLayer { SourcePath = donorMod, Mod = "Hair Bundle", SelectedIds = new List<string> { hair.Id, donorBody.Id }, OptionNames = new List<string> { "Hair B", "Main Files" }, OffIds = new List<string> { donorBody.Id } };
+            // 1.0.18 (review of PR 28): an outfit installed from a saved recipe carries the recipe's id; Update rebuilds it
+            // in place in one transaction, so a recipe that can't be built leaves the outfit exactly as it was, and one
+            // that can replaces its parts with the recipe's (none of the old ones kept); a renamed recipe keeps its id.
+            string linkData = Path.Combine(root, "recipe-links");
+            var linkDraft = new RecipeDraft("Juri", "016", "");
+            Require((linkDraft.AddLayer(baseMod, "Juri Base", null) ?? linkDraft.AddLayer(fullMod, "Juri Full", null, new[] { OutfitParts.Hair })) == null, "the linked recipe's layers");
+            OutfitRecipe linked = OutfitRecipes.Save(linkData, linkDraft.ToRecipe("Linked"));
+            OutfitRecipes.Install(linked, costumes, "Linked", "");
+            InstalledOutfit linkedOutfit = Installer.ListInstalled(costumes).Single(o => o.Name == "Linked");
+            Func<string, string> readLinked = delegate(string rel) { string f = Path.Combine(linkedOutfit.Folder, rel.Replace('/', '\\')); return File.Exists(f) ? File.ReadAllText(f) : null; };
+            Require(linkedOutfit.RecipeId == linked.Id && linked.Id.Length == 32 && readLinked(m + "02/esf016_001_02.mesh.230110883") == "full hair", "an outfit installed from a recipe does not carry its id: " + linkedOutfit.RecipeId);
+            linked.Base.Parts = new List<string> { OutfitParts.Body };   // the body layer cut to parts: can't be an extra outfit
+            bool updateRefused = false; try { OutfitRecipes.Install(linked, costumes, "Linked", "", true); } catch (IOException ex) { updateRefused = ex.Message.Contains("goes in whole"); }
+            InstalledOutfit stillThere = Installer.ListInstalled(costumes).SingleOrDefault(o => o.Name == "Linked");
+            Require(updateRefused && stillThere != null && stillThere.Id == linkedOutfit.Id && stillThere.Parts.Count == 1 && readLinked(m + "02/esf016_001_02.mesh.230110883") == "full hair" && readLinked(m + "01/esf016_001_01.mesh.230110883") == "base body",
+                "an Update that can't be built did not leave the outfit as it was");
+            linked.Base.Parts = new List<string>(); linked.Parts[0].Off = true;
+            InstallResult updatedInPlace = OutfitRecipes.Install(linked, costumes, "Linked", "", true);
+            InstalledOutfit afterUpdate = Installer.ListInstalled(costumes).Single(o => o.Name == "Linked");
+            Require(updatedInPlace.Message.StartsWith("Updated Linked from the recipe Linked") && afterUpdate.Id == linkedOutfit.Id && afterUpdate.RecipeId == linked.Id && (afterUpdate.Parts == null || afterUpdate.Parts.Count == 0)
+                && readLinked(m + "02/esf016_001_02.mesh.230110883") == "base hair" && readLinked(longFolder + "hair_albd.tex.241101895") == null, "Update in place: " + updatedInPlace.Message + " / parts " + (afterUpdate.Parts == null ? 0 : afterUpdate.Parts.Count));
+            string linkedId = linked.Id; linked.Name = "Linked Again";
+            Require(OutfitRecipes.Save(linkData, linked).Id == linkedId && OutfitRecipes.List(linkData).Count == 1 && OutfitRecipes.List(linkData)[0].Name == "Linked Again", "a renamed recipe did not keep its id");
+            Directory.Delete(afterUpdate.Folder, true);
+            Require(twoOptions.Effective().SelectedIds.SequenceEqual(new[] { hair.Id }) && twoOptions.Effective().OptionNames.SequenceEqual(new[] { "Hair B" }) && new RecipeLayer { SelectedIds = new List<string> { hair.Id }, OffIds = new List<string> { hair.Id } }.Effective() == null, "an option turned off");
+            Func<string, string, LibraryEntry> libraryMod = delegate(string path, string name) { return new LibraryEntry { SourcePath = path, Name = name, Character = "Juri", CharacterCodes = new List<string> { "016" } }; };
+            LibraryEntry baseEntry = libraryMod(baseMod, "Juri Base"), donorEntry = libraryMod(donorMod, "Juri Hair Bundle"), c2Entry = libraryMod(otherMod, "Juri C2 Hair"), sharedEntry = libraryMod(skinMod, "Juri Skin");
+            baseEntry.CostumeKeys = new List<string> { "016/001" }; donorEntry.CostumeKeys = new List<string> { "016/001", "016/002" }; c2Entry.CostumeKeys = new List<string> { "016/002" }; sharedEntry.CostumeKeys = new List<string> { "016/000" };
+            // 1.0.18: opened from a mod in the Mod library, that mod is in the recipe at once (and the selected row);
+            // then the list keeps what fits the recipe: its outfit slot or shared files; Show all brings the rest
+            // back; the options picker lists only the options that fit.
+            using (var started = new RecipeBuilderForm("Ryu", new[] { new KeyValuePair<string, string>("016", "Juri"), new KeyValuePair<string, string>("001", "Ryu") }, null, new List<LibraryEntry> { baseEntry, donorEntry, c2Entry, sharedEntry }, ""))
+            {
+                started.StartOn(baseEntry, new[] { "no such option" });
+                Require(started.Draft.Code == "016" && started.Draft.Layers.Count == 1 && started.Draft.Layers[0].Mod == "Juri Base" && started.StatusForTest == "", "opened on a mod, it is not in the recipe: " + started.Draft.Code + " / " + started.Draft.Layers.Count + " / " + started.StatusForTest);
+                Require(started.ModsForTest.Count == 3 && started.ModsCaptionForTest == "FITS C1 · 3 OF 4", "the list once a mod is in: " + started.ModsForTest.Count + " / " + started.ModsCaptionForTest);
+                started.ToggleShowAllForTest();
+                Require(started.ModsForTest.Count == 4 && started.ModsCaptionForTest == "ALL 4 MODS", "Show all: " + started.ModsForTest.Count + " / " + started.ModsCaptionForTest);
+                ModPackage c2Package = PackageReader.Load(otherMod, "", false);
+                Require(!RecipeDraft.Options(c2Package).Any(started.Draft.Fits) && RecipeDraft.Options(donor).All(started.Draft.Fits), "options that fit the recipe");
+                using (var fitPick = new OptionPickForm("C2", "Hint.", c2Package, new string[0], "", null, started.Draft.Fits))
+                    Require(fitPick.RowCountForTest == 0, "the picker lists an option for another outfit: " + fitPick.RowCountForTest);
+                // Add to recipe on a mod with one option that fits: no window, it goes straight in. With several (no
+                // window can open in a check) nothing is added.
+                started.SelectMod(sharedEntry); started.AddSelectedPart();
+                Require(started.Draft.Layers.Count == 2 && started.Draft.Layers[0].Mod == "Juri Skin", "a single-option mod was not added directly: " + started.Draft.Layers.Count + " / " + started.StatusForTest);
+                started.SelectMod(donorEntry); started.AddSelectedPart();
+                Require(started.Draft.Layers.Count == 2, "a mod with several options was added without asking");
+            }
+            // 1.0.18 Edit recipe: the window opens with the saved recipe's fighter, name and mods in their order; the
+            // layers show their option names (the bottom one's too).
+            using (var editing = new RecipeBuilderForm("Ryu", new[] { new KeyValuePair<string, string>("016", "Juri"), new KeyValuePair<string, string>("001", "Ryu") }, null, new List<LibraryEntry> { baseEntry, donorEntry, c2Entry, sharedEntry }, ""))
+            {
+                editing.LoadRecipe(mixed);
+                OutfitRecipe reloaded = editing.Draft.Layers.Count == 0 ? null : editing.Draft.ToRecipe("Mix");
+                Require(editing.Text == "Edit outfit recipe" && editing.Draft.Code == "016" && reloaded != null && editing.Draft.Layers.Count == 3 && reloaded.Summary == mixed.Summary && editing.StatusForTest == "", "Edit recipe: " + editing.Text + " / " + (reloaded == null ? "empty" : reloaded.Summary) + " / " + editing.StatusForTest);
+                Require(reloaded.Base.ShownOptions.SequenceEqual(new[] { "Juri Base" }) && reloaded.Parts[0].ShownOptions.SequenceEqual(new[] { "Hair B" }) && new RecipeLayer { SelectedIds = new List<string> { "B/Hair B", "Main" } }.ShownOptions.SequenceEqual(new[] { "Hair B", "Main" }), "layer option names: " + String.Join(", ", reloaded.Base.ShownOptions));
+            }
+            using (var builderForm = new RecipeBuilderForm("Juri", new[] { new KeyValuePair<string, string>("016", "Juri") }, null, new List<LibraryEntry> { baseEntry, donorEntry, c2Entry, new LibraryEntry { SourcePath = "x", Name = "Ryu Gi", CharacterCodes = new List<string> { "001" } } }, ""))
+            {
+                Require(builderForm.ModsForTest.Count == 3 && builderForm.Draft.Code == "016" && builderForm.Draft.Layers.Count == 0, "the builder does not list the fighter's mods: " + builderForm.ModsForTest.Count);
+                // Nothing in the recipe yet: Add is on for the selected mod; Options and Remove have no row to act on.
+                Require(builderForm.ButtonsForTest == "add" && builderForm.RowsForTest.Count == 0, "buttons with an empty recipe: '" + builderForm.ButtonsForTest + "'");
+                builderForm.SelectMod(donorEntry);
+                Require(builderForm.PreviewForTest == "Juri Hair Bundle | In your library", "the preview does not follow the list: " + builderForm.PreviewForTest);
+                builderForm.AddPart(baseEntry, null);
+                Require(builderForm.ButtonsForTest == "add options remove" && builderForm.RowsForTest.Count == 1, "buttons with one mod in: '" + builderForm.ButtonsForTest + "' / " + builderForm.RowsForTest.Count);
+                builderForm.AddPart(donorEntry, new[] { hair.Id });
+                Require(builderForm.Draft.Layers.Count == 2 && builderForm.RowsForTest.Count == 2 && builderForm.NotesForTest.Contains("replaces 2 files of the layers below it") && builderForm.StatusForTest == "", "the builder window's draft: " + builderForm.NotesForTest + " / " + builderForm.StatusForTest);
+                // 1.0.18 preview column: it follows what was touched last (the new row here), then the mod selected in the list.
+                Require(builderForm.PreviewForTest == "Juri Hair Bundle | #1 in the recipe · Hair B", "the preview does not follow the new row: " + builderForm.PreviewForTest);
+                builderForm.SelectMod(donorEntry);
+                Require(builderForm.PreviewForTest == "Juri Hair Bundle | In this recipe", "a mod of the recipe selected in the list: " + builderForm.PreviewForTest);
+                builderForm.SelectMod(baseEntry);
+                Require(builderForm.PreviewForTest == "Juri Base | In this recipe", "another mod of the recipe selected in the list: " + builderForm.PreviewForTest);
+                // Every row moves: the body dragged above a mod it shares files with is said in the notes.
+                builderForm.RowsForTest.MoveTo(0, 1);
+                Require(builderForm.Draft.Layers[0].Mod == "Juri Base" && builderForm.Draft.Layers[1].Mod == "Juri Hair Bundle" && builderForm.NotesForTest.Contains("As an extra outfit, Juri Base has to be below"), "rows moved: " + String.Join(" > ", builderForm.Draft.Layers.Select(l => l.Mod)) + " / " + builderForm.NotesForTest);
+                builderForm.ChangeOptions(builderForm.Draft.Layers[1], new[] { hair.Id, donorBody.Id });
+                Require(builderForm.Draft.Layers.Count == 2 && builderForm.Draft.Layers[1].Options.Count == 2 && builderForm.RowsForTest.Count == 2, "Options on a row: " + String.Join(" > ", builderForm.Draft.Layers.Select(RecipeDraft.Shown)));
+            }
+            // The image itself: a mod's own screenshot is read for the mod and for an option without its own image, and
+            // a mod without one gives none.
+            string picMod = Path.Combine(root, "Juri Pic.zip");
+            using (var zipFile = System.IO.Compression.ZipFile.Open(picMod, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                Action<string, byte[]> put = delegate(string name, byte[] bytes) { using (Stream s = zipFile.CreateEntry(name).Open()) s.Write(bytes, 0, bytes.Length); };
+                put("Pic/modinfo.ini", System.Text.Encoding.UTF8.GetBytes("name=Juri Pic\r\n"));
+                put("Pic/" + m + "01/esf016_001_01.mesh.230110883", System.Text.Encoding.UTF8.GetBytes("pic body"));
+                using (var bitmap = new System.Drawing.Bitmap(6, 4)) using (var png = new MemoryStream()) { bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png); put("Pic/screenshot.png", png.ToArray()); }
+            }
+            ModPackage picPackage = PackageReader.Load(picMod, "", false);
+            using (System.Drawing.Image modImage = RecipeBuilderForm.ReadPreview(picPackage, null, ""))
+            using (System.Drawing.Image optionImage = RecipeBuilderForm.ReadPreview(picPackage, picPackage.Components.First(c => c.Assets.Count > 0).Id, ""))
+            using (System.Drawing.Image noImage = RecipeBuilderForm.ReadPreview(PackageReader.Load(baseMod, "", false), null, ""))
+                Require(modImage != null && modImage.Width == 6 && modImage.Height == 4 && optionImage != null && optionImage.Width == 6 && noImage == null, "the builder's preview image: " + (modImage == null ? "none" : modImage.Width + "x" + modImage.Height) + " / " + (optionImage == null ? "none" : "ok") + " / " + (noImage == null ? "none" : "an image"));
+            File.Delete(picMod);
+            // 1.0.18: the Mod library's search finds recipes by the recipe words (the other words narrow them) or by name.
+            Require(MainForm.RecipeMatches(new[] { mixed }, "rc").Count == 1 && MainForm.RecipeMatches(new[] { mixed }, "recipes juri").Count == 1 && MainForm.RecipeMatches(new[] { mixed }, "rc ryu").Count == 0
+                && MainForm.RecipeMatches(new[] { mixed }, "mix").Count == 1 && MainForm.RecipeMatches(new[] { mixed }, "juri").Count == 1 && MainForm.RecipeMatches(new[] { mixed }, "").Count == 1 && MainForm.RecipeMatches(new[] { mixed }, "hair").Count == 1
+                && MainForm.RecipeMatches(new[] { mixed }, "", new[] { "Ryu" }).Count == 0 && MainForm.RecipeMatches(new[] { mixed }, "", new[] { "Juri", "Ryu" }).Count == 1 && MainForm.RecipeMatches(new[] { mixed }, "cammy").Count == 0, "recipe search words");
+            // 1.0.18: the options picker shows groups as headings; a choose-one group unticks the others; a required one
+            // can't be emptied; the mod's rules (the validator) hold Use these back.
+            Func<string, string, bool, ModComponent> part = delegate(string id, string parent, bool group)
+            {
+                var c = new ModComponent { Id = id, Name = id, ParentId = parent, IsDummy = group, Description = group ? "Choose one skin" : "" };
+                if (!group) c.Assets.Add(new NativeAsset { EntryPath = id, DestinationPath = "natives/stm/" + (parent == "Skins" ? "skin.tex" : id + ".bin"), Size = 1 });
+                return c;
+            };
+            var grouped = new ModPackage { Name = "Grouped", Components = new List<ModComponent> { part("", null, true), part("Main", "", false), part("Skins", "", true), part("Oily", "Skins", false), part("Dry", "Skins", false) } };
+            grouped.PrepareChoices();
+            string ruleSays = null;
+            using (var pick = new OptionPickForm("Grouped", "hint", grouped, new[] { "Main", "Oily" }, "", delegate(List<string> ids) { return ruleSays; }))
+            {
+                var texts = Enumerable.Range(0, pick.RowCountForTest).Select(pick.RowTextForTest).ToList();
+                Require(texts.SequenceEqual(new[] { "[ ] Main", "[Skins · Required · choose one]", "( ) Oily", "( ) Dry" }), "picker rows: " + String.Join(" | ", texts));
+                pick.ToggleByName("Dry");
+                Require(pick.Picked.SequenceEqual(new[] { "Main", "Dry" }), "choose one did not untick the other: " + String.Join(",", pick.Picked));
+                pick.ToggleByName("Dry");
+                Require(pick.Picked.Contains("Dry") && pick.CanAcceptForTest, "a required choice was emptied");
+                ruleSays = "Needs more."; pick.ToggleByName("Main");
+                Require(!pick.CanAcceptForTest && pick.StatusForTest == "Needs more.", "the mod's rules did not hold Use these back: " + pick.StatusForTest);
+            }
             // The same options again replace their entry instead of adding a second one.
             Installer.AddToOutfit(Installer.ListInstalled(costumes).Single(o => o.Name == "Goth Slot"), costumes, Installer.SelectionFiles(donor, new[] { hair.Id }), "");
             Require(Json.Read<InstallManifest>(Path.Combine(folder, ".slots-installer.json")).Parts.Count == 1, "added twice");
@@ -321,6 +711,59 @@ namespace SlotsInstaller
                 Call(form, "RefreshLibrary", false); WaitIdle(form);
                 ListView list = Get<ListView>(form, "modList");
                 Require(list.Items.Count == 31, "rows: " + list.Items.Count);
+                // 1.0.18: recipes are listed above the mods without a search word and narrowed by the search; a click
+                // selects one (no mod open, its layers where a mod shows its options, Install ready in both modes);
+                // opening a mod puts the recipe away.
+                OutfitRecipe windowRecipe = OutfitRecipes.Save(AppConfig.DataDir, new OutfitRecipe { Name = "Window Recipe", Character = "Juri", Base = new RecipeLayer { SourcePath = Path.Combine(lib, "Juri Bundle.zip"), Mod = "Juri Bundle" } });
+                try
+                {
+                    Call(form, "RecipesChanged"); Application.DoEvents();
+                    Require(form.RecipeStripCountForTest >= 1, "the recipe is not listed without a search word: " + form.RecipeStripCountForTest);
+                    Get<PaddedTextField>(form, "search").Text = "cammy"; WaitIdle(form);
+                    Require(form.RecipeStripCountForTest == 0, "a search for another fighter still lists the recipe: " + form.RecipeStripCountForTest);
+                    Get<PaddedTextField>(form, "search").Text = ""; WaitIdle(form);
+                    form.OpenRecipe(windowRecipe); Application.DoEvents();
+                    Require(form.OpenRecipeForTest != null && Get<Label>(form, "packageTitle").Text == "Window Recipe" && form.RecipeTextForTest == "#1 Juri Bundle" && form.RecipeInstallReadyForTest && list.SelectedItems.Count == 1,   // recipes are rows of the mod list: the open one is the selected row
+                        "a selected recipe: '" + Get<Label>(form, "packageTitle").Text + "' / " + form.RecipeTextForTest + " / ready " + form.RecipeInstallReadyForTest + " / rows selected " + list.SelectedItems.Count);
+                    Call(form, "SetInstallMode", InstallModes.Replace, false); Application.DoEvents();
+                    Require(form.RecipeInstallReadyForTest, "Install is off for a recipe in Replace original");
+                    Call(form, "SetInstallMode", InstallModes.Slot, true); Application.DoEvents();
+                    Require(form.RecipeInstallReadyForTest && form.OpenRecipeForTest != null, "the recipe did not stay open across the mode switch");
+                    // 1.0.18: "Add to recipe" on a mod lists the saved recipes of its fighter, and none for another fighter's mod.
+                    LibraryEntry juriMod = list.Items.Cast<ListViewItem>().Select(i => i.Tag as LibraryEntry).First(x => x != null && x.Recipe == null && x.SourcePath.EndsWith("Juri Bundle.zip", StringComparison.OrdinalIgnoreCase));
+                    LibraryEntry cammyMod = list.Items.Cast<ListViewItem>().Select(i => i.Tag as LibraryEntry).First(x => x != null && x.Recipe == null && x.Name.StartsWith("cammy-mod", StringComparison.OrdinalIgnoreCase));
+                    Require(form.RecipesFor(juriMod).Any(r => r.Name == "Window Recipe") && form.RecipesFor(cammyMod).Count == 0 && form.RecipesFor(list.Items.Cast<ListViewItem>().Select(i => i.Tag as LibraryEntry).First(x => x.Recipe != null)).Count == 0,
+                        "Add to recipe lists: " + form.RecipesFor(juriMod).Count + " / " + form.RecipesFor(cammyMod).Count);
+                    // 1.0.18 ticks: the only layer can't be turned off (the recipe would install nothing), and nothing is saved then.
+                    form.ToggleRecipeTick(form.OpenRecipeForTest.Base, null); Application.DoEvents();
+                    Require(!form.OpenRecipeForTest.Base.Off && form.RecipeTextForTest == "#1 Juri Bundle" && !OutfitRecipes.List(AppConfig.DataDir).First(r => r.Name == "Window Recipe").Base.Off, "the only layer was turned off: " + form.RecipeTextForTest);
+                    // 1.0.18: an installed recipe says so (row badge, footer) and Uninstall takes it off again.
+                    FlatButton recipeUninstall = Get<FlatButton>(form, "libraryUninstallButton");
+                    Require(!form.InstalledRecipe(windowRecipe).Any && !recipeUninstall.Enabled, "a recipe that is not installed offers Uninstall");
+                    form.InstallRecipe(windowRecipe); WaitIdle(form);
+                    MainForm.RecipeInstall madeRecipe = form.InstalledRecipe(windowRecipe);
+                    Require(madeRecipe.Outfits.Count == 1 && madeRecipe.Replacements.Count == 0 && madeRecipe.Badge == "Extra", "an installed recipe is not shown as installed: " + madeRecipe.Outfits.Count + " / " + madeRecipe.Badge);
+                    if (form.OpenRecipeForTest == null) form.OpenRecipe(windowRecipe);
+                    Call(form, "UpdateLibraryUninstall"); Application.DoEvents();
+                    Require(recipeUninstall.Enabled && recipeUninstall.Text == "Uninstall" && Get<Label>(form, "planDetails").Text.StartsWith("Installed now as an extra outfit."), "the open installed recipe: " + recipeUninstall.Text + " / " + recipeUninstall.Enabled + " / " + Get<Label>(form, "planDetails").Text);
+                    form.UninstallRecipe(windowRecipe); WaitIdle(form);
+                    Require(!form.InstalledRecipe(windowRecipe).Any, "Uninstall left the recipe's outfit installed");
+                    if (form.OpenRecipeForTest == null) form.OpenRecipe(windowRecipe);
+                    // Recipes are rows too: pick the first row that is a mod.
+                    foreach (ListViewItem row in list.Items) row.Selected = false;
+                    list.Items.Cast<ListViewItem>().First(i => i.Tag is LibraryEntry && ((LibraryEntry)i.Tag).Recipe == null).Selected = true; WaitIdle(form);
+                    Require(form.OpenRecipeForTest == null && form.RecipeTextForTest == "", "opening a mod did not put the recipe away");
+                    form.ClosePackage(); WaitIdle(form);
+                    // 1.0.18: the right-click menu of a recipe row; Delete recipe takes it off the list, Undo puts it back.
+                    form.OpenRecipe(windowRecipe); Application.DoEvents();
+                    Require(form.OpenRecipeForTest != null && String.Join(" | ", form.RecipeMenuForTest) == "Edit recipe | Open recipes window | - | Delete recipe", "the recipe menu: " + String.Join(" | ", form.RecipeMenuForTest));
+                    form.DeleteRecipe(form.OpenRecipeForTest); Application.DoEvents();
+                    Require(form.RecipeStripCountForTest == 0 && form.OpenRecipeForTest == null && OutfitRecipes.List(AppConfig.DataDir).All(r => r.Name != "Window Recipe"), "Delete recipe: " + form.RecipeStripCountForTest);
+                    form.PerformUndo(); Application.DoEvents();
+                    windowRecipe = OutfitRecipes.List(AppConfig.DataDir).FirstOrDefault(r => r.Name == "Window Recipe") ?? windowRecipe;
+                    Require(form.RecipeStripCountForTest == 1 && OutfitRecipes.List(AppConfig.DataDir).Any(r => r.Name == "Window Recipe"), "Undo did not put the recipe back: " + form.RecipeStripCountForTest);
+                }
+                finally { OutfitRecipes.Delete(AppConfig.DataDir, windowRecipe.Id); Call(form, "RecipesChanged"); }
                 // The first scan listed everything at once and read it in the background; a second scan has nothing to read.
                 Require(form.IndexRuns == 1 && !form.Indexing && list.Items.Cast<ListViewItem>().All(i => !((LibraryEntry)i.Tag).Pending && !((LibraryEntry)i.Tag).NamesPending), "background read: runs " + form.IndexRuns);
                 Call(form, "RefreshLibrary", false); WaitIdle(form);
@@ -397,7 +840,7 @@ namespace SlotsInstaller
                 Require(!File.Exists(Path.Combine(costumes, "Juri", "Juri Bundle", "natives", "stm", "product", "model", "esf", "esf016", "001", "03", "esf016_001_03.mesh.230110883")) || true, "optional variant");
                 Render(form, Path.Combine(root, "queue-done.png"));
                 Require(Get<Label>(form, "batchSummary").Text.StartsWith("✓ Installed 2 of 2 mods"), "queue summary: " + Get<Label>(form, "batchSummary").Text);
-                // Add to outfit… shows for an open mod in Extra outfit mode.
+                // Add to outfit shows for an open mod in Extra outfit mode.
                 Call(form, "CloseBatch"); Application.DoEvents();
                 Call(form, "LoadPackage", list.Items.Cast<ListViewItem>().Select(i => (LibraryEntry)i.Tag).First(x => x.Name == "Juri Bundle")); WaitIdle(form); Application.DoEvents(); WaitIdle(form);
                 FlatButton addParts = Get<FlatButton>(form, "addPartsButton");

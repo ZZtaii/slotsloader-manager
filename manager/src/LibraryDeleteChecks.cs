@@ -138,16 +138,16 @@ namespace SlotsInstaller
             ContextMenuStrip menu = Get<ListView>(form, "modList").ContextMenuStrip;
             ToolStripMenuItem delete = OpenMenu(form, Entry(form, "Alpha"));
             string[] texts = menu.Items.Cast<ToolStripItem>().Select(i => i is ToolStripSeparator ? "|" : i.Text).ToArray();
-            // 1.0.15: Edit bundle… after Rename.
-            Require(menu.Items.Count == 11 && texts[0] == "Open" && texts[1] == "Open in Explorer" && texts[2] == "Rename" && texts[3] == "Edit bundle…" && texts[4] == "|" && texts[7] == "Uninstall selection" && texts[9] == "|" && Object.ReferenceEquals(delete, menu.Items[10]), "menu items: " + String.Join(", ", texts));
-            Require(delete.Text == "Delete archive" && delete.Available && delete.Enabled && delete.ForeColor == Palette.Red && menu.Items[9].Available, "zip item: " + delete.Text + " available " + delete.Available + " enabled " + delete.Enabled + " colour " + delete.ForeColor);
+            // 1.0.15: Reorder bundle after Rename.
+            Require(menu.Items.Count == 13 && texts[0] == "Open" && texts[1] == "Open in Explorer" && texts[2] == "Rename" && texts[3] == "Reorder bundle" && texts[5] == "Add to recipe" && texts[6] == "|" && texts[9] == "Uninstall selection" && texts[11] == "|" && Object.ReferenceEquals(delete, menu.Items[12]), "menu items: " + String.Join(", ", texts));
+            Require(delete.Text == "Delete archive" && delete.Available && delete.Enabled && delete.ForeColor == Palette.Red && menu.Items[11].Available, "zip item: " + delete.Text + " available " + delete.Available + " enabled " + delete.Enabled + " colour " + delete.ForeColor);
             Require(OpenMenu(form, Entry(form, "Delta")).Text == "Delete folder", "folder item: " + delete.Text);
             Call(form, "SetBusy", true, "Fixture busy");
             try { Require(!OpenMenu(form, Entry(form, "Alpha")).Enabled, "Delete is enabled while busy"); }
             finally { Call(form, "SetBusy", false, "Ready"); }
             var unreadable = new LibraryEntry { Name = "Missing library", Kind = "Library", SourcePath = @"C:\fixture\missing-library", Detection = "Error" };
             OpenMenu(form, unreadable);
-            Require(!delete.Available && !menu.Items[9].Available && !menu.Items[2].Available && !menu.Items[3].Available, "Delete, Rename or Edit bundle offered for an unreadable library row");
+            Require(!delete.Available && !menu.Items[11].Available && !menu.Items[2].Available && !menu.Items[3].Available, "Delete, Rename or Reorder bundle offered for an unreadable library row");
         }
 
         // ---- 1.0.5 Rename

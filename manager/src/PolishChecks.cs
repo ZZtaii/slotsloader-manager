@@ -308,8 +308,10 @@ namespace SlotsInstaller
             manualItem.Selected = true; Application.DoEvents();
             var manual = (InstalledOutfit)manualItem.Tag;
             var visible = buttons.Where(b => b.Visible).ToArray();
-            // 1.0.18 (the user): Uninstall is always the last row, so Open folder and Uninstall each take the full width.
-            Require(visible.Length == 2 && visible[0] == buttons[0] && visible[1] == buttons[4] && visible[1].Top > visible[0].Bottom && visible[0].Width == visible[1].Width && visible[0].Left == visible[1].Left, "Manual outfit actions: Open folder, then Uninstall alone below it.");
+            // 1.0.18 (the user): an even number of actions pairs up, Uninstall included. Open folder · Load order, then
+            // Recipes · Uninstall: Uninstall is a normal button at the end of the second row.
+            Require(visible.Length == 2 && visible[0] == buttons[0] && visible[1] == buttons[4] && visible[1].Top > visible[0].Bottom && visible[0].Width == visible[1].Width && visible[1].Left > visible[0].Right
+                && Get<FlatButton>(form, "recipesButton").Top == visible[1].Top && Get<FlatButton>(form, "loadOrderButton").Top == visible[0].Top, "Manual outfit actions: Open folder and Load order, then Recipes and Uninstall.");
             var title = Get<ClampedLabel>(form, "installedTitle");
             int line; using (Graphics g = title.CreateGraphics()) line = TextRenderer.MeasureText(g, "Ag", title.Font).Height;
             Require(title.Height <= line * 2 + title.Padding.Vertical + 2 && title.Height >= line, "Installed title is not limited to two lines: " + title.Height + " vs line " + line);
@@ -322,7 +324,7 @@ namespace SlotsInstaller
                 && visible[4].Top > visible[3].Top && visible[4].Left == visible[0].Left && visible[4].Right == visible[1].Right, "Managed outfit actions are not an aligned grid.");
             foreach (var button in visible) Require(button.Parent.ClientRectangle.Contains(button.Bounds), "Installed action is clipped: " + button.Text);
             using (var image = new Bitmap(installed.Width, installed.Height)) { installed.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(root, "polish-installed-" + installed.DeviceDpi + ".png"), ImageFormat.Png); }
-            report.Add("PASS: installed details: two-line title, character/state chips, path row with copy action, actions in an aligned two-column grid with Uninstall last (manual: 2 full-width rows, managed: 2x2 + Uninstall) without clipping.");
+            report.Add("PASS: installed details: two-line title, character/state chips, path row with copy action, actions in an aligned two-column grid with Uninstall last (manual: an even count, so Uninstall pairs up; managed: an odd count, so Uninstall takes the last row) without clipping.");
         }
 
         private static void CheckSettingsLibraries(MainForm form, string root, List<string> report)
@@ -342,11 +344,11 @@ namespace SlotsInstaller
             libraries.SelectedIndex = 1; Application.DoEvents();
             Require(remove.Enabled, "Remove is disabled with a selected library.");
             var layout = (TableLayoutPanel)Get<PaddedTextField>(form, "settingsGame").Parent;
-            Control browse = layout.GetControlFromPosition(1, 1), add = remove.Parent.Controls.OfType<FlatButton>().First(c => c.Text == "Add…");
-            Require(Math.Abs(BoundsIn(add, layout).Left - browse.Left) <= 1 && Math.Abs(BoundsIn(add, layout).Width - browse.Width) <= 1, "Add… is not aligned with Browse….");
+            Control browse = layout.GetControlFromPosition(1, 1), add = remove.Parent.Controls.OfType<FlatButton>().First(c => c.Text == "Add");
+            Require(Math.Abs(BoundsIn(add, layout).Left - browse.Left) <= 1 && Math.Abs(BoundsIn(add, layout).Width - browse.Width) <= 1, "Add is not aligned with Browse.");
             Require(AllControls(settings).OfType<Button>().Any(x => x.Text == "Save settings" && x.Visible), "Save settings is missing.");
             libraries.Items.Clear();
-            report.Add("PASS: settings libraries use padded owner-drawn rows with found/missing state and scan counts; Remove follows the selection; Add…/Remove align with Browse….");
+            report.Add("PASS: settings libraries use padded owner-drawn rows with found/missing state and scan counts; Remove follows the selection; Add/Remove align with Browse.");
         }
 
         private static void CheckTiming(MainForm form, List<string> report)
@@ -418,6 +420,7 @@ namespace SlotsInstaller
             "Program.ShowError",            // an error the app cannot continue after (start-up, unhandled)
             "RecoveryForm.DeleteSelected",  // a recoverable copy is deleted for good (no Undo)
             "MainForm.ConfirmVanilla",      // 1.0.1: Restore game to vanilla removes every mod for good (no Undo)
+            "MainForm.ConfirmLostParts",    // 1.0.18 Added parts Save: asked only when added parts are lost for good (their mods are gone); otherwise no question, Undo puts the list back
         };
         // 2.4.1: modal windows (Form.ShowDialog). Each is opened by the user's own click to view or edit something,
         // except OutfitSetsForm.Confirm (a saved copy deleted for good, no Undo). Only the welcome opens on its own, once.
@@ -425,12 +428,18 @@ namespace SlotsInstaller
         {
             "WelcomeForm.ShowWelcome",      // 1.0.11 the welcome: once at the first start, then gear → Welcome (Esc / Close)
             "TourForm.Run",                 // 1.0.15 the tours: once per page at first use, then gear → Take the tour (Esc / Skip tour)
-            "AddPartsForm.Choose",          // 1.0.6 Add to outfit…: pick the installed outfit and the parts (Cancel changes nothing)
+            "AddPartsForm.Choose",          // 1.0.6 Add to outfit: pick the installed outfit and the parts (Cancel changes nothing)
+            "AddedPartsForm.Choose",        // 1.0.18 Added parts: reorder or remove what other mods added to one outfit (Cancel changes nothing; Save has Undo)
+            "RecipeBuilderForm.Choose",     // 1.0.18 New recipe: fighter, base, parts on top, what overrides what (Cancel saves nothing)
+            "RecipeBuilderForm.EnlargePreview", // 1.0.18 the builder's preview image, enlarged (click the preview; Esc closes)
+            "OptionPickForm.Choose",        // 1.0.18 the builder's Options: tick a mod's options (Cancel keeps the earlier ticks)
+            "RecipesForm.Choose",           // 1.0.18 Outfit recipes: the saved recipes; Install, Delete recipe, save the selected outfit (Close changes nothing)
+            "OutfitOrderForm.Choose",       // 1.0.18 Outfit order: drag one fighter's extra outfits into place (Cancel changes nothing; Save has Undo)
             "FluffyPresetForm.Review",      // Import Fluffy preset: map each entry before anything installs (Cancel installs nothing)
-            "MainForm.ShowMigration",       // Migrate installed mods…: review, then wait while the user uninstalls there (Close keeps the saved plan)
+            "MainForm.ShowMigration",       // Migrate installed mods: review, then wait while the user uninstalls there (Close keeps the saved plan)
             "MainForm.EnlargePreview",      // the preview image, enlarged (click the preview)
             "MainForm.ShowCompositionReport", // Health (Extra outfit mode): the compatibility report
-            "MainForm.BuildLibraryPage",    // 1.0.15 right-click → Edit bundle…: the editor (Close / Discard changes)
+            "MainForm.BuildLibraryPage",    // 1.0.15 right-click → Reorder bundle: the editor (Close / Discard changes)
             "MainForm.InspectOrToggleInstalled", // 1.0.15 Installed → Health: the read-only file report (Close)
             "MainForm.ShowCurrentReport",   // Health (Replace original): the full report; the inspector shows the summary inline
             "MainForm.ShowPresetsWindow",   // Presets…

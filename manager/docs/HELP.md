@@ -24,7 +24,7 @@ The Manager installs Street Fighter 6 mods from your own mod folders: ZIP, RAR a
 - **Replace original** overwrites the game's own files, the way external mod managers do. Tool mods (REFramework scripts, plugins, Slotsloader itself) always install this way.
 
 ### First start
-- On the first start the Manager looks for SF6 through Steam and adds your external mod manager's mod folder as a library when it finds one. If it can't, set them in **Settings → General**: the **Game folder**, and your **Mod libraries** with **Add…**, then click **Save settings**.
+- On the first start the Manager looks for SF6 through Steam and adds your external mod manager's mod folder as a library when it finds one. If it can't, set them in **Settings → General**: the **Game folder**, and your **Mod libraries** with **Add**, then click **Save settings**.
 - Add every folder where you keep downloaded mods as a mod library.
 - A short welcome shows once. Open it again with **Settings → General → Show welcome**. This Help opens any time with F1 or **Gear → Help**.
 - Short tours point at the real controls: the Mod library's after the welcome, and the Installed page's and Settings' the first time you open them. **Gear → Take the tour** shows any of them again. Esc or **Skip tour** ends one.
@@ -32,6 +32,7 @@ The Manager installs Street Fighter 6 mods from your own mod folders: ZIP, RAR a
 ### Your first extra outfit
 - Open **Mod library** and pick a mod. Ctrl+F searches, and Enter opens the top match. You can also drop an archive or folder on the window.
 - Tick the options you want. Groups marked **Required** need one choice; the footer lists what is still missing.
+- **Main files** marks an option recognized by its name: ticked for you, but not required.
 - Under **INSTALL AS**, choose **Extra outfit**. If the line under it says REFramework or Slotsloader is missing, click that line to install it. If your external mod manager installed REFramework, install or update it there.
 - Check **CHARACTER** and **OUTFIT NAME**, then click **Install** (or press Space).
 - Click **Launch SF6**. New outfits show on the character select screen once SF6 has started.
@@ -55,10 +56,10 @@ The header shows "● Mod manager running". While your replacements use the PAK 
 ### Tips
 - Don't install the same mod in both managers.
 - Your mod manager's mod folder can be one of your **Mod libraries**, so the same downloads show here.
-- **Settings → Game files & replacements → Import external preset (.prt)…** brings over a preset from your mod manager. Each row is a preset entry, numbered in preset order; untick a row to leave that entry out. Later entries win shared replacement files. Importing enables the selected replacements at the top of Installed. When several archives match an entry, double-click the row to choose one; until then it is skipped. The same download in two libraries counts as one match.
+- **Settings → Game files & replacements → Import external preset (.prt)** brings over a preset from your mod manager. Each row is a preset entry, numbered in preset order; untick a row to leave that entry out. Later entries win shared replacement files. Importing enables the selected replacements at the top of Installed. When several archives match an entry, double-click the row to choose one; until then it is skipped. The same download in two libraries counts as one match.
 
 ### Moving everything to the Manager
-The Windows version's **Migrate installed mods…** isn't in the Linux build, since your mod manager runs on Linux only through workarounds. Instead, import its preset (above), or uninstall its mods there and install them here with **Replace original**, in the same order: a later mod wins shared files.
+The Windows version's **Migrate installed mods** isn't in the Linux build, since your mod manager runs on Linux only through workarounds. Instead, import its preset (above), or uninstall its mods there and install them here with **Replace original**, in the same order: a later mod wins shared files.
 
 # In depth
 
@@ -78,7 +79,7 @@ Choose in **Settings → Game files & replacements → Replacement method**:
 Changing the method converts installed replacements; **Undo** converts them back.
 
 ### Priority and conflicts
-- On the Installed page, the **Installed** type lists replacements and tool mods in priority order. Higher in the list wins files that several mods share. What you install last goes to the top, so it wins; **Move up** and **Move down** change the order (the row moves at once and the order is saved a moment after your last click).
+- On the Installed page, the **Installed** type lists replacements and tool mods in priority order: **#1** is on top and wins files that several mods share, like the mod loaded last in other mod managers. What you install last goes to #1; **Move up** and **Move down** change the order (the row moves at once and the order is saved a moment after your last click).
 - Before you install, **REPLACES** in the inspector and the footer name any installed mod for the same outfit. The link **Uninstall 'name'** removes that other mod.
 - The **N shared files** chip on the Installed page shows which mods share files and which one wins.
 - Installing another option set of a mod you already installed replaces it and puts it at the top. **Reinstall** after the source changed keeps its place.
@@ -142,17 +143,26 @@ For an archive with several options, **Install all variants** copies the whole a
 When a ZIP mod shows options from an add-on archive (marked **Add-on** in the list), the copy includes them, so their combinations are built too. Right-click an option to open its archive in Explorer.
 
 ### Add to outfit
-**Add to outfit…** copies only the ticked options (one hair option of a bundle, for example) into an extra outfit the Manager already installed. Files with the same names are replaced and nothing else changes. Files made for another outfit slot can't go on it, so those outfits can't be picked.
+**Add to outfit** copies only the ticked options (one hair option of a bundle, for example) into an extra outfit the Manager already installed. Files with the same names are replaced and nothing else changes. Files made for another outfit slot can't go on it, so those outfits can't be picked. The Installed page shows what was added; **Added parts** reorders or removes them (the top one wins).
 
 ### Edit options
 On the Installed page, select an outfit and click **Edit options**. It opens in the Mod library with its options ticked. Change them and click **Install** to update that slot. Two or more slots from one mod show as one row with "N slots"; click its arrow to see each slot.
 
+### Load order
+Select an extra outfit and click **Load order**. Drag the fighter's outfits into place and click **Save order**. It applies when SF6 starts next; close SF6 first. Outfits SF6 has not loaded yet get a slot after one start.
+
+### Outfit recipes
+A recipe writes down one outfit: its mod, its options and the parts added on top, in order. On the Installed page, the **Recipes** icon (or **Recipes** on an outfit) lists them: **Install as extra outfit** makes a new outfit from one, and **New recipe** opens the builder, filled with the selected outfit and its added parts. Searching "recipes" or "rc" finds outfits that match one.
+
+### Play vanilla for a while
+Settings → Game files & replacements → **Turn outfit mods off** switches replacements and extra outfits off. Tool mods stay on. The same button, or the banner, turns them back on.
+
 ### Organize a bundle
-In the library, right-click a ZIP, RAR or 7Z with several options and choose **Edit bundle**. Select an option to rename it or change its rule. Use **New group** under the selected item, then drag options onto it or use **Move under**. Drop an option near the top or bottom edge of a row to place it above or below that row. Pick **Choose one** for required alternatives or **Choose up to one** when the base outfit works on its own. The line under the list says when a rule would stop the layout from saving.
+In the library, right-click a ZIP, RAR or 7Z with several options and choose **Reorder bundle**. Select an option to rename it or change its rule. Use **New group** under the selected item, then drag options onto it or use **Move under**. Drop an option near the top or bottom edge of a row to place it above or below that row. Pick **Choose one** for required alternatives or **Choose up to one** when the base outfit works on its own. The line under the list says when a rule would stop the layout from saving.
 
 **Suggest layout** works locally. It groups recognizable alternatives and explains which rules came from the author. Review any uncertain groups before saving. **Refine with Assistant** sends option names, rules and descriptions to your configured Claude model. It works on the current draft, and **Cancel refinement** stops it. Use **Undo suggestion** to return to the previous draft.
 
-**Save ZIP** puts the layout in the ZIP's comment; its files stay as they are, so installed copies don't show "Source changed". **Save layout** (RAR, 7Z) keeps it in the `Data` folder and never changes the archive; a renamed or moved copy keeps it. **Restore author layout** lets you preview the original menu and save it again. An installed outfit uses its existing files until you reinstall it. If a saved layout no longer fits (files added in another program), the author's layout shows with a note; open **Edit bundle** and save to replace it.
+**Save ZIP** puts the layout in the ZIP's comment; its files stay as they are, so installed copies don't show "Source changed". **Save layout** (RAR, 7Z) keeps it in the `Data` folder and never changes the archive; a renamed or moved copy keeps it. **Restore author layout** lets you preview the original menu and save it again. An installed outfit uses its existing files until you reinstall it. If a saved layout no longer fits (files added in another program), the author's layout shows with a note; open **Reorder bundle** and save to replace it.
 
 ## Presets
 > Save your whole setup as a list and bring it back later.
@@ -225,7 +235,7 @@ This also removes REFramework and Slotsloader if the Manager installed them, so 
 - SF6 was just updated: see [[After an SF6 update]] first.
 
 ### Step 2: restore the game to vanilla
-If it still won't start, **Gear → Restore → Restore game to vanilla…** removes all mods (your external mod manager's too), every patch PAK and the `natives` folder. Extra outfits stay, and so do REFramework and Slotsloader if the Manager installed them. A REFramework or Slotsloader your external mod manager installed goes with its mods; install them again from the line under **INSTALL AS**. It has no Undo. See [[Restore and undo#Restore game to vanilla]].
+If it still won't start, **Gear → Restore → Restore game to vanilla** removes all mods (your external mod manager's too), every patch PAK and the `natives` folder. Extra outfits stay, and so do REFramework and Slotsloader if the Manager installed them. A REFramework or Slotsloader your external mod manager installed goes with its mods; install them again from the line under **INSTALL AS**. It has no Undo. See [[Restore and undo#Restore game to vanilla]].
 
 ### Step 3: verify the game files
 If the Manager says some game entries "couldn't be proven", or the game still fails, verify SF6's files in Steam. Then **Reapply** your replacements.
@@ -342,7 +352,7 @@ Many actions happen at once and show **Undo** in the status bar: **Disable** and
 **Gear → Restore → Remove this Manager's mods** removes every replacement and tool mod the Manager installed and restores the original files. That includes REFramework and Slotsloader if the Manager installed them, so extra outfits stop loading until you press **Undo**, which puts everything back. Undo waits while your external mod manager has mods installed and ends at your next change, so your enabled replacements are saved as a preset first. Your extra outfits and your external mod manager's mods are not touched. The same action is **Restore original game files** on the Installed page banner and in **Settings → Game files & replacements**.
 
 ### Restore game to vanilla
-**Gear → Restore → Restore game to vanilla…** asks first and has no Undo. Close SF6 and your external mod manager first. It removes:
+**Gear → Restore → Restore game to vanilla** asks first and has no Undo. Close SF6 and your external mod manager first. It removes:
 
 - every mod this Manager installed, except its REFramework and Slotsloader;
 - every mod your external mod manager installed (its list is cleared);

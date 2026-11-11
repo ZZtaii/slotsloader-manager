@@ -68,7 +68,7 @@ namespace SlotsInstaller
         }
 
         // A layout that no longer fits the ZIP (files added by another program, a damaged comment) never makes
-        // the mod unusable: the author's layout is used and Edit bundle can save a new one.
+        // the mod unusable: the author's layout is used and Reorder bundle can save a new one.
         internal static void Read(ModPackage package, byte[] comment)
         {
             string json; bool damaged;
@@ -115,7 +115,7 @@ namespace SlotsInstaller
         }
         private static void Ignore(ModPackage package, string why)
         {
-            package.LayoutError = why + ", so the author's layout is shown. Edit bundle saves a new one.";
+            package.LayoutError = why + ", so the author's layout is shown. Reorder bundle saves a new one.";
             package.Warnings.Insert(0, package.LayoutError);
         }
 

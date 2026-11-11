@@ -1191,7 +1191,7 @@ namespace SlotsInstaller
 
         private ReplaceMod PublishPrepared(ReplacePlan plan, string name, bool test, ReplaceState state, out string storeDir, string newId = null)
         {
-            var mod = new ReplaceMod { Id = newId ?? Guid.NewGuid().ToString("N"), Name = name, SourcePath = plan.SourcePath, Kind = plan.Kind, InstalledUtc = DateTime.UtcNow.ToString("o"), SelectedIds = plan.SelectedIds.ToList(), Enabled = true, Test = test, Affects = plan.AffectsText };
+            var mod = new ReplaceMod { Id = newId ?? Guid.NewGuid().ToString("N"), Name = name, SourcePath = plan.SourcePath, Kind = plan.Kind, InstalledUtc = DateTime.UtcNow.ToString("o"), SelectedIds = plan.SelectedIds.ToList(), OnlyParts = (plan.OnlyParts ?? new List<string>()).ToList(), Enabled = true, Test = test, Affects = plan.AffectsText };
             mod.ArchiveSha = plan.ArchiveSha; mod.ArchiveStamp = plan.ArchiveStamp; mod.ArchiveSize = plan.ArchiveSize;
             mod.Files = plan.Files.Select(f => new ModFile { ArchiveEntry = plan.ArchiveSha != null && !f.Fixes.Any(x => x.Changed) ? f.EntryPath : null, Path = f.Path, Sha256 = f.Sha256, Size = f.Size, Fixes = String.Join("; ", f.Fixes.Where(x => x.Changed).Select(x => x.Message)) }).ToList();
             mod.Notes = plan.Items.Where(i => i.Level == "fix" || i.Level == "warn").Select(i => i.Text).ToList();
@@ -1294,6 +1294,7 @@ namespace SlotsInstaller
             ReplaceRemovedRecord record = Json.Read<ReplaceRemovedRecord>(recordFile);
             if (record == null || record.Format != "sf6-replace-removed-v1" || record.Mod == null || String.IsNullOrEmpty(record.Mod.Id) || record.Mod.Files == null) throw new IOException("Unrecognized removed-replacement record: " + recordFile);
             if (record.Mod.SelectedIds == null) record.Mod.SelectedIds = new List<string>();
+            if (record.Mod.OnlyParts == null) record.Mod.OnlyParts = new List<string>();
             if (record.Mod.Notes == null) record.Mod.Notes = new List<string>();
             long bytes = 0; foreach (ModFile f in record.Mod.Files) { string p = Safety.Under(files, f.Path); if (File.Exists(p)) bytes += new FileInfo(p).Length; }
             return new RemovedReplacement { Folder = full, Record = record, Bytes = bytes };
@@ -1623,6 +1624,7 @@ namespace SlotsInstaller
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
             ReplaceState state;
             try { RelocationReport relocation; state = LoadState(out relocation); status.Relocation = relocation; } catch (Exception ex) { status.Details.Add(ex.Message); return status; }
+            status.ModsOff = state.ModsOff;   // 1.0.18 (ReplaceEngineModsOff.cs)
             if (state.Mods.Count == 0 && state.Deployed.Count == 0 && state.Released.Count == 0) return status;
             try
             {
@@ -1706,7 +1708,7 @@ namespace SlotsInstaller
                 ReplaceMod m = state.Mods[i];
                 MissingCopies missing = null;
                 // 1.0.18: the archive serves its files only while it holds what was installed. A new stamp alone (an
-                // Edit bundle save, a restore, a sync tool) is checked by content once, as Reapply would read it (review
+                // Reorder bundle save, a restore, a sync tool) is checked by content once, as Reapply would read it (review
                 // P2-1); an archive that can't be read now counts as usable, never as replaced.
                 int archive = -1;   // -1 not read yet, 0 usable, 1 gone, 2 replaced by another file
                 foreach (ModFile f in m.Files)

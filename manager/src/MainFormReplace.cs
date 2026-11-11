@@ -35,6 +35,16 @@ namespace SlotsInstaller
 
     internal sealed partial class MainForm
     {
+        // The order of replacements and tool mods, said in full (the user: the numbering and which mod loads
+        // first/last was unclear). "#2 of 7" on rows and chips; the details add what the number means.
+        private string OrderPlace(GameModRow row) { return "#" + row.Priority + " of " + gameRows.Count(r => r.Mod != null); }
+        internal string OrderNote(GameModRow row)
+        {
+            ModFile pak = row.Mod.Files.FirstOrDefault(f => ReplaceEngine.PatchNumber(f.Path) > 0);
+            if (pak != null) return "PAK mod: added to the game as " + ReplaceEngine.PatchPakName(ReplaceEngine.PatchNumber(pak.Path)) + ". Between PAK mods the game uses the one with the higher patch number, so the one installed last wins. Move up/down does not change that.";
+            string place = "Order: " + OrderPlace(row) + ". #1 is the top of the list and wins every file it shares with another mod, like the mod loaded last in other mod managers. A new install goes to #1; Move up/down changes the order.";
+            return place + (row.Shares.Count == 0 ? " This mod shares no files with another mod now, so its place changes nothing." : "");
+        }
         private string installMode = InstallModes.Slot;
         private ReplaceSettings replaceSettings = ReplaceSettings.Load();
         private ReplacePlan replacePlan;
@@ -114,7 +124,7 @@ namespace SlotsInstaller
             {
                 if (LinuxPlatform.IsLinux && GameProcesses.Probe is SystemProcessProbe)
                 { LinuxPlatform.ProcessStatus status = LinuxPlatform.Status(); game = status.GameRunning; fluffy = status.FluffyRunning; }
-                else { game = GameProcesses.Probe.IsGameRunning(); fluffy = GameProcesses.Probe.IsFluffyRunning(); }
+                else GameProcesses.Poll(out game, out fluffy);   // one process snapshot per poll
             }
             catch (Exception ex) { if (LinuxPlatform.IsLinux) { probeError = ex.Message; game = fluffy = true; } else Program.Log(ex); }
             bool changed = game != gameRunning || fluffy != fluffyRunning;
@@ -126,6 +136,9 @@ namespace SlotsInstaller
             launchButton.Enabled = !game && !busy;
             if (changed) { UpdateFooter(); ShowInstalledSelection(); UpdateBanner(); UpdateLibraryUninstall(); }
             if (leftoverTestPending && !gameRunning && !busy) FinishLeftoverTest();
+            // Minimized: nothing to repaint, so the game and mod manager drives are left alone (about ten file
+            // stats per poll). Restoring the window runs both checks at once (Activated) and on the next poll.
+            if (WindowState == FormWindowState.Minimized) return;
             CheckFluffyStamp();
             CheckToolStamp();
         }
@@ -261,6 +274,8 @@ namespace SlotsInstaller
                 // 1.0.8 (the user): REFramework comes first; Slotsloader is its plugin.
                 string notice = ReFrameworkNotice(toolStatus); bool clickable = toolStatus.ReFrameworkOffer;
                 if (notice == null) { notice = toolStatus.SlotsLoader ? "Adds the outfit as a new slot · Slotsloader is installed" : "Slotsloader isn't installed, so extra outfits won't load · click to install it"; clickable = !toolStatus.SlotsLoader; }
+                // 1.0.18: outfit mods are off and Slotsloader with them: say that, not "isn't installed · click to install it".
+                if (ModsAreOff && gameStatus.ModsOff.LoaderId.Length > 0 && !toolStatus.SlotsLoader && !toolStatus.ReFrameworkOffer) { notice = "Outfit mods are off, so extra outfits won't load · turn them back on in Settings"; clickable = false; }
                 bool fine = notice.StartsWith("Adds the outfit", StringComparison.Ordinal);
                 modeNotice.Text = notice;
                 modeNotice.ForeColor = fine ? Palette.Muted : Palette.Accent;
@@ -381,6 +396,7 @@ namespace SlotsInstaller
 
         private void UpdateReplaceButtons()
         {
+            if (openRecipe != null && package == null) { UpdateRecipeButtons(); return; }   // 1.0.18: a recipe is open (RecipesForm.cs)
             bool ready = !busy && !ReviewPending && replacePlan != null && replacePlan.CanInstall && missingRestoredOptions.Count == 0 && unresolvedChoices.Count == 0;
             bool whileRunning = replacePlan != null && replacePlan.Method == ReplaceMethods.Loose && replacePlan.RootFiles == 0;
             installButton.Enabled = ready && (!gameRunning || whileRunning) && !FluffyBlocksPlan;
@@ -714,6 +730,7 @@ namespace SlotsInstaller
             bannerRemovePak = banner.Add(Button("Remove it", false, 90, delegate { RemoveOrphanedCostumePak(); })); bannerRemovePak.AccessibleName = "Remove the leftover Slotsloader costume pak";
             bannerRepair = banner.Add(Button("Repair", false, 76, delegate { RepairGameEntries(); })); bannerRepair.AccessibleName = "Repair the game entries another tool left invalidated";   // 2.4.2 (MainFormPakRepair.cs)
             bannerShowMod = banner.Add(Button("Show mod", false, 96, delegate { ShowMissingCopyMod(); })); bannerShowMod.AccessibleName = "Select the mod this notice is about";
+            bannerModsOn = banner.Add(Button("Turn mods back on", false, 150, delegate { ToggleModsOff(); })); bannerModsOn.Name = "bannerModsOn"; bannerModsOn.AccessibleName = "Turn outfit mods back on";   // 1.0.18 (MainFormModsOff.cs)
             gameBannerText = banner.Message;
             // 2.4.0 (no tooltips): clicking the banner text lists every detail. 1.0.18: indented lines continue the
             // entry above them (no bullet).
@@ -739,6 +756,7 @@ namespace SlotsInstaller
             bannerShowMod.AccessibleName = gameStatus != null && gameStatus.StoredMissingMods.Count > 1
                 ? "Select the next of the " + gameStatus.StoredMissingMods.Count + " mods this notice names" : "Select the mod this notice is about";
             UpdateRepairButton();   // 2.4.2
+            UpdateModsOffControls();   // 1.0.18
             // 2.4.1: Restore original game files only where it fits: game files changed or SF6 was updated, with
             // replacements or tool mods to restore. It is not the answer to the loose file loader or a leftover pak
             // notice, and it stays available in Settings → Game files & replacements.
@@ -790,7 +808,7 @@ namespace SlotsInstaller
             TextRenderer.DrawText(e.Graphics, row.Name, Palette.Strong, new Rectangle(r.Left + Px(14), r.Top + Px(10), r.Width - Px(25), Px(24)), Palette.Text, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             string sub = row.Leftover != null ? LeftoverRowText(row)   // 1.0.11
                 : row.Fluffy != null ? "External mod manager   ·   " + ReplacePlanner.N(row.Fluffy.Files.Count, "file") + (row.Fluffy.CopiedFiles ? "" : "   ·   PAK install") + "   ·   uninstall it there"
-                : (SourceChanged(row.Mod.SourcePath) && !LoaderCostumePak.IsLoaderMod(row.Mod) ? "Source changed   ·   " : "") + row.KindLabel + "   ·   #" + row.Priority + "   ·   " + (row.Mod.Enabled ? "Enabled" : "Disabled") + (row.Conflicts > 0 ? "   ·   " + ReplacePlanner.N(row.Conflicts, "shared file") : "") + (row.Mod.Test ? "   ·   Test" : "") + (row.Stacks.Count > 0 ? "   ·   " + row.Stacks[0] : String.IsNullOrEmpty(row.Mod.Affects) || row.Kind == "Tool" ? "" : "   ·   " + row.Mod.Affects);
+                : (SourceChanged(row.Mod.SourcePath) && !LoaderCostumePak.IsLoaderMod(row.Mod) ? "Source changed   ·   " : "") + row.KindLabel + "   ·   " + OrderPlace(row) + "   ·   " + (row.Mod.Enabled ? "Enabled" : "Disabled") + (row.Conflicts > 0 ? "   ·   " + ReplacePlanner.N(row.Conflicts, "shared file") : "") + (row.Mod.Test ? "   ·   Test" : "") + (row.Stacks.Count > 0 ? "   ·   " + row.Stacks[0] : String.IsNullOrEmpty(row.Mod.Affects) || row.Kind == "Tool" ? "" : "   ·   " + row.Mod.Affects);
             Rectangle meta = DrawSourceGoneNote(e.Graphics, row.Mod != null && !LoaderCostumePak.IsLoaderMod(row.Mod) ? row.Mod.SourcePath : null, new Rectangle(r.Left + Px(14), r.Top + Px(36), r.Width - Px(25), Px(20)));   // 2.4.1 Delete: muted "Source deleted"
             TextRenderer.DrawText(e.Graphics, sub, Palette.Small, meta, row.Mod == null ? Palette.Muted : row.Mod.Enabled ? Palette.Accent : Palette.Muted, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);   // 1.0.1: no "played …" (the user)
             DrawUsageAfter(e.Graphics, sub, InstalledAgo(row), Palette.Small, meta);   // 1.0.1: when it was installed, when it fits
@@ -807,7 +825,7 @@ namespace SlotsInstaller
             if (sourceGone != null) chips.Add(ChipStrip.Quiet(sourceGone));   // 2.4.1 Delete: still installed, its source is gone
             if (row.Mod != null)
             {
-                chips.Add(ChipStrip.Neutral("#" + row.Priority));
+                chips.Add(ChipStrip.Neutral(OrderPlace(row)));
                 chips.Add(row.Mod.Enabled ? ChipStrip.Good("Enabled") : ChipStrip.Quiet("Disabled"));
                 if (row.Conflicts > 0) chips.Add(ChipStrip.Warn(ReplacePlanner.N(row.Conflicts, "shared file")));
                 else if (row.Stacks.Count > 0) chips.Add(ChipStrip.Quiet("Same outfit as another mod"));
@@ -843,7 +861,8 @@ namespace SlotsInstaller
                     foreach (string stack in row.Stacks) lines.Add("• " + stack);
                     lines.Add("");
                 }
-                lines.Add((m.Enabled ? "Installed in the game folder" : "Disabled: stored by the Manager, not in the game folder") + " · " + ReplacePlanner.N(m.Files.Count, "file") + " · " + row.Owned + " deployed" + (row.HasConflicts ? "" : " (higher in the list wins shared files)") + ".");
+                lines.Add((m.Enabled ? "Installed in the game folder" : "Disabled: stored by the Manager, not in the game folder") + " · " + ReplacePlanner.N(m.Files.Count, "file") + " · " + row.Owned + " deployed.");
+                lines.Add(OrderNote(row));
                 if (!String.IsNullOrEmpty(m.Affects) && row.Kind != "Tool") lines.Add("Replaces: " + m.Affects);
                 foreach (string note in m.Notes.Take(12)) lines.Add("• " + note);
                 lines.Add("");
@@ -1136,7 +1155,7 @@ namespace SlotsInstaller
             settingsReplacePanel.Visible = replace;
             if (settingsUpdatesPanel != null) { settingsUpdatesPanel.Visible = false; settingsUpdatesTab.SetActive(false); }
             HideAboutTab();   // 2.5.9
-            if (replace) { settingsReplacePanel.BringToFront(); LoadReplaceSettingsFields(); installSlotsLoaderButton.Text = "Install Slotsloader " + CurrentInstallPin().Version + "…"; }
+            if (replace) { settingsReplacePanel.BringToFront(); LoadReplaceSettingsFields(); installSlotsLoaderButton.Text = "Install Slotsloader " + CurrentInstallPin().Version; }
             settingsGeneralTab.SetActive(!replace); settingsReplaceTab.SetActive(replace);
         }
 
@@ -1168,17 +1187,18 @@ namespace SlotsInstaller
             add(left, Rhythm.Gap(Rhythm.Group));
             add(left, Caption("REFramework and Slotsloader"));
             settingsToolStatus = note("", 52); add(left, settingsToolStatus);
-            installSlotsLoaderButton = Button("Install Slotsloader " + LoaderRelease.Pin.Version + "…", false, 230, delegate { OfferSlotsLoaderInstall(); }); installSlotsLoaderButton.Height = 32; installSlotsLoaderButton.Font = Palette.Small; installSlotsLoaderButton.Margin = Padding.Empty;
+            installSlotsLoaderButton = Button("Install Slotsloader " + LoaderRelease.Pin.Version, false, 230, delegate { OfferSlotsLoaderInstall(); }); installSlotsLoaderButton.Height = 32; installSlotsLoaderButton.Font = Palette.Small; installSlotsLoaderButton.Margin = Padding.Empty;
             // 1.0.8: REFramework first (Slotsloader is its plugin); shown while it is missing or out of date.
-            installReFrameworkButton = Button("Install " + ReFrameworkRelease.Pin.Label + "…", false, 260, delegate { OfferReFrameworkInstall(); }); installReFrameworkButton.Height = 32; installReFrameworkButton.Font = Palette.Small; installReFrameworkButton.Margin = new Padding(0, 0, 8, 0);
+            installReFrameworkButton = Button("Install " + ReFrameworkRelease.Pin.Label, false, 260, delegate { OfferReFrameworkInstall(); }); installReFrameworkButton.Height = 32; installReFrameworkButton.Font = Palette.Small; installReFrameworkButton.Margin = new Padding(0, 0, 8, 0);
             var toolRow = buttonRow(8); toolRow.Controls.Add(installReFrameworkButton); toolRow.Controls.Add(installSlotsLoaderButton); add(left, toolRow);
 
             add(right, Caption("Game files"));
             settingsGameFiles = note("", 76); add(right, settingsGameFiles);
             var gameRow = buttonRow(8);
-            FlatButton reapply = Button("Reapply all", false, 120, delegate { ReapplyAll(); });
+            FlatButton reapply = Button("Reapply all", false, 100, delegate { ReapplyAll(); });   // 1.0.18: 120 to 100, room for a third button at 1110 wide
             FlatButton restore = Button("Restore original game files", false, 220, delegate { RestoreOriginalGameFiles(); }); restore.Danger = true;
-            foreach (FlatButton b in new[] { reapply, restore }) { b.Height = 32; b.Font = Palette.Small; b.Margin = new Padding(0, 0, 8, 0); gameRow.Controls.Add(b); }
+            // 1.0.18: Turn outfit mods off (MainFormModsOff.cs) shares the row: the column has no height to spare at 640.
+            foreach (FlatButton b in new[] { reapply, restore, BuildModsOffButton() }) { b.Height = 32; b.Font = Palette.Small; b.Margin = new Padding(0, 0, 8, 0); gameRow.Controls.Add(b); }
             add(right, gameRow);
             add(right, Rhythm.Gap(Rhythm.Group));
             add(right, Caption("Replacement store"));
@@ -1189,7 +1209,7 @@ namespace SlotsInstaller
             var storeRow = new TableLayoutPanel { Height = 32, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
             storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108)); storeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92)); storeRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             settingsStore = TextField(); settingsStore.Dock = DockStyle.Fill; settingsStore.Margin = new Padding(0, 0, 8, 0); settingsStore.AccessibleName = "Replacement store folder"; settingsStore.PlaceholderText = "Default: Data\\replace-store";
-            FlatButton browse = Button("Browse…", false, 100, delegate { using (var d = new FolderBrowserDialog { Description = "Choose a folder for the replacement store" }) if (d.ShowDialog(this) == DialogResult.OK) settingsStore.Text = d.SelectedPath; });
+            FlatButton browse = Button("Browse", false, 100, delegate { using (var d = new FolderBrowserDialog { Description = "Choose a folder for the replacement store" }) if (d.ShowDialog(this) == DialogResult.OK) settingsStore.Text = d.SelectedPath; });
             browse.Dock = DockStyle.Fill; browse.Margin = new Padding(0, 0, 8, 0); browse.Font = Palette.Small;
             FlatButton save = Button("Save", true, 84, delegate { SaveReplacePreferences(); }); save.Dock = DockStyle.Fill; save.Margin = Padding.Empty; save.Font = Palette.Small;
             save.AccessibleName = "Save the replacement store folder";
@@ -1199,7 +1219,7 @@ namespace SlotsInstaller
             // 1.0.15: its own row under the store's status (only while older installs hold full copies), so the folder
             // field keeps its width.
             var reclaimRow = buttonRow(0); reclaimRow.Name = "reclaimSpaceRow"; reclaimRow.Visible = false;
-            reclaimSpaceButton = Button("Reclaim space…", false, 150, delegate { ConfirmReclaimSpace(); });
+            reclaimSpaceButton = Button("Reclaim space", false, 150, delegate { ConfirmReclaimSpace(); });
             reclaimSpaceButton.Margin = Padding.Empty; reclaimSpaceButton.Height = 32; reclaimSpaceButton.Font = Palette.Small;
             reclaimRow.Controls.Add(reclaimSpaceButton); reclaimSpaceRow = reclaimRow;
             add(right, reclaimRow);
@@ -1207,10 +1227,10 @@ namespace SlotsInstaller
             add(right, Caption("External mod manager"));
             settingsFluffyStatus = note("", 52); add(right, settingsFluffyStatus);
             var fluffyRow = buttonRow(8);
-            FlatButton import = Button("Import external preset (.prt)…", false, 190, delegate { ImportFluffyPreset(); });
-            // 1.0.15: moves that manager's active mods here (MigrationForm); "Resume migration…" while a plan is saved.
+            FlatButton import = Button("Import external preset (.prt)", false, 190, delegate { ImportFluffyPreset(); });
+            // 1.0.15: moves that manager's active mods here (MigrationForm); "Resume migration" while a plan is saved.
             // Linux: not offered, since the external manager itself runs there only through workarounds.
-            migrateModsButton = Button("Migrate installed mods…", false, 180, ShowMigration);
+            migrateModsButton = Button("Migrate installed mods", false, 180, ShowMigration);
             migrateModsButton.Visible = MigrationOffered;
             foreach (FlatButton b in MigrationOffered ? new[] { import, migrateModsButton } : new[] { import }) { b.Height = 32; b.Font = Palette.Small; b.Margin = new Padding(0, 0, 8, 6); fluffyRow.Controls.Add(b); }
             // The two buttons wrap onto a second line in a narrow column.
@@ -1244,9 +1264,12 @@ namespace SlotsInstaller
                 ToolStatus tools = ToolStatus.Detect(config.GameRoot, fluffy);
                 settingsToolStatus.Text = tools.ReFrameworkDetail + Environment.NewLine + tools.SlotsLoaderDetail;
                 settingsToolStatus.ForeColor = tools.SlotsLoader && !tools.ReFrameworkOffer && tools.ReFramework ? Palette.Muted : Palette.Accent;
-                installSlotsLoaderButton.Enabled = !tools.SlotsLoader;
+                // 1.0.18: while outfit mods are off, the Manager's own Slotsloader is only switched off: no second install.
+                bool loaderParked = state != null && state.ModsOff != null && state.ModsOff.LoaderId.Length > 0;
+                installSlotsLoaderButton.Enabled = !tools.SlotsLoader && !loaderParked;
+                if (loaderParked) settingsToolStatus.Text = tools.ReFrameworkDetail + Environment.NewLine + "Slotsloader is switched off with the outfit mods.";
                 installReFrameworkButton.Visible = tools.ReFrameworkOffer;
-                installReFrameworkButton.Text = (tools.ReFrameworkFile ? "Update to " : "Install ") + ReFrameworkRelease.Pin.Label + "…";
+                installReFrameworkButton.Text = (tools.ReFrameworkFile ? "Update to " : "Install ") + ReFrameworkRelease.Pin.Label;
                 if (state != null)
                 {
                     string pak = "Base PAK: not found";
@@ -1260,7 +1283,7 @@ namespace SlotsInstaller
                     settingsStoreStatus.Text = StoreStatusText(InstalledStoreBytes(store), state.Mods.Count, engine.ListRemoved(), store);
                 }
                 bool pendingMigration = File.Exists(ModMigration.Pending(engine));
-                migrateModsButton.Text = pendingMigration ? "Resume migration…" : "Migrate installed mods…";
+                migrateModsButton.Text = pendingMigration ? "Resume migration" : "Migrate installed mods";
                 migrateModsButton.Enabled = pendingMigration || fluffy.Mods.Count > 0;
                 settingsFluffyStatus.Text = ReplacePlanner.N(fluffy.Mods.Count, "mod") + " installed by an external mod manager (protected) · " + (fluffyRunning ? "it is running" : "it is closed") + " · " + ReplacePlanner.N(FluffyPresets.PresetFiles(fluffy.Roots).Count, "preset") + (fluffy.Roots.Count == 0 ? Environment.NewLine + "No external mod manager found next to your libraries." : String.Concat(fluffy.Roots.Select(r => Environment.NewLine + r)));
             }

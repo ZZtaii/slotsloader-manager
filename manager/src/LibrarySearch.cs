@@ -385,9 +385,11 @@ namespace SlotsInstaller
             return new HashSet<string>(SlotsInstaller.Characters.ByCode.Where(kv => names.Contains(kv.Value)).Select(kv => kv.Key), StringComparer.OrdinalIgnoreCase);
         }
 
+        // One pattern per costume number, kept: this runs for every library entry on each filter pass.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, Regex> CostumeTitlePatterns = new System.Collections.Concurrent.ConcurrentDictionary<int, Regex>();
         private static bool TitleSaysCostume(LibraryEntry e, int costume)
         {
-            var pattern = new Regex(@"(?<![A-Za-z0-9])(?:c|o|costume|outfit|cos)[\s_\-]*0*" + costume.ToString(CultureInfo.InvariantCulture) + @"(?![0-9])", RegexOptions.IgnoreCase);
+            Regex pattern = CostumeTitlePatterns.GetOrAdd(costume, n => new Regex(@"(?<![A-Za-z0-9])(?:c|o|costume|outfit|cos)[\s_\-]*0*" + n.ToString(CultureInfo.InvariantCulture) + @"(?![0-9])", RegexOptions.IgnoreCase));
             return pattern.IsMatch(e.Name ?? "") || pattern.IsMatch(e.DisplayName ?? "") || pattern.IsMatch(FileName(e.SourcePath));
         }
 

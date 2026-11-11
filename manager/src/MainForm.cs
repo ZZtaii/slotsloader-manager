@@ -513,7 +513,7 @@ namespace SlotsInstaller
             navAssistant = Button("Assistant", false, 108, delegate { ShowAssistant(); });
             ContextMenuStrip toolsMenu = new ContextMenuStrip { BackColor = Palette.Surface, ForeColor = Palette.Text, ShowImageMargin = false, Font = Palette.Normal };
             toolsMenu.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors());
-            ToolStripMenuItem settingsItem = new ToolStripMenuItem("Settings…", null, delegate { RunShortcut(ShortcutAction.SettingsPage); }) { ShortcutKeyDisplayString = Shortcuts.Display(ShortcutAction.SettingsPage) };
+            ToolStripMenuItem settingsItem = new ToolStripMenuItem("Settings", null, delegate { RunShortcut(ShortcutAction.SettingsPage); }) { ShortcutKeyDisplayString = Shortcuts.Display(ShortcutAction.SettingsPage) };
             toolsMenu.Items.Add(settingsItem);
             // 2.5.9: no Open costume folder, Refresh libraries (F5 / ↻ stay) or Import external preset (Settings → Game files) here.
             // 1.0.1: no Recover removed outfits (uninstall keeps no copy; the user asked to remove it).
@@ -524,7 +524,7 @@ namespace SlotsInstaller
             restoreMenu.ShowImageMargin = false; restoreMenu.BackColor = Palette.Surface; restoreMenu.ForeColor = Palette.Text;
             restoreMenu.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors());
             restoreItem.DropDownItems.Add("Remove this Manager's mods", null, delegate { RestoreOriginalGameFiles(); });
-            restoreItem.DropDownItems.Add("Restore game to vanilla…", null, delegate { RestoreGameToVanilla(); });
+            restoreItem.DropDownItems.Add("Restore game to vanilla", null, delegate { RestoreGameToVanilla(); });
             toolsMenu.Items.Add(restoreItem);
             toolsMenu.Items.Add(new ToolStripSeparator());
             ToolStripMenuItem shortcutsItem = new ToolStripMenuItem("Keyboard shortcuts");
@@ -555,8 +555,8 @@ namespace SlotsInstaller
             // Library source actions live in the header, freeing a full row
             // above the panes for options. They show on the library page only.
             headerTools = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 300, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 2, 0, 0), Margin = Padding.Empty };
-            openFolderButton = Button("Open folder…", false, 140, delegate { RunShortcut(ShortcutAction.OpenFolder); });
-            openArchiveButton = Button("Open archive…", false, 140, delegate { RunShortcut(ShortcutAction.OpenArchive); });
+            openFolderButton = Button("Open folder", false, 140, delegate { RunShortcut(ShortcutAction.OpenFolder); });
+            openArchiveButton = Button("Open archive", false, 140, delegate { RunShortcut(ShortcutAction.OpenArchive); });
             foreach (FlatButton button in new[] { openFolderButton, openArchiveButton }) { button.Height = 32; button.Margin = new Padding(8, 0, 0, 0); button.Font = Palette.Small; headerTools.Controls.Add(button); }
             header.Controls.Add(BuildGameTools());
             header.Controls.Add(headerTools);
@@ -682,7 +682,7 @@ namespace SlotsInstaller
             modMenu.Items.Add("Open", null, delegate { OpenLibrarySource(modMenu.Tag as LibraryEntry, false); });
             modMenu.Items.Add("Open in Explorer", null, delegate { OpenLibrarySource(modMenu.Tag as LibraryEntry, true); });
             AddLibraryRename(modMenu);   // 1.0.5 (MainFormRename.cs)
-            var editBundle = modMenu.Items.Add("Edit bundle…", null, delegate
+            var editBundle = modMenu.Items.Add("Reorder bundle", null, delegate
             {
                 var entry = modMenu.Tag as LibraryEntry;
                 if (entry == null || busy || !BundleLayout.CanEdit(entry.SourcePath)) return;   // 1.0.16: ZIP, RAR and 7Z
@@ -697,6 +697,11 @@ namespace SlotsInstaller
                         if (editor.ShowDialog(this) == DialogResult.OK) LoadPackage(entry);
                 });
             });
+            // 1.0.18: an outfit recipe with this mod as its base (RecipeBuilder.cs).
+            modMenu.Items.Add("New outfit recipe", null, delegate { var entry = modMenu.Tag as LibraryEntry; if (entry != null && !busy) ShowRecipeBuilder(entry); });
+            // 1.0.18: the saved recipes of the mod's fighter; shown only when there is one (RecipesForm.cs).
+            ToolStripMenuItem addToRecipe = new ToolStripMenuItem("Add to recipe") { Visible = false };
+            modMenu.Items.Add(addToRecipe);
             modMenu.Items.Add(new ToolStripSeparator());
             ToolStripMenuItem uninstallItem = new ToolStripMenuItem("Uninstall outfit");
             uninstallItem.Click += delegate { LibraryEntry entry = modMenu.Tag as LibraryEntry; if (entry != null) UninstallAllOutfits(entry.SourcePath); };   // 2.4.1: all of its extra outfits, Undo
@@ -724,6 +729,14 @@ namespace SlotsInstaller
             {
                 if (e.KeyCode == Keys.Apps || (e.KeyCode == Keys.F10 && e.Shift))
                     modMenu.Tag = modList.SelectedItems.Count == 0 ? null : modList.SelectedItems[0].Tag;
+                // 1.0.18: on a recipe's row F2 opens Edit recipe (its name is changed there) and Del deletes the recipe (Undo).
+                LibraryEntry keyed = modList.SelectedItems.Count == 1 ? modList.SelectedItems[0].Tag as LibraryEntry : null;
+                if (keyed != null && keyed.Recipe != null && e.Modifiers == Keys.None && (e.KeyCode == Keys.F2 || e.KeyCode == Keys.Delete))
+                {
+                    e.Handled = true;
+                    if (e.KeyCode == Keys.F2) EditRecipe(keyed.Recipe); else DeleteRecipe(keyed.Recipe);
+                    return;
+                }
                 if (e.KeyCode == Keys.F2 && e.Modifiers == Keys.None && modList.SelectedItems.Count > 0) { e.Handled = true; BeginLibraryRename(modList.SelectedItems[0].Tag as LibraryEntry); }   // 1.0.5
             };
             // 1.0.5: the rename box sits on its row; scrolling or resizing the list ends the edit (Enter's rules).
@@ -732,6 +745,8 @@ namespace SlotsInstaller
             modMenu.Opening += delegate(object sender, CancelEventArgs e)
             {
                 LibraryEntry entry = modMenu.Tag as LibraryEntry;
+                // 1.0.18: a recipe's row has the recipe's own menu (Edit recipe, Open recipes window, Delete recipe).
+                if (entry != null && entry.Recipe != null) { e.Cancel = true; OutfitRecipe rowRecipe = entry.Recipe; Point at = Cursor.Position; BeginInvoke((Action)delegate { ShowRecipeMenuFor(rowRecipe, at); }); return; }
                 e.Cancel = entry == null;
                 string source = entry == null ? null : entry.SourcePath;
                 PopulateLibraryUninstall(uninstallItem, source);
@@ -740,6 +755,7 @@ namespace SlotsInstaller
                 bool multi = BatchVisible && entry != null && BatchSourcePaths().Contains(entry.SourcePath);
                 editBundle.Visible = !multi && BundleLayout.CanEdit(source) && File.Exists(source);
                 editBundle.Enabled = !busy;
+                PopulateAddToRecipe(addToRecipe, multi ? null : entry);
                 uninstallSelectionItem.Visible = multi;
                 uninstallSelectionItem.Enabled = multi && batchUninstallButton.Enabled;
                 if (multi) { uninstallReplacementItem.Visible = false; uninstallFluffyItem.Visible = false; }
@@ -749,7 +765,7 @@ namespace SlotsInstaller
                 uninstallItem.Visible = !multi && (LinkedOutfits(source).Count > 0 || (LinkedReplacements(source).Count == 0 && LinkedFluffy(source).Count == 0));
             };
             modList.Disposed += delegate { modMenu.Dispose(); };
-            browser.Controls.Add(modList); browser.Controls.Add(BuildLibraryEmpty()); browser.Controls.Add(filters);   // 1.0.12 (23 Oct): in place of an empty list (MainFormLibraryEmpty.cs)
+            browser.Controls.Add(modList); browser.Controls.Add(BuildLibraryEmpty()); browser.Controls.Add(BuildRecipeStrip()); browser.Controls.Add(filters);   // 1.0.12 (23 Oct): in place of an empty list (MainFormLibraryEmpty.cs)
             split.Panel1.Controls.Add(browser);
             split.Panel2.Controls.Add(detailPanel = BuildDetail());
             split.Panel2.Controls.Add(BuildBatchPanel()); batchPanel.BringToFront();   // 1.0.6: hidden until several mods are selected
@@ -805,7 +821,7 @@ namespace SlotsInstaller
             choiceTabs.Controls.Add(componentTab);
             componentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
             componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font(UiFonts.Family, 10.5F) };
-            componentTree.EmptyText = "Choose a mod from the library, or drop an archive (ZIP, RAR, 7Z) or mod folder anywhere in this window.\n\nCtrl+O opens an archive · Ctrl+F searches the library";
+            componentTree.EmptyText = NoModText;
             componentTree.DrawNode += DrawComponentNode;
             componentTree.ContextMenuStrip = BuildOptionMenu();   // 1.0.18: open the option's archive (an addon's own) in Explorer
             // OptionTree paints the background, indicator and text together;
@@ -856,7 +872,7 @@ namespace SlotsInstaller
             body.Controls.Add(centre, 0, 0);
 
             Panel inspector = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), BackColor = Palette.Surface, Padding = new Padding(8, 0, 0, 9) };
-            // 1.0.6 (the user): no destination line under the fields; Add to outfit… shares the Install all variants row.
+            // 1.0.6 (the user): no destination line under the fields; Add to outfit shares the Install all variants row.
             TableLayoutPanel target = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 56, ColumnCount = 2, RowCount = 2, Padding = new Padding(0, 6, 0, 0) };
             target.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 36)); target.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 64));
             target.RowStyles.Add(new RowStyle(SizeType.Absolute, 20)); target.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
@@ -964,9 +980,12 @@ namespace SlotsInstaller
             removeInstalledButton.KeyHint = "Ctrl";   // 2.5.3: a lone Ctrl tap, as in the Mod library (MainFormKeys.cs)
             moveUpButton = Button("Move up", false, 200, delegate { MoveGameRow(-1); }); moveDownButton = Button("Move down", false, 200, delegate { MoveGameRow(1); });
             reinstallButton = Button("Reinstall", false, 200, delegate { ReinstallSelected(); }); reinstallButton.AccessibleName = "Reinstall from the changed source"; reinstallButton.Visible = false;   // 2.4.1
-            
+            removePartButton = Button("Added parts", false, 200, delegate { ShowAddedParts(); }); removePartButton.Name = "removePartButton"; removePartButton.AccessibleName = "Reorder or remove the parts added to this outfit"; removePartButton.Visible = false;   // 1.0.18
+            loadOrderButton = Button("Load order", false, 200, delegate { ShowOutfitOrder(); }); loadOrderButton.Name = "loadOrderButton"; loadOrderButton.AccessibleName = "Change the order of this fighter's extra outfits"; loadOrderButton.Visible = false;   // 1.0.18 (OutfitOrderForm.cs)
+            recipesButton = Button("Recipes", false, 200, delegate { ShowRecipes(); }); recipesButton.Name = "recipesButton"; recipesButton.AccessibleName = "Saved outfit recipes: install one, or save the selected outfit as one"; recipesButton.Visible = false;   // 1.0.18 (RecipesForm.cs)
+
             openInstalledButton.Enabled = false; editInstalledButton.Enabled = false; toggleInstalledButton.Enabled = false; disableInstalledButton.Enabled = false; removeInstalledButton.Enabled = false;
-            foreach (FlatButton button in new[] { reinstallButton, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, moveUpButton, moveDownButton }) { button.Margin = Padding.Empty; installedActions.Controls.Add(button); }
+            foreach (FlatButton button in new[] { reinstallButton, removePartButton, loadOrderButton, recipesButton, openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, moveUpButton, moveDownButton }) { button.Margin = Padding.Empty; installedActions.Controls.Add(button); }
             installedActions.Resize += delegate { LayoutInstalledActions(); }; dpiLayouts.Add(LayoutInstalledActions);
             installedSectionCaption = Caption("ABOUT"); installedSectionCaption.Dock = DockStyle.Top; installedSectionCaption.Height = 34; installedSectionCaption.Padding = new Padding(0, 10, 0, 0); installedSectionCaption.AutoEllipsis = true;
             Panel helpCard = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Background, Padding = new Padding(12, 10, 6, 10) };
@@ -975,7 +994,7 @@ namespace SlotsInstaller
             helpCard.Controls.Add(installedHelp);
             refreshHint = new Label { UseMnemonic=false, Text = "Restart SF6 to see changes.", ForeColor = Palette.Accent, Dock = DockStyle.Bottom, Height = 30, Font = Palette.Small, TextAlign = ContentAlignment.BottomLeft };
             // Docking runs from the highest index: the title is added last of the top group.
-            info.Controls.Add(helpCard); info.Controls.Add(installedSectionCaption); info.Controls.Add(BuildVariantsPanel()); info.Controls.Add(installedActions); info.Controls.Add(installedPathRow); info.Controls.Add(installedChips); info.Controls.Add(installedTitle); info.Controls.Add(refreshHint);
+            info.Controls.Add(helpCard); info.Controls.Add(installedSectionCaption); info.Controls.Add(BuildVariantsPanel()); info.Controls.Add(BuildAddedPartsPanel()); info.Controls.Add(installedActions); info.Controls.Add(installedPathRow); info.Controls.Add(installedChips); info.Controls.Add(installedTitle); info.Controls.Add(refreshHint);
             helpCard.BringToFront();
             split.Panel2.Controls.Add(info); page.Controls.Add(split); split.BringToFront();
             return page;
@@ -996,11 +1015,11 @@ namespace SlotsInstaller
             foreach (int h in heights) layout.RowStyles.Add(h < 0 ? new RowStyle(SizeType.AutoSize) : h == 0 ? new RowStyle(SizeType.Percent, 100) : new RowStyle(SizeType.Absolute, h));
             Label gameCaption = Caption("Game folder"); gameCaption.Dock = DockStyle.Fill; layout.Controls.Add(gameCaption, 0, 0); layout.SetColumnSpan(gameCaption, 2);
             settingsGame = TextField(); settingsGame.AccessibleName="Game folder"; settingsGame.Dock = DockStyle.Fill; settingsGame.Margin = new Padding(0, 0, 10, 0); layout.Controls.Add(settingsGame, 0, 1);
-            FlatButton browseGame=Button("Browse…", false, 108, delegate { ChooseSettingFolder(settingsGame); }); browseGame.Dock=DockStyle.Fill; browseGame.Margin=Padding.Empty; layout.Controls.Add(browseGame, 1, 1);
+            FlatButton browseGame=Button("Browse", false, 108, delegate { ChooseSettingFolder(settingsGame); }); browseGame.Dock=DockStyle.Fill; browseGame.Margin=Padding.Empty; layout.Controls.Add(browseGame, 1, 1);
             Label dest = new Label { UseMnemonic=false, Name = "settingsGameNote", Text = "", ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, Padding = new Padding(0, Rhythm.Related, 0, 0), Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(dest, 0, 2); layout.SetColumnSpan(dest, 2);
             Label sevenCaption = Caption("7-Zip (RAR and 7Z)"); sevenCaption.Dock = DockStyle.Fill; layout.Controls.Add(sevenCaption, 0, 4); layout.SetColumnSpan(sevenCaption, 2);
             settingsSevenZip = TextField(); settingsSevenZip.AccessibleName="7-Zip executable"; settingsSevenZip.PlaceholderText = "Automatic"; settingsSevenZip.Dock = DockStyle.Fill; settingsSevenZip.Margin = new Padding(0, 0, 10, 0); layout.Controls.Add(settingsSevenZip, 0, 5);
-            FlatButton browseSevenZip=Button("Browse…", false, 108, delegate { using (OpenFileDialog d = new OpenFileDialog { Filter = "7-Zip executable|7z.exe|Executable|*.exe", FileName = settingsSevenZip.Text }) { if (d.ShowDialog(this) == DialogResult.OK) settingsSevenZip.Text = d.FileName; } }); browseSevenZip.Dock=DockStyle.Fill; browseSevenZip.Margin=Padding.Empty; layout.Controls.Add(browseSevenZip, 1, 5);
+            FlatButton browseSevenZip=Button("Browse", false, 108, delegate { using (OpenFileDialog d = new OpenFileDialog { Filter = "7-Zip executable|7z.exe|Executable|*.exe", FileName = settingsSevenZip.Text }) { if (d.ShowDialog(this) == DialogResult.OK) settingsSevenZip.Text = d.FileName; } }); browseSevenZip.Dock=DockStyle.Fill; browseSevenZip.Margin=Padding.Empty; layout.Controls.Add(browseSevenZip, 1, 5);
             Label sevenHint = new Label { UseMnemonic=false, Name = "settingsSevenZipNote", Text = "ZIP and folders work without 7-Zip.", ForeColor = Palette.Muted, Font = Palette.Small, Dock = DockStyle.Fill, Padding = new Padding(0, Rhythm.Related, 0, 0), Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(sevenHint, 0, 6); layout.SetColumnSpan(sevenHint, 2);
             settingsGame.TextChanged += delegate { dest.Text = Directory.Exists(settingsGame.Text) ? "Found · extra outfits install to reframework\\costume_mods" : "Folder not found"; dest.ForeColor = Directory.Exists(settingsGame.Text) ? Palette.Green : Palette.Red; };
             // 1.0.11: empty = automatic (installed 7-Zip, else the copy beside the Manager); the note says which one runs.
@@ -1022,7 +1041,7 @@ namespace SlotsInstaller
             librariesFrame.Controls.Add(settingsLibraries);
             layout.Controls.Add(librariesFrame, 0, 10);
             Panel libActions = new Panel { Dock = DockStyle.Fill, Margin=Padding.Empty };
-            FlatButton addLibrary = Button("Add…", false, 118, delegate { using (FolderBrowserDialog d = new FolderBrowserDialog { Description = "Choose a library folder, such as your mod manager's Mods folder" }) { if (d.ShowDialog(this) == DialogResult.OK && !settingsLibraries.Items.Cast<string>().Contains(d.SelectedPath, StringComparer.OrdinalIgnoreCase)) { libraryFolderStatus.Remove(d.SelectedPath); settingsLibraries.Items.Add(d.SelectedPath); settingsLibraries.SelectedIndex = settingsLibraries.Items.Count - 1; } } });
+            FlatButton addLibrary = Button("Add", false, 118, delegate { using (FolderBrowserDialog d = new FolderBrowserDialog { Description = "Choose a library folder, such as your mod manager's Mods folder" }) { if (d.ShowDialog(this) == DialogResult.OK && !settingsLibraries.Items.Cast<string>().Contains(d.SelectedPath, StringComparer.OrdinalIgnoreCase)) { libraryFolderStatus.Remove(d.SelectedPath); settingsLibraries.Items.Add(d.SelectedPath); settingsLibraries.SelectedIndex = settingsLibraries.Items.Count - 1; } } });
             removeLibraryButton = Button("Remove", false, 118, delegate { if (settingsLibraries.SelectedIndex >= 0) { int index = settingsLibraries.SelectedIndex; settingsLibraries.Items.RemoveAt(index); if (settingsLibraries.Items.Count > 0) settingsLibraries.SelectedIndex = Math.Min(index, settingsLibraries.Items.Count - 1); } removeLibraryButton.Enabled = settingsLibraries.SelectedIndex >= 0; });
             removeLibraryButton.Enabled = false; addLibraryButton = addLibrary;
 
@@ -1332,6 +1351,21 @@ namespace SlotsInstaller
         {
             LibraryEntry entry = e.Item.Tag as LibraryEntry; if (entry == null) return;
             bool selected = e.Item.Selected;
+            if (entry.Recipe != null)
+            {
+                // 1.0.18: a recipe's row looks like a mod's: the name, and "Recipe · fighter · its mods" under it.
+                Rectangle rr = e.Bounds;
+                using (Brush bg = new SolidBrush(selected ? Palette.Selected : Palette.Surface)) e.Graphics.FillRectangle(bg, rr);
+                // Installed (RecipesForm.cs InstalledRecipe): the green rail and a badge on the right, as on a mod's row.
+                RecipeInstall made = InstalledRecipe(entry.Recipe);
+                string made_badge = made.Badge;
+                int madeWidth = made_badge.Length == 0 ? 0 : Math.Max(Px(63), TextRenderer.MeasureText(e.Graphics, made_badge, Palette.Tiny, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width + Px(8));
+                using (Brush chip = new SolidBrush(made.Any && made.Enabled ? Palette.Green : Palette.Border)) e.Graphics.FillRectangle(chip, rr.Left + Px(1), rr.Top + Px(12), Px(3), rr.Height - Px(24));
+                TextRenderer.DrawText(e.Graphics, entry.Recipe.Name, Palette.Strong, new Rectangle(rr.Left + Px(13), rr.Top + Px(8), rr.Width - Px(24), Px(24)), Palette.Text, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                TextRenderer.DrawText(e.Graphics, RecipeRowText(entry.Recipe), Palette.Tiny, new Rectangle(rr.Left + Px(13), rr.Top + Px(33), rr.Width - Px(24) - madeWidth, Px(20)), Palette.Muted, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                if (madeWidth > 0) TextRenderer.DrawText(e.Graphics, made_badge, Palette.Tiny, new Rectangle(rr.Right - Px(5) - madeWidth, rr.Top + Px(33), madeWidth, Px(20)), made.Enabled ? Palette.Green : Palette.Muted, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                return;
+            }
             LibraryInstallState installState = CachedInstallState(entry);
             using (Brush bg = new SolidBrush(selected ? Palette.Selected : Palette.Surface)) e.Graphics.FillRectangle(bg, e.Bounds);
             Rectangle r = e.Bounds;
@@ -1367,6 +1401,8 @@ namespace SlotsInstaller
             string sub = outfit.Character + "   ·   " + (outfit.Enabled ? "Enabled" : "Disabled") + "   ·   " + (outfit.Managed ? "Managed" : outfit.WholeArchive ? "All variants" : "Manual");
             if(!String.IsNullOrEmpty(outfit.LoaderOutfitName)) sub=outfit.Character+"   ·   "+(outfit.LoaderStatus=="Loaded" ? outfit.LoaderOutfitName : "Last: "+outfit.LoaderOutfitName)+"   ·   "+outfit.LoaderStatus;
             if (groupedSlots.ContainsKey(outfit)) sub = SlotOptions(outfit) + (String.IsNullOrEmpty(outfit.LoaderOutfitName) ? "" : "   ·   " + (outfit.LoaderStatus == "Loaded" ? outfit.LoaderOutfitName : "Last: " + outfit.LoaderOutfitName)) + "   ·   " + (outfit.Enabled ? (String.IsNullOrEmpty(outfit.LoaderStatus) ? "Enabled" : outfit.LoaderStatus) : "Disabled");   // 2.5.0: a slot shows its options
+            string addedParts = AddedPartsShort(outfit); if (addedParts != null) sub += "   ·   " + addedParts;   // 1.0.18: Add to outfit shows on the row
+            if (RecipeOf(outfit) != null) sub += "   ·   Recipe";   // 1.0.18: it matches a saved recipe (RecipesForm.cs)
             if (outfit.Managed && SourceChanged(outfit.SourcePath)) sub = "Source changed   ·   " + sub;   // 2.4.1: Reinstall applies the edit
             Rectangle meta = DrawSourceGoneNote(e.Graphics, outfit.Managed || outfit.WholeArchive ? outfit.SourcePath : null, new Rectangle(r.Left + Px(14), r.Top + Px(36), r.Width - Px(25), Px(20)));   // 2.4.1 Delete: muted "Source deleted"
             if (!groupedSlots.ContainsKey(outfit)) sub = "Extra   ·   " + sub;   // 1.0.1: the install type, like "Replacement" on game rows; no "played …" (the user)
@@ -1405,7 +1441,10 @@ namespace SlotsInstaller
                 { Rectangle inner = Rectangle.Inflate(mark, -Px(3), -Px(3)); if (radio) using (Brush fill = new SolidBrush(Palette.Accent)) e.Graphics.FillEllipse(fill, inner); else Glyphs.FillRounded(e.Graphics, Palette.Accent, inner, Px(1)); }
             }
             bool choice = component.IsDummy && IsChoiceGroup(component);
-            string name = component.Name + (component.BundleRule == "Required" ? "  ·  Required" : choice && !required && !component.InferredChoice ? "  ·  Choose one" : "");
+            // "Main files" tags an option whose name only looks like main files (a label, not a requirement); skipped
+            // when the name already says so ("1) Main files").
+            bool guessedMain = !component.IsDummy && !Composer.IsRequired(component) && Composer.IsBase(component) && !Regex.IsMatch(component.Name ?? "", @"main\s*files?", RegexOptions.IgnoreCase);
+            string name = component.Name + (component.BundleRule == "Required" ? "  ·  Required" : guessedMain ? "  ·  Main files" : choice && !required && !component.InferredChoice ? "  ·  Choose one" : "");
             Font nameFont = component.IsDummy ? Palette.Strong : componentTree.Font;
             // 1.0.18 (the user: show which options came from an addon): a quiet "Add-on" tag at the row's right end; the
             // option's description names the file and right-click opens it in Explorer (MainFormAddons.cs).
@@ -1723,11 +1762,15 @@ namespace SlotsInstaller
             // 2.4.1 sort chips (LibrarySort.cs): Installed (default ↓) keeps that relevance first; Added and Last used
             // replace it. Ties fall back to the name.
             List<LibraryEntry> rows = SortLibraryRows(ranked);
+            // 1.0.18: the recipes that pass the search and the fighter filter are the first rows (RecipesForm.cs).
+            List<LibraryEntry> recipeRows = RecipeRows(fighters, kindsOn);
+            if (installedOn) recipeRows = recipeRows.Where(x => InstalledRecipe(x.Recipe).Any).ToList();   // "installed only" keeps the installed recipes
+            if (recipeRows.Count > 0) { rows = recipeRows.Concat(rows).ToList(); }
             bool sameRows = modList.Items.Count == rows.Count;
             for (int i = 0; sameRows && i < rows.Count; i++) sameRows = Object.ReferenceEquals(modList.Items[i].Tag, rows[i]);
             if (!sameRows) UpdateLibraryRows(rows);
             ScrollLibraryToTopIfAsked();
-            captionShown = rows.Count; UpdateLibraryCaption();   // 1.0.6: "· READING n%" while mods are read in the background
+            captionShown = rows.Count - recipeRows.Count; UpdateLibraryCaption();   // 1.0.6: "· READING n%" while mods are read in the background
             UpdateCustomDraftStatus();
         }
 
@@ -2199,12 +2242,15 @@ namespace SlotsInstaller
         private void LoadPackage(LibraryEntry entry, InstalledOutfit restore) { LoadPackage(entry, restore, null); }
         private void LoadPackage(LibraryEntry entry, InstalledOutfit restore, ReplaceMod restoreReplace)
         {
+            // 1.0.18: a recipe's row of the mod list opens the recipe, not a mod file (RecipesForm.cs).
+            if (entry != null && entry.Recipe != null) { OpenRecipe(entry.Recipe); return; }
             if (busy)
             {
                 // 1.0.12: a library pick while a mod is read waits as the next one (MainFormOpen.cs).
                 if (packageLoading && restore == null && restoreReplace == null && pendingReload == null) QueueOpen(entry);
                 return;
             }
+            CloseRecipe();   // 1.0.18: a mod opens in place of the recipe that was shown
             StopReadAhead(false, entry.SourcePath);   // 7-Zip for this mod, unless it is the one being read ahead
             // A review of the old package must become obsolete as soon as another load starts, even while
             // that load is still reading and the package field has not been replaced yet.
@@ -2729,6 +2775,7 @@ namespace SlotsInstaller
         private void UpdateFooter()
         {
             if (planSummary == null) return;
+            if (openRecipe != null && package == null) { UpdateRecipeFooter(); return; }   // 1.0.18
             if (IsReplaceMode && package != null) { UpdateReplaceFooter(); return; }
             string tip = ""; Color detailColor = Palette.Muted;
             if (conflictView != null) UpdateConflictView();
@@ -2771,8 +2818,9 @@ namespace SlotsInstaller
                 planSummary.Text = "Ready to install · " + ReplacePlanner.N(plan.Files.Count, "file"); planSummary.ForeColor = Palette.Green;
                 bool named = targetCharacter.SelectedIndex >= 0 && !String.IsNullOrWhiteSpace(outfitName.Text);
                 InstalledOutfit duplicate = DuplicateExtraOutfit();
-                planDetails.Text = !named ? "Choose a character and outfit name to install." : duplicate != null ? DuplicateText(duplicate) + (String.Equals(duplicate.Name, outfitName.Text.Trim(), StringComparison.OrdinalIgnoreCase) ? " · Install updates it" : " · installing again adds another extra outfit") : Utilities.FriendlyBytes(plan.TotalBytes) + " · " + plan.Overrides.Count + " overrides · " + (plan.Warnings.Count > 0 ? "View notes" : "Selection reviewed");
-                if (named && duplicate != null) detailColor = Palette.Accent;
+                planDetails.Text = !named ? "Choose a character and outfit name to install." : duplicate != null ? DuplicateText(duplicate) + (String.Equals(duplicate.Name, outfitName.Text.Trim(), StringComparison.OrdinalIgnoreCase) ? " · Install updates it" : " · installing again adds another extra outfit") : (plan.MissingMains.Count > 0 ? "Main files not selected · " : Utilities.FriendlyBytes(plan.TotalBytes) + " · " + plan.Overrides.Count + " overrides · ") + (plan.Warnings.Count > 0 ? "View notes" : "Selection reviewed");
+                // Main files guessed from a name no longer block Install, so leaving them out is said where it is seen.
+                if (named && (duplicate != null || plan.MissingMains.Count > 0)) detailColor = Palette.Accent;
                 tip = String.Join(Environment.NewLine, (duplicate == null ? new string[0] : new[] { DuplicateText(duplicate) + "." }).Concat(plan.Warnings).Concat(plan.Overrides.Select(o => o.Path + ": " + o.Previous + " → " + o.Winner)));
             }
             planDetails.ForeColor = detailColor;
@@ -2843,6 +2891,7 @@ namespace SlotsInstaller
         private void UpdateInstallButton()
         {
             UpdateAddPartsButton();   // 1.0.6
+            if (openRecipe != null && package == null) { UpdateRecipeButtons(); UpdateSlotHint(); return; }   // 1.0.18: a recipe is open (RecipesForm.cs)
             if (IsReplaceMode) { UpdateReplaceButtons(); UpdateSlotHint(); return; }
             UpdateSlotHint();
             if (installButton != null) installButton.Enabled = !busy && !ReviewPending && missingRestoredOptions.Count==0 && plan != null && plan.CanInstall && targetCharacter.SelectedIndex >= 0 && !String.IsNullOrWhiteSpace(outfitName.Text);
@@ -2852,6 +2901,7 @@ namespace SlotsInstaller
 
         private void InstallCurrent()
         {
+            if (openRecipe != null && package == null) { InstallOpenRecipe(); return; }   // 1.0.18
             if (busy || package == null || ReviewPending) return;
             WithFreshPackage(delegate
             {
@@ -3047,8 +3097,12 @@ namespace SlotsInstaller
             InstalledOutfit outfit = GetInstalledSelection();
             GameModRow gameRow = GetGameRowSelection();
             ShowVariants(outfit);   // 2.5.0: a manual archive/folder with several variants (MainFormVariants.cs)
+            ShowAddedPartList(installedList != null && installedList.SelectedItems.Count == 1 ? outfit : null);   // 1.0.18: the outfit's added parts, with ticks (MainFormAddParts.cs)
             List<GameModRow> movable = MovableSelection();   // 1.0.18: one row or several (multi-select)
             moveUpButton.Visible = moveDownButton.Visible = movable.Count > 0;
+            removePartButton.Visible = false;   // only one selected outfit with added parts shows it (set below)
+            loadOrderButton.Visible = false;
+            recipesButton.Visible = InstalledActionShown(recipesButton); recipesButton.Enabled = !busy;
             bool canMoveNow = movable.Count > 0 && (RowChangesAllowed || (busy && MovePending));   // Move up/down keep working while the order is saved (MainFormMove.cs)
             moveUpButton.Enabled = canMoveNow && CanMoveSelection(-1); moveDownButton.Enabled = canMoveNow && CanMoveSelection(1);
             if (gameRow != null)
@@ -3096,6 +3150,8 @@ namespace SlotsInstaller
             openInstalledButton.Enabled = !busy && outfit != null; editInstalledButton.Enabled = !busy && outfit != null && outfit.Managed && outfit.Enabled && !String.IsNullOrEmpty(outfit.SourcePath); toggleInstalledButton.Enabled = !busy && outfit != null && outfit.Managed; removeInstalledButton.Enabled = !busy && selected.Count>0;
             editInstalledButton.Visible = toggleInstalledButton.Visible = outfit != null && outfit.Managed;removeInstalledButton.Visible=selected.Count>0;
             reinstallButton.Visible = outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath); reinstallButton.Enabled = !busy;
+            removePartButton.Visible = InstalledActionShown(removePartButton); removePartButton.Enabled = !busy;   // 1.0.18
+            loadOrderButton.Visible = InstalledActionShown(loadOrderButton); loadOrderButton.Enabled = !busy;
             removeInstalledButton.Text=selected.Count>1 ? "Uninstall selection" : "Uninstall outfit";
             if (outfit != null) toggleInstalledButton.Text = outfit.Enabled ? "Health" : "Enable outfit";
             disableInstalledButton.Visible = outfit != null && outfit.Managed && outfit.Enabled && selected.Count == 1; disableInstalledButton.Enabled = !busy; disableInstalledButton.Text = "Disable outfit";
@@ -3135,15 +3191,17 @@ namespace SlotsInstaller
             if (outfit.Managed && SourceChanged(outfit.SourcePath)) chips.Add(ChipStrip.Warn("Source changed"));   // 2.4.1
             string sourceGone = outfit.Managed || outfit.WholeArchive ? SourceGoneNote(outfit.SourcePath) : null;
             if (sourceGone != null) chips.Add(ChipStrip.Quiet(sourceGone));   // 2.4.1 Delete: still installed, its source is gone
+            string addedDetails = AddedPartsDetails(outfit);   // 1.0.18: what Add to outfit put on it
+            if (addedDetails.Length > 0) chips.Add(ChipStrip.Neutral(ReplacePlanner.N(outfit.Parts.Count(g => g != null), "added part")));
             installedChips.SetChips(chips);
             installedDetail.Text = outfit.Folder; installedPathRow.Visible = true;
             string help = (outfit.Managed ? (outfit.Enabled ? "Health checks the outfit files against the install record. " : "Enable outfit makes it available to Slotsloader again. ") : outfit.WholeArchive ? "Every variant, copied by the Manager from " + Path.GetFileName(outfit.SourcePath) + ". " : "Not installed by Manager. ") + RemovedCopyHelp(new List<InstalledOutfit> { outfit });
             if(!String.IsNullOrEmpty(outfit.LoaderStatus))
             {
                 installedSectionCaption.Text = "LAST SLOTSLOADER RUN · " + (String.IsNullOrEmpty(outfit.LoaderGenerated) ? "NO RESULT" : outfit.LoaderGenerated.ToUpperInvariant());
-                installedHelp.Text = FormatLoaderDetails(outfit.LoaderOutfitDetails) + help;
+                installedHelp.Text = addedDetails + FormatLoaderDetails(outfit.LoaderOutfitDetails) + help;
             }
-            else { installedSectionCaption.Text = "ABOUT"; installedHelp.Text = help; }
+            else { installedSectionCaption.Text = "ABOUT"; installedHelp.Text = addedDetails + help; }
             installedHelp.Text=installedHelp.Text.Replace("\r\n","\n").Replace("\n",Environment.NewLine);
             installedHelp.Select(0,0);
         }
@@ -3163,16 +3221,19 @@ namespace SlotsInstaller
         }
 
         // Visible actions in fixed rows of two equal columns (1.0.18, the user's order): Move up · Move down, Open folder ·
-        // Edit options, Health/Enable · Disable, Reinstall, Uninstall last. An action left alone on its row takes the full
-        // width, and a row with nothing shown is skipped, so hidden actions never leave a gap.
+        // Edit options, Health/Enable · Disable, Reinstall, Uninstall last. Hidden actions never leave a gap: the shown
+        // ones close up, and only the last of an odd number takes the full width.
         private void LayoutInstalledActions()
         {
             if (installedActions == null) return;
             var groups = new[] {
                 new[] { moveUpButton, moveDownButton }, new[] { openInstalledButton, editInstalledButton },
-                new[] { toggleInstalledButton, disableInstalledButton }, new[] { reinstallButton }, new[] { removeInstalledButton } };
+                new[] { toggleInstalledButton, disableInstalledButton }, new[] { removePartButton, loadOrderButton, recipesButton }, new[] { reinstallButton }, new[] { removeInstalledButton } };
             // Control.Visible reads false while the page is hidden; use the requested state.
-            var rows = groups.Select(g => g.Where(b => InstalledActionShown(b)).ToList()).Where(r => r.Count > 0).ToList();
+            // 1.0.18 (user request): the shown actions fill the two columns in order, so an even number leaves no wide
+            // button; with an odd number the last one (Uninstall when it is shown) takes the full row.
+            var shown = groups.SelectMany(g => g).Where(b => InstalledActionShown(b)).ToList();
+            var rows = Enumerable.Range(0, (shown.Count + 1) / 2).Select(k => shown.Skip(k * 2).Take(2).ToList()).ToList();
             int gap = Px(8), height = Px(38), top = installedActions.Padding.Top;
             int width = Math.Max(Px(60), (installedActions.ClientSize.Width - gap) / 2);
             for (int r = 0; r < rows.Count; r++)
@@ -3196,6 +3257,9 @@ namespace SlotsInstaller
                 if (button == toggleInstalledButton) return movable.Any(r => !r.Mod.Enabled);
                 return false;
             }
+            if (button == recipesButton) return gameRow == null && count <= 1;   // extra outfits, or nothing selected: the way in to the recipes
+            if (button == removePartButton) return count == 1 && gameRow == null && AddedPartsShort(outfit) != null && outfit.Managed;
+            if (button == loadOrderButton) return count == 1 && gameRow == null && (outfit != null || GetGroupSelection() != null);   // any extra outfit, or a group of slots
             if (button == reinstallButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && SourceChanged(gameRow.Mod.SourcePath) : outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath));
             if (button == disableInstalledButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && gameRow.Mod.Enabled : outfit != null && outfit.Managed && outfit.Enabled);
             if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && (gameRow.Fluffy != null || gameRow.Leftover != null));
@@ -3273,8 +3337,52 @@ namespace SlotsInstaller
             GameModRow gameRow = GetGameRowSelection(); if (gameRow != null) { if (!busy) EditGameRow(gameRow); return; }
             InstalledOutfit outfit = GetInstalledSelection(); if (outfit == null || !outfit.Managed || busy) return;
             if (!File.Exists(outfit.SourcePath) && !Directory.Exists(outfit.SourcePath)) { Error(new FileNotFoundException("Mod not found: " + outfit.SourcePath + ". Restore it there to edit this outfit.")); return; }
-            ShowPage(libraryPage);
-            LoadPackage(new LibraryEntry { SourcePath = outfit.SourcePath, Name = outfit.Name }, outfit);
+            // 1.0.18 (the user: Edit options "takes you to the mods installation window ... It would be cool if we can
+            // just open a window here to make quick edits ... the window from the recipe"): the options picker of the
+            // recipe builder, here, with the outfit's options ticked. Save puts the outfit together again with the new
+            // ones (its added parts stay on it); Undo puts the old ones back. Shift+click opens the Mod library as before.
+            if ((ModifierKeys & Keys.Shift) == Keys.Shift || Program.Headless)
+            {
+                ShowPage(libraryPage);
+                LoadPackage(new LibraryEntry { SourcePath = outfit.SourcePath, Name = outfit.Name }, outfit);
+                return;
+            }
+            QuickEditOptions(outfit);
+        }
+        private static string OptionRules(ModPackage package, List<string> ids)
+        {
+            CompositionPlan plan = Composer.Plan(package, ids);
+            return plan.CanInstall ? null : String.Join(" ", plan.Errors.DefaultIfEmpty("Tick an option that has files."));
+        }
+        internal void QuickEditOptions(InstalledOutfit outfit)
+        {
+            string source = outfit.SourcePath, sevenZip = config.SevenZipPath, root = config.CostumeRoot, name = outfit.Name, character = outfit.Character;
+            ModPackage opened;
+            Cursor previous = Cursor; Cursor = Cursors.WaitCursor;
+            try { opened = PackageReader.Load(source, sevenZip, false); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); SetPageStatus(installedPage, "Couldn't read " + ModNameOf(source) + ": " + ex.Message, Palette.Red); return; }
+            finally { Cursor = previous; }
+            List<string> before = (outfit.SelectedIds ?? new List<string>()).ToList();
+            List<string> picked = OptionPickForm.Choose(this, "Options of " + name, "Tick what this outfit should have. Save puts it together again from " + ModNameOf(source) + "; parts added from other mods stay on it.", opened, before, sevenZip,
+                delegate(List<string> ids) { return OptionRules(opened, ids); });
+            if (picked == null) return;
+            var optionIds = new HashSet<string>(RecipeDraft.Options(opened).Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+            if (new HashSet<string>(before.Where(optionIds.Contains), StringComparer.OrdinalIgnoreCase).SetEquals(picked)) { SetPageStatus(installedPage, "The options of " + name + " are as they were.", Palette.Muted); return; }
+            Func<List<string>, InstallResult> put = delegate(List<string> ids)
+            {
+                ModPackage fresh = PackageReader.Load(source, sevenZip, false);
+                CompositionPlan plan = Composer.Plan(fresh, ids);
+                if (!plan.CanInstall) throw new IOException("Couldn't change the options of " + name + ": " + String.Join(" ", plan.Errors.DefaultIfEmpty("the selection has no files.")));
+                return Installer.Install(plan, root, character, name, sevenZip, true);
+            };
+            Work("Saving the options of " + name + "…", delegate { return put(picked); }, delegate(InstallResult result)
+            {
+                OfferUndo("Changed the options of " + name, delegate
+                {
+                    Work("Putting the options of " + name + " back…", delegate { return put(before); }, delegate(InstallResult back) { RefreshInstalled("✓ Undone: " + name + " has its earlier options."); });
+                });
+                RefreshInstalled("✓ Changed the options of " + name + (result.PartsNote ?? "") + ". Restart SF6 to load it.");
+            });
         }
 
         private void RemoveOutfit()
@@ -3328,6 +3436,17 @@ namespace SlotsInstaller
         private void UpdateLibraryUninstall()
         {
             if (libraryUninstallButton == null) return;
+            if (openRecipe != null && package == null)
+            {
+                // 1.0.18: a recipe is open: Uninstall removes what it installed (RecipesForm.cs), and shows only then.
+                RecipeInstall made = InstalledRecipe(openRecipe);
+                string why = made.Replacements.Count > 0 ? ReplacementUninstallBlocker(made.Replacements) : null;
+                libraryUninstallButton.Visible = made.Any; libraryUninstallButton.Text = "Uninstall";
+                libraryUninstallButton.Enabled = !busy && made.Any && why == null;
+                libraryUninstallButton.AccessibleDescription = why ?? "Shortcut: tap Ctrl";
+                UpdateAllVariants();
+                return;
+            }
             string source = package == null ? null : package.SourcePath;
             int outfits = LinkedOutfits(source).Count; List<GameModRow> replacements = LinkedReplacements(source);
             string blocker = replacements.Count > 0 ? ReplacementUninstallBlocker(replacements) : null;
@@ -3377,6 +3496,7 @@ namespace SlotsInstaller
         // mod showed an enabled "Uninstall outfit" in Extra outfit mode that did nothing).
         private void UninstallLibraryOutfit()
         {
+            if (!busy && package == null && openRecipe != null) { UninstallRecipe(openRecipe); return; }   // 1.0.18
             if (busy || package == null) return;
             if (LibraryUninstallsReplacements(LinkedOutfits(package.SourcePath).Count, LinkedReplacements(package.SourcePath).Count)) UninstallAllReplacements(package.SourcePath);
             else UninstallAllOutfits(package.SourcePath);
@@ -3599,7 +3719,7 @@ namespace SlotsInstaller
                 case ShortcutAction.LibraryPage: ShowPage(libraryPage); return true;
                 case ShortcutAction.InstalledPage: if (currentPage != installedPage) { ShowPage(installedPage); RefreshInstalled(); } return true;
                 case ShortcutAction.AssistantPage: if (!assistantTabShown) return false; ShowAssistant(); return true;   // 2.4.1: inert while the tab is off
-                case ShortcutAction.SettingsPage: ShowPage(settingsPage); LoadSettingsFields(); if (settingsAboutPanel != null && settingsAboutPanel.Visible) ShowSettingsTab(false); return true;   // 2.5.9: Settings… after About = General
+                case ShortcutAction.SettingsPage: ShowPage(settingsPage); LoadSettingsFields(); if (settingsAboutPanel != null && settingsAboutPanel.Visible) ShowSettingsTab(false); return true;   // 2.5.9: Settings after About = General
                 case ShortcutAction.HelpPage: ShowHelp(); return true;   // 1.0.11
                 case ShortcutAction.RefreshLibraries: if (!busy) RefreshLibrary(true); return true;
                 case ShortcutAction.OpenArchive: if (!busy) ChoosePackageFile(); return true;
@@ -3726,6 +3846,122 @@ namespace SlotsInstaller
                         Control popupPanel = ((ToolStripControlHost)characterPopup.Items[0]).Control;
                         using (var popupShot = new Bitmap(popupPanel.Width, popupPanel.Height)) { popupPanel.DrawToBitmap(popupShot, new Rectangle(Point.Empty, popupPanel.Size)); popupShot.Save(Path.ChangeExtension(screenshotFile, null) + "-characters.png", System.Drawing.Imaging.ImageFormat.Png); }
                         characterPopup.Close();
+                    }
+                    else if (String.Equals(screenshotPage, "installed-parts", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 1.0.18: an outfit with added parts selected (row text, chip, details, Remove added part, Outfit order).
+                        ShowPage(installedPage);
+                        foreach (ListViewItem row in installedList.Items) { var o = row.Tag as InstalledOutfit; if (o != null && AddedPartsShort(o) != null) { row.Selected = true; break; } }
+                        ShowInstalledSelection();
+                    }
+                    else if (String.Equals(screenshotPage, "added-parts", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 1.0.18: the Added parts window (the outfit's parts plus two sample rows), saved as <file>-parts.png.
+                        ShowPage(installedPage);
+                        InstalledOutfit withParts = installedList.Items.Cast<ListViewItem>().Select(r => r.Tag as InstalledOutfit).FirstOrDefault(o => o != null && AddedPartsShort(o) != null);
+                        var sample = (withParts == null ? new List<PartGraft>() : withParts.Parts.ToList());
+                        sample.Add(new PartGraft { Mod = "Juri Skin Pack", Options = new List<string> { "Oily skin" }, Files = Enumerable.Range(0, 12).Select(i => "f" + i).ToList() });
+                        sample.Add(new PartGraft { Mod = "Juri Shoes", Options = new List<string> { "Boots", "Laces" }, Files = Enumerable.Range(0, 5).Select(i => "g" + i).ToList(), SourcePath = "gone" });
+                        using (var partsWindow = new AddedPartsForm(withParts == null ? "Outfit" : withParts.Name, sample, delegate(PartGraft g) { return g.SourcePath == "gone"; }, delegate { return ""; }))
+                        {
+                            partsWindow.StartPosition = FormStartPosition.Manual; partsWindow.Location = new Point(-32000, -32000); partsWindow.Show(); Application.DoEvents();
+                            using (var partsShot = new Bitmap(partsWindow.Width, partsWindow.Height)) { partsWindow.DrawToBitmap(partsShot, new Rectangle(Point.Empty, partsWindow.Size)); partsShot.Save(Path.ChangeExtension(screenshotFile, null) + "-parts.png", System.Drawing.Imaging.ImageFormat.Png); }
+                            partsWindow.Close();
+                        }
+                    }
+                    else if (String.Equals(screenshotPage, "recipe-builder", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 1.0.18: the recipe builder with a base and parts from the library's own mods, saved as <file>-builder.png.
+                        ShowPage(installedPage);
+                        using (var builderWindow = new RecipeBuilderForm("Juri", GridFighters(), filterPanel.Grid.Cards, library.ToList(), config.SevenZipPath))
+                        {
+                            builderWindow.StartPosition = FormStartPosition.Manual; builderWindow.Location = new Point(-32000, -32000); builderWindow.Show(); Application.DoEvents();
+                            LibraryEntry baseMod = library.FirstOrDefault(e => (e.Name ?? "").IndexOf("Juri Base", StringComparison.OrdinalIgnoreCase) >= 0), parts = library.FirstOrDefault(e => (e.Name ?? "").IndexOf("Hair Bundle", StringComparison.OrdinalIgnoreCase) >= 0);
+                            if (baseMod != null) builderWindow.AddPart(baseMod, null);
+                            if (parts != null)
+                                foreach (ModComponent c in RecipeDraft.Options(PackageReader.Load(parts.SourcePath, config.SevenZipPath, false))) builderWindow.AddPart(parts, new[] { c.Id });
+                            // A mod given as the source is opened as the window opens from the Mod library: selected, and the base.
+                            LibraryEntry opened = String.IsNullOrWhiteSpace(screenshotSource) ? null : library.FirstOrDefault(e => String.Equals(e.SourcePath, screenshotSource, StringComparison.OrdinalIgnoreCase));
+                            if (opened != null) builderWindow.StartOn(opened, null);
+                            // A second mod of the library on top (two rows), when there is one.
+                            LibraryEntry second = opened == null ? null : library.FirstOrDefault(e => !ReferenceEquals(e, opened) && e.CharacterCodes != null && opened.CharacterCodes != null && e.CharacterCodes.Intersect(opened.CharacterCodes).Any() && builderWindow.Draft.Fits(e));
+                            if (second != null) builderWindow.AddPart(second, null);
+                            builderWindow.WaitPreviewForTest(8000);
+                            Application.DoEvents();
+                            using (var builderShot = new Bitmap(builderWindow.Width, builderWindow.Height)) { builderWindow.DrawToBitmap(builderShot, new Rectangle(Point.Empty, builderWindow.Size)); builderShot.Save(Path.ChangeExtension(screenshotFile, null) + "-builder.png", System.Drawing.Imaging.ImageFormat.Png); }
+                            builderWindow.Close();
+                            if (parts != null)
+                                using (var pick = new OptionPickForm(parts.Name, "Tick the options to put on top of the base. Only their files are added.", PackageReader.Load(parts.SourcePath, config.SevenZipPath, true), new string[0], config.SevenZipPath))
+                                {
+                                    pick.StartPosition = FormStartPosition.Manual; pick.Location = new Point(-32000, -32000); pick.Show(); pick.ToggleByName("Hair B"); Application.DoEvents();
+                                    using (var pickShot = new Bitmap(pick.Width, pick.Height)) { pick.DrawToBitmap(pickShot, new Rectangle(Point.Empty, pick.Size)); pickShot.Save(Path.ChangeExtension(screenshotFile, null) + "-options.png", System.Drawing.Imaging.ImageFormat.Png); }
+                                    pick.Close();
+                                }
+                        }
+                    }
+                    else if (String.Equals(screenshotPage, "library-recipe-scrolled", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 1.0.18: the Mod library scrolled to its end: the recipe rows have scrolled away with the mods.
+                        ShowPage(libraryPage); Application.DoEvents();
+                        if (modList.Items.Count > 0) modList.Items[modList.Items.Count - 1].EnsureVisible();
+                        Application.DoEvents();
+                    }
+                    else if (String.Equals(screenshotPage, "library-recipe", StringComparison.OrdinalIgnoreCase) || String.Equals(screenshotPage, "library-recipe-replace", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 1.0.18: the Mod library with the first saved recipe selected ("-replace": in Replace original mode).
+                        ShowPage(libraryPage);
+                        if (screenshotPage.EndsWith("-replace", StringComparison.OrdinalIgnoreCase)) SetInstallMode(InstallModes.Replace, false);
+                        OpenRecipe(Recipes().FirstOrDefault()); WaitRecipePreviewForTest(8000); Application.DoEvents();
+                    }
+                    else if (String.Equals(screenshotPage, "option-pick", StringComparison.OrdinalIgnoreCase) && !String.IsNullOrWhiteSpace(screenshotSource))
+                    {
+                        // 1.0.18: the builder's options picker on the given mod with its default ticks, saved as <file>-options.png.
+                        ModPackage picked = PackageReader.Load(screenshotSource, config.SevenZipPath, true);
+                        using (var pick = new OptionPickForm(picked.Name, "The base outfit. The mod's own rules apply; the line under the list says what is still missing.", picked, Composer.DefaultSelection(picked, false), config.SevenZipPath,
+                            delegate(List<string> ids) { CompositionPlan plan = Composer.Plan(picked, ids); return plan.CanInstall ? null : String.Join(" ", plan.Errors.DefaultIfEmpty("This selection has no outfit files.")); }))
+                        {
+                            pick.StartPosition = FormStartPosition.Manual; pick.Location = new Point(-32000, -32000); pick.Show(); Application.DoEvents();
+                            using (var pickShot = new Bitmap(pick.Width, pick.Height)) { pick.DrawToBitmap(pickShot, new Rectangle(Point.Empty, pick.Size)); pickShot.Save(Path.ChangeExtension(screenshotFile, null) + "-options.png", System.Drawing.Imaging.ImageFormat.Png); }
+                            pick.Close();
+                        }
+                    }
+                    else if (String.Equals(screenshotPage, "recipes", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 1.0.18: the Outfit recipes window with sample recipes, saved as <file>-recipes.png (nothing is written).
+                        ShowPage(installedPage);
+                        InstalledOutfit any = installedList.Items.Cast<ListViewItem>().Select(r => r.Tag as InstalledOutfit).FirstOrDefault(o => o != null && o.Managed);
+                        var samples = new List<OutfitRecipe> {
+                            new OutfitRecipe { Name = "Goth with long hair", Character = "Juri", Base = new RecipeLayer { SourcePath = any == null ? "" : any.SourcePath, Mod = "Goth Juri C1" }, Parts = new List<RecipeLayer> { new RecipeLayer { SourcePath = any == null ? "" : any.SourcePath, Mod = "Juri Hairs", Options = new List<string> { "Hair B" } }, new RecipeLayer { SourcePath = any == null ? "" : any.SourcePath, Mod = "Skin Pack", Options = new List<string> { "Oily skin" } } } },
+                            new OutfitRecipe { Name = "Summer", Character = "Juri", Base = new RecipeLayer { SourcePath = "gone.zip", Mod = "Swimsuit Juri C2" } } };
+                        using (var recipesWindow = new RecipesForm(delegate { return samples; }, any, delegate { return ""; }, delegate { }))
+                        {
+                            recipesWindow.StartPosition = FormStartPosition.Manual; recipesWindow.Location = new Point(-32000, -32000); recipesWindow.Show(); Application.DoEvents();
+                            using (var recipesShot = new Bitmap(recipesWindow.Width, recipesWindow.Height)) { recipesWindow.DrawToBitmap(recipesShot, new Rectangle(Point.Empty, recipesWindow.Size)); recipesShot.Save(Path.ChangeExtension(screenshotFile, null) + "-recipes.png", System.Drawing.Imaging.ImageFormat.Png); }
+                            recipesWindow.Close();
+                        }
+                    }
+                    else if (String.Equals(screenshotPage, "outfit-order", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 1.0.18: the Outfit order window with one row moved, saved beside the shot as <file>-order.png (its own window).
+                        ShowPage(installedPage);
+                        Dictionary<string, int> counts = OutfitOrder.Counts(config.GameRoot);
+                        string dir = counts.Where(kv => kv.Value > 1).OrderByDescending(kv => kv.Value).Select(kv => kv.Key).FirstOrDefault() ?? "", fighter = "";
+                        if (dir.Length > 3) Characters.ByCode.TryGetValue(dir.Substring(3), out fighter);
+                        using (var order = new OutfitOrderForm(config.GameRoot, fighter, GridFighters(), filterPanel.Grid.Cards, counts, delegate { return new List<string> { "Summer Dress" }; }, false))
+                        {
+                            order.StartPosition = FormStartPosition.Manual; order.Location = new Point(-32000, -32000); order.Show(); Application.DoEvents();
+                            if (order.RowsForTest.Count > 2) { order.RowsForTest.MoveTo(order.RowsForTest.Count - 1, 0); order.RowsForTest.LiftForTest(3, order.RowsForTest.Height / order.RowsForTest.Count * 3 / 2); }
+                            Application.DoEvents();
+                            using (var orderShot = new Bitmap(order.Width, order.Height)) { order.DrawToBitmap(orderShot, new Rectangle(Point.Empty, order.Size)); orderShot.Save(Path.ChangeExtension(screenshotFile, null) + "-order.png", System.Drawing.Imaging.ImageFormat.Png); }
+                            order.Close();
+                        }
+                    }
+                    else if (String.Equals(screenshotPage, "mods-off", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 1.0.18: the banner while outfit mods are off (the state is only shown, nothing is changed).
+                        ShowPage(installedPage);
+                        gameStatus = new GameFilesStatus { ModsOff = new ModsOffRecord { ReplacementIds = new List<string> { "a", "b", "c" }, LoaderId = "loader" } };
+                        UpdateBanner();
                     }
                     else if (String.Equals(screenshotPage, "merged", StringComparison.OrdinalIgnoreCase)) { ShowDetailTab(true); }
                     else if (screenshotPage != null && screenshotPage.StartsWith("search=", StringComparison.OrdinalIgnoreCase)) { search.Text = screenshotPage.Substring(7); FlushLibraryFilter(); ApplyFilters(); if (modList.Items.Count > 0) modList.EnsureVisible(0); }

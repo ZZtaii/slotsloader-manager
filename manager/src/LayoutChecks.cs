@@ -184,7 +184,7 @@ namespace SlotsInstaller
                     Require(field.Height>=DpiMetrics.Px(field,22),context+": native input field height is clipped.");
                 }
                 // 1.5 moved Open archive/Open folder from a library-page row into the header.
-                Button[] sourceActions=AllControls(layoutHost).OfType<Button>().Where(b=>b.Text=="Open archive…" || b.Text=="Open folder…").ToArray();
+                Button[] sourceActions=AllControls(layoutHost).OfType<Button>().Where(b=>b.Parent is FlowLayoutPanel && (b.Text=="Open archive" || b.Text=="Open folder")).ToArray();   // the header's two, not the Installed page's Open folder
                 Require(sourceActions.Length==2,context+": Open archive/Open folder actions are missing.");
                 foreach(Button action in sourceActions)
                 {
@@ -249,9 +249,10 @@ namespace SlotsInstaller
             ListView list = ControlField<ListView>(form, "modList");
             ContextMenuStrip contextMenu = list.ContextMenuStrip;
             // 2.4.1: a separator and Delete (to the Recycle Bin) follow, last.
-            // 1.0.15: Edit bundle… after Rename.
-            Require(contextMenu != null && contextMenu.Items.Count == 11 && contextMenu.Items[2].Text == "Rename" && contextMenu.Items[3].Text == "Edit bundle…" && contextMenu.Items[4] is ToolStripSeparator && contextMenu.Items[6].Text == "Uninstall replacement" && contextMenu.Items[7].Text == "Uninstall selection" && contextMenu.Items[8].Text == "Uninstall mod (external manager)" && contextMenu.Items[9] is ToolStripSeparator && contextMenu.Items[10].Text.StartsWith("Delete", StringComparison.Ordinal), context + ": uninstall context action is missing.");
-            ToolStripMenuItem contextAction = contextMenu.Items[5] as ToolStripMenuItem;
+            // 1.0.18: New outfit recipe after Reorder bundle (RecipeBuilder.cs).
+            // 1.0.15: Reorder bundle after Rename.
+            Require(contextMenu != null && contextMenu.Items.Count == 13 && contextMenu.Items[2].Text == "Rename" && contextMenu.Items[3].Text == "Reorder bundle" && contextMenu.Items[4].Text.Equals("New outfit recipe", StringComparison.Ordinal) && contextMenu.Items[5].Text == "Add to recipe" && contextMenu.Items[6] is ToolStripSeparator && contextMenu.Items[8].Text == "Uninstall replacement" && contextMenu.Items[9].Text == "Uninstall selection" && contextMenu.Items[10].Text == "Uninstall mod (external manager)" && contextMenu.Items[11] is ToolStripSeparator && contextMenu.Items[12].Text.StartsWith("Delete", StringComparison.Ordinal), context + ": uninstall context action is missing.");
+            ToolStripMenuItem contextAction = contextMenu.Items[7] as ToolStripMenuItem;
             Require(contextAction != null && contextAction.Text == "Uninstall outfit", context + ": uninstall context action has changed.");
             ModPackage oldPackage = (ModPackage)Field("package").GetValue(form);
             List<InstalledOutfit> oldInstalled = (List<InstalledOutfit>)Field("installed").GetValue(form);
@@ -362,8 +363,8 @@ namespace SlotsInstaller
             ListView list = ControlField<ListView>(form, "modList");
             ContextMenuStrip menu = list.ContextMenuStrip;
             Require(menu != null, context + ": library context menu is missing.");
-            Require(menu.Items.Count == 11 && menu.Items[7].Text == "Uninstall selection" && menu.Items[8].Text == "Uninstall mod (external manager)" && menu.Items[0].Text == "Open" && menu.Items[1].Text == "Open in Explorer" && menu.Items[2].Text == "Rename" && menu.Items[3].Text == "Edit bundle…" && menu.Items[4] is ToolStripSeparator && menu.Items[5].Text == "Uninstall outfit" && menu.Items[6].Text == "Uninstall replacement"
-                && menu.Items[9] is ToolStripSeparator && menu.Items[10].Text.StartsWith("Delete", StringComparison.Ordinal) && menu.Items[10].ForeColor == Palette.Red, context + ": library context actions are missing.");   // 2.4.1: Delete last, danger colour; 1.0.5: Rename after Open in Explorer; 1.0.15: Edit bundle… after Rename
+            Require(menu.Items.Count == 13 && menu.Items[9].Text == "Uninstall selection" && menu.Items[10].Text == "Uninstall mod (external manager)" && menu.Items[0].Text == "Open" && menu.Items[1].Text == "Open in Explorer" && menu.Items[2].Text == "Rename" && menu.Items[3].Text == "Reorder bundle" && menu.Items[5].Text == "Add to recipe" && menu.Items[6] is ToolStripSeparator && menu.Items[7].Text == "Uninstall outfit" && menu.Items[8].Text == "Uninstall replacement"
+                && menu.Items[11] is ToolStripSeparator && menu.Items[12].Text.StartsWith("Delete", StringComparison.Ordinal) && menu.Items[12].ForeColor == Palette.Red, context + ": library context actions are missing.");   // 2.4.1: Delete last, danger colour; 1.0.5: Rename after Open in Explorer; 1.0.15: Reorder bundle after Rename
             LibraryEntry first = new LibraryEntry { Name = "First", Kind = "ZIP", SourcePath = @"C:\fixture\first.zip" };
             LibraryEntry second = new LibraryEntry { Name = "Second", Kind = "RAR", SourcePath = @"C:\fixture\second.rar" };
             list.Items.Add(new ListViewItem(first.Name) { Tag = first });
@@ -867,7 +868,7 @@ namespace SlotsInstaller
             // 1.0.11 (the user): Help (F1); no Welcome (Settings → General) and no About (the Settings → About tab).
             // 1.0.15: Take the tour at the end, with the three tours.
             string[] gearItems = menu.Items.OfType<ToolStripMenuItem>().Select(i => i.Text).ToArray();
-            Require(gearItems.SequenceEqual(new[] { "Settings…", "History", "Restore", "Keyboard shortcuts", "Help", "Take the tour" }), context + ": gear menu items: " + String.Join(" | ", gearItems));
+            Require(gearItems.SequenceEqual(new[] { "Settings", "History", "Restore", "Keyboard shortcuts", "Help", "Take the tour" }), context + ": gear menu items: " + String.Join(" | ", gearItems));
             string[] tours = menu.Items.OfType<ToolStripMenuItem>().Last().DropDownItems.OfType<ToolStripMenuItem>().Select(i => i.Text).ToArray();
             Require(tours.SequenceEqual(new[] { "Mod library", "Installed page", "Settings" }), context + ": tour menu items: " + String.Join(" | ", tours));
             ToolStripMenuItem helpItem = menu.Items.OfType<ToolStripMenuItem>().Single(i => i.Text == "Help");

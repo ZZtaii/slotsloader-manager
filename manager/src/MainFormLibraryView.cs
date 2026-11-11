@@ -41,7 +41,7 @@ namespace SlotsInstaller
         }
 
         // Name shown for a library row (and used for its type-ahead and A–Z ties).
-        internal string LibraryRowName(LibraryEntry entry) { return entry == null ? "" : entry.ShownName(libraryFileNames); }
+        internal string LibraryRowName(LibraryEntry entry) { return entry == null ? "" : entry.Recipe != null ? entry.Recipe.Name : entry.ShownName(libraryFileNames); }   // a recipe has no file name
 
         internal void SetLibraryFileNames(bool fileNames, bool save)
         {

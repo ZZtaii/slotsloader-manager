@@ -123,7 +123,8 @@ namespace SlotsInstaller
         }
         private bool OutfitMatchesSearch(InstalledQuery q, InstalledOutfit o)
         {
-            return InstalledRowMatches(q, o.Name, o.Character, o.SourcePath, null, false, o);
+            // 1.0.18: an outfit that matches a saved recipe is also found by "recipe", "recipes", "rc", "outfits" and "ou".
+            return InstalledRowMatches(q, q.Empty || RecipeOf(o) == null ? o.Name : o.Name + RecipeSearchWords, o.Character, o.SourcePath, null, false, o);
         }
         private bool GameRowMatchesSearch(InstalledQuery q, GameModRow r)
         {

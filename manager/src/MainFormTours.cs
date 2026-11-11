@@ -177,7 +177,7 @@ namespace SlotsInstaller
             var tour = new Tour { Id = InstalledTourId, Name = "Installed page" };
             tour.Steps.Add(step("Everything you installed", new[] { "Extra shows your extra outfits, Installed your replacements and tool mods, All shows both. Search, or pick a character or outfit to narrow the list." }, show,
                 delegate { return TourUnion(installedSearch, installedKind); }));
-            tour.Steps.Add(step("Each row", new[] { "- Replacement or Extra outfit, and its place in the order: #1 is on top.", "- Enabled or Disabled.", "- Shared files: when several mods change the same file, the one higher in the list wins." }, show,
+            tour.Steps.Add(step("Each row", new[] { "- Replacement or Extra outfit, and its place in the order: #1 is on top and wins.", "- Enabled or Disabled.", "- Shared files: when several mods change the same file, the one higher in the list wins. What you install last goes to #1." }, show,
                 delegate { var rows = installedList.Items.Cast<ListViewItem>().Where(r => !TourElsewhere(r)).Take(3).ToList(); return rows.Count == 0 ? TourRect(installedList) : TourRows(rows); }));
             tour.Steps.Add(step("Rows from elsewhere", new[] { "- A Leftover PAK is a patch PAK no mod manager lists, but SF6 still loads it. Remove PAK takes it out, with Undo.", "- External mod manager rows are that manager's mods. Uninstall them there." }, show,
                 delegate { return TourRows(installedList.Items.Cast<ListViewItem>().Where(TourElsewhere).Take(3)); }));

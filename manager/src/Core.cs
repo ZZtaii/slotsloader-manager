@@ -144,6 +144,8 @@ namespace SlotsInstaller
     public sealed class LibraryEntry
     {
         public string SourcePath, Name, Character, Kind;
+        // 1.0.18: a saved outfit recipe shown as a row of the Mod library (RecipesForm.cs): no source file, Kind "Recipe".
+        internal OutfitRecipe Recipe;
         public long Size;
         public int OptionCount = -1;
         public List<string> OptionIds = new List<string>();
@@ -929,6 +931,8 @@ namespace SlotsInstaller
         internal bool VariantsUnsupported;      // 2.5.0: several SlotsLoader outfits but no variants.json (an older SlotsLoader)
         internal bool WholeArchive;             // 2.5.4: a manual archive the Manager copied from SourcePath (Install all variants, ArchiveInstalls.cs)
         internal List<PartGraft> Parts;         // 1.0.16: the manifest's added parts (an addon archive's ticks come back from them)
+        internal List<PartGraft> OffParts;      // 1.0.18: added parts that are turned off (InstallManifest.OffParts), or null
+        internal string RecipeId;               // 1.0.18: the recipe it was installed from (InstallManifest.RecipeId), or null
         internal List<string> AddonSources;     // 1.0.18: a WholeArchive copy's combined addon archives (ArchiveInstalls/ArchiveCombine), or null
     }
     public sealed class InstallManifest
@@ -938,6 +942,12 @@ namespace SlotsInstaller
         public Dictionary<string,string> Sha256=new Dictionary<string,string>();
         // 1.0.6: parts added from other mods (InstallerParts.cs); null or empty = none. Older Managers ignore the field.
         public List<PartGraft> Parts;
+        // 1.0.18 (the user: "I don't see any options to manage it, like toggle or untoggle it"): added parts that are
+        // turned off: their files are not in the outfit, and the record stays so a tick puts them back. Null = none.
+        public List<PartGraft> OffParts;
+        // 1.0.18: the outfit recipe this outfit was installed from (OutfitRecipe.Id), or null. Uninstall and Update of a
+        // recipe act on the outfits that carry its id, never on one that only looks like it.
+        public string RecipeId;
         public Dictionary<string,string> RebuiltSwatches;
     }
     public static partial class Installer
@@ -958,9 +968,22 @@ namespace SlotsInstaller
         // fails the install before anything is written (AddToOutfit after the commit could leave the dropped part out).
         internal static InstallResult Install(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources,IList<CompositionPlan> addParts)
         {
-            using (AcquireMutation(costumeRoot)) return InstallLocked(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,dropPartSources,addParts);
+            return Install(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,dropPartSources,addParts,null);
         }
-        private static InstallResult InstallLocked(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources,IList<CompositionPlan> addParts)
+        // 1.0.18 (user request: remove what Add to outfit added, one at a time): dropPart names the added parts that are
+        // not put back on this reinstall; the others are, on top of the outfit's own files (InstallerParts.RemovePart).
+        internal static InstallResult Install(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources,IList<CompositionPlan> addParts,Func<PartGraft,bool> dropPart)
+        {
+            return Install(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,dropPartSources,addParts,dropPart,null);
+        }
+        // 1.0.18 (user request: a window to reorder and remove added parts): partOrder is the whole list of added parts
+        // this reinstall puts on, in the order given (the last one wins a shared file); each is copied from its mod again,
+        // so one that was taken off earlier can be in it (Undo). null = the outfit's own list, as before.
+        internal static InstallResult Install(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources,IList<CompositionPlan> addParts,Func<PartGraft,bool> dropPart,IList<PartGraft> partOrder)
+        {
+            using (AcquireMutation(costumeRoot)) return InstallLocked(plan,costumeRoot,character,outfitName,sevenZipPath,replaceManaged,dropPartSources,addParts,dropPart,partOrder);
+        }
+        private static InstallResult InstallLocked(CompositionPlan plan,string costumeRoot,string character,string outfitName,string sevenZipPath,bool replaceManaged,IEnumerable<string> dropPartSources,IList<CompositionPlan> addParts,Func<PartGraft,bool> dropPart,IList<PartGraft> partOrder)
         {
             if (!plan.CanInstall) throw new IOException(String.Join(Environment.NewLine,plan.Errors));
             Safety.Segment(character); Safety.Segment(outfitName);
@@ -1002,7 +1025,8 @@ namespace SlotsInstaller
                 // a changed source); another mod in this outfit's place starts without them.
                 var droppedParts=new List<string>(); List<PartGraft> keptParts=new List<PartGraft>();
                 var drop=new List<string>(dropPartSources ?? new string[0]);
-                List<PartGraft> previousParts=oldManifest==null || oldManifest.Parts==null ? null : oldManifest.Parts.Where(g=>!drop.Any(d=>ReplacePlanner.SameSource(d,g.SourcePath))).ToList();
+                List<PartGraft> previousParts=oldManifest==null || oldManifest.Parts==null ? null : oldManifest.Parts.Where(g=>!drop.Any(d=>ReplacePlanner.SameSource(d,g.SourcePath)) && (dropPart==null || !dropPart(g))).ToList();
+                if (partOrder!=null && oldManifest!=null) previousParts=partOrder.Where(g=>g!=null).ToList();
                 if (previousParts!=null && previousParts.Count>0)
                 {
                     if (String.Equals(oldManifest.SourcePath,fresh.SourcePath,StringComparison.OrdinalIgnoreCase)) keptParts=ReapplyParts(new InstallManifest {Parts=previousParts},stage,hashes,transaction,sevenZipPath,droppedParts);
@@ -1013,6 +1037,11 @@ namespace SlotsInstaller
                 int swatchFixes=FixSwatches(stage,hashes,root,rebuiltSwatches);   // 2.5.5: outdated select-screen swatches (ModFixes.UpgradeSwatches)
                 var manifest=new InstallManifest {Id=oldManifest==null ? Guid.NewGuid().ToString("N") : oldManifest.Id,Name=outfitName,Character=character,SourcePath=fresh.SourcePath,CreatedUtc=DateTime.UtcNow.ToString("o"),SelectedIds=current.Layers.Select(c=>c.Id).ToList()};
                 manifest.Sha256=hashes; if (rebuiltSwatches.Count > 0) manifest.RebuiltSwatches=rebuiltSwatches; if (keptParts.Count+addedParts.Count>0) manifest.Parts=keptParts.Concat(addedParts).ToList();
+                // 1.0.18: parts that are turned off stay remembered across a rebuild (Edit options, a changed part list).
+                // Not when another mod fills the outfit: it starts without the old one's parts, on or off.
+                if (oldManifest!=null && oldManifest.OffParts!=null && oldManifest.OffParts.Count>0 && String.Equals(oldManifest.SourcePath,fresh.SourcePath,StringComparison.OrdinalIgnoreCase)) manifest.OffParts=oldManifest.OffParts.Where(g=>g!=null).ToList();
+                // 1.0.18: the recipe an outfit was installed from stays its recipe across a rebuild (OutfitRecipes.Install sets it).
+                if (oldManifest!=null && !String.IsNullOrEmpty(oldManifest.RecipeId)) manifest.RecipeId=oldManifest.RecipeId;
                 File.WriteAllText(Path.Combine(stage,"modinfo.ini"),"name="+outfitName+"\r\nauthor="+CleanMetadata(String.Join(", ",current.Layers.Select(c=>c.Author).Where(s=>!String.IsNullOrWhiteSpace(s)).Distinct()))+"\r\ndescription="+CleanMetadata("Composed with Slotsloader Manager. "+String.Join(" + ",current.Layers.Select(c=>c.Name)))+"\r\nversion=1.0\r\n",new UTF8Encoding(false));
                 Json.Write(Path.Combine(stage,ManifestName),manifest);
                 OperationContext.ThrowIfCancellationRequested();
@@ -1202,7 +1231,7 @@ namespace SlotsInstaller
         {
             DateTime created;
             if (m==null || !DateTime.TryParse(m.CreatedUtc,null,System.Globalization.DateTimeStyles.RoundtripKind,out created)) created=DateTime.MinValue;
-            return new InstalledOutfit {Folder=folder,Name=m==null ? Path.GetFileName(folder) : m.Name,Character=character,Enabled=enabled,Managed=m!=null,Id=m==null ? "" : m.Id,SourcePath=m==null ? "" : m.SourcePath,SelectedIds=m==null ? new List<string>() : m.SelectedIds,Parts=m==null ? null : m.Parts,InstalledUtc=created==DateTime.MinValue ? created : created.ToUniversalTime(),SnapshotStamp=OutfitSnapshotStamp(folder)};
+            return new InstalledOutfit {Folder=folder,Name=m==null ? Path.GetFileName(folder) : m.Name,Character=character,Enabled=enabled,Managed=m!=null,Id=m==null ? "" : m.Id,SourcePath=m==null ? "" : m.SourcePath,SelectedIds=m==null ? new List<string>() : m.SelectedIds,Parts=m==null ? null : m.Parts,OffParts=m==null ? null : m.OffParts,RecipeId=m==null ? null : m.RecipeId,InstalledUtc=created==DateTime.MinValue ? created : created.ToUniversalTime(),SnapshotStamp=OutfitSnapshotStamp(folder)};
         }
         internal static string OutfitSnapshotStamp(string path)
         {
