@@ -358,13 +358,13 @@ namespace SlotsInstaller
         internal string ButtonsForTest { get { return ((addPart.Enabled ? "add " : "") + (layerOptions.Enabled ? "options " : "") + (remove.Enabled ? "remove" : "")).Trim(); } }
 
         // edit: a saved recipe to change (the window opens with its layers), else a new one.
-        internal static bool Choose(IWin32Window owner, string fighter, IEnumerable<KeyValuePair<string, string>> fighters, IEnumerable<FighterCard> portraits, List<LibraryEntry> library, string sevenZip, LibraryEntry startBase, IList<string> startIds, out OutfitRecipe recipe, out bool install, OutfitRecipe edit = null, string gameRoot = null, LibraryEntry addOnTop = null, OutfitRecipe startFrom = null)
+        internal static bool Choose(IWin32Window owner, string fighter, IEnumerable<KeyValuePair<string, string>> fighters, IEnumerable<FighterCard> portraits, List<LibraryEntry> library, string sevenZip, LibraryEntry startBase, IList<string> startIds, out OutfitRecipe recipe, out bool install, OutfitRecipe edit = null, string gameRoot = null, LibraryEntry addOnTop = null, OutfitRecipe startFrom = null, Func<string, string, bool> nameTaken = null)
         {
             recipe = null; install = false;
             if (Program.Headless) return false;
             using (var form = new RecipeBuilderForm(fighter, fighters, portraits, library, sevenZip))
             {
-                form.GameRoot = gameRoot ?? "";
+                form.GameRoot = gameRoot ?? ""; form.NameTaken = nameTaken;
                 if (edit != null) { form.LoadRecipe(edit); form.AddOnTop = addOnTop; }
                 else if (startFrom != null) form.StartFrom(startFrom);
                 else form.StartOn(startBase, startIds);
@@ -876,7 +876,19 @@ namespace SlotsInstaller
             if (draft == null || draft.Layers.Count == 0) return;
             try { Recipe = draft.ToRecipe(nameBox.Text); Safety.Segment(Recipe.Name); }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Recipe = null; UpdateState(ex.Message); return; }
+            // 1.0.18 (review): saving under the name of another recipe of this fighter replaces that recipe. It is said
+            // first; the same button again goes ahead.
+            string key = Recipe.Name + "\n" + Recipe.Character;
+            if (NameTaken != null && NameTaken(Recipe.Name, Recipe.Character) && !String.Equals(replaceConfirmed, key, StringComparison.OrdinalIgnoreCase))
+            {
+                replaceConfirmed = key; string taken = Recipe.Name; Recipe = null;
+                UpdateState("There is already a recipe named " + taken + " for " + draft.Character + ". Save again to replace it, or change the name.");
+                return;
+            }
             InstallAfter = install; DialogResult = DialogResult.OK; Close();
         }
+        // (name, fighter): another saved recipe has this name for this fighter (not the one being edited).
+        internal Func<string, string, bool> NameTaken;
+        private string replaceConfirmed;
     }
 }

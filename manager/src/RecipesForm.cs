@@ -24,7 +24,18 @@ namespace SlotsInstaller
         private void RecipesChanged()
         {
             recipeCache = null; recipeEntries.Clear(); InvalidateInstalledSearch(); if (installedList != null) { FillInstalled(); installedList.Invalidate(); }
-            if (openRecipe != null && package == null && !Recipes().Any(r => r.Id == openRecipe.Id)) ClosePackage();   // the open recipe was deleted
+            if (openRecipe != null && package == null)
+            {
+                // The list was read again: the open recipe is the new object of that id (a tick must change the one the
+                // row shows), or it was deleted.
+                OutfitRecipe fresh = Recipes().FirstOrDefault(r => r.Id == openRecipe.Id);
+                if (fresh == null) ClosePackage();
+                else if (!ReferenceEquals(fresh, openRecipe))
+                {
+                    openRecipe = fresh;
+                    if (recipeView != null && recipeViewShown) { recipeView.SetRecipe(fresh); selectedLabel.Text = RecipeLayerCount(fresh); packageTitle.Text = fresh.Name; CheckRecipeMaterials(fresh); }
+                }
+            }
             if (modList != null && search != null) ApplyFilters();   // their rows are part of the mod list
         }
 
@@ -146,52 +157,82 @@ namespace SlotsInstaller
             // Install reads "Update" and puts it in again as ticked. Stale: records of mods the recipe no longer installs.
             internal bool Changed;
             internal List<GameModRow> Stale = new List<GameModRow>();
+            // Linked: these are installs the recipe itself made (recorded), not ones that only match it.
+            // ChangedOutfits: its outfits that are not as ticked now; ChangedRows: its replacement records are not.
+            internal bool Linked, ChangedRows;
+            internal List<InstalledOutfit> ChangedOutfits = new List<InstalledOutfit>();
             internal string Badge { get { return !Any ? "" : Changed ? "◐ Changed" : !Enabled ? "Disabled" : Outfits.Any(o => o.Enabled) ? "Extra" : "✓ Installed"; } }
         }
+        // The mods of an (already effective) recipe, each once, with the options its layers name for it together.
+        private static List<KeyValuePair<string, HashSet<string>>> RecipeMods(OutfitRecipe recipe)
+        {
+            var mods = new List<KeyValuePair<string, HashSet<string>>>();
+            foreach (RecipeLayer layer in recipe == null ? new List<RecipeLayer>() : recipe.AllLayers)
+            {
+                var mod = mods.FirstOrDefault(m => ReplacePlanner.SameSource(m.Key, layer.SourcePath));
+                if (mod.Key == null) mods.Add(mod = new KeyValuePair<string, HashSet<string>>(layer.SourcePath ?? "", new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
+                mod.Value.UnionWith(layer.SelectedIds ?? new List<string>());
+            }
+            return mods;
+        }
+        // 1.0.18 (review of PR 28): what counts as "installed from this recipe" decides what Uninstall and Update
+        // remove, so it is recorded, not guessed. An extra outfit carries the recipe's id in its install record
+        // (InstallManifest.RecipeId); the replacement records of the last Replace original install are listed in the
+        // recipe (OutfitRecipe.InstalledRecords). Those are the recipe's installs: Changed when they are not what the
+        // recipe would install now, Stale when their mod is turned off or gone from the recipe.
+        // Nothing recorded (a recipe installed by an earlier build, or its mods installed by hand): it still reads
+        // installed when what is there is exactly the recipe, the same mods with the same options and nothing else
+        // of it turned off; never "changed", and never a record of a mod only because the recipe names that mod.
         internal RecipeInstall InstalledRecipe(OutfitRecipe recipe)
         {
-            if (recipe == null || recipe.Base == null) return new RecipeInstall();
+            var found = new RecipeInstall();
+            if (recipe == null || recipe.Base == null) return found;
             OutfitRecipe now = recipe.Effective();
-            RecipeInstall found = now == null ? new RecipeInstall() : InstalledExactly(now);
-            List<string> all = recipe.AllLayers.Select(l => l.SourcePath ?? "").ToList();
-            Func<string, IEnumerable<string>, bool> among = (source, list) => list.Any(s => ReplacePlanner.SameSource(s, source));
-            List<string> on = now == null ? new List<string>() : now.AllLayers.Select(l => l.SourcePath ?? "").ToList();
+            RecipeInstall exact = now == null ? new RecipeInstall() : InstalledExactly(now, false);
             List<GameModRow> rows = (gameRows ?? new List<GameModRow>()).Where(r => r.Mod != null).ToList();
-            if (found.Replacements.Count > 0)
+            var recorded = new HashSet<string>(recipe.InstalledRecords ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+            List<InstalledOutfit> ownOutfits = String.IsNullOrEmpty(recipe.Id) ? new List<InstalledOutfit>() : (installed ?? new List<InstalledOutfit>()).Where(o => o.Managed && String.Equals(o.RecipeId, recipe.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+            List<GameModRow> ownRows = rows.Where(r => recorded.Contains(r.Mod.Id)).OrderBy(r => r.Priority).ToList();
+            if (ownOutfits.Count + ownRows.Count == 0)
             {
-                // A mod that was turned off in the recipe and is still installed: not as ticked.
-                found.Stale = rows.Where(r => among(r.Mod.SourcePath, all) && !among(r.Mod.SourcePath, on)).ToList();
-                if (found.Stale.Count > 0) { found.Changed = true; found.Replacements.AddRange(found.Stale.Where(s => !found.Replacements.Contains(s))); }
+                RecipeInstall strict = now == null ? exact : InstalledExactly(now, true);
+                found.Outfits = strict.Outfits; found.Replacements = strict.Replacements;
+                return found;
             }
-            if (found.Any) return found;
-            // Not installed as ticked. Installed another way: an outfit of the recipe's name built from its mods, or a
-            // record of every mod that is on (whatever its options).
-            foreach (InstalledOutfit o in installed ?? new List<InstalledOutfit>())
-                if (o.Managed && String.Equals(o.Character, recipe.Character, StringComparison.OrdinalIgnoreCase) && String.Equals(o.Name, recipe.Name, StringComparison.OrdinalIgnoreCase)
-                    && among(o.SourcePath, all) && (o.Parts ?? new List<PartGraft>()).Where(g => g != null).All(g => among(g.SourcePath, all))) found.Outfits.Add(o);
-            if (on.Count > 0 && on.All(s => rows.Any(r => ReplacePlanner.SameSource(r.Mod.SourcePath, s))))
+            found.Linked = true; found.Outfits = ownOutfits; found.Replacements = ownRows;
+            found.ChangedOutfits = ownOutfits.Where(o => !exact.Outfits.Contains(o)).ToList();
+            if (ownRows.Count > 0)
             {
-                found.Replacements = rows.Where(r => among(r.Mod.SourcePath, all)).OrderBy(r => r.Priority).ToList();
-                found.Stale = found.Replacements.Where(r => !among(r.Mod.SourcePath, on)).ToList();
+                List<KeyValuePair<string, HashSet<string>>> mods = RecipeMods(now);
+                found.Stale = ownRows.Where(r => !mods.Any(m => ReplacePlanner.SameSource(m.Key, r.Mod.SourcePath))).ToList();
+                found.ChangedRows = now == null || found.Stale.Count > 0 || mods.Any(m => !ownRows.Any(r => RowHas(r, m, false)));
             }
-            found.Changed = found.Any;
+            found.Changed = found.ChangedOutfits.Count > 0 || found.ChangedRows;
             return found;
         }
-        // Installed exactly as this (already effective) recipe says.
-        private RecipeInstall InstalledExactly(OutfitRecipe recipe)
+        // The record is this mod with these options (strict: with exactly these; else with at least these, since the
+        // mod's own rules may have added its main files to what the recipe names).
+        private static bool RowHas(GameModRow row, KeyValuePair<string, HashSet<string>> mod, bool strict)
+        {
+            if (row == null || row.Mod == null || !ReplacePlanner.SameSource(row.Mod.SourcePath, mod.Key)) return false;
+            List<string> ids = row.Mod.SelectedIds ?? new List<string>();
+            if (mod.Value.Count == 0) return true;   // the mod as it installs by default
+            return strict ? mod.Value.SetEquals(ids) : mod.Value.All(id => ids.Contains(id, StringComparer.OrdinalIgnoreCase));
+        }
+        // Installed exactly as this (already effective) recipe says, judged by content.
+        private RecipeInstall InstalledExactly(OutfitRecipe recipe, bool strict)
         {
             var found = new RecipeInstall();
             // A layer saved without options is the mod as it installs by default: any options of that mod match it.
             Func<RecipeLayer, string, List<string>, bool> same = (layer, source, ids) => ReplacePlanner.SameSource(layer.SourcePath, source)
                 && (layer.SelectedIds == null || layer.SelectedIds.Count == 0 || new HashSet<string>(layer.SelectedIds, StringComparer.OrdinalIgnoreCase).SetEquals(ids ?? new List<string>()));
-            List<RecipeLayer> recipeParts = recipe.Parts ?? new List<RecipeLayer>();
+            List<RecipeLayer> layers = recipe.AllLayers;
             foreach (InstalledOutfit o in installed ?? new List<InstalledOutfit>())
             {
                 if (!o.Managed || !String.Equals(o.Character, recipe.Character, StringComparison.OrdinalIgnoreCase)) continue;
                 List<PartGraft> parts = (o.Parts ?? new List<PartGraft>()).Where(g => g != null).ToList();
                 // The outfit is built on the lowest layer that brings a body, so its record may start at another layer
                 // than the recipe's bottom one: the same mods with the same options, whatever the order.
-                var layers = new[] { recipe.Base }.Concat(recipeParts).ToList();
                 if (layers.Count != parts.Count + 1) continue;
                 var have = new List<KeyValuePair<string, List<string>>> { new KeyValuePair<string, List<string>>(o.SourcePath, o.SelectedIds) };
                 have.AddRange(parts.Select(g => new KeyValuePair<string, List<string>>(g.SourcePath, g.SelectedIds)));
@@ -204,17 +245,9 @@ namespace SlotsInstaller
                 }
                 if (all) found.Outfits.Add(o);
             }
-            var mods = new List<KeyValuePair<string, HashSet<string>>>();
-            foreach (RecipeLayer layer in new[] { recipe.Base }.Concat(recipe.Parts ?? new List<RecipeLayer>()))
+            foreach (var mod in RecipeMods(recipe))
             {
-                var mod = mods.FirstOrDefault(m => ReplacePlanner.SameSource(m.Key, layer.SourcePath));
-                if (mod.Key == null) mods.Add(mod = new KeyValuePair<string, HashSet<string>>(layer.SourcePath ?? "", new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
-                mod.Value.UnionWith(layer.SelectedIds ?? new List<string>());
-            }
-            foreach (var mod in mods)
-            {
-                GameModRow row = (gameRows ?? new List<GameModRow>()).Where(r => r.Mod != null && ReplacePlanner.SameSource(r.Mod.SourcePath, mod.Key)
-                    && mod.Value.All(id => (r.Mod.SelectedIds ?? new List<string>()).Contains(id, StringComparer.OrdinalIgnoreCase))).OrderBy(r => r.Priority).FirstOrDefault();
+                GameModRow row = (gameRows ?? new List<GameModRow>()).Where(r => RowHas(r, mod, strict)).OrderBy(r => r.Priority).FirstOrDefault();
                 if (row == null) { found.Replacements.Clear(); break; }
                 found.Replacements.Add(row);
             }
@@ -239,8 +272,7 @@ namespace SlotsInstaller
             SetPageStatus(currentPage, "✓ Deleted the recipe " + recipe.Name + ". Installed outfits are not touched.", Palette.Green);
             OfferUndo("Delete the recipe " + recipe.Name, delegate
             {
-                recipe.Id = "";
-                OutfitRecipes.Save(AppConfig.DataDir, recipe); RecipesChanged();
+                OutfitRecipes.Save(AppConfig.DataDir, recipe); RecipesChanged();   // under its own id again: its installs still name it
                 SetPageStatus(currentPage, "✓ The recipe " + recipe.Name + " is back.", Palette.Green);
             });
         }
@@ -278,10 +310,13 @@ namespace SlotsInstaller
         {
             if (busy || recipe == null) return;
             OutfitRecipe edited; bool installNow;
-            if (!RecipeBuilderForm.Choose(this, recipe.Character, GridFighters(), filterPanel.Grid.Cards, library == null ? new List<LibraryEntry>() : library.ToList(), config.SevenZipPath, null, null, out edited, out installNow, recipe, config.GameRoot, addOnTop)) return;
+            if (!RecipeBuilderForm.Choose(this, recipe.Character, GridFighters(), filterPanel.Grid.Cards, library == null ? new List<LibraryEntry>() : library.ToList(), config.SevenZipPath, null, null, out edited, out installNow, recipe, config.GameRoot, addOnTop, null,
+                delegate(string n, string c) { return Recipes().Any(r => r.Id != recipe.Id && String.Equals(r.Name, n, StringComparison.OrdinalIgnoreCase) && String.Equals(r.Character, c, StringComparison.OrdinalIgnoreCase)); })) return;
             try
             {
                 edited.CreatedUtc = recipe.CreatedUtc;
+                // It stays the same recipe (its id), so what was installed from it is still its own.
+                edited.Id = recipe.Id; edited.InstalledRecords = (recipe.InstalledRecords ?? new List<string>()).ToList();
                 // The ticks of the Mod library's view stay with the layers that were not changed.
                 foreach (RecipeLayer fresh in edited.AllLayers)
                 {
@@ -421,7 +456,7 @@ namespace SlotsInstaller
             planSummary.Text = missing ? "Can't install this recipe" : IsReplaceMode ? "Installs as replacements" : "Installs as a new extra outfit";
             RecipeInstall now = InstalledRecipe(openRecipe);
             if (!missing && now.Changed) planSummary.Text = "Update installs it as ticked now";
-            string installedAs = !now.Any ? "" : now.Changed ? "Installed with other ticks" + (now.Outfits.Count > 0 ? " as an extra outfit" : " as replacements") + ". " : "Installed now" + (now.Outfits.Count > 0 && now.Replacements.Count > 0 ? " as an extra outfit and as replacements" : now.Outfits.Count > 0 ? " as an extra outfit" : " as " + ReplacePlanner.N(now.Replacements.Count, "replacement")) + (now.Enabled ? "" : " (disabled)") + ". ";
+            string installedAs = !now.Any ? "" : now.Changed ? "Installed with other ticks" + (now.ChangedOutfits.Count > 0 ? " as an extra outfit" : " as replacements") + ". " : "Installed now" + (now.Outfits.Count > 0 && now.Replacements.Count > 0 ? " as an extra outfit and as replacements" : now.Outfits.Count > 0 ? " as an extra outfit" : " as " + ReplacePlanner.N(now.Replacements.Count, "replacement")) + (now.Enabled ? "" : " (disabled)") + ". ";
             planDetails.Text = missing ? "No longer in the library: " + String.Join(", ", openRecipeMissing)
                 : installedAs + (IsReplaceMode ? (gameRunning ? "Close SF6 first. " : "") + "Its mods in load order, the bottom one first. One replacement per mod."
                 : "Its mods in load order, as one new outfit.");
@@ -434,7 +469,7 @@ namespace SlotsInstaller
             // 1.0.18: installed with other ticks: the button puts it in again as ticked (the kind that is installed).
             RecipeInstall made = openRecipe == null ? new RecipeInstall() : InstalledRecipe(openRecipe);
             installButton.Text = made.Changed ? "Update" : "Install";
-            if (made.Changed) installButton.Enabled = !busy && openRecipeMissing.Count == 0 && (made.Replacements.Count == 0 || ReplacementUninstallBlocker(made.Replacements) == null);
+            if (made.Changed) installButton.Enabled = !busy && openRecipeMissing.Count == 0 && (made.ChangedOutfits.Count > 0 || ReplacementUninstallBlocker(made.Replacements) == null);
             UpdateLibraryUninstall();
         }
         private void InstallOpenRecipe()
@@ -449,23 +484,22 @@ namespace SlotsInstaller
         internal void UpdateInstalledRecipe(OutfitRecipe recipe, RecipeInstall made)
         {
             if (busy || recipe == null || made == null || !made.Changed) return;
-            if (made.Replacements.Count > 0)
+            // One change per click. An outfit of the recipe first: it is rebuilt in place, in one transaction
+            // (OutfitRecipes.Install with replace), so a recipe that can't be built leaves the outfit as it is. With
+            // several, or with replacement records too, the row still reads Changed afterwards and Update does the next.
+            if (made.ChangedOutfits.Count > 0)
             {
-                string blocker = ReplacementUninstallBlocker(made.Replacements);
-                if (blocker != null) { SetPageStatus(currentPage, blocker, Palette.Accent); return; }
-                InstallRecipeAsReplacement(recipe, made.Stale.Select(r => r.Mod.Id).ToList());
+                InstalledOutfit outfit = made.ChangedOutfits[0];
+                string root = config.CostumeRoot, sevenZip = config.SevenZipPath, name = outfit.Name;
+                Work("Updating " + name + " from its recipe…", delegate { return OutfitRecipes.Install(recipe, root, name, sevenZip, true); },
+                    delegate(InstallResult result) { RefreshInstalled("✓ Updated " + name + " from the recipe " + recipe.Name + ". Restart SF6 to load it." + RecipeHeadsUp(recipe)); });
+                return;
             }
-            if (made.Outfits.Count == 0) return;
-            if (made.Replacements.Count > 0) return;   // one change at a time: the outfit keeps its ticks until the next Update
-            List<InstalledOutfit> old = made.Outfits.ToList();
-            string root = config.CostumeRoot, sevenZip = config.SevenZipPath, name = old[0].Name; IRecycleBin bin = RecycleBin.Current;
-            Work("Updating " + name + " from its recipe…", delegate
-            {
-                // Checked before the old outfit goes: a recipe that can't install leaves it in place.
-                if (recipe.Effective() == null) throw new System.IO.IOException("Every layer of " + recipe.Name + " is turned off. Turn one on first.");
-                OutfitSetStore.UninstallOutfits(root, old, bin);
-                return OutfitRecipes.Install(recipe, root, name, sevenZip);
-            }, delegate(InstallResult result) { RefreshInstalled("✓ Updated " + name + " from the recipe " + recipe.Name + ". Restart SF6 to load it." + RecipeHeadsUp(recipe)); });
+            if (!made.ChangedRows) return;
+            string blocker = ReplacementUninstallBlocker(made.Replacements);
+            if (blocker != null) { SetPageStatus(currentPage, blocker, Palette.Accent); return; }
+            // Stale: records this recipe installed for a mod that is now turned off. Only its own records.
+            InstallRecipeAsReplacement(recipe, made.Stale.Select(r => r.Mod.Id).ToList());
         }
         // The base mod's own image, read off the UI thread; a later selection makes an earlier answer stale.
         private void LoadRecipePreview(OutfitRecipe recipe)
@@ -516,6 +550,9 @@ namespace SlotsInstaller
                 return RecipeReplace.Install(recipe, engine, sevenZip, alsoRemove);
             }, delegate(RecipeReplaceResult r)
             {
+                // The records this install made are the recipe's (InstalledRecipe): written into the recipe.
+                try { recipe.InstalledRecords = r.Installed.Select(m => m.Id).ToList(); OutfitRecipes.Save(AppConfig.DataDir, recipe); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
                 RefreshInstalled((r.Failed.Count == 0 ? "✓ " : "") + "Installed the recipe " + recipe.Name + " as " + ReplacePlanner.N(r.Installed.Count, "replacement") + ": " + String.Join(", then ", r.Installed.Select(m => m.Name))
                     + (r.Failed.Count == 0 ? "" : "; " + String.Join("; ", r.Failed)) + ". " + (gameRunning ? "Restart SF6 to see it." : "Start SF6 to see it.") + RecipeHeadsUp(recipe));
             });
@@ -594,7 +631,8 @@ namespace SlotsInstaller
             List<string> known = startBase == null || startBase.CharacterCodes == null ? new List<string>() : startBase.CharacterCodes.Where(c => Characters.ByCode.ContainsKey(c)).ToList();
             string fighter = known.Count > 0 ? Characters.ByCode[known[0]] : picked != null ? picked.Character : installedCharacters.FirstOrDefault();
             OutfitRecipe recipe; bool installNow;
-            if (!RecipeBuilderForm.Choose(this, fighter, GridFighters(), filterPanel.Grid.Cards, library == null ? new List<LibraryEntry>() : library.ToList(), config.SevenZipPath, startBase, startIds, out recipe, out installNow, null, config.GameRoot, null, from)) return;
+            if (!RecipeBuilderForm.Choose(this, fighter, GridFighters(), filterPanel.Grid.Cards, library == null ? new List<LibraryEntry>() : library.ToList(), config.SevenZipPath, startBase, startIds, out recipe, out installNow, null, config.GameRoot, null, from,
+                delegate(string n, string c) { return Recipes().Any(r => String.Equals(r.Name, n, StringComparison.OrdinalIgnoreCase) && String.Equals(r.Character, c, StringComparison.OrdinalIgnoreCase)); })) return;
             try { OutfitRecipes.Save(AppConfig.DataDir, recipe); }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); SetPageStatus(currentPage, "Couldn't save the recipe: " + ex.Message, Palette.Red); return; }
             RecipesChanged();

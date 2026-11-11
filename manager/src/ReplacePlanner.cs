@@ -57,7 +57,7 @@ namespace SlotsInstaller
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
             if (composition == null) throw new ArgumentNullException("composition");
-            var plan = new ReplacePlan { ModName = composition.Package.Name, SourcePath = composition.Package.SourcePath, SelectedIds = composition.Layers.Select(c => c.Id).ToList(), StagingFolder = staging };
+            var plan = new ReplacePlan { ModName = composition.Package.Name, SourcePath = composition.Package.SourcePath, SelectedIds = composition.Layers.Select(c => c.Id).ToList(), OnlyParts = (composition.OnlyParts ?? new List<string>()).ToList(), StagingFolder = staging };
             foreach (string e in composition.Errors) plan.Items.Add(new HealthItem("error", e));
             foreach (string w in composition.Warnings) plan.Items.Add(new HealthItem("info", w));
             if (composition.Package.RootFilesIgnored > 0) plan.Items.Add(new HealthItem("info", "Skipped " + N(composition.Package.RootFilesIgnored, "file") + " outside the mod's option folders."));
@@ -548,6 +548,14 @@ namespace SlotsInstaller
         // Every installed replacement that shares files or a slot with `paths`. A new install goes to the
         // top of the list, so it wins every shared file; an update in place keeps its own priority.
         // The same source with the same options is not a conflict: Install offers to update it in place.
+        // 1.0.18: the plan for a record that holds only some parts of its options (ReplaceMod.OnlyParts): exactly those
+        // options' files cut to the parts, as the recipe installed it. `whole` (the mod's own plan) when no parts are named.
+        internal static CompositionPlan WithParts(ModPackage package, List<string> ids, IList<string> parts, string sevenZip, CompositionPlan whole)
+        {
+            if (parts == null || parts.Count == 0) return whole;
+            CompositionPlan cut = Installer.SelectionFiles(package, ids, parts.ToList(), sevenZip); cut.ReplaceMode = true;
+            return cut;
+        }
         internal static List<ReplaceConflict> AnalyzeConflicts(IEnumerable<string> paths, ReplaceState state, string updateId, GameReference reference) { return AnalyzeConflicts(paths, state, updateId, reference, null, null); }
         internal static List<ReplaceConflict> AnalyzeConflicts(IEnumerable<string> paths, ReplaceState state, string updateId, GameReference reference, string sourcePath, IEnumerable<string> selectedIds)
         {

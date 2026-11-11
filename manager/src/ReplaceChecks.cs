@@ -87,12 +87,21 @@ namespace SlotsInstaller
                     after = f.Engine.LoadState();
                     Require(partly.Failed.Count == 0 && after.Mods.Count == 2 && after.Mods[0].Name == "Cammy Alt" && after.Mods[0].Files.Count >= ofPart && (altParts.Count == 1 || after.Mods[0].Files.Count < altFiles.Count),
                         "only some parts of a mod: " + after.Mods[0].Files.Count + " of " + altFiles.Count + " (" + String.Join(", ", altParts) + ") / " + String.Join("; ", partly.Failed));
+                    // 1.0.18 (review of PR 28): the record remembers the parts, so a reinstall cuts to them again.
+                    Require(after.Mods[0].OnlyParts != null && after.Mods[0].OnlyParts.SequenceEqual(new[] { altParts[0] }) && (after.Mods[1].OnlyParts == null || after.Mods[1].OnlyParts.Count == 0), "the parts are not on the record: " + String.Join(",", after.Mods[0].OnlyParts ?? new List<string>()));
+                    ModPackage altPackage = PackageReader.Load(f.Mod("modB"), "");
+                    CompositionPlan wholeAlt = Composer.SavedPlan(altPackage, after.Mods[0].SelectedIds, true);
+                    Require(ReplacePlanner.WithParts(altPackage, after.Mods[0].SelectedIds, after.Mods[0].OnlyParts, "", wholeAlt).Files.Count == after.Mods[0].Files.Count && ReferenceEquals(ReplacePlanner.WithParts(altPackage, after.Mods[0].SelectedIds, new List<string>(), "", wholeAlt), wholeAlt), "a reinstall plan does not keep the parts");
                     recipe.Parts[0].Parts = new List<string>();
                     RecipeReplace.Install(recipe, f.Engine, "");
                     var twice = new OutfitRecipe { Name = "Twice", Character = "Cammy", Base = new RecipeLayer { SourcePath = f.Mod("modA"), Mod = "Cammy Colors" } };
                     twice.Parts.Add(new RecipeLayer { SourcePath = f.Mod("modB"), Mod = "Cammy Alt" }); twice.Parts.Add(new RecipeLayer { SourcePath = f.Mod("modA"), Mod = "Cammy Colors" });
                     List<RecipeReplace.Step> steps = RecipeReplace.Steps(twice, "");
                     Require(steps.Count == 2 && steps[0].IsBase && steps[0].Twice && steps[0].Mod == "Cammy Colors" && steps[1].Mod == "Cammy Alt", "a mod used twice: " + String.Join(" > ", steps.Select(s => s.Mod)));
+                    // 1.0.18 (review of PR 28): a mod used twice with different parts each time can't be one record: refused, nothing installed.
+                    twice.Parts[1].Parts = new List<string> { OutfitParts.In(steps[0].Plan.Files.Keys)[0] };
+                    Refused(delegate { RecipeReplace.Steps(twice, ""); }, "taking different parts");
+                    twice.Parts[1].Parts = new List<string>();
                     var gone = new OutfitRecipe { Name = "Gone", Character = "Cammy", Base = new RecipeLayer { SourcePath = f.Mod("modA"), Mod = "Cammy Colors" } };
                     gone.Parts.Add(new RecipeLayer { SourcePath = Path.Combine(f.Mods, "no such mod"), Mod = "Lost Mod" });
                     var beforeGone = Snapshot(f.Game);

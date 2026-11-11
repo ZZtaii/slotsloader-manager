@@ -63,6 +63,9 @@ namespace SlotsInstaller
         public string Format = "sf6-outfit-recipe-v1", Id = "", Name = "", Character = "", CreatedUtc = "";
         public RecipeLayer Base = new RecipeLayer();
         public List<RecipeLayer> Parts = new List<RecipeLayer>();   // in the order applied: the last one wins
+        // 1.0.18: the replacement records the last Replace original install of this recipe made (ReplaceMod.Id).
+        // Uninstall and Update act on these, never on a record that only has the same mod. Ids that are gone are ignored.
+        public List<string> InstalledRecords = new List<string>();
 
         internal List<RecipeLayer> AllLayers { get { return new[] { Base }.Concat(Parts ?? new List<RecipeLayer>()).Where(l => l != null).ToList(); } }
         // 1.0.18: the recipe as it installs: the layers that are on, with the options that are on (the bottom one of
@@ -71,7 +74,7 @@ namespace SlotsInstaller
         {
             List<RecipeLayer> on = AllLayers.Select(l => l.Effective()).Where(l => l != null).ToList();
             if (on.Count == 0) return null;
-            return new OutfitRecipe { Format = Format, Id = Id, Name = Name, Character = Character, CreatedUtc = CreatedUtc, Base = on[0], Parts = on.Skip(1).ToList() };
+            return new OutfitRecipe { Format = Format, Id = Id, Name = Name, Character = Character, CreatedUtc = CreatedUtc, Base = on[0], Parts = on.Skip(1).ToList(), InstalledRecords = (InstalledRecords ?? new List<string>()).ToList() };
         }
         internal bool AnyOff { get { return AllLayers.Any(l => l.Off || (l.OffIds != null && l.OffIds.Count > 0)); } }
 
@@ -105,6 +108,7 @@ namespace SlotsInstaller
                     OutfitRecipe r = Json.Read<OutfitRecipe>(file);
                     if (r == null || r.Format != FormatName || String.IsNullOrWhiteSpace(r.Name) || r.Base == null || String.IsNullOrWhiteSpace(r.Base.SourcePath)) continue;
                     if (r.Parts == null) r.Parts = new List<RecipeLayer>();
+                    if (r.InstalledRecords == null) r.InstalledRecords = new List<string>();
                     r.Parts.RemoveAll(p => p == null || String.IsNullOrWhiteSpace(p.SourcePath));
                     foreach (RecipeLayer l in new[] { r.Base }.Concat(r.Parts)) { if (l.SelectedIds == null) l.SelectedIds = new List<string>(); if (l.Options == null) l.Options = new List<string>(); if (l.OptionNames == null) l.OptionNames = new List<string>(); if (l.OffIds == null) l.OffIds = new List<string>(); if (l.Parts == null) l.Parts = new List<string>(); }
                     r.Id = Path.GetFileNameWithoutExtension(file);
@@ -136,7 +140,9 @@ namespace SlotsInstaller
             // The same name for the same fighter is the same recipe: saved again, it is replaced.
             OutfitRecipe same = existing.FirstOrDefault(r => String.Equals(r.Name, recipe.Name.Trim(), StringComparison.OrdinalIgnoreCase) && String.Equals(r.Character, recipe.Character, StringComparison.OrdinalIgnoreCase));
             recipe.Name = recipe.Name.Trim(); recipe.Format = FormatName;
-            recipe.Id = same != null ? same.Id : Guid.NewGuid().ToString("N");
+            // A recipe saved under a new name keeps its id (it is the same recipe, and its installs name it by id).
+            Guid kept;
+            recipe.Id = same != null ? same.Id : Guid.TryParseExact(recipe.Id ?? "", "N", out kept) ? recipe.Id : Guid.NewGuid().ToString("N");
             if (String.IsNullOrEmpty(recipe.CreatedUtc)) recipe.CreatedUtc = DateTime.UtcNow.ToString("o");
             Json.Write(Path.Combine(folder, recipe.Id + ".json"), recipe);
             return recipe;
@@ -178,10 +184,13 @@ namespace SlotsInstaller
 
         // Installs the recipe as a new extra outfit named `outfitName`: the base with its options, then every part in
         // order, in one transaction (a part that can't be added fails the install before anything is written).
-        internal static InstallResult Install(OutfitRecipe recipe, string costumeRoot, string outfitName, string sevenZipPath)
+        internal static InstallResult Install(OutfitRecipe recipe, string costumeRoot, string outfitName, string sevenZipPath) { return Install(recipe, costumeRoot, outfitName, sevenZipPath, false); }
+        // replace (1.0.18, Update of an installed recipe): the outfit of that name is rebuilt in place, in one
+        // transaction, with exactly the recipe's layers; when the recipe can't be built the outfit stays as it is.
+        internal static InstallResult Install(OutfitRecipe recipe, string costumeRoot, string outfitName, string sevenZipPath, bool replace)
         {
             // 1.0.18: what is turned off in the recipe is not installed.
-            string recipeName = recipe.Name;
+            string recipeName = recipe.Name, recipeId = recipe.Id;
             recipe = recipe.Effective();
             if (recipe == null) throw new IOException("Every layer of " + recipeName + " is turned off. Turn one on first.");
             List<string> missing = Missing(recipe);
@@ -216,8 +225,19 @@ namespace SlotsInstaller
             if (!plan.CanInstall) throw new IOException("Couldn't install " + recipe.Name + ": " + layers[body].ModName + ": " + String.Join(" ", plan.Errors));
             var parts = new List<CompositionPlan>();
             for (int i = 0; i < layers.Count; i++) if (i != body) parts.Add(selections[i]);
-            InstallResult result = Installer.Install(plan, costumeRoot, recipe.Character, outfitName, sevenZipPath, false, null, parts);
-            result.Message = "Installed " + outfitName + " from the recipe " + recipe.Name + " for " + recipe.Character + ". Restart SF6 to load it.";
+            // In place: none of the outfit's earlier parts are kept (an empty part order), only the recipe's are added.
+            InstallResult result = replace
+                ? Installer.Install(plan, costumeRoot, recipe.Character, outfitName, sevenZipPath, true, null, parts, null, new List<PartGraft>())
+                : Installer.Install(plan, costumeRoot, recipe.Character, outfitName, sevenZipPath, false, null, parts);
+            // The outfit is this recipe's: Uninstall and Update find it by that, not by what it looks like.
+            if (!String.IsNullOrEmpty(recipeId))
+                try
+                {
+                    InstalledOutfit made = Installer.ListInstalled(costumeRoot).FirstOrDefault(o => o.Managed && String.Equals(Path.GetFullPath(o.Folder), Path.GetFullPath(result.Folder), StringComparison.OrdinalIgnoreCase));
+                    if (made != null) Installer.SetRecipeId(made, costumeRoot, recipeId);
+                }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            result.Message = (replace ? "Updated " : "Installed ") + outfitName + " from the recipe " + recipe.Name + " for " + recipe.Character + ". Restart SF6 to load it.";
             return result;
         }
     }

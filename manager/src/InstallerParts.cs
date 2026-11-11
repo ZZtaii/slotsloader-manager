@@ -123,9 +123,9 @@ namespace SlotsInstaller
                 var graft = new PartGraft { SourcePath = selection.Package.SourcePath, Mod = selection.Package.Name ?? "", AddedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => c.Name).ToList(), Parts = (selection.OnlyParts ?? new List<string>()).ToList() };
                 ApplyGraft(stage, hashes, graft, transaction, sevenZipPath, selection);
                 // The same options of the same mod added again replace that entry.
-                var grafts = (m.Parts ?? new List<PartGraft>()).Where(g => !(String.Equals(g.SourcePath, graft.SourcePath, StringComparison.OrdinalIgnoreCase) && new HashSet<string>(g.SelectedIds ?? new List<string>(), StringComparer.OrdinalIgnoreCase).SetEquals(graft.SelectedIds))).ToList();
+                var grafts = (m.Parts ?? new List<PartGraft>()).Where(g => !SamePart(g, graft)).ToList();   // 1.0.18: the same options with other parts are another addition
                 grafts.Add(graft);
-                var manifest = new InstallManifest { Id = m.Id, Name = m.Name, Character = m.Character, SourcePath = m.SourcePath, CreatedUtc = m.CreatedUtc, SelectedIds = m.SelectedIds, Sha256 = hashes, Parts = grafts, OffParts = m.OffParts };
+                var manifest = new InstallManifest { Id = m.Id, Name = m.Name, Character = m.Character, SourcePath = m.SourcePath, CreatedUtc = m.CreatedUtc, SelectedIds = m.SelectedIds, Sha256 = hashes, Parts = grafts, OffParts = m.OffParts, RecipeId = m.RecipeId };
                 Json.Write(Path.Combine(stage, ManifestName), manifest);
                 OperationContext.ThrowIfCancellationRequested();
                 using (OperationContext.NonCancellable())
@@ -167,8 +167,7 @@ namespace SlotsInstaller
                 if (mismatch != null) throw new IOException("Can't add " + OptionText(selection) + " from " + from + ": these files are made for " + mismatch + (folders.Count == 0 ? "" : " and the outfit is built on " + SlotText(folders)) + ". Materials point at their own outfit slot's files.");
                 var graft = new PartGraft { SourcePath = selection.Package.SourcePath, Mod = selection.Package.Name ?? "", AddedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => c.Name).ToList(), Parts = (selection.OnlyParts ?? new List<string>()).ToList() };
                 ApplyGraft(stage, hashes, graft, transaction, sevenZipPath, selection);
-                var ids = new HashSet<string>(graft.SelectedIds, StringComparer.OrdinalIgnoreCase);
-                kept.RemoveAll(g => String.Equals(g.SourcePath, graft.SourcePath, StringComparison.OrdinalIgnoreCase) && ids.SetEquals(g.SelectedIds ?? new List<string>()));
+                kept.RemoveAll(g => SamePart(g, graft));
                 added.Add(graft);
             }
             return added;
@@ -237,6 +236,16 @@ namespace SlotsInstaller
             {
                 string root = ValidateRoot(costumeRoot); InstallManifest m = ValidateOutfit(outfit, root);
                 m.OffParts = off == null || off.Count == 0 ? null : off.Where(g => g != null).ToList();
+                Json.Write(Path.Combine(outfit.Folder, ManifestName), m);
+            }
+        }
+        // 1.0.18: marks the outfit as installed from this recipe (null: from none). Only the install record changes.
+        internal static void SetRecipeId(InstalledOutfit outfit, string costumeRoot, string recipeId)
+        {
+            using (AcquireMutation(costumeRoot))
+            {
+                string root = ValidateRoot(costumeRoot); InstallManifest m = ValidateOutfit(outfit, root);
+                m.RecipeId = String.IsNullOrEmpty(recipeId) ? null : recipeId;
                 Json.Write(Path.Combine(outfit.Folder, ManifestName), m);
             }
         }
