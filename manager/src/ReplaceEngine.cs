@@ -1617,6 +1617,7 @@ namespace SlotsInstaller
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
             ReplaceState state;
             try { RelocationReport relocation; state = LoadState(out relocation); status.Relocation = relocation; } catch (Exception ex) { status.Details.Add(ex.Message); return status; }
+            status.ModsOff = state.ModsOff;   // 1.0.18 (ReplaceEngineModsOff.cs)
             if (state.Mods.Count == 0 && state.Deployed.Count == 0 && state.Released.Count == 0) return status;
             try
             {
@@ -1700,7 +1701,7 @@ namespace SlotsInstaller
                 ReplaceMod m = state.Mods[i];
                 MissingCopies missing = null;
                 // 1.0.18: the archive serves its files only while it holds what was installed. A new stamp alone (an
-                // Edit bundle save, a restore, a sync tool) is checked by content once, as Reapply would read it (review
+                // Reorder bundle save, a restore, a sync tool) is checked by content once, as Reapply would read it (review
                 // P2-1); an archive that can't be read now counts as usable, never as replaced.
                 int archive = -1;   // -1 not read yet, 0 usable, 1 gone, 2 replaced by another file
                 foreach (ModFile f in m.Files)

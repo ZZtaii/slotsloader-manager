@@ -9,7 +9,7 @@ namespace SlotsInstaller
 {
     internal static partial class ReplaceUiChecks
     {
-        // 1.0.16: Edit bundle on a 7Z. Its layout is saved in the Data folder and the archive keeps its stamp, so the
+        // 1.0.16: Reorder bundle on a 7Z. Its layout is saved in the Data folder and the archive keeps its stamp, so the
         // package kept for that stamp must not be shown again: the reopen after Save (what the editor does) reads the
         // archive again and shows the new groups and names. An installed copy's selection with a layout group (Edit
         // options) ticks the same options.

@@ -60,6 +60,45 @@ namespace SlotsInstaller
                 check("Extra outfit health previews repairs and flags unpatched files, then checks the installed bytes", delegate { ExtraPatchHealth(Path.Combine(run, "outfit-health")); });
                 check("swatch repair (2.5.5): an old select-screen swatch file is rebuilt from the game's current one with the mod's colours per ID (extra current IDs kept); current files, other paths and unknown layouts untouched; another outfit, a missing ID or no game file leave it as it is with a warning; extra outfit installs rebuild the copy and its hash", delegate { Swatches(); });
                 check("install -> conflict/priority -> disable -> uninstall restores every PAK and loose file byte for byte (PAK method)", delegate { Lifecycle(Path.Combine(run, "lifecycle")); });
+                check("outfit recipe as replacements (1.0.18): the base goes in first and each part above it, so the last part is on top; one record per mod, also when installed again; a mod used twice is one step; a missing mod installs nothing", delegate {
+                    var f = Create(Path.Combine(run, "recipe-replace"), false, ReplaceMethods.Pak);
+                    var recipe = new OutfitRecipe { Name = "Cammy Mix", Character = "Cammy", Base = new RecipeLayer { SourcePath = f.Mod("modA"), Mod = "Cammy Colors" } };
+                    recipe.Parts.Add(new RecipeLayer { SourcePath = f.Mod("modB"), Mod = "Cammy Alt" });
+                    RecipeReplaceResult made = RecipeReplace.Install(recipe, f.Engine, "");
+                    ReplaceState after = f.Engine.LoadState();
+                    Require(made.Failed.Count == 0 && made.Installed.Count == 2 && after.Mods.Count == 2 && after.Mods[0].Name == "Cammy Alt" && after.Mods[1].Name == "Cammy Colors", "recipe records: " + String.Join(" > ", after.Mods.Select(m => m.Name)) + " / " + String.Join("; ", made.Failed));
+                    RecipeReplace.Install(recipe, f.Engine, "");
+                    after = f.Engine.LoadState();
+                    Require(after.Mods.Count == 2 && after.Mods[0].Name == "Cammy Alt" && after.Mods[1].Name == "Cammy Colors", "installed again: " + String.Join(" > ", after.Mods.Select(m => m.Name)));
+                    // 1.0.18: a layer that is turned off is not installed, and an Update takes its record out again.
+                    string altId = after.Mods[0].Id; recipe.Parts[0].Off = true;
+                    RecipeReplaceResult updated = RecipeReplace.Install(recipe, f.Engine, "", new[] { altId });
+                    after = f.Engine.LoadState();
+                    Require(updated.Failed.Count == 0 && updated.Installed.Count == 1 && after.Mods.Count == 1 && after.Mods[0].Name == "Cammy Colors", "a layer turned off: " + String.Join(" > ", after.Mods.Select(m => m.Name)) + " / " + String.Join("; ", updated.Failed));
+                    recipe.Base.Off = true;
+                    Refused(delegate { RecipeReplace.Install(recipe, f.Engine, ""); }, "is turned off");
+                    recipe.Base.Off = false; recipe.Parts[0].Off = false;
+                    // 1.0.18: only some parts of a mod (OutfitParts): the record holds that part's files, not the rest.
+                    List<RecipeReplace.Step> wholeSteps = RecipeReplace.Steps(recipe, "");
+                    List<string> altFiles = wholeSteps[1].Plan.Files.Keys.ToList(); List<string> altParts = OutfitParts.In(altFiles);
+                    recipe.Parts[0].Parts = new List<string> { altParts[0] };
+                    int ofPart = altFiles.Count(k => OutfitParts.Of(k) == altParts[0]);
+                    RecipeReplaceResult partly = RecipeReplace.Install(recipe, f.Engine, "");
+                    after = f.Engine.LoadState();
+                    Require(partly.Failed.Count == 0 && after.Mods.Count == 2 && after.Mods[0].Name == "Cammy Alt" && after.Mods[0].Files.Count >= ofPart && (altParts.Count == 1 || after.Mods[0].Files.Count < altFiles.Count),
+                        "only some parts of a mod: " + after.Mods[0].Files.Count + " of " + altFiles.Count + " (" + String.Join(", ", altParts) + ") / " + String.Join("; ", partly.Failed));
+                    recipe.Parts[0].Parts = new List<string>();
+                    RecipeReplace.Install(recipe, f.Engine, "");
+                    var twice = new OutfitRecipe { Name = "Twice", Character = "Cammy", Base = new RecipeLayer { SourcePath = f.Mod("modA"), Mod = "Cammy Colors" } };
+                    twice.Parts.Add(new RecipeLayer { SourcePath = f.Mod("modB"), Mod = "Cammy Alt" }); twice.Parts.Add(new RecipeLayer { SourcePath = f.Mod("modA"), Mod = "Cammy Colors" });
+                    List<RecipeReplace.Step> steps = RecipeReplace.Steps(twice, "");
+                    Require(steps.Count == 2 && steps[0].IsBase && steps[0].Twice && steps[0].Mod == "Cammy Colors" && steps[1].Mod == "Cammy Alt", "a mod used twice: " + String.Join(" > ", steps.Select(s => s.Mod)));
+                    var gone = new OutfitRecipe { Name = "Gone", Character = "Cammy", Base = new RecipeLayer { SourcePath = f.Mod("modA"), Mod = "Cammy Colors" } };
+                    gone.Parts.Add(new RecipeLayer { SourcePath = Path.Combine(f.Mods, "no such mod"), Mod = "Lost Mod" });
+                    var beforeGone = Snapshot(f.Game);
+                    Refused(delegate { RecipeReplace.Install(gone, f.Engine, ""); }, "no longer in the library");
+                    SameSnapshot(beforeGone, Snapshot(f.Game), "a recipe with a missing mod changed the game");
+                });
                 check("selected replacements uninstall in one transaction, validate every ID and restore original files", delegate {
                     var f = Create(Path.Combine(run, "selected-replacements"), false, ReplaceMethods.Pak);
                     var clean = Snapshot(f.Game);
@@ -133,6 +172,7 @@ namespace SlotsInstaller
                 check("Fluffy open (2.1.0): loose and tool-mod installs/uninstalls and REFramework config edits go ahead (installed.ini re-read at each change, crash reporter left for later); PAK-method row changes and a conversion to PAK refuse with the same-PAK reason; a PAK-method tool mod (no rows) installs", delegate { FluffyOpen(Path.Combine(run, "fluffy-open"), probe); });
                 check("first-start detection (2.4.3): the SF6 folder from Steam's libraryfolders.vdf and appmanifest_1364780.acf (installdir), else steamapps\\common\\Street Fighter 6; nothing found is empty; Fluffy libraries are real <Fluffy>\\Games\\SF6\\Mods folders; compiled defaults are empty", delegate { DetectionChecks.Run(Path.Combine(run, "detection")); });
                 check("CLI same source (2.4.1): replace-install of an installed mod, or of Slotsloader from another zip, updates the record in place (one record at the same priority, no stacking), the INFO line says so, and uninstall still restores the game's own amd_ags_x64.dll", delegate { CliSameSource(Path.Combine(run, "cli-same")); });
+                check("outfit mods off (1.0.18): one switch disables every enabled replacement and the Manager's Slotsloader (game files and the game's own amd_ags_x64.dll back), records exactly those, says so in the status, and turning back on enables only those; a mod the user had disabled stays disabled; off twice or on twice is refused", delegate { ModsOff(Path.Combine(run, "mods-off")); });
                 check("CLI loose loader (2.1.0): tool-only replace-install needs neither --yes nor --no-loader; natives files fail without one; --no-loader installs with the loader off and leaves the config; --yes with --no-loader is refused", delegate { LooseLoaderCli(Path.Combine(run, "cli-loader")); });
                 check("relocation rules (2.1.0): only missing paths under another Data root are rebased (case/trailing separators tolerated); existing, outside-Data, game-folder and custom-store paths are left; a copied folder is reported", delegate { RelocationRules(Path.Combine(run, "reloc-rules")); });
                 check("relocation (2.1.0): the whole app folder (CLI exe + Data) moved to a new path and the old one deleted: status OK, 0 missing backups, rebase logged once; uninstall from the new folder restores the genuine file and the PAK index byte-exact; Recovery lists the removed copies; the state file names only the new folder", delegate { RelocationMove(Path.Combine(run, "reloc")); });
@@ -1080,6 +1120,36 @@ namespace SlotsInstaller
             Require(removed.StartsWith("0\n") && cli.LoadState().Mods.Count == 0 && File.ReadAllText(GameFile(f, "amd_ags_x64.dll")) == genuine, "the game's own amd_ags_x64.dll was not restored after in-place updates: " + removed + " / " + File.ReadAllText(GameFile(f, "amd_ags_x64.dll")));
             }
             finally { try { cli.RestoreAll(); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; } }
+        }
+
+        private static void ModsOff(string root)
+        {
+            Fixture f = Create(root, true, ReplaceMethods.Pak);
+            try
+            {
+                string genuine = File.ReadAllText(GameFile(f, "amd_ags_x64.dll"));
+                ReplaceMod a = Install(f, "modA", "Cammy Colors");
+                ReplaceMod tool = Install(f, "tool", "Tool Pack");
+                Require(LoaderCostumePak.IsLoaderMod(tool) && !ReplaceEngine.IsOutfitMod(tool) && ReplaceEngine.IsOutfitMod(a) && File.ReadAllText(GameFile(f, "amd_ags_x64.dll")) != genuine && Zeroed(Base(f), V1) && File.Exists(GameFile(f, V1)), "fixture: a replacement and a Slotsloader record");
+                string off = f.Engine.SetModsOff(true);
+                ReplaceState s = f.Engine.LoadState();
+                Require(s.ModsOff != null && s.ModsOff.ReplacementIds.SequenceEqual(new[] { a.Id }) && s.ModsOff.LoaderId == tool.Id && s.Mods.Count == 2 && s.Mods.All(m => !m.Enabled), "off did not record and disable both: " + off);
+                Require(!File.Exists(GameFile(f, V1)) && !Zeroed(Base(f), V1) && File.ReadAllText(GameFile(f, "amd_ags_x64.dll")) == genuine, "off left a replaced file, an invalidated entry or the loader proxy");
+                Require(GameFilesStatus.ModsOffText(s.ModsOff) == "Outfit mods are off: 1 replacement and all extra outfits wait to be turned back on. Tool mods still load.", "status text: " + GameFilesStatus.ModsOffText(s.ModsOff));
+                Refused(delegate { f.Engine.SetModsOff(true); }, "already off");
+                f.Engine.SetModsOff(false);
+                s = f.Engine.LoadState();
+                Require(s.ModsOff == null && s.Mods.All(m => m.Enabled) && File.Exists(GameFile(f, V1)) && Zeroed(Base(f), V1) && File.ReadAllText(GameFile(f, "amd_ags_x64.dll")) != genuine, "on did not bring both back");
+                Refused(delegate { f.Engine.SetModsOff(false); }, "not off");
+                // A mod the user had disabled is not in the record, so it stays disabled.
+                f.Engine.SetEnabled(a.Id, false);
+                f.Engine.SetModsOff(true);
+                Require(f.Engine.LoadState().ModsOff.ReplacementIds.Count == 0, "a disabled mod was recorded as on");
+                f.Engine.SetModsOff(false);
+                s = f.Engine.LoadState();
+                Require(!s.Find(a.Id).Enabled && s.Find(tool.Id).Enabled, "a mod the user had disabled came back on");
+            }
+            finally { try { f.Engine.RestoreAll(); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; } }
         }
 
         private static void LooseLoaderCli(string root)

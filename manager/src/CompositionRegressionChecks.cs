@@ -27,7 +27,8 @@ namespace SlotsInstaller
             Check("nested choice branches count their parent and child as one alternative",delegate { NestedBranches(Path.Combine(run,"nested-branches")); },ref failures);
             Check("case-insensitive IDs, dependencies and previews retain canonical identities",delegate { CaseHandling(Path.Combine(run,"case-handling")); },ref failures);
             Check("options follow MenuPriority (higher first), else plain options before groups, then name",delegate { OptionOrder(Path.Combine(run,"option-order")); },ref failures);
-            Console.WriteLine("Composition regression checks: "+(7-failures)+" passed, "+failures+" failed.");
+            Check("an option named after the game's main menu is not the mod's main files",delegate { MainMenuName(Path.Combine(run,"main-menu-name")); },ref failures);
+            Console.WriteLine("Composition regression checks: "+(8-failures)+" passed, "+failures+" failed.");
             return failures;
         }
 
@@ -106,7 +107,9 @@ namespace SlotsInstaller
             Put(source,"skins/default/modinfo.ini","name=Default skin\n"); Put(source,"skins/default/"+Texture,"skin texture");
             ModPackage package=Load(source);
             CompositionPlan missing=Plan(package,"outfits/dress");
-            Require(!missing.CanInstall && missing.Errors.Any(e=>e.Contains("Main files")) && missing.Errors.Any(e=>e.Contains("Skin choices")),"Nested outfit bypassed implicit-root requirements.");
+            // Main files guessed from the name are a warning, not an error; the required skin choice still blocks.
+            Require(!missing.CanInstall && missing.Errors.All(e=>!e.Contains("Main files")) && missing.Warnings.Any(w=>w.Contains("'Main files' looks like")) && missing.MissingMains.Count==1 && missing.Errors.Any(e=>e.Contains("Skin choices")),"Nested outfit bypassed implicit-root requirements: "+Errors(missing));
+            Require(Plan(package,"outfits/dress","skins/default").CanInstall,"Main files guessed from a name still blocked an install.");
             Require(!Plan(package,"main","outfits/dress").CanInstall,"Required skin choice was not enforced.");
             InstallAndCheck(Plan(package,"main","outfits/dress","skins/default"),root,"required shared material");
             Require(File.ReadAllText(Safety.Under(source,"main/"+Material))=="required shared material","Source material changed.");
@@ -122,6 +125,40 @@ namespace SlotsInstaller
             CompositionPlan plan=Plan(package,"blue","main");
             Require(plan.Overrides.Count==1 && plan.Files[Material].Component.Id=="blue","Main-first overlay precedence changed.");
             InstallAndCheck(plan,root,"blue material");
+        }
+        private static void MainMenuName(string root)
+        {
+            foreach (string name in new[]{"Main","Main files","MAIN FILE","Mainfiles","Main mod","Base","Required"})
+                Require(Composer.IsBase(new ModComponent {Name=name}),"'"+name+"' is no longer main files.");
+            foreach (string name in new[]{"Base costume","C1 XXL - Base","!BASE: Mai C1 ORIGINAL TEXTURE FILES","MAIN: Mai C1 L","(Main) Belly Dancer 2.0"})
+                Require(Composer.IsBase(new ModComponent {Name=name}),"'"+name+"' is no longer main files.");
+            foreach (string name in new[]{"Faster StartUp (MAIN MENU)","Main-menu music","Main screen","Main theme","Training","Regular - shorts (base costume boots) no tights"})
+                Require(!Composer.IsBase(new ModComponent {Name=name}),"'"+name+"' was taken for main files.");
+            // Sizes of one mesh named "base" are alternatives; main files of two outfits are both still required.
+            string sizes=Path.Combine(root,"sizes");
+            foreach (string size in new[]{"L","XL"}) { Put(sizes,"C1 "+size+"/modinfo.ini","name=C1 "+size+" base\n"); Put(sizes,"C1 "+size+"/"+Mesh,size+" mesh"); }
+            Put(sizes,"C1 chest/modinfo.ini","name=C1 L + Chest\n"); Put(sizes,"C1 chest/"+Material,"chest");
+            ModPackage sized=Load(sizes);
+            Require(!Composer.IsBase(Named(sized,"C1 L base")) && !Composer.IsBase(Named(sized,"C1 XL base")),"Two sizes of one mesh were both main files.");
+            Require(Plan(sized,Named(sized,"C1 XL base").Id).Errors.All(e=>!e.StartsWith("Include main files")),"One size asked for the other: "+Errors(Plan(sized,Named(sized,"C1 XL base").Id)));
+            // The plain size is the one ticked by default, not whichever name sorts first ("C1 L + Chest").
+            foreach (string size in new[]{"L","XL"}) { Put(sizes,"C1 "+size+" + Skirt/modinfo.ini","name=C1 "+size+" + Skirt\n"); Put(sizes,"C1 "+size+" + Skirt/"+Mesh,size+" skirt mesh"); }
+            ModPackage sizedAll=Load(sizes);
+            var ticked=Composer.DefaultSelection(sizedAll).Select(id=>sizedAll.Find(id).Name).OrderBy(n=>n,StringComparer.Ordinal).ToList();
+            Require(ticked.SequenceEqual(new[]{"C1 L + Chest","C1 L base"}),"Default size: "+String.Join(" | ",ticked));
+            string outfits=Path.Combine(root,"outfits");
+            Put(outfits,"C1/modinfo.ini","name=C1 - Main files\n"); Put(outfits,"C1/"+Mesh,"c1");
+            Put(outfits,"C2/modinfo.ini","name=C2 - Main files\n"); Put(outfits,"C2/"+Material,"c2");
+            ModPackage two=Load(outfits);
+            Require(two.Components.Count(Composer.IsBase)==2,"Main files of two outfits are no longer both main files.");
+            foreach (string mode in new[]{"mainmenu","training"})
+            {
+                Put(root,"startup/"+mode+"/modinfo.ini","name=Faster StartUp ("+(mode=="mainmenu" ? "MAIN MENU" : "TRAINING")+")\n");
+                Put(root,"startup/"+mode+"/reframework/autorun/faster.lua","-- "+mode);
+            }
+            ModPackage package=Load(Path.Combine(root,"startup"));
+            CompositionPlan plan=Composer.Plan(package,new[]{"training"},true);
+            Require(plan.CanInstall,"The TRAINING option alone was rejected: "+Errors(plan));
         }
         private static void InferredAlternatives(string root)
         {
@@ -172,7 +209,7 @@ namespace SlotsInstaller
             package.Find("Main").ParentId="hEaDeR"; package.Find("Choices").ParentId="HEADER"; package.Find("Dress").ParentId="cHoIcEs";
             CompositionPlan plan=Plan(package,"mAiN","DRESS","dress");
             Require(plan.CanInstall && plan.Layers.Select(c=>c.Id).SequenceEqual(new[]{"Main","Dress"}),"Mixed-case IDs changed selection identity: "+Errors(plan));
-            Require(!Plan(package,"dress").CanInstall,"Mixed-case ancestry bypassed required main files.");
+            Require(Plan(package,"dress").MissingMains.Select(c=>c.Id).SequenceEqual(new[]{"Main"}),"Mixed-case ancestry lost the in-scope main files.");
             Require(Encoding.UTF8.GetString(package.PreviewBytes("dress",""))=="preview marker","Ancestor preview lookup failed after indexing.");
             Require(Named(package,"Dress").ParentId=="cHoIcEs","Indexing unexpectedly rewrote model identity.");
         }

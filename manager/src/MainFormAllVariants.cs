@@ -17,7 +17,7 @@ namespace SlotsInstaller
         private FlatButton allVariantsButton;
         internal int AllVariantsInstalls;   // tests: copies that finished
 
-        // 1.0.6: the row holds Install all variants and Add to outfit… (MainFormAddParts.cs) side by side; one alone fills it.
+        // 1.0.6: the row holds Install all variants and Add to outfit (MainFormAddParts.cs) side by side; one alone fills it.
         private Panel BuildAllVariantsRow()
         {
             allVariantsRow = new Panel { Dock = DockStyle.Bottom, Height = 42, Padding = new Padding(0, 6, 0, 2), Visible = false };

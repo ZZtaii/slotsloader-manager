@@ -11,10 +11,17 @@ namespace SlotsInstaller
     // A click or Space/Enter on a row raises Toggled; the form writes variant_choices.json and reports inline.
     internal sealed class VariantList : ScrollableControl
     {
-        internal sealed class Row { internal string Label = "", Note = ""; internal bool On, NoteAccent; }
+        internal sealed class Row { internal string Label = "", Note = "", Display = ""; internal bool On, NoteAccent; }   // Display: the short name drawn (Label stays the full, accessible one)
         private List<Row> rows = new List<Row>();
         private int focus = -1, hover = -1;
         internal event Action<int> Toggled;
+        // 1.0.18 (the added parts of an outfit): a remove mark at the end of every row; a click on it, or Delete on
+        // the focused row, raises Removed instead of Toggled.
+        internal bool Removable;
+        internal event Action<int> Removed;
+        private int RemoveWidth { get { return Removable ? DpiMetrics.Px(this, 30) : 0; } }
+        private bool OnRemove(Point p) { return Removable && p.X >= ClientSize.Width - RemoveWidth; }
+        internal void Remove(int index) { if (index < 0 || index >= rows.Count || !Enabled || !Removable) return; focus = Math.Min(index, rows.Count - 1); if (Removed != null) Removed(index); }
         internal IList<Row> Rows { get { return rows.AsReadOnly(); } }
         internal int RowHeight { get { return DpiMetrics.Px(this, 30); } }
 
@@ -52,15 +59,24 @@ namespace SlotsInstaller
                 if (r.On) Glyphs.FillRounded(e.Graphics, Palette.Accent, Rectangle.Inflate(mark, -3 * px, -3 * px), px);
                 int noteWidth = r.Note.Length == 0 ? 0 : Math.Min(row.Width / 2, TextRenderer.MeasureText(e.Graphics, r.Note, Font, new Size(int.MaxValue, h), TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width + 4 * px);
                 int x = mark.Right + 10 * px;
-                TextRenderer.DrawText(e.Graphics, r.Label, Font, new Rectangle(x, row.Y, Math.Max(1, row.Right - x - noteWidth - 8 * px), h), r.On ? Palette.Text : Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter);
+                if (Removable)
+                {
+                    // The remove mark: a small cross, red under the pointer.
+                    int zone = RemoveWidth, arm = 4 * px, cx = row.Right - zone / 2, cy = row.Y + h / 2;
+                    using (Pen cross = new Pen(i == hover && hoverRemove ? Palette.Red : Palette.Muted, 1.5F * DeviceDpi / 96F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    { e.Graphics.DrawLine(cross, cx - arm, cy - arm, cx + arm, cy + arm); e.Graphics.DrawLine(cross, cx - arm, cy + arm, cx + arm, cy - arm); }
+                    row.Width -= zone;
+                }
+                TextRenderer.DrawText(e.Graphics, r.Display.Length > 0 ? r.Display : r.Label, Font, new Rectangle(x, row.Y, Math.Max(1, row.Right - x - noteWidth - 8 * px), h), r.On ? Palette.Text : Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter);
                 if (noteWidth > 0) TextRenderer.DrawText(e.Graphics, r.Note, Font, new Rectangle(row.Right - noteWidth - 4 * px, row.Y, noteWidth, h), r.NoteAccent ? Palette.Accent : Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
                 if (i == focus && Focused) Glyphs.DrawRounded(e.Graphics, Color.FromArgb(170, Palette.Accent), Math.Max(1F, DeviceDpi / 96F), new RectangleF(row.X + px, row.Y + px, Math.Max(1, row.Width - 2 * px), h - 2 * px), 4 * px);
             }
         }
-        protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); int at = RowAt(e.Location); if (at != hover) { hover = at; Cursor = at >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); } }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hover >= 0) { hover = -1; Invalidate(); } }
-        protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); Focus(); if (e.Button == MouseButtons.Left && e.Clicks == 1) Toggle(RowAt(e.Location)); }
-        protected override bool IsInputKey(Keys keyData) { Keys k = keyData & Keys.KeyCode; return k == Keys.Up || k == Keys.Down || k == Keys.Space || k == Keys.Enter || base.IsInputKey(keyData); }
+        private bool hoverRemove;
+        protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); int at = RowAt(e.Location); bool onRemove = at >= 0 && OnRemove(e.Location); if (at != hover || onRemove != hoverRemove) { hover = at; hoverRemove = onRemove; Cursor = at >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); } }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hover >= 0) { hover = -1; hoverRemove = false; Invalidate(); } }
+        protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); Focus(); if (e.Button == MouseButtons.Left && e.Clicks == 1) { if (OnRemove(e.Location)) Remove(RowAt(e.Location)); else Toggle(RowAt(e.Location)); } }
+        protected override bool IsInputKey(Keys keyData) { Keys k = keyData & Keys.KeyCode; return k == Keys.Up || k == Keys.Down || k == Keys.Space || k == Keys.Enter || (Removable && k == Keys.Delete) || base.IsInputKey(keyData); }
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
@@ -73,6 +89,7 @@ namespace SlotsInstaller
                 Invalidate(); e.Handled = true;
             }
             else if ((e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) && e.Modifiers == Keys.None) { Toggle(Math.Max(0, focus)); e.Handled = true; e.SuppressKeyPress = true; }
+            else if (Removable && e.KeyCode == Keys.Delete && e.Modifiers == Keys.None) { Remove(Math.Max(0, focus)); e.Handled = true; e.SuppressKeyPress = true; }
         }
         protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); if (focus < 0 && rows.Count > 0) focus = 0; Invalidate(); }
         protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
@@ -107,7 +124,7 @@ namespace SlotsInstaller
         private VariantList variantList;
         private InstalledOutfit variantsOutfit;
         private List<VariantState> variantStates = new List<VariantState>();
-        internal const int VariantRowsShown = 6;   // more rows scroll inside the list
+        internal const int VariantRowsShown = 9;   // more rows scroll inside the list
         internal const string VariantsTooOld = "Variant on/off needs a newer Slotsloader.";
 
         // Installed page inspector, between the actions and the ABOUT card.
@@ -119,8 +136,25 @@ namespace SlotsInstaller
             variantList.Toggled += ToggleVariant;
             variantsNote = new Label { UseMnemonic = false, Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true, Text = VariantsTooOld, Visible = false };
             variantsPanel.Controls.Add(variantList); variantsPanel.Controls.Add(variantsNote); variantsPanel.Controls.Add(variantsCaption);
+            // The list follows the room it has: when the panel moves (the actions above it grow) or the window changes.
+            variantsPanel.LocationChanged += delegate { FitVariantsPanel(); };
+            variantsPanel.ParentChanged += delegate { if (variantsPanel.Parent != null) variantsPanel.Parent.Resize += delegate { FitVariantsPanel(); }; };
             return variantsPanel;
         }
+        // 1.0.18 (the user: "can we allow scrolling through the variants?", nine variants in a window that showed six
+        // and a half): the list is as tall as its rows, up to VariantRowsShown, but never taller than the room left in
+        // the inspector, so the rows that don't fit scroll inside it instead of running off the bottom of the window.
+        // Room is kept under it for the section caption and a few lines of the card below.
+        private void FitVariantsPanel()
+        {
+            if (variantsPanel == null || variantList == null || variantsPanel.Parent == null || variantsOutfit == null || variantsOutfit.Variants == null) return;
+            int rows = Math.Min(variantStates.Count, VariantRowsShown), row = Math.Max(1, variantList.RowHeight);
+            int room = variantsPanel.Parent.ClientSize.Height - variantsPanel.Parent.Padding.Bottom - variantsPanel.Top - Px(34) - Px(34) - Px(72);
+            int shown = Math.Max(Math.Min(3, rows), Math.Min(rows, room / row));
+            int height = Px(34) + shown * row;
+            if (variantsPanel.Height != height) variantsPanel.Height = height;
+        }
+        internal int VariantRowsVisibleForTest { get { return variantList == null ? 0 : variantList.ClientSize.Height / Math.Max(1, variantList.RowHeight); } }
 
         // A manual archive/folder SlotsLoader split into several variants: one row each (on/off, the slot a built one got).
         private void ShowVariants(InstalledOutfit outfit)
@@ -137,9 +171,11 @@ namespace SlotsInstaller
             }
             variantStates = VariantChoices.States(outfit.Variants, VariantChoices.ReadChoices(config.CostumeRoot));
             variantsCaption.Text = "VARIANTS · " + variantStates.Count(v => v.On) + " OF " + variantStates.Count + " ON";
-            variantList.SetRows(variantStates.Select(v => new VariantList.Row { Label = v.Label, On = v.On, Note = VariantChoices.Note(v), NoteAccent = v.Pending }));
+            // 1.0.18 (the user: hard to navigate): variants that only add to another one show what they add ("+ Option 01 - Straight hair").
+            List<string> shortNames = LabelShortener.Short(variantStates.Select(v => v.Label).ToList());
+            variantList.SetRows(variantStates.Select((v, i) => new VariantList.Row { Label = v.Label, Display = shortNames[i], On = v.On, Note = VariantChoices.Note(v), NoteAccent = v.Pending }));
             variantList.Visible = true; variantsNote.Visible = false; variantList.Enabled = !busy;
-            variantsPanel.Height = Px(34) + Math.Min(variantStates.Count, VariantRowsShown) * variantList.RowHeight;
+            FitVariantsPanel();
         }
 
         // On click: written at once (also while SF6 runs; SlotsLoader reads it at the next launch), reported inline with Undo.

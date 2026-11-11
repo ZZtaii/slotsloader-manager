@@ -59,9 +59,9 @@ namespace SlotsInstaller
             var right = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
             action = AddButton(right,"Start migration",true,160,Advance,new Padding(8,0,0,0));
             close = AddButton(right,"Close",false,96,delegate { if (confirmingForget) ToggleForget(); else Close(); },new Padding(8,0,0,0));
-            locate = AddButton(left,"Locate archive…",false,132,delegate { Locate(false); },new Padding(0,0,8,0));
-            folder = AddButton(left,"Locate folder…",false,124,delegate { Locate(true); },new Padding(0,0,8,0));
-            forget = AddButton(left,"Forget plan…",false,118,ToggleForget,new Padding(0,0,8,0));
+            locate = AddButton(left,"Locate archive",false,132,delegate { Locate(false); },new Padding(0,0,8,0));
+            folder = AddButton(left,"Locate folder",false,124,delegate { Locate(true); },new Padding(0,0,8,0));
+            forget = AddButton(left,"Forget plan",false,118,ToggleForget,new Padding(0,0,8,0));
             bar.Controls.Add(left); bar.Controls.Add(right);
             Controls.Add(rows); Controls.Add(detailsHost); Controls.Add(bar); Controls.Add(status); Controls.Add(title); Controls.Add(steps);
             CancelButton = close;

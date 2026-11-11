@@ -6,7 +6,7 @@ using System.Windows.Forms;
 
 namespace SlotsInstaller
 {
-    // 1.0.6 (the user): in Extra outfit mode, "Add to outfit…" (end of the destination line) copies exactly the ticked
+    // 1.0.6 (the user): in Extra outfit mode, "Add to outfit" (end of the destination line) copies exactly the ticked
     // options of the open mod into an extra outfit that is already installed, instead of a new slot. AddPartsForm picks
     // the outfit. The engine is Installer.AddToOutfit (InstallerParts.cs).
     internal sealed partial class MainForm
@@ -15,7 +15,7 @@ namespace SlotsInstaller
 
         private FlatButton BuildAddPartsButton()
         {
-            addPartsButton = Button("Add to outfit…", false, 128, delegate { AddPartsToOutfit(); });
+            addPartsButton = Button("Add to outfit", false, 128, delegate { AddPartsToOutfit(); });
             addPartsButton.Font = Palette.Small; addPartsButton.Margin = Padding.Empty; addPartsButton.Name = "addPartsButton";
             addPartsButton.AccessibleName = "Add the ticked options to an installed outfit";
             addPartsButton.AccessibleDescription = "Copies the files of the ticked options into an extra outfit you already have.";
@@ -35,6 +35,186 @@ namespace SlotsInstaller
             if (showAddParts != show) { showAddParts = show; LayoutVariantRow(); }
             CompositionPlan selection = show ? AddSelection() : null;
             addPartsButton.Enabled = show && !busy && missingRestoredOptions.Count == 0 && selection != null && selection.Errors.Count == 0 && selection.Files.Count > 0;
+        }
+
+        // 1.0.18 (user request: "If I have installed an addon via Add to outfit, is there any way to see this in the GUI
+        // later?"): the Installed page says what was added to an outfit, from its install record (Parts).
+        // The row: "+ Hair B", or "+ 3 added options" when the names would not fit; null when nothing was added.
+        internal static string AddedPartsShort(InstalledOutfit outfit)
+        {
+            List<PartGraft> parts = outfit == null || outfit.Parts == null ? new List<PartGraft>() : outfit.Parts.Where(g => g != null).ToList();
+            if (parts.Count == 0) return null;
+            List<string> names = parts.SelectMany(g => g.Options ?? new List<string>()).Where(n => !String.IsNullOrWhiteSpace(n)).ToList();
+            return names.Count >= 1 && names.Count <= 2 ? "+ " + String.Join(" + ", names) : "+ " + ReplacePlanner.N(Math.Max(names.Count, parts.Count), "added option");
+        }
+        // The details: one line per addition (options, mod, files, date; a note when its mod is gone), or "".
+        internal static string AddedPartsDetails(InstalledOutfit outfit)
+        {
+            if (AddedPartsShort(outfit) == null) return "";
+            var lines = new List<string> { "ADDED FROM OTHER MODS (Add to outfit, or an addon's options)" };
+            foreach (PartGraft g in outfit.Parts.Where(g => g != null))
+            {
+                DateTime when; bool dated = DateTime.TryParse(g.AddedUtc, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out when);
+                bool gone = false;
+                try { gone = !String.IsNullOrEmpty(g.SourcePath) && !System.IO.File.Exists(g.SourcePath) && !System.IO.Directory.Exists(g.SourcePath); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; }
+                lines.Add("• " + Installer.GraftText(g) + " · " + ReplacePlanner.N((g.Files ?? new List<string>()).Count, "file") + (dated ? " · added " + when.ToLocalTime().ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture) : "")
+                    + (gone ? " · its mod is no longer in the library, so a reinstall of this outfit leaves it out" : ""));
+            }
+            return String.Join(Environment.NewLine, lines) + Environment.NewLine + Environment.NewLine;
+        }
+
+        // 1.0.18 (user requests: "hopefully we can selectively remove the added mods too", then "a new window could be
+        // cool because that way you can reorder parts of what to load first/last too"): "Added parts" on the Installed
+        // page, shown for one selected outfit with added parts, opens AddedPartsForm: the parts with the winner on top,
+        // drag to reorder, Remove takes one off, Save rebuilds the outfit from its mod with that list
+        // (Installer.SetParts). No question for the usual case: Undo puts the earlier list back.
+        private FlatButton removePartButton;
+        private static bool PartSourceGone(PartGraft g)
+        {
+            try { return String.IsNullOrEmpty(g.SourcePath) || (!System.IO.File.Exists(g.SourcePath) && !System.IO.Directory.Exists(g.SourcePath)); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return true; }
+        }
+        internal void ShowAddedParts()
+        {
+            if (busy) return;
+            InstalledOutfit outfit = GetInstalledSelection();
+            List<PartGraft> parts = outfit == null || !outfit.Managed || outfit.Parts == null ? new List<PartGraft>() : outfit.Parts.Where(g => g != null).ToList();
+            if (parts.Count == 0) return;
+            if (PartSourceGone(new PartGraft { SourcePath = outfit.SourcePath }))
+            { SetPageStatus(installedPage, "Can't change the added parts: the outfit's own mod is no longer in the library, and it is needed to put the outfit together again.", Palette.Accent); return; }
+            List<PartGraft> wanted;
+            // 1.0.18 (the user): no instant "Save as recipe" here; Recipes → New recipe opens the builder with this outfit's parts.
+            if (!AddedPartsForm.Choose(this, outfit.Name, parts, PartSourceGone, null, out wanted, ModNameOf(outfit.SourcePath), SlotOptions(outfit))) return;
+            SaveAddedParts(outfit, parts, wanted);
+        }
+        // Other added parts that this save would lose for good (their mods are gone, so they can't be copied again).
+        private bool ConfirmLostParts(string name, List<PartGraft> lost)
+        {
+            if (lost.Count == 0 || Program.Headless) return true;
+            string question = "Save the added parts of " + name + "?\n\nThe outfit is put together again from its own mod. These added parts can't be put back because their mods are no longer in the library, so they are removed too, with no Undo:\n"
+                + String.Join("\n", lost.Select(g => "• " + Installer.GraftText(g)));
+            return ThemedMessageBox.Show(this, question, "Added parts", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+        }
+        // 1.0.18 (the user, about a part added with Add to outfit: "I don't see any options to manage it, like toggle
+        // or untoggle it", "and even remove the extra option I added"): the added parts of the selected outfit as a
+        // tick list in the Installed inspector, the winner first. A tick turns a part off (its files leave the outfit,
+        // the record stays in the install record's OffParts) or on again in its old place; the cross at the end of a
+        // row removes it for good. Each change rebuilds the outfit from its mod (Installer.SetParts) and has an Undo.
+        // The Added parts window stays for the order.
+        private Panel addedPartsPanel;
+        private Label addedPartsCaption;
+        private VariantList addedPartList;
+        private InstalledOutfit addedPartsOutfit;
+        private List<KeyValuePair<PartGraft, bool>> addedPartRows = new List<KeyValuePair<PartGraft, bool>>();
+        internal VariantList AddedPartListForTest { get { return addedPartList; } }
+        internal const int AddedPartRowsShown = 5;
+        private Panel BuildAddedPartsPanel()
+        {
+            addedPartsPanel = new Panel { Dock = DockStyle.Top, Height = 34 + 30, Visible = false, Padding = Padding.Empty, Name = "addedPartsPanel" };
+            addedPartsCaption = Caption("ADDED PARTS"); addedPartsCaption.Dock = DockStyle.Top; addedPartsCaption.Height = 34; addedPartsCaption.Padding = new Padding(0, 10, 0, 0); addedPartsCaption.AutoEllipsis = true;
+            addedPartList = new VariantList { Dock = DockStyle.Fill, Removable = true, AccessibleName = "Added parts: tick to turn one off or on, Delete to remove it" };
+            addedPartList.Toggled += ToggleAddedPart; addedPartList.Removed += RemoveAddedPart;
+            addedPartsPanel.Controls.Add(addedPartList); addedPartsPanel.Controls.Add(addedPartsCaption);
+            return addedPartsPanel;
+        }
+        private void ShowAddedPartList(InstalledOutfit outfit)
+        {
+            if (addedPartsPanel == null) return;
+            List<PartGraft> on = outfit == null || !outfit.Managed || outfit.Parts == null ? new List<PartGraft>() : outfit.Parts.Where(g => g != null).ToList();
+            List<PartGraft> off = outfit == null || !outfit.Managed || outfit.OffParts == null ? new List<PartGraft>() : outfit.OffParts.Where(g => g != null).ToList();
+            addedPartsOutfit = on.Count + off.Count > 0 ? outfit : null;
+            addedPartsPanel.Visible = addedPartsOutfit != null;
+            // The winner first (the part added last), then the ones that are off.
+            addedPartRows = Enumerable.Reverse(on).Select(g => new KeyValuePair<PartGraft, bool>(g, true)).Concat(off.Select(g => new KeyValuePair<PartGraft, bool>(g, false))).ToList();
+            if (addedPartsOutfit == null) { addedPartList.SetRows(new VariantList.Row[0]); return; }
+            addedPartsCaption.Text = "ADDED PARTS · " + on.Count + " OF " + (on.Count + off.Count) + " ON";
+            // "Hair B from Hair Bundle"; a part that is its whole mod is named once ("Manon Victorias Secret C1 - barefoot").
+            Func<PartGraft, string> shownPart = delegate(PartGraft g)
+            {
+                string mod = String.IsNullOrEmpty(g.Mod) ? System.IO.Path.GetFileNameWithoutExtension(g.SourcePath ?? "") : g.Mod;
+                bool whole = g.Options == null || g.Options.Count == 0 || (g.Options.Count == 1 && String.Equals(g.Options[0], mod, StringComparison.OrdinalIgnoreCase));
+                return (whole ? mod : Installer.GraftText(g)) + (g.Parts != null && g.Parts.Count > 0 ? " · " + OutfitParts.Labels(g.Parts) + " only" : "");
+            };
+            addedPartList.SetRows(addedPartRows.Select(r => new VariantList.Row { Label = Installer.GraftText(r.Key), Display = shownPart(r.Key), On = r.Value,
+                Note = PartSourceGone(r.Key) ? "its mod is gone" : r.Value ? ReplacePlanner.N((r.Key.Files ?? new List<string>()).Count, "file") : "off", NoteAccent = PartSourceGone(r.Key) }));
+            addedPartList.Enabled = !busy;
+            addedPartsPanel.Height = Px(34) + Math.Min(addedPartRows.Count, AddedPartRowsShown) * addedPartList.RowHeight;
+        }
+        private bool AddedPartLists(int index, out InstalledOutfit outfit, out PartGraft part, out bool isOn, out List<PartGraft> on, out List<PartGraft> off)
+        {
+            outfit = addedPartsOutfit; part = null; isOn = false; on = off = null;
+            if (busy || outfit == null || index < 0 || index >= addedPartRows.Count) return false;
+            part = addedPartRows[index].Key; isOn = addedPartRows[index].Value;
+            on = (outfit.Parts ?? new List<PartGraft>()).Where(g => g != null).ToList(); off = (outfit.OffParts ?? new List<PartGraft>()).Where(g => g != null).ToList();
+            return true;
+        }
+        internal void ToggleAddedPart(int index)
+        {
+            InstalledOutfit outfit; PartGraft part; bool isOn; List<PartGraft> on, off;
+            if (!AddedPartLists(index, out outfit, out part, out isOn, out on, out off)) return;
+            List<PartGraft> wantOn = on.ToList(), wantOff = off.ToList();
+            if (isOn) { part.Place = on.IndexOf(part); wantOn.Remove(part); wantOff.Add(part); }
+            else
+            {
+                if (PartSourceGone(part)) { SetPageStatus(installedPage, "Can't turn " + Installer.GraftText(part) + " on again: its mod is no longer in the library.", Palette.Accent); return; }
+                wantOff.Remove(part); wantOn.Insert(Math.Max(0, Math.Min(part.Place < 0 ? wantOn.Count : part.Place, wantOn.Count)), part);
+            }
+            SaveAddedParts(outfit, on, wantOn, off, wantOff, (isOn ? "Turned off " : "Turned on ") + Installer.GraftText(part) + " on " + outfit.Name);
+        }
+        internal void RemoveAddedPart(int index)
+        {
+            InstalledOutfit outfit; PartGraft part; bool isOn; List<PartGraft> on, off;
+            if (!AddedPartLists(index, out outfit, out part, out isOn, out on, out off)) return;
+            List<PartGraft> wantOn = on.ToList(), wantOff = off.ToList();
+            if (isOn) wantOn.Remove(part); else wantOff.Remove(part);
+            SaveAddedParts(outfit, on, wantOn, off, wantOff, "Removed " + Installer.GraftText(part) + " from " + outfit.Name);
+        }
+
+        internal void SaveAddedParts(InstalledOutfit outfit, List<PartGraft> before, List<PartGraft> wanted) { SaveAddedParts(outfit, before, wanted, null, null, null); }
+        // offBefore/offWanted: the parts that are turned off, before and after (null: they stay as they are).
+        // said: what the status says when it worked, else the rebuild's own sentence.
+        internal void SaveAddedParts(InstalledOutfit outfit, List<PartGraft> before, List<PartGraft> wanted, List<PartGraft> offBefore, List<PartGraft> offWanted, string said)
+        {
+            if (busy || outfit == null) return;
+            string source = outfit.SourcePath, sevenZip = config.SevenZipPath, root = config.CostumeRoot, name = outfit.Name, id = outfit.Id;
+            bool sameParts = before.Count == wanted.Count && before.Zip(wanted, (a, b) => ReferenceEquals(a, b)).All(x => x);
+            if (!sameParts && PartSourceGone(new PartGraft { SourcePath = source }))
+            { SetPageStatus(installedPage, "Can't change the added parts: the outfit's own mod is no longer in the library, and it is needed to put the outfit together again.", Palette.Accent); return; }
+            if (!sameParts && !ConfirmLostParts(name, wanted.Where(PartSourceGone).ToList())) return;
+            List<string> selection = (outfit.SelectedIds ?? new List<string>()).ToList();
+            Func<List<PartGraft>, InstallResult> rebuildParts = null;
+            Func<List<PartGraft>, List<PartGraft>, bool, InstallResult> rebuildAll = delegate(List<PartGraft> list, List<PartGraft> offList, bool partsChanged)
+            {
+                InstallResult made = partsChanged ? rebuildParts(list) : new InstallResult { Message = "Saved the added parts of " + name + "." };
+                if (offList != null)
+                {
+                    InstalledOutfit fresh = Installer.ListInstalled(root).FirstOrDefault(o => o.Managed && o.Id == id);
+                    if (fresh == null) throw new System.IO.IOException(name + " is no longer installed.");
+                    Installer.SetOffParts(fresh, root, offList);
+                }
+                return made;
+            };
+            Func<List<PartGraft>, InstallResult> rebuild = delegate(List<PartGraft> list) { return rebuildAll(list, list == wanted ? offWanted : offBefore, !sameParts); };
+            rebuildParts = delegate(List<PartGraft> list)
+            {
+                InstalledOutfit now = Installer.ListInstalled(root).FirstOrDefault(o => o.Managed && o.Id == id);
+                if (now == null) throw new System.IO.IOException(name + " is no longer installed.");
+                ModPackage source2 = PackageReader.Load(source, sevenZip, false);
+                List<string> dropped; List<string> ids = MapSelection(source2, selection.Select(s => new KeyValuePair<string, string>(s, "")).ToList(), out dropped);
+                if (dropped.Count > 0) throw new System.IO.IOException("The outfit's saved options are missing from its mod: " + String.Join(", ", dropped) + ". Use Edit options instead.");
+                if (selection.Count == 0) ids = Composer.DefaultSelection(source2, false);
+                CompositionPlan composition = Composer.SavedPlan(source2, ids, false);
+                if (!composition.CanInstall) throw new System.IO.IOException("Couldn't rebuild " + name + ": " + String.Join(" ", composition.Errors));
+                return Installer.SetParts(now, root, composition, list, sevenZip);
+            };
+            Work("Saving the added parts of " + name + "…", delegate { return rebuild(wanted); }, delegate(InstallResult result)
+            {
+                if (!before.Any(PartSourceGone)) OfferUndo("Changed the added parts of " + name, delegate
+                {
+                    Work("Putting the added parts of " + name + " back…", delegate { return rebuild(before); }, delegate(InstallResult back) { RefreshInstalled("✓ Undone: the added parts of " + name + " are as before."); });
+                });
+                RefreshInstalled("✓ " + (said == null ? result.Message : said + (result.PartsNote ?? "") + ". Restart SF6 to load it."));
+            });
         }
 
         internal void AddPartsToOutfit()
@@ -102,7 +282,7 @@ namespace SlotsInstaller
             rows.Height = rowHeight * Math.Max(1, outfits.Count);
             listHost.Controls.Add(rows);
             summary = new Label { UseMnemonic = false, Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Small, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
-            var footer = new Panel { Dock = DockStyle.Bottom, Height = 58, Padding = new Padding(0, 14, 0, 0) };
+            var footer = new Panel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(0, 14, 0, 0) };
             addButton = new FlatButton("Add " + ReplacePlanner.N(fileCount, "file"), true) { Width = 150, Dock = DockStyle.Right, Font = Palette.Small, Name = "addPartsAdd" }; addButton.Click += delegate { Accept(); };
             var cancel = new FlatButton("Cancel", false) { Width = 100, Dock = DockStyle.Right, Font = Palette.Small }; cancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
             footer.Controls.Add(summary); footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); footer.Controls.Add(cancel); footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); footer.Controls.Add(addButton);

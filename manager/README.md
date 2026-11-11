@@ -11,6 +11,10 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 ## What changed
 
 - 1.0.18:
+  - Outfit recipes: write an outfit down as its mods in load order, build one in the recipe builder, and install it as an extra outfit or as replacements. Recipes are listed in the Mod library, where each layer and option can be turned off, and a layer can take only some parts of a mod (its hair, for example).
+  - Added parts of an extra outfit can be turned off and on, removed and reordered on the Installed page.
+  - Load order for a fighter's extra outfits, and Turn outfit mods off to play vanilla for a while.
+  - Edit options opens a quick window on the Installed page.
   - What you install last wins: a mod installed again with other options goes to the top, like a new install.
   - Move up and Move down are instant, with Undo. Several selected replacements move, disable or enable together.
   - The Installed list shows replacements in priority order; Uninstall is the last button.
@@ -28,7 +32,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 - 1.0.16:
   - Includes Slotsloader Fork 1.10.8: extra outfits load again while another mod manager replaces Ryu's Outfit 1 colours.
-  - Addon zips show their options inside their main mod. Edit bundle works on RAR and 7Z too.
+  - Addon zips show their options inside their main mod. Reorder bundle works on RAR and 7Z too.
   - Filters: **REFramework & code** replaces Tool mods.
   - Restoring game files saves a preset first; the crash reporter is always renamed.
   - Faster installs and uninstalls.
@@ -100,7 +104,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
   - **Deep search** (check box beside the switch) also searches a mod's variant folders and option names: `barefoot` finds a bundle whose Barefoot variant is a sub-folder.
   - Changing a filter scrolls the list back to the top, like a search.
   - **Several mods at once**: Ctrl+click, Shift+click or Ctrl+A in the Mod library opens a queue with **Install N** and **Delete N**, and a row per mod with its result. Each mod installs with its default options; a bundle gets its main files and the default or first choice of each required group, optional variants stay off. A mod that can't install is skipped with the reason, and the rest go on. Delete moves them to the Recycle Bin.
-  - **Add to outfit…** (Extra outfit mode, beside Install all variants): copy the options you ticked, for example one hair option of a bundle, into an extra outfit you already installed. Exactly those files are added, replacing the outfit's files with the same names; nothing else changes. Edit options and reinstalls of that outfit keep them. Files made for another outfit slot can't go on it.
+  - **Add to outfit** (Extra outfit mode, beside Install all variants): copy the options you ticked, for example one hair option of a bundle, into an extra outfit you already installed. Exactly those files are added, replacing the outfit's files with the same names; nothing else changes. Edit options and reinstalls of that outfit keep them. Files made for another outfit slot can't go on it.
   - **Rename** (F2) follows the switch: with **Name** on it changes only the name the list shows (kept in the Manager's Data; the file and its modinfo.ini stay as they are, and an empty name gives the mod's own name back); with **File** on it renames the archive or folder as before. The rename box is now the size of the row's name.
   - The destination path line under the outfit name is gone.
   - **Refresh** button on the Installed page.
@@ -128,7 +132,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 - 1.0.1:
   - The loader is now called **Slotsloader** too, so the app and the loader share one spelling. The release bundles **Slotsloader Fork 1.10.1** in a `Slotsloader` folder beside the exe. It keeps the patch PAK row free of gaps that could stop the game at a black screen, and treats a patch PAK it can't read as another tool's. It also reads a texture that a Replace-original install switched off from its loose copy. An extra outfit whose own scene lists a different number of parts than the game's (SF5 Sakura over Ryu) keeps its own hair and cloth physics.
   - **Uninstall means uninstall.** Uninstalling keeps no copy: reinstall from the Mod library. Outfits with no library source (manual drops) go to the Recycle Bin.
-  - Gear → **Restore** has two choices. **Remove this Manager's mods** removes every replacement and tool mod this app installed, with Undo. Its copies are kept only while that Undo is available. **Restore game to vanilla…** removes those mods and also the external mod manager's installs, every patch PAK (other tools' too) and the `natives` folder. It asks first and has no Undo.
+  - Gear → **Restore** has two choices. **Remove this Manager's mods** removes every replacement and tool mod this app installed, with Undo. Its copies are kept only while that Undo is available. **Restore game to vanilla** removes those mods and also the external mod manager's installs, every patch PAK (other tools' too) and the `natives` folder. It asks first and has no Undo.
   - While an external mod manager has any mod installed, only Extra outfit and Slotsloader install here (and REFramework since 1.0.10), so two managers never change the same game files.
   - **INSTALL AS** remembers your last choice. PAK and tool mods switch to Replace original by themselves, and **Tab** in the Mod library switches between the two.
   - Installed page:
@@ -163,14 +167,14 @@ For Goth Juri C1, Main files + Default skin + Regular full outfit barefoot yield
 3. Click **Install** (or press Space). Start SF6 with **Launch SF6**. With the replacement method on Automatic, the app uses REFramework's loose file loader when it is on and otherwise the PAK method, so the files always show in game.
 4. On **Installed**, set the type toggle to **Installed** (replacements and tool mods). From there you can disable, reorder, edit or uninstall it. Uninstall restores the original files exactly and keeps no copy: reinstall it from the Mod library. A mod whose source is gone from your libraries goes to the Recycle Bin instead.
 
-After a game update, the Installed page shows a banner, and every other page a notice at the bottom right (1.0.10). Click **Reapply**, or **Restore original game files** to remove every replacement and tool mod this app installed; **Undo** puts them back. The same action is in gear → Restore → **Remove this Manager's mods** and in Settings → Game files & replacements. Extra outfits and external mod manager installs are not touched. To go further, gear → Restore → **Restore game to vanilla…** also removes the external mod manager's installs, every patch PAK and the `natives` folder (no Undo). It leaves REFramework, Slotsloader and your extra outfits alone (1.0.11: also when this Manager installed REFramework and Slotsloader; the external mod manager's REFramework goes with its mods).
+After a game update, the Installed page shows a banner, and every other page a notice at the bottom right (1.0.10). Click **Reapply**, or **Restore original game files** to remove every replacement and tool mod this app installed; **Undo** puts them back. The same action is in gear → Restore → **Remove this Manager's mods** and in Settings → Game files & replacements. Extra outfits and external mod manager installs are not touched. To go further, gear → Restore → **Restore game to vanilla** also removes the external mod manager's installs, every patch PAK and the `natives` folder (no Undo). It leaves REFramework, Slotsloader and your extra outfits alone (1.0.11: also when this Manager installed REFramework and Slotsloader; the external mod manager's REFramework goes with its mods).
 
 If another tool replaced or deleted a file this app installed, the banner says which one. Uninstall still works: choose **Restore original** or **Keep current file** (see What changed, 2.2.0). The originals kept behind such files and the other tools' files that were replaced stay in the Manager's Data folder.
 
 ## Switching from another mod manager
 
 - **While the external mod manager has any mod installed, only Extra outfit, Slotsloader and REFramework install here.** Replace original, PAK mods and other tool mods wait until it is empty, so two managers never change the same game files. REFramework that the external mod manager installed is updated there. Uninstalling, disabling and Restore original game files still work for this app's own mods.
-- **Moving over**: **Migrate installed mods…** (Settings → Game files & replacements) reviews that manager's mods, waits while you uninstall them there, then installs them here in the same order. Or install them yourself with Replace original, or import its preset.
+- **Moving over**: **Migrate installed mods** (Settings → Game files & replacements) reviews that manager's mods, waits while you uninstall them there, then installs them here in the same order. Or install them yourself with Replace original, or import its preset.
 - Close the external mod manager before changing game files here. Don't install the same mod in both managers.
 - External mod manager features this app does not reproduce:
   - the `pak_mods` folder (a PAK mod installs here as the next patch PAK instead);

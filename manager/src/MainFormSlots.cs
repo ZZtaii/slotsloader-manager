@@ -247,7 +247,7 @@ namespace SlotsInstaller
             installedChips.SetChips(chips);
             installedDetail.Text = group.Source; installedPathRow.Visible = true;
             installedSectionCaption.Text = "SLOTS";
-            installedHelp.Text = String.Join(Environment.NewLine + Environment.NewLine, group.Slots.Select(o => o.Name + Environment.NewLine + SlotOptions(o) + (String.IsNullOrEmpty(o.LoaderOutfitName) ? "" : "  ·  " + o.LoaderOutfitName) + (o.Enabled ? "" : "  ·  disabled")))
+            installedHelp.Text = String.Join(Environment.NewLine + Environment.NewLine, group.Slots.Select(o => o.Name + Environment.NewLine + SlotOptions(o) + (AddedPartsShort(o) == null ? "" : "  ·  " + AddedPartsShort(o)) + (String.IsNullOrEmpty(o.LoaderOutfitName) ? "" : "  ·  " + o.LoaderOutfitName) + (o.Enabled ? "" : "  ·  disabled")))
                 + Environment.NewLine + Environment.NewLine + "Uninstall deletes every slot; reinstall from the Mod library. Expand the row to pick one.";
             installedHelp.Select(0, 0);
         }

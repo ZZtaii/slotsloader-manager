@@ -32,7 +32,7 @@ namespace SlotsInstaller
         public List<string> Warnings = new List<string>();
         internal int RootFilesIgnored;
         internal bool HasBundleLayout;
-        internal string LayoutError;   // the saved layout was ignored (BundleLayout.Read); Edit bundle saves a new one
+        internal string LayoutError;   // the saved layout was ignored (BundleLayout.Read); Reorder bundle saves a new one
         internal List<BundleOption> AuthorOptions;
         internal List<string> AuthorSlotDefaults, AuthorReplaceDefaults;
         internal readonly Dictionary<string,byte[]> PreloadedPreviews = new Dictionary<string,byte[]>(StringComparer.OrdinalIgnoreCase);
@@ -168,6 +168,22 @@ namespace SlotsInstaller
             if (c == null) return null;
             return ReadPreview(c.PreviewEntry,sevenZipPath);
             }
+        }
+        // What the previews held now weigh: ReadPreview adds to them after the package was opened, so the
+        // Mod library's package cache asks again instead of trusting the size at open (a ZIP opens with none).
+        // Never waits: a preview being read from a RAR/7Z holds the lock for up to seconds, so the last size is used then.
+        private long preloadedBytesSeen;
+        internal long PreloadedBytes()
+        {
+            if (System.Threading.Monitor.TryEnter(previewLock))
+            {
+                try { preloadedBytesSeen = PreloadedPreviews.Values.Sum(b => (long)b.Length); }
+                finally { System.Threading.Monitor.Exit(previewLock); }
+            }
+            long total = preloadedBytesSeen;
+            if (MergedFrom != null) total += MergedFrom.PreloadedBytes();
+            if (AddonParts != null) foreach (AddonPart part in AddonParts) if (part.Package != null && part.Package != this) total += part.Package.PreloadedBytes();
+            return total;
         }
         private byte[] ReadPreview(string entry,string sevenZipPath)
         {
