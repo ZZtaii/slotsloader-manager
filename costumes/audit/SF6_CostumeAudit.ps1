@@ -1,5 +1,5 @@
-﻿# SF6 Costume Slots Loader - audit
-# Lists manually supplied costume mods, where they come from (archive dropped in
+# SF6 Costume Slots Loader - audit
+# Lists the costume mods installed, where they come from (Fluffy Mod Manager pak, archive dropped in
 # costume_mods, unpacked folder), the outfits the loader made of them, and what the last launch reported.
 # Reads files only; changes nothing. Windows PowerShell 5.1 or newer.
 
@@ -23,7 +23,7 @@ $data = Join-Path $ref 'data\SF6_Costumes_Data'
 $names = @{ 1='Ryu'; 2='Luke'; 3='Kimberly'; 4='Chun-Li'; 5='Manon'; 6='Zangief'; 7='JP'; 8='Dhalsim';
             9='Cammy'; 10='Ken'; 11='Dee Jay'; 12='Lily'; 13='A.K.I.'; 14='Rashid'; 15='Blanka'; 16='Juri';
             17='Marisa'; 18='Guile'; 19='Ed'; 20='E. Honda'; 21='Jamie'; 22='Akuma'; 25='Sagat'; 26='M. Bison';
-            27='Terry'; 28='Mai'; 29='Elena'; 30='C. Viper'; 31='Alex'; 32='Ingrid'; 33='Yasmine'; 34='Arjun' }
+            27='Terry'; 28='Mai'; 29='Elena'; 30='C. Viper'; 31='Alex'; 32='Ingrid'; 33='Yasmine' }
 $archiveExt = @('.zip', '.7z', '.rar')
 
 $out = New-Object System.Collections.Generic.List[string]
@@ -113,8 +113,28 @@ function Describe($o) {
 
 # ---- costume mods found on disk ----
 Say '== Costume mods found =='
-Say '  Custom 1.9.4: only costume_mods entries create extra costume slots.'
-Say '  Installed patch PAKs and game natives do not create slots.'
+$ourPak = ''
+if ($list) { $ourPak = [string]$list.pak }
+$paks = Get-ChildItem $game -Filter 're_chunk_000.pak.patch_*.pak' | Sort-Object Name
+# marker-only placeholders (under 1 KB) are the loaders' own, kept so the row of patch paks has no hole
+$fluffy = $paks | Where-Object { $_.Name -ne $ourPak -and $_.Length -gt 1024 }
+Say '  Fluffy Mod Manager (patch paks in the game folder):'
+if (-not $fluffy) { Say '    none' }
+foreach ($p in $fluffy) {
+    $os = OutfitsOf $p.Name
+    if ($os) { foreach ($o in $os) { Say ('    ' + $p.Name + '  ->  ' + (Describe $o)) } }
+    else { Say ('    ' + $p.Name + '  ->  no outfit (not a costume mod, or installed after the last launch)') }
+}
+if ($ourPak) { Say ('    (' + $ourPak + ' is the one the loader builds itself)') }
+Say '  Fluffy Mod Manager (mods ticked in Fluffy, read from their archives):'
+$fl = @()
+if ($list) { $fl = @($list.outfits | Where-Object { ([string]$_.source).StartsWith('Fluffy Mod Manager/') }) }
+if (-not $fl) { Say '    none' }
+foreach ($g in ($fl | Group-Object source)) {
+    Say ('    ' + $g.Name.Substring('Fluffy Mod Manager/'.Length))
+    foreach ($o in $g.Group) { Say ('        -> ' + (Describe $o) + ': ' + $o.label) }
+}
+
 Say '  reframework\costume_mods:'
 $found = 0
 $entries = New-Object System.Collections.Generic.List[object]
@@ -154,7 +174,7 @@ if (-not $list) {
         Say ('  ' + $who + ' (' + $g.Count + ')')
         foreach ($o in ($g.Group | Sort-Object { [int]$_.costume_no })) {
             $src = [string]$o.source
-            $src = ($src -replace '/', '\')
+            if ($o.kind -eq 'fluffy pak') { $src = 'Fluffy: ' + $src } else { $src = ($src -replace '/', '\') }
             Say ('    ' + $o.name.PadRight(14) + ' ' + $o.label + '   [' + $src + ']')
             $total++
         }

@@ -3,12 +3,21 @@ setlocal
 cd /d "%~dp0"
 
 rem Builds everything into build\
+rem   core\sf6core_native.dll           the shared core (core\build.bat)
+rem   colormod\SF6_ColorModNative.dll   the Color Mod (colormod\build.bat)
+rem   crsm\SF6_CRSMNative.dll           the SF6 Recording Manager (crsm\build.bat)
+rem   report_mod\report_mod.dll          Report a bug (report_mod\build.bat), in the Slots Loader's package
 rem   amd_ags_x64.dll                  costume slots + stage slots: the DLL the game loads
 rem   costumes_only\amd_ags_x64.dll    the costume loader alone (what the releases ship so far)
 rem   SF6_CostumeSlotsNative.dll       REFramework plugin used during online matches
 rem   costume_loader.exe paktool.exe loadtest.exe    costume tools
+rem   colourtest.exe                  colourtest --selftest: the colours following their outfit (colour_follow.hpp)
+rem   SF6_SlotsClean.exe              removes the loader's runtime paks and state (shipped next to amd_ags_x64.dll)
 rem   stagepak.exe stagetest.exe textest.exe         stage tools
-rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first.
+rem   SF6_ModSorter.exe               drop a downloaded mod on it: it says what it is and copies it into the game's right folder (tools\sorter\build.bat)
+rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first; "build.bat archive_deps" builds only them, when missing (the Color Mod needs them).
+rem "build.bat <module>" builds one module only: loader (amd_ags_x64.dll + tools), plugin, core, colormod, crsm, profile, report, sorter.
+rem Every compile runs on all cores (/MP). Build only what changed; the full build is for releases.
 
 rem Visual Studio or Build Tools with the C++ workload, wherever it is installed
 set "VSDIR=C:\Program Files\Microsoft Visual Studio\2022\Community"
@@ -21,32 +30,41 @@ set CO=costumes\loader
 set ST=stages\loader
 set B=build
 set O=build\obj
-set CF=/nologo /std:c++17 /O2 /MT /EHa /W3 /D_CRT_SECURE_NO_WARNINGS /I"%C%" /I"%C%\third_party" /I"%CO%" /I"proxy"
+set CF=/nologo /MP /std:c++17 /O2 /MT /EHa /W3 /D_CRT_SECURE_NO_WARNINGS /I"%C%" /I"%C%\third_party" /I"%CO%" /I"%ST%" /I"proxy"
 set LK=/link /INCREMENTAL:NO
 rem Libraries the archive decoders may import. All of them are already loaded by the game's own
 rem executable, so importing them statically adds nothing at runtime.
 set SYSLIBS=bcrypt.lib advapi32.lib shell32.lib ole32.lib user32.lib
 if not exist %B%\costumes_only mkdir %B%\costumes_only
+if /i "%1"=="core" goto :only_core
+if /i "%1"=="colormod" goto :only_colormod
+if /i "%1"=="crsm" goto :only_crsm
+if /i "%1"=="profile" goto :only_profile
+if /i "%1"=="report" goto :only_report
+if /i "%1"=="sorter" goto :only_sorter
+if /i "%1"=="plugin" goto :plugin
 
 rem ---------------------------------------------------------------------------------------------
 rem Archive decoders (7z: LZMA SDK, rar: UnRAR), built once into build\archive_deps.lib.
 rem UnRAR is built single-threaded and without Crypt32: see common\third_party\unrar\SF6_PATCHES.txt.
 rem ---------------------------------------------------------------------------------------------
 if /i "%1"=="deps" if exist %B%\archive_deps.lib del %B%\archive_deps.lib
+if /i "%1"=="archive_deps" if exist %B%\archive_deps.lib exit /b 0
 if exist %B%\archive_deps.lib goto :objects
 
 echo === archive_deps.lib (LZMA SDK + UnRAR) ===
 if exist %O%\deps rmdir /s /q %O%\deps
 mkdir %O%\deps
 set LZ=%C%\third_party\lzma
-cl /nologo /O2 /MT /W1 /c /Fo%O%\deps\ %LZ%\7zAlloc.c %LZ%\7zArcIn.c %LZ%\7zBuf.c %LZ%\7zBuf2.c %LZ%\7zCrc.c %LZ%\7zCrcOpt.c %LZ%\7zDec.c %LZ%\7zFile.c %LZ%\7zStream.c %LZ%\Bcj2.c %LZ%\Bra.c %LZ%\Bra86.c %LZ%\BraIA64.c %LZ%\CpuArch.c %LZ%\Delta.c %LZ%\Lzma2Dec.c %LZ%\LzmaDec.c %LZ%\Ppmd7.c %LZ%\Ppmd7Dec.c
+cl /nologo /MP /O2 /MT /W1 /c /Fo%O%\deps\ %LZ%\7zAlloc.c %LZ%\7zArcIn.c %LZ%\7zBuf.c %LZ%\7zBuf2.c %LZ%\7zCrc.c %LZ%\7zCrcOpt.c %LZ%\7zDec.c %LZ%\7zFile.c %LZ%\7zStream.c %LZ%\Bcj2.c %LZ%\Bra.c %LZ%\Bra86.c %LZ%\BraIA64.c %LZ%\CpuArch.c %LZ%\Delta.c %LZ%\Lzma2Dec.c %LZ%\LzmaDec.c %LZ%\Ppmd7.c %LZ%\Ppmd7Dec.c
 if errorlevel 1 goto :failed
 set UR=%C%\third_party\unrar
 set URDEF=/DRARDLL /DUNRAR /DSILENT /DSF6_LOADER_NO_SMP /DSF6_LOADER_NO_CRYPT32
-cl /nologo /std:c++17 /O2 /MT /EHa /W1 %URDEF% /c /Fo%O%\deps\ %UR%\archive.cpp %UR%\arcread.cpp %UR%\blake2s.cpp %UR%\cmddata.cpp %UR%\consio.cpp %UR%\crc.cpp %UR%\crypt.cpp %UR%\dll.cpp %UR%\encname.cpp %UR%\errhnd.cpp %UR%\extinfo.cpp %UR%\extract.cpp %UR%\filcreat.cpp %UR%\file.cpp %UR%\filefn.cpp %UR%\filestr.cpp %UR%\find.cpp %UR%\getbits.cpp %UR%\global.cpp %UR%\hash.cpp %UR%\headers.cpp %UR%\isnt.cpp %UR%\largepage.cpp %UR%\match.cpp %UR%\motw.cpp %UR%\options.cpp %UR%\pathfn.cpp %UR%\qopen.cpp %UR%\rar.cpp %UR%\rarvm.cpp %UR%\rawread.cpp %UR%\rdwrfn.cpp %UR%\rijndael.cpp %UR%\rs.cpp %UR%\rs16.cpp %UR%\scantree.cpp %UR%\secpassword.cpp %UR%\sha1.cpp %UR%\sha256.cpp %UR%\smallfn.cpp %UR%\strfn.cpp %UR%\strlist.cpp %UR%\system.cpp %UR%\threadpool.cpp %UR%\timefn.cpp %UR%\ui.cpp %UR%\unicode.cpp %UR%\unpack.cpp %UR%\volume.cpp
+cl /nologo /MP /std:c++17 /O2 /MT /EHa /W1 %URDEF% /c /Fo%O%\deps\ %UR%\archive.cpp %UR%\arcread.cpp %UR%\blake2s.cpp %UR%\cmddata.cpp %UR%\consio.cpp %UR%\crc.cpp %UR%\crypt.cpp %UR%\dll.cpp %UR%\encname.cpp %UR%\errhnd.cpp %UR%\extinfo.cpp %UR%\extract.cpp %UR%\filcreat.cpp %UR%\file.cpp %UR%\filefn.cpp %UR%\filestr.cpp %UR%\find.cpp %UR%\getbits.cpp %UR%\global.cpp %UR%\hash.cpp %UR%\headers.cpp %UR%\isnt.cpp %UR%\largepage.cpp %UR%\match.cpp %UR%\motw.cpp %UR%\options.cpp %UR%\pathfn.cpp %UR%\qopen.cpp %UR%\rar.cpp %UR%\rarvm.cpp %UR%\rawread.cpp %UR%\rdwrfn.cpp %UR%\rijndael.cpp %UR%\rs.cpp %UR%\rs16.cpp %UR%\scantree.cpp %UR%\secpassword.cpp %UR%\sha1.cpp %UR%\sha256.cpp %UR%\smallfn.cpp %UR%\strfn.cpp %UR%\strlist.cpp %UR%\system.cpp %UR%\threadpool.cpp %UR%\timefn.cpp %UR%\ui.cpp %UR%\unicode.cpp %UR%\unpack.cpp %UR%\volume.cpp
 if errorlevel 1 goto :failed
 lib /nologo /OUT:%B%\archive_deps.lib %O%\deps\*.obj
 if errorlevel 1 goto :failed
+if /i "%1"=="archive_deps" exit /b 0
 
 :objects
 rem ---------------------------------------------------------------------------------------------
@@ -54,18 +72,24 @@ rem Shared objects, compiled once and linked into each target
 rem ---------------------------------------------------------------------------------------------
 for %%d in (core stage proxy proxy_costumes tools) do if not exist %O%\%%d mkdir %O%\%%d
 echo === common + costume loader ===
-rem structural*.cpp, vanilla_inventory.cpp and fighter_names.cpp build the structural files, the missing
-rem vanilla index rows and new fighters' folder names from the game's own files at each pak build
-cl %CF% /c /Fo%O%\core\ %C%\third_party\zstddeclib.c %C%\third_party\miniz.c %C%\pak.cpp %C%\archive.cpp %CO%\patch.cpp %CO%\structural.cpp %CO%\structural_scene.cpp %CO%\structural_msg.cpp %CO%\vanilla_inventory.cpp %CO%\fighter_names.cpp %CO%\loader_core.cpp
+cl %CF% /c /Fo%O%\core\ %C%\third_party\zstddeclib.c %C%\third_party\miniz.c %C%\pak.cpp %C%\archive.cpp %C%\fighter_names.cpp %CO%\patch.cpp %CO%\swap_repairs.cpp %CO%\structural_scene.cpp %CO%\structural_msg.cpp %CO%\vanilla_inventory.cpp %CO%\colour_follow.cpp %CO%\loader_core.cpp
+if errorlevel 1 goto :failed
+echo === stage slots ===
+cl %CF% /c /Fo%O%\stage\ %ST%\stage_log.cpp %ST%\stage_loader.cpp %ST%\stage_classify.cpp %ST%\preview_tex.cpp %ST%\stage_redirect.cpp
 if errorlevel 1 goto :failed
 set PAK=%O%\core\zstddeclib.obj %O%\core\miniz.obj %O%\core\pak.obj
-set GAMEDATA=%O%\core\structural.obj %O%\core\structural_scene.obj %O%\core\structural_msg.obj %O%\core\vanilla_inventory.obj %O%\core\fighter_names.obj
-set CORE=%PAK% %O%\core\archive.obj %O%\core\patch.obj %GAMEDATA% %O%\core\loader_core.obj
+set CORE=%PAK% %O%\core\archive.obj %O%\core\fighter_names.obj %O%\core\patch.obj %O%\core\swap_repairs.obj %O%\core\structural_scene.obj %O%\core\structural_msg.obj %O%\core\vanilla_inventory.obj %O%\core\colour_follow.obj %O%\core\loader_core.obj
 
-echo === amd_ags_x64.dll (costumes only) ===
-cl %CF% /DSLOTS_NO_STAGES /c /Fo%O%\proxy\ proxy\slots_proxy.cpp
+echo === amd_ags_x64.dll (costume slots + stage slots) ===
+cl %CF% /c /Fo%O%\proxy\ proxy\slots_proxy.cpp
 if errorlevel 1 goto :failed
-link /nologo /DLL /INCREMENTAL:NO /MACHINE:X64 /OUT:%B%\amd_ags_x64.dll %O%\proxy\slots_proxy.obj %CORE% %B%\archive_deps.lib %SYSLIBS%
+link /nologo /DLL /INCREMENTAL:NO /MACHINE:X64 /OUT:%B%\amd_ags_x64.dll %O%\proxy\slots_proxy.obj %CORE% %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\stage_classify.obj %O%\stage\preview_tex.obj %O%\stage\stage_redirect.obj %B%\archive_deps.lib %SYSLIBS%
+if errorlevel 1 goto :failed
+
+echo === costumes_only\amd_ags_x64.dll ===
+cl %CF% /DSLOTS_NO_STAGES /c /Fo%O%\proxy_costumes\ proxy\slots_proxy.cpp
+if errorlevel 1 goto :failed
+link /nologo /DLL /INCREMENTAL:NO /MACHINE:X64 /OUT:%B%\costumes_only\amd_ags_x64.dll %O%\proxy_costumes\slots_proxy.obj %CORE% %B%\archive_deps.lib %SYSLIBS%
 if errorlevel 1 goto :failed
 
 echo === costume tools ===
@@ -75,15 +99,80 @@ cl %CF% /Fo%O%\tools\ %C%\paktool.cpp %PAK% %O%\core\patch.obj /Fe%B%\paktool.ex
 if errorlevel 1 goto :failed
 cl %CF% /Fo%O%\tools\ %CO%\loadtest.cpp /Fe%B%\loadtest.exe %LK%
 if errorlevel 1 goto :failed
+cl %CF% /Fo%O%\tools\ costumes\tools\slots_clean.cpp %PAK% /Fe%B%\SF6_SlotsClean.exe %LK%
+if errorlevel 1 goto :failed
+cl %CF% /Fo%O%\tools\ costumes\tools\colourtest.cpp %O%\core\colour_follow.obj /Fe%B%\colourtest.exe %LK%
+if errorlevel 1 goto :failed
 
+echo === stage tools ===
+cl %CF% /Fo%O%\tools\ stages\tools\stagepak.cpp %PAK% /Fe%B%\stagepak.exe %LK%
+if errorlevel 1 goto :failed
+cl %CF% /Fo%O%\tools\ stages\tools\textest.cpp %O%\stage\preview_tex.obj /Fe%B%\textest.exe %LK%
+if errorlevel 1 goto :failed
+cl %CF% /Fo%O%\tools\ stages\tools\stagetest.cpp %PAK% %O%\core\archive.obj %O%\core\patch.obj %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\stage_classify.obj %O%\stage\preview_tex.obj /Fe%B%\stagetest.exe %LK% %B%\archive_deps.lib %SYSLIBS%
+if errorlevel 1 goto :failed
+
+if /i "%1"=="loader" goto :done_one
+:plugin
 echo === SF6_CostumeSlotsNative.dll (REFramework plugin, API 1.5.8: costume and stage slots in game) ===
 if not exist %O%\plugin mkdir %O%\plugin
-cl /nologo /std:c++20 /EHa /O2 /W4 /LD /I plugin\include /Fo%O%\plugin\ plugin\src\common.cpp plugin\src\costumes.cpp plugin\src\main.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
+rem SLOTS_LEGACY_UI_FALLBACK: compiles the direct implementations so the plugin
+rem works without sf6core_native.dll.  Remove when the core becomes mandatory.
+rem updater\src: the SF6 Mod Suite updater, also in the core (updater\src\update_host.hpp: one of the two runs it); miniz: its zip reader.
+cl /nologo /c /O2 /MT /W0 /TC %C%\third_party\miniz.c /Fo%O%\plugin\miniz.obj >nul
+if errorlevel 1 goto :failed
+set UPD=updater\src\update_host.cpp updater\src\update_game.cpp updater\src\update_install.cpp updater\src\update_logic.cpp updater\src\update_fs.cpp updater\src\update_net.cpp updater\src\update_sys.cpp updater\src\update_text.cpp
+cl /nologo /MP /std:c++20 /EHa /O2 /W4 /LD /DSLOTS_LEGACY_UI_FALLBACK /I plugin\include /I core\include /external:I colormod\third_party /external:W0 /Fo%O%\plugin\ %UPD% plugin\src\common.cpp plugin\src\json.cpp plugin\src\costumes.cpp plugin\src\rto_data.cpp plugin\src\rto.cpp plugin\src\rto_menu.cpp plugin\src\rto_select.cpp plugin\src\rto_camera.cpp plugin\src\nsfw_option.cpp plugin\src\title_preview.cpp plugin\src\options_page.cpp plugin\src\ui_packs.cpp plugin\src\ui_packs_grid.cpp plugin\src\game_cell.cpp plugin\src\true_owner.cpp plugin\src\fs_name.cpp plugin\src\opp_summary.cpp plugin\src\stages.cpp plugin\src\codecheck.cpp plugin\src\main.cpp plugin\src\slots_ui.cpp plugin\src\slots_ui_legacy.cpp plugin\src\perf.cpp plugin\src\wjournal.cpp plugin\src\replay_outfits.cpp plugin\src\replay_tab.cpp plugin\src\replay_music.cpp plugin\src\name_scroll.cpp plugin\src\ui_retexture.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref %O%\plugin\miniz.obj winhttp.lib bcrypt.lib user32.lib
+if errorlevel 1 goto :failed
+
+if /i "%1"=="plugin" goto :done_one
+echo.
+echo === core (sf6core_native.dll) ===
+call core\build.bat
+if errorlevel 1 goto :failed
+echo === Color Mod (SF6_ColorModNative.dll) ===
+call colormod\build.bat
+if errorlevel 1 goto :failed
+echo === Recording Manager (SF6_CRSMNative.dll) ===
+call crsm\build.bat
+if errorlevel 1 goto :failed
+echo === Profile Mod (profile_mod.dll) ===
+call profile_mod\build.bat
+if errorlevel 1 goto :failed
+echo === Report a bug (report_mod.dll) ===
+call report_mod\build.bat
+if errorlevel 1 goto :failed
+echo === SF6_ModSorter.exe ===
+call tools\sorter\build.bat
 if errorlevel 1 goto :failed
 
 echo.
-echo All OK: build\amd_ags_x64.dll, build\costumes_only\amd_ags_x64.dll, build\SF6_CostumeSlotsNative.dll and the tools
+echo All OK: build\amd_ags_x64.dll, build\costumes_only\amd_ags_x64.dll, build\SF6_CostumeSlotsNative.dll,
+echo         build\core\sf6core_native.dll, build\colormod\SF6_ColorModNative.dll, build\crsm\SF6_CRSMNative.dll, build\report_mod\report_mod.dll,
+echo         build\SF6_ModSorter.exe and the tools
 echo Replace the DLLs in the game folder only while the game is closed.
+exit /b 0
+
+:only_core
+call core\build.bat
+exit /b %errorlevel%
+:only_colormod
+call colormod\build.bat
+exit /b %errorlevel%
+:only_crsm
+call crsm\build.bat
+exit /b %errorlevel%
+:only_profile
+call profile_mod\build.bat
+exit /b %errorlevel%
+:only_report
+call report_mod\build.bat
+exit /b %errorlevel%
+:only_sorter
+call tools\sorter\build.bat
+exit /b %errorlevel%
+:done_one
+echo OK: %1 only
 exit /b 0
 
 :failed

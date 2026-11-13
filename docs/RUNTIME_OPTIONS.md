@@ -1,0 +1,1305 @@
+# Runtime costume options (design, in progress)
+
+Status: released in Slots Loader 1.13.0 (SF6 Mod Suite 1.17.0) behind a setting off by default, on by default
+since Slots Loader 1.13.1 (SF6 Mod Suite 1.17.1), **always on since the `RuntimeOptions=` setting was removed**
+(after 1.15.1): lot A (the loader part) and lot B (the plugin: runtime swaps, the
+Battle Settings and character select menus, the `former` migration), tested in game. The sections below that describe
+`RuntimeOptions=off` or `variants` describe what 1.13.0 - 1.15.1 could be set to; those layouts can no longer be selected.
+Everything 1.13.0 changed, file by file: [SLOTS_LOADER_1.13_CHANGES.md](SLOTS_LOADER_1.13_CHANGES.md).
+
+## Goal
+
+Costume mods made for Fluffy Mod Manager often come as one archive with groups of options: body types, skins,
+dress textures, SFW / NSFW variants, extra jiggle, a tan, "hide ponytail" for hair mods... Today the Slots Loader
+turns such a *modular mod* into up to 50 outfits (one per combination of the options that change meshes) and keeps
+only the first option of every other group. Example, "Mini Dress Mai C1 Swap" v1.5: 43 options in 6 groups, 10
+outfits, 32 options never reachable.
+
+Target:
+
+- **One outfit per modular mod.** Its options are chosen in game, in **Battle Settings**, like the Color Mod's
+  colour editor: the `F` hint shows only on a costume that has options, the preview shows the result live.
+- Applied **at runtime**, without relaunching, **per player**: P1 and P2 can wear the same outfit with other options.
+- Every character, every modular mod: all its options are detected and listed.
+- Fluffy vs menu: the options checked in Fluffy (or the loader's default combination) apply until the user changes
+  something in our menu; from then on, the menu's choice wins.
+
+## Proven in game (probes, 19/10)
+
+On a fighter's model (Training) and on the Battle Settings preview, per model:
+
+- `via.render.Mesh`: `setMesh(MeshResourceHolder)`, `set_Material(MeshMaterialResourceHolder)`,
+  `setMaterialTexture(material, texture, TextureResourceHolder)`; `via.motion.Chain`: `set_ChainAsset` + restart.
+- The change takes effect, holds, survives colour changes (`PlayerColorController.SetColor`) and position resets.
+  P2 in the same slot is untouched as long as the write goes to the model, **never to the shared costume manifest**
+  (`FighterVisualHolder._Setting`: one manifest serves P1 and P2).
+- A resource that is not resident yet is not ready on the first frames (body invisible after `setMesh`, black after
+  `set_Material`, for 30 frames and more): options must be **preloaded** and applied once ready. Already loaded,
+  the swap is ready at frame 0.
+- A body mesh and its material file belong together: swap them as a pair when an option ships both.
+- Texture bindings are per model: during the probe's texture phases on P1, P2's binding kept its own path in every
+  sample (`rto2_result_p1.json`, `other.tex`). The visual anomaly seen after a swap and its restore (P2's dress
+  looked different) is not explained by the bindings; see [Textures](#textures-and-the-shared-material-question).
+
+## Settings
+
+`reframework\costume_mods\settings.ini`:
+
+The `RuntimeOptions=` setting is **gone**: runtime options are always on. A modular mod is **one** outfit (the mod's
+first combination), every option is stored in the pak and listed in `costume_options.json`. A `RuntimeOptions=` line
+left in `settings.ini` (any value, `off` and `variants` included) is ignored, and the log says so once
+(`RuntimeOptions=<value> ignored: runtime options are always on`). The `RuntimeOptions` block of the template the loader
+wrote up to 1.15.1 (1.13.0's `off`, then `on`), left untouched, is taken out of the file at the next launch (any edit of
+those lines keeps the file as it is: the line is then only ignored). The pak fingerprint of a user who was on `on` is
+unchanged (the mode part of it, `;options=sf6-costume-options-1:one`, is the same), so no rebuild is forced. Someone who
+had written `off` or `variants` gets one rebuild.
+
+History: the setting was `off` by default in 1.13.0 (opt-in), `on` by default from 1.13.1 (`off` builds what the loader
+built before 1.13; `variants` keeps those outfits and stores the options too). The loader code of `off` and `variants`
+is still in `loader_core.cpp`, unreachable (`g_rto_layout` is a constant).
+
+## Data model
+
+A modular mod is the tree `build_modular` already reads: options (folders with `modinfo.ini`) whose `AddonFor`
+names a group, groups whose `AddonFor` names the root. The Fluffy menu entries (folders holding only a
+`modinfo.ini`, usually `DummyMod=True`) are read too, with their descriptions (ported from ZZtaii's Slotsloader
+fork 1.9.7-custom, MIT).
+
+- **Group**: the options sharing one `AddonFor`. When options hang from sub-groups of the menu ("03 Outfit" >
+  "Lower Neckline" > option), every option under one top-level group is ONE group (one choice), keyed by that
+  top-level group's **name** (`menu:<name>`, not its place in the menu, so saved choices keep their ids); the main
+  files of such a mod form the group `(root)`. Groups are listed in the order their files are laid over each
+  other: the **root group (main files) first**, then the others (sorted group names; nested: menu folder order). The
+  files of a later group replace those of an earlier one at the same path. (Before the port, a root whose name did
+  not start with `(` could be merged last, over the options.)
+- **Steps of a flat menu** (09/11, loader `2026-11-09-addon-chains`): every option hangs from the root and the names
+  carry the steps ("1) Main Files", "2) Oily skin", "2) Sweat on", "3a) Bikini Edits", "5) hide ponytail": Cow girl
+  Mai C1). A step of two options or more that ship one same file, or numbered with `!`, is a choice group of its own
+  (key `<root key>/NN`, named after the word its options share, else "Step N"); the main files' step and the other
+  options stay in the root group. Only the root group of a mod without nested menus is split.
+- **Add-ons of an option**: an option whose `AddonFor` names another option of the tree (Fluffy lists it under that
+  option and installs both: "3b) Regular - Monokini" under "3a) Monokini Edits"), or an add-on of such an add-on, is
+  that option worn with it: the option is offered through its add-ons only, each carrying the option's files (its own
+  win), in the option's place. The add-ons of the main files (always worn) are a group of their own instead. Before,
+  such add-ons were outfits of their own (mesh-only versions merged by `merge_versions`) and the rest of the mod a
+  separate add-on put on every outfit of the fighter.
+- **Option**: `id` (8 hex digits, a hash of the group key and the option's folder name: stable when the archive is
+  updated or renamed; unchanged for mods without nested menus), `name` (from `modinfo.ini`), `folder`, its files,
+  and a `mode`:
+  - `base`: always worn, not a choice (the root group's main files: its first plain option whose name does not say
+    "addon" / "add-on");
+  - `pick`: one option of the group at a time, in a **choice** group: its author asks for one ("2! Skin": a name
+    numbered with `!`, or a description saying select / choose / pick (only) one, as ZZtaii's Slotsloader Manager
+    reads it), or every option of the group ships one same file (two of them on would hide each other);
+  - `toggle`: on or off: another option of the root group ("hide ponytail"), an option or a group whose name or
+    description says "optional", a lone option, every option of a group that is not a choice.
+- **Exactly one** (no None): a choice group its author asks one option of, unless its name or description says
+  "optional", and unless its options share a file with options of another group (Mai mini dress: "4! NSFW",
+  "4! SFW" and "4! Skimpy" all ship the body mesh, "3! Dress" and "4! SFW" the dress texture: picking in one
+  group turns the other's option off, a required group would put it back over the new choice). Listed in each
+  slot's `required` (with the groups that have no base copy, see Storage).
+- An option is **a set of files: (original path -> stored copy)**. Each file has a **kind**: `mesh`, `material`
+  (`.mdf2`), `texture`, `chain` (all four swapped on the model at runtime), `colour` (colour files, for the Color
+  Mod) or `other` (user files, cloth, joint constraints `.jcns` / `_jcs.user`, scenes: only at the next launch;
+  the loader logs `runtime options: <option> ships joint constraints (...)`). Per option, `apply` sums it up: `live`,
+  `colour` or `relaunch`.
+- Options of different groups can ship the same file (Mai: the NSFW, SFW and Skimpy groups all ship the body mesh).
+  When an option is chosen, the menu turns off the chosen options of other groups that come **later** in the
+  layering and ship one of its files (they would hide it). Earlier ones stay: the new option wins the shared file and
+  their other files still apply, as in the variants the loader builds (Mai "Regular - Barefoot" = an SFW option for
+  its dress texture + a Skimpy option for the body mesh). (Lot B narrowed the first rule, "any option sharing a
+  file", which turned off the SFW option's texture and left a set no variant has.)
+- **Defaults** of an outfit = the options its combination is made of, minus those whose every file a later option
+  replaces (they are not worn).
+
+### Outfits with add-ons (not modular)
+
+A complete option and the options of its mod made for it (Fluffy `AddonFor` naming it, the same bundle, the same
+archive touching its costume folder; a complete option whose `AddonFor` names another complete option, ported from
+the fork 1.9.8; add-ons whose `AddonFor` names nothing of their mod beside a single complete option, fork 1.9.9,
+with a WARN) are also one mod:
+
+- (before runtime options were always on) `RuntimeOptions=off`: the outfit plus one outfit per add-on (and one with all of them when they replace
+  no same file; the outfit alone past three add-ons). "Leon Requiem On Luke C1": Leon as Luke, + More muscles,
+  + Leon Hair, + Trimmed Hair (More muscles was an outfit of its own without the main files before the port).
+- `on`: **one outfit**, the outfit alone (its own id: its slot as before), every add-on an option, any number of them:
+  the outfit is `base`, each add-on a `toggle` in the group "Add-ons", add-ons that replace a same file one choice
+  group (`pick`, with None) named after the word their names share ("Hair": Leon Hair / Trimmed Hair). The former
+  add-on outfits are its `variants` (saved choices of their slots move to it, `former`), the complete add-on's
+  own former outfit too. `variants`: the outfits of `off`, with the options stored.
+- Add-ons the user put with the outfit in one sub-folder (`Ken\Ken SFV\` holding KenSFV and Ken SFV Hair V2; the
+  separate add-on archives of Ingrid's Fly In A Bucket): `off` makes the outfit with them only, never alone. `on`:
+  the same one outfit with its add-ons as options, worn by default (`defaults`): the combination `off` makes (the
+  one with the most add-ons of the sub-folder), whose id it keeps (its slot as before); the outfit alone and the
+  other combinations are its `variants`. Option ids as above (the add-on's folder). Its name (`outfits.json`, the
+  manifest's `label`, the menu's title) is the outfit's alone ("Ingrid - Fly In A Bucket - Drive Tech"; before,
+  "... + Ingrid - True... meme book + Ingrid - Maxwell the cat (monad)"); the variants keep the names `off` gives.
+  Mods that are all retouches too (`M. Bison\Wesker\`: see "Several mods in one sub-folder").
+- Not when an add-on brings files for another costume folder than the outfit's (the runtime swaps the slot's own
+  folders only; Cammy's Belly_cammy02 + BellyHair01_Cammy, hair made for `001/02/`): `off` rules.
+
+An **add-on mod** (a modular mod none of whose options has a body mesh: "Mai face accessories", whose options
+replace the shared head `000/00/` or Outfit 2's head) makes no outfit: with `on` / `variants` its options go on the
+outfits whose files they replace (next section); with `off` it is not used (WARN).
+
+### Add-ons on other outfits (20/10, loader `2026-10-20-rto-addons`)
+
+A separate add-on that makes no outfit of its own becomes runtime options of the outfits whose files it replaces
+(`attach_addons` in the loader): a modular mod none of whose combinations is a complete outfit ("Mai face accessories
+C2 and swap test"), or a lone add-on no outfit of its own mod completes (A.K.I No Sleeves: a material file of
+Outfit 1; Cammy C4 pale skin: textures of Outfit 4). With `off` nothing changes (such add-ons are not used). A
+retouch that made an outfit of its own (C. Viper C2 Glasses Removed, "applied to the original outfit it modifies") is
+an option too since the retouch rule (next section).
+
+Where each group of the add-on goes (a group = a series of its menu: `!C2 Mai face accessories`):
+
+- **Shared files only** (files of the fighter's `000/` that every game costume of the fighter loads, or that no
+  costume scene names: the props of the option prefabs every costume scene names): an option of **every outfit of
+  the fighter**, ours and the game's. Mai's "3) addon - remove wrinkles" (`000/00/..._facialblend.tex`, loaded by all
+  four game costumes); Ingrid's book (`000/32`, `000/34`) and cat (`000/30`) when they are not in a sub-folder with
+  an outfit.
+- Else, **every outfit that wears a file it replaces** (as a retouch, 20/10): a mod's outfit that ships the same
+  mesh or material file (the shape it is made for), or that ships none of the series' files and is made from a game
+  outfit that loads one; and the **game outfits** that load its files (a costume folder `NNN/`: the game outfit of
+  that folder; a `000/` file: the costumes whose scene or material files name it, from the vanilla index). Where each
+  option fits is decided when it is stored (joints, materials, textures; logged per outfit). The "C1 swap" series
+  (glasses / piercings on the head `000/00/`, which "Mini Dress Mai C1 Swap" ships) goes on the mini dress, Outfit 1
+  and Drive Tech (Outfit 2 wears no mesh there, Outfit 3 no material for that part); the "C2" series (`002/00/`) on
+  Outfit 2. A mod's outfit that ships only the series' textures itself is a re-skin of its own, left out (Cammy C4
+  pale skin, next to outfits made for Cammy's Outfit 4 slot that ship their own textures at those paths; logged).
+- An add-on put with an outfit in one sub-folder is still that outfit's option only (the folder wins, see "Several
+  mods in one sub-folder"); a copy of an add-on an outfit already has (same paths, same sizes) is not put on it twice.
+
+The options: **none is worn by default** (the outfit stays as installed; the slot's own files, or the game's, are
+the way back: no base copy). A series with a "main files" option (its name says "main file") is one choice with None:
+each other option **with** the main files (the main files alone are not offered) (what Fluffy installs: "1) Main files" + one of
+"2) Glasses + piercings / Glasses only / Piercings only"); in another series, options that replace a same file are one
+choice (named after the word their names share), the others On / Off. An option with colour or other files only is
+not one (nothing to swap on a model: "CVS Shin Akuma Inspired Color"). The menu shows names without the prefixes
+mods use for Fluffy's sort order ("!C2 Mai face accessories" -> "C2 Mai face accessories", "3) addon - remove mais
+facial wrinkles" -> "Remove mais facial wrinkles"); the manifest keeps the mod's names.
+
+**Fit** (`addon_fit`, per slot and per game outfit): an option is stored for an outfit only if each of its files fits
+what that outfit wears there; else the log says `runtime options: <option> does not fit this outfit (<file>: why):
+not offered here`.
+
+- a mesh: the outfit wears a mesh at that path; the add-on's mesh has every joint of it (the model keeps its chains;
+  blend shapes, `BS_<mesh>.<joint>_...` in the same name table, do not count: no chain moves them); every material of
+  the add-on's mesh is in the part's material file (the option's own, else the one the outfit loads for that part:
+  a slot's own copy when it relocated it, C.Viper lace lingerie's head material file);
+- a material file: every material of the part's mesh (the option's, else the outfit's) is in it, and every texture it
+  names exists (the option's own textures count);
+- a texture: the outfit loads a texture at that path (any size: "remove wrinkles" is an 8x8 over a 512x256 mask);
+- a chain: the outfit has one at that path.
+
+What an outfit wears or loads (fit, and where an add-on goes) includes, as for versions, the files its physics `.user`
+files name, one level: a body chain named only by its `_chain.user` (Ryu's Outfit 1 `esf001_001_01_chain.chain`)
+takes an add-on's chain there (before: "the outfit has no chain there"). Those names are read while the mods are
+scanned, for the fighters of the add-ons.
+
+### Retouches (20/10, loader `2026-10-20-rto-retouch`)
+
+With `on` (not `variants`, which keeps the outfits of `off`), a **retouch** makes no outfit of its own: a mod (its
+whole folder or archive) whose every file is a mesh or a texture of costumes (streaming twins included), **no
+material file**, no chain, colour or other file, that made an outfit (one with a body mesh, or a lone option applied
+to the outfit it modifies). It keeps that outfit's look: it is an option of every outfit that wears the files it
+replaces, where it fits. A mod that ships its own `.mdf2` stays an outfit. Why no chain: a chain swapped on a game
+outfit has no way back that keeps the chain safe (part units exist for a slot's base copies only), so a retouch with
+a chain stays an outfit. Colour and other files cannot be swapped on a live model (they would be lost).
+
+- **Where**: the game outfits that load its files (a file of their folder, a `000/` file they load), and the mods'
+  outfits made from those costumes, except where that outfit ships one of the option's files itself (it replaces the
+  game's files: Bayonetta C2 ships its own `002/00` head, so "Glasses Removed" is not offered there).
+- **One series per fighter**: retouches of different mods that replace a same file are one choice named after the
+  part ("Body": part `01`, "Head": `00`, else "Part NN"), None = the outfit's own file; the others On / Off each,
+  named as their outfit was. A modular retouch keeps its own groups (add-on rules). Option ids: `retouch/<option
+  folder>` (stable when another retouch is added).
+- **A file the outfit does not load is left out** of that outfit's option, not a reason to refuse it: no material file
+  of the outfit names it (C. Viper Barefoot C1 ships four `access*` textures Outfit 1's material file does not name).
+- **Kept as an outfit** when it does not fit the game outfit it was made from (checked while the mods are read,
+  against the game's files): Ken "VEGETA MAJIN" (its hair lacks 95 joints of the game's hair) is still an outfit.
+- An add-on mod that never made an outfit ("Mai face accessories": no body mesh) keeps the add-on rules above.
+- **Not in a sub-folder with other mods**: when one of them has a body mesh, they are handled together, retouches or
+  not (see "Several mods in one sub-folder"). The rule is for a mod loose in the character folder.
+- **Former outfits**: the game outfit's `former` lists each retouch's slot of the launch before (its costume number and
+  folder, its option); a Battle Settings choice of it moves to the game outfit with that option chosen (see Saved
+  choices). The other outfits keep their numbers (registry); only their names ("Outfit IV") follow their rank.
+
+Offline (Wael's mods): C. Viper Barefoot C1, coat no mesh C1,
+Coatless C1 (Outfit 1's body; Barefoot also 3 body textures) -> game Outfit 1, one "Body" choice; C2 Glasses
+Removed (Outfit 2's head mesh) -> game Outfit 2, C.Viper Lace lingerie C2 (its own head material file, the game's
+mesh), Battlesuit C2.1, Trench Coat (On / Off each); Cammy "Escape from Shadaloo" (Outfit 2's body mesh) -> game
+Outfit 2 (B Style Bunny, Camo Cammy and Belly ship their own body); Akuma "BARECHEST CLASSIC" (Outfit 2's body
+mesh) -> game Outfit 2. Six outfits fewer (76 -> 70).
+
+### Merges (20/10, loader `2026-10-20-rto-merge`)
+
+With `on` only (`off` and `variants` build what they built). Every rule is decided from the files: their bytes, the
+meshes' name tables (materials, joints) and faces, the costume folders. Names only label the options. Each build logs
+a short **merge audit** (`merge audit (RuntimeOptions=on): outfits that look related`): per fighter, what was made one,
+and the outfits that look related but were not (same archive, an identical mesh, a mesh made from a game outfit's)
+with the reason.
+
+**On / Off options of a same file are one choice** (every outfit with options, `variants` too): two toggles that
+replace a same file, in one group or in several (of the mod or of add-ons put on the outfit), become one pick group
+with None, placed where the later of them was, named after the word their names share, else the part ("Body") or the
+texture ("Jewels"); their ids do not change. Swimsuit Viper C1: "hide accessories (bracelets and leg chain)" + "hide
+leg chain" both ship `jewels_atos.tex` (both on, the second one's file brought the bracelets back): "Chain" (None /
+hide accessories / hide leg chain); "hide earings only / hide earings and necklace / hide necklace": "Necklace". The
+plugin is defensive (a manifest of an older loader): a toggle turned on turns off every other chosen toggle that ships
+one of its targets, and a set holding two picks of one group keeps the last one (both logged, `rto: menu: ...`).
+
+**Versions: several outfits made one** (`merge_versions`). Outfits of one fighter that are
+- versions of one archive: the complete options of one folder or archive (Ryu Aloha Bundle: C1 / C2 / C3 for
+  Outfits 1 / 2 / 3; Lily Jun Kazama Cosplay: No Shawl / Jun's Outfit; a mod with a costume per game outfit), or
+- outfits of several archives whose every mesh is the same bytes for the same game outfit (Sagat's Tees: one body
+  mesh, other textures and colours; Viper's Lace / Battlesuit / Trench Coat ship other meshes: not merged)
+
+become **one outfit** with a required choice ("Version", or the word their names end with: "Tee"). The **base** is
+the first of them (archive order; the first one the Slotsloader Manager leaves on): it keeps its slot, number and
+colours; the others are options of it and their slots move to it with their version picked (`former`). Each other
+version is moved onto the base's folder (`esf001/002/01/...` -> `esf001/001/01/...`, its material files' texture
+references follow, `RtoOption::origin`); a version made for another game outfit **carries what that outfit wears at
+the parts it does not ship** (C2 on the C1 base: Outfit 2's head and part 02, mesh and material file, at the paths the
+base loads; not their chains: the base's chains stay). A file the same as what the base wears there is left out (the
+identical body mesh of the Aloha versions, the Tees' mesh and material file), physics files (`other`) too. The base's
+own pick holds the base's files wherever a version ships another one (going back to it; worn by default, so nothing
+is swapped). A version is merged **only where every file fits the base** (`version_fit`, the add-on fit checks against
+the base's files and its game outfit's; what an outfit wears includes the files its physics `.user` files name, one
+level: Outfit 1's body chain `001/esf001_001_01_chain.chain` is named by `esf001_001_01_chain.user`, not by the scene)
+**and its physics are the base's** (physics rule below; its model chains aside: they are swapped live where the base
+has a chain); else it stays an outfit (AoD replace Ingrid: a texture its material names is missing). A chain that
+nothing of the version's own outfit names (its game outfit's scene and physics `.user` files, its own `.user` files) is
+left out, unused there (Aloha C3's `003/esf001_003_02_chain.chain`; the game's Outfit 3 names `esf001_002_03_chain`).
+Aloha C3 (made for Outfit 3, its body chain and wind chain Outfit 1's bytes) is a version of the C1 outfit since loader
+`2026-10-20-physics` (before: "the outfit has no chain there"). A version whose files are all the same as the
+base's is merged without an option; one that differs only in colours stays an outfit (colours are not swapped live).
+Their add-ons are made with it (the same add-on of several versions once). The outfit's name: what the versions' names
+share ("Aloha Ryu"), else the archive's name without its download numbers ("Lily Jun Kazama Cosplay"), else the
+base's; option labels: the words that tell their names apart ("C1" / "C2"; "Muay Thai" / "Tiger Photo" / "Tiger" from
+the archives' names when two names are alike). Not merged: Fluffy installs, modular mods, retouches, outfits put with
+their add-ons in a sub-folder. An outfit of a sub-folder holding several mods is merged only with the outfits of that
+sub-folder (versions of one archive, never identical meshes).
+
+**Colour entries of an option's materials** (`on` only, `add_slot_files`, `cmd_add_missing_clusters` in
+`patch.cpp`). Colour files are not swapped live, so the slot's own ones colour every option: a material no entry
+names keeps its material file's default (Aloha C2 on the C1 slot: Outfit 2's head brings `esf_Eyebrow` and
+`esf_Beard`, which neither the slot's `cmd_000` (game Outfit 1's) nor C1's `cmd_001..010` name: uncoloured). A
+material of an option's material file that **no material file of the slot's scene has** gets its entries (the
+cluster and its tree, per part type) appended to each of the slot's colour files `cmd_NNN`, taken from the option's
+`cmd_NNN`, else its `cmd_000`, else the game outfit's it was made for (the folder its moved files come from), same
+number then `cmd_000`. In `cmd_001..010` every colour slot of an added entry is written as the game shows it and
+**enabled**: the source's colour where it enables the slot, else the default file's (`cmd_000`) colour of that slot.
+The game colours a material with every slot of the default file whatever its Enable flag, a colour file replaces only
+the slots it enables (read from the game's files: Ryu's, Juri's), and a material swapped in at runtime only gets what
+`SetColor` applies. Copied disabled (20/10, first build), Aloha C2's eyebrows stayed the material's own light grey
+(`CustomizeColor_0` 0.502 = sRGB #BBBBBB, "white") where the game's Outfit 2 shows its default file's #0C0C0C.
+Existing entries are never changed, removed or moved (a new cluster goes at the end of its
+part, a new part at the end of the parts: the Color Mod lays its colour trees over the live data by position and
+name); a material the slot has is never added, so the slot looks as before. Each file is read back with the same
+parser (entry count). Log: `runtime options: esf001/v05: colour files: +22 entries (esf_Beard, esf_Eyebrow) from C2,
+in 11 files`; materials no source names are listed (Ingrid's book and cat props: none, their defaults). Offline on
+Wael's mods only Aloha C2 needs it. Not done for game outfits' options (their colour files are the game's).
+
+**Subsets: a game outfit with parts taken off** (`game_subset`). An outfit (a lone option of its folder or archive)
+whose every mesh is the mesh a game outfit of the fighter wears at that part, either the same bytes or the same
+materials and joints with some materials taken off: left out of the mesh, or every triangle of theirs folded to
+nothing (two corners on one vertex; the other materials keep their triangles as they were), at least one part with
+something taken off, and its meshes have the game meshes' joints **in the same order** (bone indices: Havok cloth and
+chains address bones by index). Ryu "Outfit 1 No Cloak - Drive Tech" is the game's Outfit 1 body with `esf_Costume00`,
+`esf_Ring` and `esf_Threads` folded; Sagat "Outfit 1 Shirtless" ships Outfit 1's head as it is and its body with the fur
+vest folded; Ken "Outfit 2 Shirtless", Alex "Outfit 1 No Vest", Yasmine "Outfit 1 No Jacket" alike. A mod in a
+sub-folder with other mods is never a subset (not a lone option), and a mod alone in its sub-folder neither (that rule,
+below, comes first): Ryu No Cloak in its own sub-folder
+(`costume_mods/Ryu/Ryu_Outfit1_NoCloak_DriveTech_v1.0/`) stays its own outfit; the same archive put directly in
+`costume_mods/Ryu/` is a subset. It makes no outfit: its
+files are moved to the paths that game outfit loads (Drive Tech's `005/01` -> Outfit 1's `001/01`), the ones the same
+as the game's there left out, physics and colour files too (the game outfit's own stay: the subset mesh has all its
+joints), and it is an option of that game outfit and of the mods' outfits that wear those files, where it fits (as a
+retouch: one series per fighter, a choice with retouches of a same file, `former` moves its slot to the game outfit
+with the option chosen). It is named as its outfit was. **Chains**: a subset that ships a changed chain stays an
+outfit. A part unit (stop the chain, set the new chain, the mesh, restart) needs a way back that the loader checked as
+a whole (a base copy of the part); a game outfit's options have no base copy (the game's files are the way back, and
+the plugin goes back to them file by file), so a chain changed on a game outfit could be left bound to joints of the
+other mesh. None of Wael's subsets ships a model chain (their `_chain.user` and joint constraints are physics files,
+left out). A mesh made from a game outfit's with nothing taken off (an edited copy) stays an outfit (audit).
+
+**Physics: the same bytes as what the outfit loads** (subsets and versions, loader `2026-10-20-physics`). Physics files
+(`_chain.user`, `_jcs.user`, `.jcns`, `_havok.user`, `.havokcloth`, `_aogeo.user`, `_shape.user`, model chains and the
+wind chain `weather/wind/mode/NNN/<fd>_<folder>_NN_chain.chain`; not `_ccvd.user` / `cmd`: colours) are not swapped
+live: an option wears the physics of the outfit it goes on. So every physics file of a subset must be **byte-identical
+to a physics file the game outfit loads**, and every physics file of a version to one the base loads (its own files
+and its game outfit's): the files its scene names and the files its physics `.user` files name, one level
+(`_chain.user` -> `.chain`, `_jcs.user` -> `.jcns`, `_havok.user` -> `.havokcloth`). Compared by content, whatever the
+names (the five subsets above ship their game outfit's physics under the Drive Tech names). One that differs keeps the
+mod its own outfit: merge audit `subset: <mod> stays an outfit (<outfit> minus <parts>, but its physics differ
+(<file>))`, or for a version `... not with <base> (...): its physics differ (<file>)`.
+
+Offline (Wael's mods, `on`, before the sub-folder rule and the physics rule): 70 outfits -> 59. Ryu: Aloha Ryu (Version
+C1 / C2, add-ons No Gloves / No Headband), Aloha Ryu C3 stayed (its body chain; a version since `2026-10-20-physics`),
+No Cloak -> an option of game Outfit 1 (in its own sub-folder now: its own outfit); Sagat: one Tee outfit (Muay Thai / Tiger
+Photo / Tiger), Shirtless -> game Outfit 1; Cammy: Zani Costume (Horn removed / Outfit01) and Mai Outfit 2 PRO
+(PRO / PROmc: its own chain); Lily: Jun Kazama Cosplay (No Shawl / Jun's Outfit); Ken Outfit 2 Shirtless, Alex No
+Vest, Yasmine No Jacket -> their game outfits. The scan takes about 12 s more (meshes read for the subset test, hashed
+for identical meshes).
+
+**Game outfits** in the manifest: a `slots[]` entry with `"game": true`, the game's costume number (Outfit 2 = 1) and
+folder (`002`), name and label "Outfit 1".."Outfit 4" / "Drive Tech", mod key `<fighter>/game outfit 2` (its groups
+are the add-ons' series), `defaults`, `base`, `required` and `former` empty. Options are stored under the game's
+folder: `esf028/002/rto/<id>/00/esf028_002_00.mesh`, `esf028/002/rto/<id>/_/000/00/...`; nothing the game loads
+changes. The plugin finds a model's outfit from the paths it loads, **one of our slots first**, then a game outfit
+(`Manifest::slot_of_paths`: a slot of ours may keep a part in its game outfit's folder); menu, F hint and runtime are
+those of a slot. Online, an opponent wearing that game outfit shows P1's options on this screen only (as a
+replacement mod would).
+
+**Shared files, checked in the game's files (20/10)**: every Ingrid costume scene (`esf032v00`, `v01`, `v02`, `v04`)
+names the same option prefabs `Product/Event/FGM/esf/esf032/option/prefab/esf032_Option_01.pfb` (cat `000/30`),
+`esf032_Option_02.pfb` (book `000/34` and the `000/32` joint constraints) and `esf032_Continue_00/01.pfb` (`000/31`,
+`000/30` with its chain); no costume scene names `000/30-34` itself (the vanilla index lists them for no costume). So
+the props are one set for every outfit of the fighter: a book or cat add-on made of them is an option of every Ingrid
+outfit, ours and the game's (an outfit that relocated them, Fly In A Bucket, gets them at its own copies). Mai's
+`000/00/` is not one set: its head mesh is loaded by Outfits 1, 3 and Drive Tech (Outfit 2 has `002/00/`), its
+wrinkle masks by all four.
+
+Offline (Wael's mods, `RuntimeOptions=on`): Mai's Outfit 1, 3 and Drive Tech get "remove wrinkles", Outfit 2 the
+"C2" series (one choice: None / Glasses + piercings / Glasses only / Piercings only, each with the main files)
+and "remove wrinkles", the mini dress the "C1 swap" series and "remove wrinkles"; A.K.I's Outfit 1 "No Sleeves";
+Cammy's Outfit 4 the pale skin. Ingrid's book and cat put loose in `Ingrid\` (a test copy) go on every Ingrid outfit
+where they fit; in Wael's sub-folders they stay options of the Fly In A Bucket outfits only.
+
+Options of a part the slot does not have in its own folder (Leon as Luke wears the game's hair, `000/02/`; its hair
+add-ons ship `001/02/` and a scene pointing there) target what the slot's scene loads for that part: the mesh and
+material files the scene names for it, the chain of the same name in that folder. Before, they targeted the
+original folder's path, which no model loads (the option did nothing).
+
+### A mod alone in its sub-folder (20/10)
+
+A mod (archive or folder mod, all its options counting as one) that is the only mod of its own sub-folder of the
+character folder (`costume_mods/<Character>/<Sub-folder>/<that mod>`; the sub-folder is neither an archive nor a pak) is
+**always its own outfit** with `RuntimeOptions=on`. It is left out of every rule above, on both sides: never a retouch,
+a subset or a version of another outfit, never merged with another outfit (rules B, C, D), never an option of another
+outfit's add-on placement, and no other mod's add-ons or retouches are placed on it. Its own internal options (a modular
+mod) stay runtime options of that outfit. Several mods in one sub-folder: next section. A lone mod that is
+a pure add-on (no complete outfit) cannot be an outfit: it keeps the add-on rules, and the log says so. The log has one
+line per mod kept apart (`<mod>: alone in its sub-folder <name>: its own outfit (no merge)`), repeated in the merge audit.
+`RuntimeOptions=variants` and `off` (no longer selectable) were unchanged.
+
+### Several mods in one sub-folder (05/11)
+
+Several mods (archives, paks or folder mods) in one sub-folder of the character folder, one of them at least with a body
+mesh: the user put them there to have them together. With `RuntimeOptions=on` they are **handled together**, whatever
+files they ship:
+
+- **One outfit of the group's own, the others its options**, worn by default (the rule of "Outfits with add-ons", above).
+  Nothing of the group goes on a game outfit or on another mod's outfit, and an outfit of the group is not merged with an
+  outfit from elsewhere.
+- **Retouches included**: the mods of a sub-folder are not retouches, even when they all ship only meshes and textures.
+  `M. Bison\Wesker\` with RE4R Wesker (body mesh) and Krauser Hair (head and hair meshes, no body): one outfit
+  "RER4R Wesker for Suit Bison", the hair its option, on by default. Before, both were options of the game's Outfit 1,
+  the hair of Outfit 3 as well: all the mods of a sub-folder are read as one source, and the retouch
+  rule took that source for one mod with two options.
+- **Two or more with a body mesh**: versions of one archive, one outfit with a "Version" choice where they fit; else each
+  stays an outfit of the group (the merge audit says why), and the add-ons are options of each.
+- **An add-on that brings files of another costume folder** than the outfit's: no option (the runtime swaps the slot's
+  own folders only), the outfit is made with it, as in "Outfits with add-ons".
+- **A modular mod in the group**: the other mods go on its outfit only, where it wears their files; where it does not,
+  they are not used (the log says `no outfit: not used`).
+
+Not a group, each as before:
+
+- mods that are all pure add-ons (no body mesh in any): the add-on rules;
+- a mod alone in its sub-folder (previous section), and mods loose in the character folder: Krauser Hair directly in
+  `M. Bison\` stays an option of the outfits it fits;
+- the options of one unpacked mod: all folders, and Fluffy's own links say so (a menu entry, an `AddonFor`, one
+  `NameAsBundle` for all of them). The same mod in an archive already counts as one;
+- mods of several fighters, an archive dropped in the root of `costume_mods`, Fluffy installs.
+
+Folders with no such link cannot be told apart from mods the user put together: an unpacked download whose options are
+plain folders, all retouches, one with a body mesh, was options of the game outfits and is now an outfit with options.
+
+Other mods can still reach the group's outfit: an add-on or a retouch loose in the character folder goes on it where it
+fits, as on any outfit that is not alone in its sub-folder. `costume_mods/X/` and `costume_mods_nsfw/X/` are two
+sub-folders (`nsfw:<char>/<sub>`). `RuntimeOptions=off` and Manager mode: no change (`RtoLayout::One` only).
+
+The log says `sub-folder <name>: <n> mods, handled together: an outfit of its own, the others its options`, repeated in
+the merge audit. `LOADER_PAK_ID` stayed, so that no other install rebuilds for this: an install that already has such a
+sub-folder says `Up to date` and keeps its old result until the next rebuild, which any change in the mods folders starts
+(moving a mod in or out of the sub-folder is one).
+
+### NSFW outfits: `costume_mods_nsfw` (20/10)
+
+A second root, `reframework/costume_mods_nsfw/<Character>/`, read like `costume_mods` (same layout, archives in the
+same `costume_mods\.cache`, same `settings.ini`), after every other source, its units marked `nsfw` (`ModUnit::nsfw`,
+`nsfw_dir`). The plugin hides its outfits while "Display NSFW Outfits" is off (README, NSFW outfits).
+
+**Both roots are one folder** (Wael, 20/10; loader `2026-10-20-nsfw-samelevel`; before, nothing of one root was
+merged with, grouped with or made an option of the other). Every rule above reads the mods of both as if they were in
+one folder: add-ons by `AddonFor` or bundle, add-ons on other outfits, retouches, subsets, versions and identical
+meshes (merges), the "On / Off of a same file" choice, the merge audit. Only two things set them apart:
+
+- **Sub-folders are folders**: `costume_mods/Mai/X/` and `costume_mods_nsfw/Mai/X/` are two sub-folders
+  (`user_grouped`, the lone key `nsfw:<char>/<sub>`). A sub-folder groups the mods it holds and a mod alone in its
+  sub-folder stays its own outfit, as before, each in its root.
+- **NSFW only hides**, never separates:
+  - An **outfit whose base is an NSFW mod's** is NSFW (hidden while the row is Off; `outfit_is_nsfw`). In a merge
+    (`merge_versions`) the base is the first version that is not NSFW (as for keywords), so an outfit merged from
+    normal and NSFW versions is a normal outfit whose NSFW versions are NSFW picks of its version choice; an outfit
+    all of whose versions are NSFW is NSFW.
+  - An **option an NSFW mod gives an outfit that is not NSFW is an NSFW option** (`RtoOption::nsfw`, `"nsfw": true`
+    in `costume_options.json`, exactly as a keyword option): add-ons placed on game outfits and on mods' outfits
+    (`attach_addons`), retouches and subsets, the versions of a merge, the add-ons of an outfit (`build_addon_options`;
+    `rto_from_groups` takes `outfit_nsfw`). The plugin neither offers nor wears it while the row is Off and keeps a
+    saved choice of it (`hidden`, `chosen_of`, `keep_hidden`, unchanged); a game outfit whose options are all NSFW has
+    no options menu (and no F hint) then. In `attach_addons` every option of an NSFW mod is marked, also where it
+    lands on an NSFW outfit (hidden with that outfit anyway: the mark changes nothing there). An NSFW outfit's own
+    options (its modular groups) are not NSFW options: only those whose names have a keyword would be, and the
+    keywords are not looked at in `costume_mods_nsfw`.
+  - An outfit that **wears** an option of an NSFW mod (not replaced by a later part) is NSFW (`push_combined`,
+    `worn_kw` / `nsfw_part`, log `nsfw: wears <option> (from costume_mods_nsfw): an NSFW outfit`): an outfit put in
+    one sub-folder with an add-on of an NSFW mod (keywords), the combinations `off` / `variants` make of an outfit and
+    an NSFW add-on.
+- A former slot (a retouch's, a merged version's) moves onto its outfit with its NSFW option chosen: worn again once
+  NSFW outfits are shown.
+- Log and merge audit: `add-on <mod>, <series>: N NSFW options (hidden while Display NSFW Outfits is off), for
+  <outfits>`, `retouches: ...` likewise; a merge names its NSFW versions with `(NSFW)`. The summary line of the add-on
+  says `; NSFW options`.
+- Manifests: `outfits.json` and the registry (`slots[]`, `possession[]`) carry `"nsfw": true` on NSFW outfits;
+  `costume_options.json` on their `slots[]` and `mods[]`, whose key is `<fighter folder>/nsfw/<name>` (never the
+  choices of a mod of the same name in `costume_mods`). Written only when true: without `costume_mods_nsfw` every
+  file is byte-identical to before. `variants.json` does not list them (the Slotsloader Manager names sources in
+  `costume_mods` only).
+- Numbers (`assign_slots`): a new NSFW outfit goes after every number of the fighter in use, its first one
+  `kNsfwGap` (10) numbers further; a new outfit of `costume_mods` goes after the fighter's other outfits and before
+  its NSFW ones (a free number before them, else after them, logged). Numbers in use are kept; a mod moved between
+  the roots is numbered again (the registry's `nsfw` no longer matches).
+- Fingerprint: the root's entries as `nsfw:<path>` (none without the folder). The loader makes the folder (and a
+  folder per fighter) with `costume_mods` (`ensure_costume_mods_dirs`); the Slots Loader package ships it too. Empty, it
+  adds nothing to the fingerprint and changes no output.
+
+Offline (20/10, Wael's mods in a test game folder, `RuntimeOptions=on`): Mai's "Mini Dress Mai C1 Swap" and "Mai face
+accessories C2 and swap test" both in `costume_mods_nsfw\Mai`: the mini dress is an NSFW outfit; the accessories are
+NSFW options of game Outfit 1 and Drive Tech ("C1 swap" series, "remove wrinkles"), Outfit 2 ("C2" series, "remove
+wrinkles"), Outfit 3 ("remove wrinkles") and of the mini dress ("C1 swap", "remove wrinkles"), the same placement as
+with both mods in `costume_mods` (before: options of the mini dress only). C. Viper's Lace lingerie in
+`costume_mods_nsfw` gets the "Glasses Removed" retouch of `costume_mods`. Sagat's Muay Thai Tee in `costume_mods_nsfw`
+is merged with the Tiger and Tiger Photo Tees of `costume_mods` (base Tiger Photo Tee, "Muay Thai" an NSFW pick); the
+Outfit 1 Shirtless subset from `costume_mods_nsfw` is an NSFW option of game Outfit 1. With the same mods all in
+`costume_mods` (no NSFW mod), the pak, `costume_options.json`, `outfits.json`, `variants.json` and the registry are
+byte-identical to the loader before this change, but for the loader's build id.
+
+### NSFW by keywords (20/10)
+
+Mods of `costume_mods` (and those Fluffy Mod Manager installed) are NSFW by their names: `common/nsfw_keywords.hpp`,
+a port of ZZtaii's Slotsloader Manager 1.0.8 NSFW filter (`LibraryFilters.NsfwKeywords`, `LibrarySearch.HasCompact`,
+with his permission): a keyword's letters and digits as one run in a text's letters and digits (case, accents,
+spaces, dashes dropped); a keyword of one or two characters must start a word. Default list: `nsfw, nude, naked,
+topless, bottomless, pubic, pubes, nipple, pasties, lewd, futa, see through, see thru, no panties, no underwear,
+erotic`; `NsfwKeywords=` in `costume_mods\settings.ini` replaces it (a comma list; empty: detection off; part of the
+fingerprint when given). Read per mod after its units are loaded (`nsfw_detect`, `process_units`):
+
+- **Mod level**: the mod's archive, folder or pak name (not the character folder of a mod put straight in it), the
+  folders around all its options, its Fluffy root menu entry (`AddonFor` empty), every name of a one-option mod. A hit
+  marks every unit `nsfw`: the mod is handled exactly as one of `costume_mods_nsfw` (mixed with the other mods, its
+  outfits NSFW and numbered after the others, its options on other outfits NSFW options), except that its source
+  stays one the Slotsloader Manager can name (`variants.json`), its sub-folder is one of `costume_mods`, and its
+  options keep their key `<fighter folder>/<name>` (saved choices stay).
+- **Option level** (a mod whose name has no keyword): a unit whose `modinfo.ini` name, folders below the mod's, or
+  Fluffy menu groups (its `AddonFor` chain up to the root entry, "4! NSFW style options c1") have one gets
+  `UnitFiles::kw`; its `RtoOption` is `nsfw` (written `"nsfw": true` in `costume_options.json`, `mods[].groups[].
+  options[]`). The plugin (`rto_data`: `hidden`, `rows`, `default_pick`, `chosen_of`) neither offers nor wears it while
+  `display_nsfw` is false; a required group then gets its first other option; a saved choice of it is kept
+  (`keep_hidden`: what the menu saves while they are hidden keeps the hidden toggles, and a hidden pick unless the
+  user picked in its group) and worn again once they are shown. The plugin reads `settings.json` when the manifest has
+  an NSFW option even without an NSFW outfit.
+- **What an outfit wears by default**: `RuntimeOptions=on`, `build_modular` takes the first combination left on
+  without an NSFW option; an NSFW option every combination keeps (a frozen group) is left out of the defaults when its
+  group is not required, replaced by the group's first other option when it is; the main files, a required group of
+  NSFW options only, or an outfit that would not be complete without it keep it, and the outfit is NSFW.
+  `merge_versions` takes a version without keyword as the base. `push_combined`: an outfit that wears an option with
+  `kw` is NSFW (`g_nsfw_ids`; `worn_kw`: one of the option's files is not replaced by a later group, so a frozen option
+  every file of which a later group replaces does not count); so is every such combination with `off` / `variants`. A
+  unit with `kw` that is an outfit of its own (a bundle of outfits) is NSFW (end of `finalize_units`).
+- **Numbers**: `outfit_is_nsfw` (folder, mod keyword or `g_nsfw_ids`) is the slot's `nsfw`. An outfit whose registry
+  `nsfw` differs is numbered again once (log `nsfw: <mod>: outfit number A -> B`), as a new outfit (an NSFW one after
+  the others, one no longer NSFW before the NSFW ones); its old number stays unused in that run, and `outfits.json` lists `"moved": [{"fighter", "from", "to", "label"}]` (only when something moved): the
+  plugin moves a Battle Settings choice of the old number to the new one at start (`load_state`).
+- **Log**: `nsfw: <mod> (<where> "<text>": "<keyword>")` per mod, `nsfw: <mod> / <option> (...)` per option, what the
+  one outfit wears instead, and `NSFW by keywords: N mods, M options; K NSFW outfits of costume_mods` after the merge
+  audit. No `modinfo.ini` field carries an adult flag (keys seen on 190 mods: name, version, description, screenshot,
+  author, category = the character, AddonFor, DummyMod, NameAsBundle, requirement, homepage); names only.
+
+## Storage in the costume pak
+
+For every slot of a modular mod, every option except `base` ones is stored **as that slot would use it**, under the
+slot's folder:
+
+```
+natives/stm/product/model/esf/<fighter>/<slot folder>/rto/<option id>/<path in the slot folder>
+natives/stm/product/model/esf/<fighter>/<slot folder>/rto/<option id>/_/<path in the fighter folder>
+```
+
+- *Target* = the file the slot's model loads in place of the original (`esf028/001/01/esf028_001_01.mesh` becomes
+  `esf028/006/01/esf028_006_01.mesh` for the slot in folder 006; a shared file such as `esf028/mini/mini1_atos.tex`
+  keeps its path). The loader records every file it relocates for the slot and uses that; a file the slot did not
+  relocate keeps its original path (the slot loads the game's file there).
+- Materials are processed like the slot's own: texture references moved with the slot, files made for an older
+  material layout rebuilt on the game's, and the references to textures **the option itself ships** pointed at the
+  option's copies (new `mdf2_rebind_textures`, in `patch.cpp`; the path is appended to the file, as
+  `modernize_mdf2` already does). Meshes, textures, chains and colour files are the mod's bytes. A texture gets its
+  streaming twin like the slot's textures.
+- **Base copies** (`rto/base/`): for every file of an option the outfit is made of, what that file is without the
+  option: the mod's base files, else the game's file (patched like the slot's). They let the runtime go back to "no
+  option of this group" exactly as Fluffy would show it.
+  A mesh gets a base copy only if it has every joint of the slot's mesh (its name table, materials aside): the
+  model keeps its chains and other parts while the mesh is swapped, and they move those joints. Swimsuit C. Viper
+  ships no body in its main files: the game's Outfit 1 body, without the 18 joints the swimsuit's chain moves,
+  stopped the game in a chain job half a second after the swap (19/10).
+  A base copy is made **only when it fits** what the model may wear with it (20/10, loader `2026-10-20-rtofit`):
+  - a material file must define every material of each mesh the model may wear at its part (the meshes the mod's
+    options ship there, else the game's) and every texture it names must exist; the **game's** material file only
+    where the mod keeps the game's mesh for that part. Mai mini dress ships the body's materials in its skin
+    options only: the game's Outfit 1 material file lacked 11 of the 14 materials of the dress's body and "None"
+    drew the body black. C. Viper swimsuit keeps the game's material names, but the game's file still laid the
+    game's textures on the mod's mesh (34 of the 83 textures of its skin materials are the mod's).
+  - a mesh: every material it uses must be in each material file an option ships for its part; the **game's** mesh
+    only where the mod keeps the game's material file (C. Viper lace lingerie: Outfit 2's body, refused).
+  - a texture from the game (none of the mod's base files ships it): only with the proportions of the slot's own.
+  - the mod's base files (main files) are used when they fit.
+  - a chain: not when a mesh of its part (same folder) has no base copy: the slot's own mesh stays, its own chain
+    stays with it (Ken SFV Hair V2: the game's hair chain under the mod's hair; loader `2026-10-20-rto-grouped-addons`).
+    A part whose mesh, material file and chain change together is a **part unit** instead (below).
+  The loader logs each refusal (`runtime options: no base copy of ... (why)`).
+- **Part units** (20/10, loader `2026-10-20-rto-units`): a model part that every option touching it ships whole
+  (its mesh, its material files and, when it is the only mesh of its folder, the chain of that folder) gets its base
+  copy as one unit: every file from one source (the mod's base files, else the game's), all or nothing, the per-file
+  checks above replaced by checks of the whole. Ken SFV Hair V2 ships the hair's mesh, material file and chain; the
+  per-file rules refused the game's hair mesh (it lacks the 22 joints of the add-on's chain) and the game's material
+  file (the mod ships its own mesh), so "Off" changed nothing on the model. Checks of a unit:
+  - its material files fit its mesh (`material_fit`: materials defined, textures present);
+  - without a chain in the unit: the base mesh has every joint of the slot's mesh (the model's chain there stays);
+  - with a chain: for every two (mesh, chain) the model may wear there (the base, each option shipping the part),
+    the chain of one names no joint that only the mesh of the other has (`_end` joints by UTF-16 name, collision
+    joints by name hash: murmur3, seed 0xFFFFFFFF, UTF-16LE), and each chain names at least one joint of its own
+    mesh (else it is not read this way: refused). The runtime sets the new chain before the new mesh (see Runtime),
+    so no joint that disappears with the old mesh is ever bound to the chain. Ken: the two hairs share 40 joints,
+    the game's has 73 of its own (none named by the add-on's chain), the add-on's 22 (none named by the game's).
+  The manifest marks every file of a unit (base copies and the options' copies) with `unit` (the target of its
+  chain, else of its mesh) and its meshes with `joints` (logs). Logged: `runtime options: part <folder> as one unit
+  (N files[, its chain]) from the game's files | the mod's base files, J joints`, or with a chain
+  `... is not one unit (why): its files are checked one by one`. Ingrid's Fly In A Bucket props (book 000/32 + 34,
+  cat 000/30: mesh + material each) are units too: "Off" gives back the game's props.
+- **Required groups**: a pick group one of whose options ships a file the slot wears with no base copy, and no pick
+  of another group ships it, is listed in the slot's `required`: the menu offers it **without None** (the group
+  always wears one of its options). On Wael's install: Mai's skin group, both groups of each C. Viper mod. Mai's
+  dress group keeps None: its base copy is the main files' `mini1_atos.tex` (the same file as its "side stripes").
+- The pak builder already stores identical data once: the copies of a file shared by the slot and by its options,
+  or by several slots, cost an entry (48 bytes), not their size.
+
+Mai mini dress, measured offline (game base pak, mod from its archive):
+
+| | Pak | Entries | Build |
+|---|---|---|---|
+| `off` (= before) | 374.6 MB | 3841 | 1.6 s |
+| `variants`: 10 outfits + options | 732.5 MB | 4481 | 5.3 s |
+| `on`: 1 outfit + options | 725.3 MB | 3374 | 1.2 s |
+
+The options of one outfit are 42 options, 64 files (5 base copies). The pak grows by the options that were never
+installed before (13 body meshes, 12 dress textures...).
+
+**Fingerprint.** `off` leaves the registry fingerprint as it was (no rebuild for existing users). `on` / `variants`
+add `;options=sf6-costume-options-1:<layout>`: switching the setting rebuilds once. A missing
+`costume_options.json` also forces a rebuild.
+
+## The options manifest: `reframework/data/SF6_Costumes_Data/costume_options.json`
+
+Written by the loader with the pak (same generation; `pak` names it), read by the plugin. Resource names are as the
+game names resources: lowercase, without `natives/stm/` and without the version suffix.
+
+```json
+{
+  "format": "sf6-costume-options-1",
+  "generated": "2026-10-19 21:44", "loader": "<build id>", "pak": "re_chunk_000.pak.patch_001.pak",
+  "layout": "one",
+  "mods": [
+    {"key": "esf028/mini dress mai c1 swap", "name": "mini dress Mai C1 Swap", "source": "Mai/Mini Dress Mai C1 swap v1.5",
+     "defaults_from": "loader", "groups": [
+      {"name": "(mini dress Mai C1 Swap)", "options": [
+        {"id": "0e0a734f", "name": "1) Main Files c1", "folder": "...", "mode": "base", "apply": "relaunch"},
+        {"id": "2407ae42", "name": "5) optional - more jiggle and wobble", "folder": "...", "mode": "toggle", "apply": "live"},
+        {"id": "b741b9f2", "name": "5) optional - Tan skin tone", "folder": "...", "mode": "toggle", "apply": "colour"},
+        {"id": "b1e9e85c", "name": "6) hide ponytail - to work with hair mods", "folder": "...", "mode": "toggle", "apply": "live"}]},
+      {"name": "2! Skin type options c1", "options": [
+        {"id": "b104ad5a", "name": "damaged skin", "folder": "...", "mode": "pick", "apply": "live"}, "..."]},
+      "..."],
+     "variants": [
+      {"label": "mini dress Mai C1 Swap - Regular - Barefoot + pubic hair",
+       "options": ["0e0a734f", "b104ad5a", "a7125dd3", "d5be40d1", "77b84100"]}, "..."]}],
+  "slots": [
+    {"fighter": 28, "fighter_dir": "esf028", "costume_no": 5, "folder": "006", "name": "Outfit I",
+     "label": "mini dress Mai C1 Swap", "mod": "esf028/mini dress mai c1 swap",
+     "defaults": ["0e0a734f", "b104ad5a", "a7125dd3", "d5be40d1", "77b84100"],
+     "options": {
+       "2407ae42": [{"kind": "chain", "target": "product/model/esf/esf028/006/esf028_001_01_chain.chain",
+                     "path": "product/model/esf/esf028/006/rto/2407ae42/esf028_001_01_chain.chain"}],
+       "a7125dd3": [{"kind": "texture", "target": "product/model/esf/esf028/mini/mini1_atos.tex",
+                     "path": "product/model/esf/esf028/006/rto/a7125dd3/_/mini/mini1_atos.tex"}],
+       "...": []},
+     "base": [{"kind": "texture", "target": "product/model/esf/esf028/mini/mini1_atos.tex",
+               "path": "product/model/esf/esf028/006/rto/base/_/mini/mini1_atos.tex"}, "..."],
+     "required": [1],
+     "former": [{"costume_no": 6, "folder": "007", "label": "mini dress Mai C1 Swap - Regular - Barefoot",
+                 "options": ["0e0a734f", "b104ad5a", "a7125dd3", "d5be40d1", "4fe85878"]}, "..."]}]
+}
+```
+
+- `mods[].key` = `<fighter folder>/<root name, lowercase>`: stable across mod updates; the choices file uses it.
+- `mods[].variants` = the combinations the loader makes as variant slots: ready-made presets.
+- `slots[].options` lists only options that have files for that slot (a multi-costume mod's other folders belong to
+  its other slots).
+- `slots[].former`: see [Saved choices and slot numbers](#saved-choices-and-slot-numbers).
+- File entries may also carry `unit` (the file belongs to a part unit, named by the target of its chain, else of
+  its mesh: swapped together), `joints` (a unit's mesh: its joint count) and `own_joints` (a unit's base mesh: the
+  joint count of the slot's own mesh at that target). Older plugins ignore them.
+- `slots[].required`: pick groups (index in the mod's `groups`) offered without None (see Base copies). A side's
+  choices that hold no option of such a group (a None saved before) wear its default: the slot's default option in
+  that group, else its first offered option (`complete()` in `rto_data.cpp`, also after every menu change).
+- `format` changes when a field changes meaning; the plugin ignores a manifest of another format, or one whose
+  `pak` is not the costume pak of `outfits.json` (stale file).
+
+## The user's choices: `reframework/data/SF6_CostumeSlots_data/costume_choices.json` (plugin, lot B)
+
+Written by the plugin only, read at runtime. Per mod key, per player side:
+
+```json
+{
+  "format": "sf6-costume-choices-1",
+  "former_done": "2026-10-19 21:45 re_chunk_000.pak.patch_001.pak",
+  "mods": {
+    "esf028/mini dress mai c1 swap": {
+      "p1": {"changed": true, "options": ["0e0a734f", "3d8bf169", "4989efb2", "cc13098f"], "names": ["..."]},
+      "p2": {"changed": false}
+    }
+  }
+}
+```
+
+- `changed: false` (or no entry): the slot's `defaults` apply (Fluffy's checked options, or the loader's
+  combination). As soon as the user changes an option of that side in our menu, `changed` becomes true and the list
+  wins, until "Restore defaults".
+- Ids plus names: an option renamed or removed by a mod update is dropped (log line), the others stay.
+- Keyed by mod, not by slot number: the choices survive slot renumbering.
+- "Side" = the menu's Player side row (P1 by default): offline, the fighter seated on that side wears that side's
+  options (Training dummy, Versus); online, the player's own fighter wears P1's (the opponent never wears a slot).
+- `former_done`: the manifest (`generated` + `pak`) whose `former` slots were migrated.
+
+## Runtime (plugin, lot B)
+
+Effective file of a target, for one model: among the chosen options in layering order, the last one that ships it;
+none -> the `base` copy if listed; else the slot's own file (nothing to do). A required group always has one of its
+options in the set (see `slots[].required`).
+
+1. **Load**: read `costume_options.json` and the choices once at start (background thread), again when the loader's
+   generation changes.
+2. **Preload**: when a costume with options is about to be shown (Battle Settings preview, character select
+   decided, fight load), `create_resource` + holder for every file the chosen options need, and wait until each
+   is ready. A file never ready after N frames is skipped (log line), never applied half loaded.
+3. **Apply per model** (each fighter's own GameObjects, the preview's own): materials first (`set_Material`, mesh +
+   material as a pair when both change), then meshes, then textures (`setMaterialTexture` on the bindings whose
+   path is the target), then chains (`set_ChainAsset` + restart). Never `FighterVisualHolder._Setting`. Game
+   objects only from `LateUpdateBehavior`, kept objects checked with `is_managed_object` (Slots Loader rules).
+4. **When**: on every rebuild of a model (preview costume / colour change, character select, fight start, round
+   reload, replay, training reset): hook the moment the model's meshes are set, re-apply. After
+   `PlayerColorController.SetColor` the probe showed the swaps hold; re-check textures there.
+5. **Colours** (`colour` kind, the tan): the Color Mod applies them (see [Tan](#tan)); the loader already stores
+   the files.
+6. **Online**: options are visual and local: the opponent sees the default outfit (no network data), as for colours.
+
+### Built (lot B): `plugin/src/rto.cpp`, `rto_data.cpp`
+
+- **Load**: at plugin start (synchronously, before the costume module: the `former` migration needs it; Mai's
+  manifest is 20 KB). A manifest of another format, or one whose `pak` is not `outfits.json`'s, is ignored (one log
+  line). The loader now also renames the pak in `costume_options.json` when it only moves the pak (same "pak" key as
+  `outfits.json`), else the plugin would take the manifest for stale.
+- **Models**: the preview (`CaptureRoomFighter.FighterObj` once `IsSetUpEnd`), each side's model on the character
+  select (the GameObject `FighterVisual_01` / `FighterVisual_02` that holds its `PlayerColorController`, or a parent
+  of that name), each side's model on the VS screen (below) and each fighter (`PlayerBehavior`, `_PlayerID` 0 / 1, once `IsAppliedResource`). Its components are walked once (transform tree, 400 nodes at most):
+  `via.render.Mesh`, `via.motion.Chain`, `app.PlayerColorController`. Its **slot is found from the paths its
+  meshes load** (`product/model/esf/<fighter>/<folder>/`), so the online alias (a slot over its carrier) needs
+  nothing more. An outfit of ours without options (the loader's `registry.json` knows its folder) has no slot, even when it
+  keeps parts of a game outfit that has options (M. Bison's Wesker: its body in `esf026/006`, its `esf026/001/02` the game's). Game objects are never `add_ref`'d (R21): checked alive (`is_managed_object` + type) before use.
+- **Pass** (per model, what differs from the manifest's desired state): verify the parts swapped on the frame
+  before; meshes and materials (a pair in the same frame when both change); `SetColor(ColorNum)` on the model's
+  colour controllers after a material change; textures on parts whose material is settled (the bindings of a
+  material that name a target are found once per material file); chains (`set_ChainAsset` + `restart`).
+- **Never half loaded**: every file is created ahead (`create_resource` + holder, kept by the plugin) and given to a
+  model only 30 frames later (textures 60); then the model's own flags must say drawable **in the same frame**
+  (`MeshReady`; `MaterialReady` and `MaterialNum` > 0) and again **on the next frame**, else the part goes back at
+  once to what it wore (a holder of that file made before the swap) and is tried again later (1 s, 2 s, 4 s...;
+  left out after 6 tries, one log line). The probe's not-resident body stayed `MeshReady` 0 for 50+ frames.
+- **Part units** (mesh and/or material and the chain of the same GameObject all change; 20/10): the chain is
+  stopped (`via.Component.set_Enabled(false)`, only if it was enabled), and on a later frame: `set_ChainAsset(new
+  chain)` + `restart` on the mesh still worn, then `setMesh` / `set_Material`, then `restart` again (the chain set
+  up on the mesh now worn); the next frame, if the part is drawable the chain runs again, else the old unit goes
+  back the same way (chain first) and the chain runs again a frame later. Why this order: the 19/10 crash came from
+  joints that went away with a mesh while a chain still moved them; a chain set on a mesh lacking some of its joints
+  leaves them out (the game itself sets Mai's `esf028_001_30_Chain` on four prop meshes that each lack most of its
+  joints), so the old chain is released while all its joints are there, and the new chain, set first, is never
+  bound to a joint that disappears (the loader's check above). No frame ever has a running chain on a part made of
+  two sources; between two frames a part wears a whole unit, so a model reset (or a fault) starts a stopped chain
+  again at once; a stopped chain is started again after 2 s at most. A unit's chain never changes alone (step 4
+  skips it), and a unit's mesh whose chain is not on the model is left as is (one log line).
+- **Toggles Off cannot change**: an option worn by default none of whose files has a base copy (Off would show the
+  same model) is not offered; a slot left without any row gets no menu and no F hint. Logged once at start:
+  `rto: <fighter>/<folder>: "<option>" cannot be turned off live (no copy of the outfit without it): not in the menu`.
+  With a manifest written before part units, Ken SFV Hair V2 and Ingrid's book / cat are hidden that way.
+- **Chains**: the body's chain is not loaded from the slot's folder (Mai: `esf028/002/esf028_002_01_chain.chain`),
+  so an option's `..._01_chain.chain` stands for the chain of the part with the same number (the GameObject whose
+  mesh is `..._01.mesh`); the way back is the file that part wore when first seen.
+- **When**: the preview while Battle Settings is up (every 10 frames: a menu screen; a model the game rebuilt, e.g.
+  outfit or colour change, is found by its paths and done again). Fighters only after an event: an outfit mounted
+  for a fight (`FighterVisualHolder..ctor`) or a model built (`PlayerBehavior.SetupAppearance`) opens a 10 s watch
+  (every 10 frames), then nothing: no read in a fight (R38). If `SetupAppearance` kept the watch open for 30 s it is
+  ignored for the session (not a build event). While the character select is open (20/10: an option chosen in
+  Battle Settings was missing there, the model showed the plain outfit): no fighter watch, each side's model is
+  polled like the preview (every 10 frames; a rebuilt model is seen within 10 frames), offline with that side's
+  options, online P1's; one log line per search result (`rto: character select: ...`). If the screen's end event
+  is missed, the models stop being followed once the screen is no longer in the game's flow list (never in a
+  fight: the intro's rigs also hang under `FighterVisual_0N`).
+- **VS screen** (the versus intro between the character / stage select and the fight; `vs_tick`): each side's model
+  (`esfNNNvMM`) sits under `Pos` < `Left` (P1) / `Right` (P2) < `FighterEmoteCtrl` (the Color Mod's finding; the
+  intro's rigs hang under `FighterVisual_0N`, the fighters under nothing). The root followed is that `Left` / `Right`
+  GameObject, found from a `PlayerColorController`'s parents (`vs_model_side` in `rto_data.cpp`, unit-tested; a
+  `Left` / `Right` not under `FighterEmoteCtrl` is not followed and is logged once). Looked for from the end of the
+  character select (90 s: the stage select comes between) or the start of a fighters watch (20 s: online, where
+  there is no select screen): every frame for a second after any model's colours are set up (a pre-hook of
+  `PlayerColorController.SetupColor` that only counts calls: the VS models get theirs when built), else every 30
+  frames (every 5 without that hook). A model found is looked at every frame until it wears its options (the same
+  passes: preload, swap once ready, never half loaded; a model still loading is tried again the next frame, not 5
+  frames later; its walk too, for its first second), so it is swapped on the first frame its parts are ready; a part
+  swapped with its chain (part unit) one frame later (its chain stopped a frame before). When the select ends, the
+  files of the options both select models wear are asked for again (`warm_vs`, mostly loaded already: kept, not
+  given back) so the VS models never wait the 30 frames of a new holder. Offline with that side's options, online
+  P1's. Until 20/10 the search ran every 30 frames and a model every 10: the base outfit showed up to ~40
+  frames before the option. Let go
+  (models reset, no more scans) when the screen's models are gone, 20 s after they came at the latest, 5 s after both
+  fighters are built when no VS model came (Training), or when the character select opens: never into the fight.
+  Logs: `rto: VS screen models looked for (...)`, `rto: N files of the select models' options kept for the VS
+  screen (M not loaded yet)`, `rto: VS screen: N colour controllers, P1 model found|none, P2 model found|none` (on
+  change), `rto: VS P1 model found (a model was just built | periodic search)`, `rto: VS P1 wears ...`, `rto: VS
+  screen models no longer followed (...)`.
+- **Ahead**: 30 s after start, the files of the choices made in the menu (both sides, 64 at most) are loaded and
+  kept, so a fight shows them at once; other holders are given back 10 s after their last use.
+- 5 exceptions: the runtime options stop for the session (one log line).
+
+### Textures and the shared material question
+
+The probe saw a texture change leak to the other player (or not revert). Before relying on `setMaterialTexture`:
+test whether each model has its own material instance (swap on P1 only, read P2's binding back). If materials are
+shared, the fallback is per-model materials: the loader writes, per slot, a material copy per texture option with
+its binding pointed at the option's texture (`mdf2_rebind_textures`, already used for options shipping their own
+textures), and the plugin swaps that material per model (`set_Material` is proven per model). Skin options that are
+materials themselves then combine with a texture option only through such copies; the loader would build them for
+the pairs actually chosen (lot B decides).
+
+Lot B, from the probe's results: P2's binding (`getMaterialTexture` path, same slot, same material) stayed
+`mini/mini1_ATOS.tex` through P1's swap to `royalb1_ATOS.tex`, its hold and its restore, and the screenshot during
+the swap shows P2 unchanged (`results_v2/p1_tex_atos_2on.png`). **Bindings are per model**: lot B uses
+`setMaterialTexture` per model and does not build the material copies. The difference seen after the restore is not
+explained by the bindings (the probe restored through a fresh holder of the original path). Lot B never keeps the
+game's holders (R21) either: a way back is a holder the plugin creates for that file. **To check in game**: P1 and
+P2 in the same outfit, a dress option on P2 only: P1's dress must not change, before and after going back. If it
+does, the fallback above is the next step.
+
+## Menu (Battle Settings, lot B)
+
+- Through the core's option service (`opt_group`, `opt_entry`, `opt_open_menu`, `opt_navigate` with PUSH,
+  `opt_rebuild`; see `core/docs/OPTIONS.md`): one page per costume, one choice row per `pick` group, one on/off row
+  per `toggle` option, a "Restore defaults" button (no preset row: the `variants` only serve the migration of a former
+  variant slot). The rows follow the costume shown
+  (the page is rebuilt when it changes).
+- `F` entry in the bottom input guide bar, only on the costume row of a costume that has options (`costume_options.json`
+  lists its slot).
+- Live preview: each change is applied to the preview model at once (steps 2-3), and saved.
+- No new core capability is expected. If the option service cannot give a page whose rows change with the costume
+  without closing it, that is a core change and needs an ADR (Proposed, then accepted by the user) before code.
+
+### Built (lot B): `plugin/src/rto_menu.cpp` (no new core capability)
+
+- **Where**: Battle Settings > character (Fighter Settings, agent `MatchingFighterSetting`). While the costume row
+  (`p_Spin_costume`) is focused, the preview wears a slot with options and our menu is closed, the bottom input
+  guide bar gets an extra entry `<ICON KeyF><ICON MouseL> Costume options` (a left click on the row's body, arrows excluded, opens the menu like F) (`<ICON BtnD>` after a pad input), like the Color
+  Mod's `<ICON KeyF><ICON MouseL> Edit Color` on its Color row. The label is English only (the plugin has no locale
+  system).
+- **One writer of the bar** (the bar's `e_text_0_g_*`, else its first `e_text_0_d_*`). Who writes depends on the
+  Color Mod (`rto_menu.cpp`, `guide_mode`; the log says `guide bar entry: ...` once per visit):
+  - **Color Mod 0.22.4 or later** (the normal case): the plugin never writes the bar. It exports
+    `int SF6Slots_GuideEntry(char* buf, int cap)` from `SF6_CostumeSlotsNative.dll`: the entry text (UTF-8, icon
+    included, chosen by the plugin's device detection, which follows the Color Mod's rule) while it belongs in the
+    bar, else 0 / empty (also when the plugin stopped publishing for more than 500 ms). It only copies a string the
+    plugin's LateUpdateBehavior code keeps under a lock: no game call, any thread. The Color Mod resolves it with
+    `GetModuleHandleW` + `GetProcAddress` (looked for again every 600 passes while absent), calls it on every
+    screens pass (every 3 frames, `colormod/src/screens/colour_track.cpp`, `slots_entry_poll`) and, while Fighter
+    Settings is up, appends `"      " + entry` (its own six-space separator) to the text it writes for the left
+    bar, after its own entry. When the entry comes or goes it refreshes the bar at once instead of waiting for its
+    15-frame refresh: the entry shows / leaves within about 4 frames of the row change. Each call also tells the
+    plugin a guide owner is there; while calls come (within 60 of its frames) the plugin writes nothing.
+    Without the plugin (or without that export) the Color Mod writes exactly what 0.22.3 wrote.
+  - **No Color Mod loaded**: the plugin writes the bar itself (appends `"      " + entry`, takes out only its exact
+    entry, never an identical write); the game is the only other writer. More than 12 writes in 120 frames = the
+    text is left alone for that visit (never a fight).
+  - **An older Color Mod** (loaded, never calls the export): the plugin never writes the bar. The key icon goes at
+    the end of the costume row's value instead (`  <ICON KeyF>` / `  <ICON BtnD>` while the outfit has options),
+    the kit B behaviour that ran 100 Costume / Color round trips without a crash; same 12-in-120 guard.
+- **Why one writer (crash of 20/10)**: the Color Mod writes its stored copy of that text from its post-hook of
+  `app.UIPartsInputGuideList.OnLateUpdate` (a game UI job thread) on every frame the text differs, and refreshed
+  the copy only every 15 frames. The first build (51dde84) also wrote the text from the plugin, on any frame: the
+  Color Mod took it back from the job thread, the plugin wrote it again, up to 14 pairs of `set_Message` on one text
+  per row change. Moving S / Z between the Costume and Color rows every 0.4 s (Mai Outfit I) crashed the game 2 / 2
+  within 40 round trips, same RIP (`StreetFighter6.exe+0x4654383`, a managed object with a zeroed header, i.e.
+  freed, read during a nested coroutine walk of the LateUpdateBehavior entry); the build without guide writes ran
+  100 round trips. 1f503bf then wrote only on the frame phase where a write stayed (learned from the Color Mod's
+  refresh): no crash in 100 round trips, but after fast row changes it gave up ("16 writes in a row taken back")
+  and the entry stayed gone. Replaced by the single writer above.
+- **Key**: `F` (or the pad's A / Cross) with the costume row focused opens the menu. The Color Mod's keys are
+  elsewhere: F on the Color row (its editor), X (Drive colours), C / V inside its editor; its editor and this menu
+  never open together (both need the option window closed).
+- **Title**: the outfit's name in capitals and the side (`MINI DRESS MAI C1 SWAP  -  P1`); a name longer than 40
+  characters (UTF-8; 30 when the menu has several pages) is cut and ends with `...`, so the side stays readable.
+  Several pages: the Color Mod's colour editor's paged title, `<ICON KeyA>   MINI DRESS MAI C1 SWAP  -  P1   1/2
+  <ICON KeyE>` (pad: `<ICON BtnL1>` / `<ICON BtnR1>`; the glyphs of the device in use when the pages were built). The costume row shows the outfit's label
+  (the loader's name message, "Outfit VII" for an outfit with none: `docs/MANAGER_CONTRACT.md`, "What the game shows"), scrolling when it
+  is wider than the row ("Long names scroll" below); the outfit's name is also at the right of the guide bar ("Outfit name on Fighter Settings" below).
+- **Pages** (7 rows at most, the dialog's pool; split by `split_pages`, `rto_data.cpp`, unit-tested): page 1 = Player
+  side (P1 / P2), the first 5 option rows, Restore defaults; later pages = 7 option rows each (no "More options" row
+  since 20/10). Player side and Restore defaults are on page 1 only, like the colour editor's extra rows (its cluster
+  list keeps them on its first page): they act on every page at once, the title shows the side on every page, page 1
+  is one key away from any page (pages wrap), and the other pages keep their 7 rows for options. **Page turning** =
+  the colour editor's (`colormod/src/dialogs/editor_core.cpp`, page turning): the game's tab keys
+  (`app.InputAssign.Digital.Id` UITabL / UITabR; the symbol from `InputGuideManager.GetSymbolText` in keyboard mode, so
+  A / E on an AZERTY keyboard, Q / E on a QWERTY one; fallback: scan codes 0x10 / 0x12 in the layout in use, else A /
+  E; read again every 120 frames) or L1 / R1 (`via.hid.GamePadButton` LTrigTop / RTrigTop), or a left click on the
+  title row left / right of the title (1080p reference y 190-252, x 40-470 / 590-1020), on a key press (no repeat),
+  wrapping, only while the game window is in front. A turn builds every page again (values as they are now) and
+  replaces the page on screen (`opt_navigate` with `SF6CORE_OPT_NAV_REBUILD`, nothing pushed: Esc closes the menu from
+  any page); the cursor stays on the same row index (`opt_focused_entry`), the last row when the other page is
+  shorter. No key of the preview camera (mouse, PageUp / PageDown, right stick, L3, L2 / R2) is a page key.
+  A pick group = one choice row: None + its options (15 labels at most a row, R9: a bigger group is
+  split in rows "Group (1/2)"...); a required group has no None (split in rows, its first label is "(other row)":
+  picked on the row that holds the choice, it goes back to the group's default). A toggle = an Off / On row. Options that change nothing on the model (colour or
+  cloth files only, e.g. the tan) are not offered; one that also ships such files is marked `*` (its description
+  says so). Texts are English only for now.
+- **A change**: saved at once (`costume_choices.json`), applied to the preview by the runtime (a not-yet-loaded
+  file shows within a second); the page is rebuilt on the next frame when other values changed (an option turned
+  off); the other pages show it when turned to. The window docks left (x -430, as the
+  Color Mod's editor on this screen) so the preview stays visible. Esc closes the menu, as the game's dialogs.
+- **Preview camera** (`plugin/src/rto_camera.cpp`, a port of the Color Mod's `colormod/src/dialogs/camera.cpp`
+  with the same constants, limits and input; the Color Mod is unchanged): while the menu is open on Fighter
+  Settings, exactly what the colour editor gives. Mouse right of the docked dialog (x > 1040 at 1920 wide): left
+  drag = turn (`app.FighterSpinCtrl`'s `Rot` yaw + `mAngle`), middle drag = pan, wheel = zoom (`ess_DefaultCamera`
+  local position, eased, clamped); PageUp / PageDown = zoom anywhere; pad: right stick = turn, L3 + right stick =
+  pan, R2 / L2 = zoom. The cursor is read only while the game window has the focus. The screen's hint blocks
+  `c_00` (Move: `<ICON MouseM>` or `<ICON BtnL3>＋<ICON StickR>`) and `c_02` (Zoom: wheel or L2 / R2 glyphs) are
+  shown at the editor's positions, glyph size from the game's Rotation block `c_01`, titles `hint.move` /
+  `hint.zoom` from the shared `SF6_NativeLocale_data/locale.json` in the game's text language (English when the
+  file is absent). The device (pad or keyboard / mouse) follows the Color Mod's rule (a pad button; a menu key, a
+  mouse button or a cursor move), also for the guide bar entry. On close: the camera position goes back to what
+  it was before the first zoom / pan (the turn stays, as in the editor) and both blocks are hidden; this happens
+  on the frame after the window closed (never from the core's callback). Input is only read, never swallowed.
+  The Color Mod hides `c_00` / `c_02` every 30 of its frames while Fighter Settings is up and its editor is closed
+  (so also under our menu): the plugin paints them from a post-LateUpdateBehavior callback (after every pre
+  callback of the frame) and shows a block again on any frame it finds hidden, so nothing blinks. Checked against
+  the guide bar crash (20/10): not the same case. REFramework runs the pre callbacks, the LateUpdateBehavior entry
+  and the post callbacks on one thread, one after the other, so the Color Mod's hide (pre, core callback) and our
+  paint (post) never overlap; no job-thread hook writes `c_00` / `c_02` (the Color Mod's camera writes them only
+  while its editor is open, never with our menu), and the only back and forth is one hide and one show per block
+  every 30 frames (texts written only when they differ).
+
+### Long names scroll
+
+A name wider than its place scrolls inside it; one that fits doesn't move. It rests about 1.5 s at its start, slides to its end at 60 units a
+second, rests about 1.5 s, comes back, and so on (`plugin/src/scroll_logic.hpp`, tested by `plugin/tests/names_test.cpp`;
+`plugin/src/name_scroll.cpp` is the game side). It is the game's own method, read in `app.UIPartsScrollText`: the text's Position moves, its
+ScissorRect, local to the text, moves the other way. That class itself isn't used: it belongs to the controls the game builds with it.
+
+- **Where:** the Costume row of Fighter Settings, of the character select's panels, of Training's popup, of Opponent Outfit Settings; the
+  summary lines of Opponent Outfit Settings and of Replays > Settings; the big stage banner's name in Battle Settings, Training and Replays >
+  Settings (there, only a name wider than the banner scrolls, inside it).
+- **A Costume row's place** runs between its two arrows, read on that row, 8 units inside each; the text's own region doesn't count (it reaches
+  past the arrows on the character select and stops well inside them on Opponent Outfit Settings). A name wider than its region but inside the
+  arrows stays where it is at full size.
+- **Replays > Settings' character lines** split when too long: "Luke :" stays and the rest moves, in a second text, in a window from where the rest
+  starts to the place's end. The rest's start is the difference of two measures (the whole line, the rest alone), so a language's spacing is its
+  own. A line that fits stays one text. Not in Arabic (the whole line moves), and not when under 80 units would be left.
+- **On a text the game owns:** its AutoRegionFit and AutoWrap off, its alignment and control point on its row's left while it slides, all put
+  back when its text changes, it hides, or the row's owner claims it (the costume options, the Color Mod's DI mode). Its region stays the game's
+  (two frames apart, to measure a text not seen yet): those two modes save it, restore it and lay their rows out from it. No text is written: the
+  game's message stays.
+- **Cost:** a look at the agents every 15 frames while none is drawn; while one is, a read of the row's message each frame, and writes only when the
+  whole offset changes or the game moved the text. On the character select's panels and Training's popup the row's focus animation writes the text's
+  Position and font size, so a sliding name's place is read before and after LateUpdateBehavior and put back in time for the frame's drawing.
+- **Right to left:** a name whose first strong character is Arabic or Hebrew starts from its other end, since its beginning is on the right.
+  Not tested in game, in Arabic or otherwise; what the game does with an Arabic name when the game's language isn't Arabic isn't known.
+- **Not this:** `crsm/src/ui/ticker.cpp` is only the game's own ticker strip (`TickerRequestData`); Profile Mod's Steam name keeps its cut;
+  Replays > Settings' own Costume row keeps its cut at 24 units.
+
+## Outfit name on Fighter Settings: `plugin/src/fs_name.cpp` (no new core capability)
+
+- **What**: on Fighter Settings, the name of the outfit on the preview, right-aligned at the right end of the bottom
+  input guide bar's line (the bar's left margin mirrored). The options menu's title without "- P1": an outfit of
+  the options manifest = its label (the mod's name, e.g. "Aloha Ryu"; a game outfit with options: "Outfit 1"),
+  another of ours = its label in `outfits.json`, any other game outfit = the costume row's own text (the game's
+  name, e.g. "DriveTech Wear"). Cut at 40 characters ("..."). The outfit: an `app.UIPartsMatchingFighterSetting`
+  (`FighterId`, `GetCostumeId()`) in the screen's parts list or its flow's settings, else the fighter of the
+  preview model built since the screen came up (`esfNNNv..`) and the outfit by the costume row's text (a slot's label as the
+  loader wrote it, or the registry's "Outfit II"). Worked with `RuntimeOptions` off too in 1.13 - 1.15 (its own module; the preview's
+  fighter then only came from the screen).
+- **Shown** while Fighter Settings is on screen on its Character tab (the costume row shown: its Titles and Profile tabs keep the
+  agent and main control visible, read 07/11) and no option window is open; **hidden** under our options menu and
+  the Color Mod's colour editor (their own guide bar and camera hints are there), off that screen, and when it would
+  come within 48 px of the bar's own text (its entries change with the focused row).
+- **How**: never the bar's text (one writer, see above). A copy of the bar's item template `e_text_0` (the element
+  the game duplicates for each entry: same font, size, colour) named `e_text_slots_outfit`, added under
+  `c_guideBtn`'s parent with the core's `ui_clone_control` (core 0.8.2+). R19: the copy is made inside a post-hook of
+  `app.UIPartsInputGuideList.OnLateUpdate`, that list only (its template and parent found from `this`), hidden; the
+  frame only asks. One copy per bar (it lives and dies with the bar's tree), no new copy after 3 refusals in a
+  session. Everything else from LateUpdateBehavior, by the plugin only, through the core (R1, R35: found again by
+  name under its live parent): text (tags shown as typed), ControlPoint = the bar text's row at its LEFT point,
+  placed at (right end - drawn width): the copy keeps the template's region (about the bar's width) and a text is
+  laid out from its region's left, so a right point drew it at the screen's far left (20/10). The drawn width is
+  the copy's `get_DisplaySize` once drawn (read on the next frames), estimated from the bar's glyph width before.
+  AutoRegionFit, scale, position, visibility. Logs: `fs name: ...` in `native_log.txt` (source of the name, geometry
+  once per change with the copy's global x and region as found, shown / hidden and why).
+
+## Options on the character select: `plugin/src/rto_select.cpp` (no new core capability)
+
+- **What**: in a side's panel of the character select (agents `ui10505` P1, `ui10507` P2; rows Costume, Color,
+  Control Type, Button Preset), **R1** on that player's pad or **C** on the keyboard (the keyboard's player, as the
+  game assigns it) shows the options of the outfit that side's model wears, in the panel's own four rows: the rows
+  of the Battle Settings menu (`rows()`: one choice row per pick group, one On / Off row per toggle; no Player side,
+  no Restore defaults: the side is the panel's). Left / Right change the focused row (wrapping), Up / Down move
+  through them; more than four rows: a window over them, "▲" in the first row's left margin while rows lie above,
+  "▼" in the last row's while rows lie below (the titles untouched), Down on the last row goes to the first and Up on
+  the first to the last (the CRSM recording slots' rule; `panel_move` / `panel_arrow` / `panel_arrow_left` in
+  `rto_data.cpp`, unit-tested). Fewer than four rows: the others are hidden. B / Esc or Decide put the panel back
+  (Esc leaves the mode only: the press is not a Back for the screen, IsDecide / IsCancel answer false 15 frames
+  after); R1 / C do nothing while the options show (Wael 20/10; logged).
+- **Arrows**: a copy of the row's title (`e_text_slots_arrow`, the core's `ui_clone_control`, core 0.8.2+) next to
+  it (same parent, font, size and colour), on the title's line (its control point row), its glyph's left edge 45 units
+  (root space, 1080p) left of the title's left edge, further left when the glyph would end less than 8 units from the
+  title (`panel_arrow_left`, unit-tested): x 40 for a title at 85, about 12 inside the row's visible frame (x 28). The
+  row's outline is no reference: its leftmost wide element is the glow `e_tex_glow`, which reaches off the panel
+  (x -32); the leftmost non-glow element is only logged. **Anchored** on the title: the copy inherits
+  the title's layout / animation (R31) and the game puts its position back at the title's place (20/10 19:59: placed
+  six times then left alone, drawn on the titles' first letters; 20/10 night: written every frame, it flickered, our
+  write and the game's alternating). So its position is only ever the title's own point (the game's write and ours
+  are the same value: nothing to alternate, whatever their order in a frame), and the arrow's place comes from what
+  the game does not lay out: its control point on the right of the title's row, `set_AutoRegionFit(false)`, a fixed
+  region reaching from that point left to the arrow's place, the glyph drawn at the region's left
+  (`via.gui.PageAlignment` of the same row on the left, read by name from the game's types). Drawn above the row's
+  focus highlight: `set_Priority` at least 10 (the Color Mod's colour grid copies) and above the highest priority
+  found among the row's elements; only while it shows (hidden + ForceInvisible otherwise). Hollow "△" / "▽" (U+25B3 /
+  U+25BD) while its row is not focused, filled "▲" / "▼" on the focused row, the rule of the game's own ◁ ▷ on the
+  rows; the text is written only when it changes. The hollow glyph's drawn width is read once (`get_DisplaySize`, two
+  frames after it is written): 0 = the game's font does not draw it, the arrows stay filled for the session (logged
+  once). Logged once a visit: `rto select: P1 arrow row 3: anchored, page alignment .., priority .. (was ..; row's
+  highest .., <element>)` and, 3 frames after it shows, `.. drawn at x <region> , glyph at .. (title x .. - 45, glyph
+  .. wide ..; row frame x .. <element>, for reference; anchored, priority ..; colour .., title's .., row focused | not
+  focused; its layout found changed by the game on N of M frames)` (control point, region or position found changed
+  before our write: should stay 0). R19: the copy is made inside a post-hook of
+  `app.UIFlowUI10505.CharaSetting.OnUpdate` (the type's own method only; the place LL's row clones on this panel
+  use), installed with the mode's hooks; the frame asks (one copy per row, under the title's parent, it lives and
+  dies with the panel's tree), the hook body is the core's guarded copy, made hidden and ForceInvisible. Every other
+  write from the frame (LateUpdateBehavior, R1). R35: found again by name under the title's live parent, every write
+  through the core. Hidden + ForceInvisible when its row has no arrow and when leaving. Fallback: no hook, no
+  `ui_clone_control`, 3 copies refused, or a copy still missing a second after it was asked: the arrows go before the
+  titles ("▲ " / "▼ ") for the session (one log line with the counts).
+- **Offered** only while the side's model wears an outfit with options (rto.cpp `select_slot`: the select model was
+  identified as wearing it after the panel's fighter / costume last changed), the panel has been active 20 frames
+  and one of its rows has the focus, no option window is open (the Color Mod's colour editor uses C), and the Color
+  Mod's DI mode does not hold the panel. Online: only when one panel alone is active (taken as the player's own), and
+  the options edited are P1's (the player's own fighter wears P1's options online, as in a fight).
+- **Saved and shown** like the Battle Settings menu's (`costume_choices.json`, offline the panel's side, `keep_hidden`
+  for hidden NSFW choices); `choices_changed()` makes the side's select model (`FighterVisual_01 / _02`, `select_tick`)
+  wear it on its next pass (at most 10 frames).
+- **Keys**: `reframework\data\SF6_CostumeSlots_data\settings.json`: `"select_options_button"`: `R1` (default), `L1`,
+  `R2`, `L2`, `R3`, `L3` or `off`; `"select_options_key"`: `C` (default, the user's choice 20/10), any letter or
+  digit, `auto` (the game's keyboard key of its UI tab action UITabR, the keyboard twin of R1: E on AZERTY) or `off`.
+  Read each time the screen opens. A fresh settings.json lists them; the NSFW row keeps them when it writes the file.
+  R1 is the game's `UITabR` (input id 74): nothing in the game data at hand says the select screen uses it, but its
+  input table could not be read offline, so the plugin logs the game's own guide bars of the screen once a visit and
+  warns when they already show the button or the key (`rto select: the game's guide on the character select`).
+- **How** (the Color Mod's DI mode technique on this same panel, `colormod/src/screens/dipanel*.cpp`): the four rows
+  are borrowed, nothing is created or added to the pool (R12, R13). Entering: each row's spin range / `_Num` /
+  IsDisable, visibility, value text, list position, text region, arrows' ForceInvisible and title message id are
+  kept; the titles' message link is cut (a title already showing what we write gets one differing write first, R7).
+  Each frame while on (LateUpdateBehavior, through the core): titles and values (compare-before-write), spins 0 ..
+  labels + 1 with `_Num` = the value, chips hidden, arrows shown, lists and regions aligned on the Costume row's. Hooks
+  (installed the first time the mode is used; they only store numbers, R1): `UIPartsSpin` Add / Sub / AddNum /
+  SubNum / MouseAdd / MouseSub / InputLeft / InputRight / InputDirection, `UIFlowUI10505.Param` SelectChange* /
+  SetMessage* / setCostume / setColor / setCostumeAndColor skipped, IsDecide / IsCancel / isSelectOperationType false,
+  getCostume / getColor = the indexes it had, `UIAgent` InputLeft / Right / Up / Down / Direction / Decide / Cancel,
+  `UIPartsGroup.MoveFocus`; each acts only for the addresses of a side that is on. Leaving: spins, message ids,
+  visibility, chips, positions, regions, arrows put back, the cache indexes, then the game's repaint
+  (`SetMessageCostume`, `SetMessageColor`, `SelectChangeColorChip`, `setCostumeAndColor`), then the value texts it
+  did not put back (R36), never the Color row's (a native fault). A panel rebuilt meanwhile: left the same way; a
+  panel gone: dropped without a write.
+- **One owner per panel** (two writers on one UI crashed the game before): the Color Mod's DI mode (X) borrows the
+  same rows. The plugin keeps each side's owner: `int SF6Slots_SelectPanelClaim(int side, int who, int op)` (who 1
+  the plugin's mode, 2 the Color Mod's DI mode; op 1 take: 1 granted / 0 held by the other, op 0 give back, op -1 the
+  owner). Each mode takes it before borrowing the rows and gives it back last; the Color Mod (0.22.5+) refuses its key
+  (X; L1 / X since 0.22.6) while the plugin holds the panel (journal "the Slots Loader's costume options hold this panel, X ignored"), the plugin
+  refuses R1 / C while the DI mode holds it. The Color Mod exports `int SF6ColorMod_DiPanelActive(int side)`: a claim
+  of the Color Mod without a DI mode for 60 frames is freed, and a Color Mod without that export (older) turns the
+  plugin's mode off (logged once). The Color Mod's colour tracker does not paint the Color row of a panel the plugin
+  holds (as during its DI mode).
+- **Guide**: the Color Mod writes each side's corner of the select guide ("L1 Edit Drive Colors" on the pad, "X Edit
+  Drive Colors" on the keyboard, 0.22.6) alone and adds the plugin's entry after it: `int SF6Slots_SelectGuideEntry(int
+  side, int pad, char* buf, int cap)` gives "<ICON BtnR1> Costume options" (pad glyphs, as the bar's own glyph mode)
+  or "<ICON KeyC> Costume options" while that side's outfit has options and the panel is ready; nothing while the
+  options show (R1 / C do nothing then). While the plugin holds the panel the Color Mod's entry is left out, and the
+  whole corner while its DI mode is on (L1 / X do nothing then): the corner is empty in both modes. Without the Color
+  Mod there is no select entry (the mode works, unannounced). The plugin's check of the game's guide skips the corner
+  (`e_text_0`, the Color Mod's and its own entries) and warns when the configured button is L1 or the key X (the
+  Color Mod's DI keys there); the Color Mod warns in its journal when the game's own guide there shows L1.
+- Logs: `rto select: ...` in `native_log.txt` (keys read, hooks installed, ON / OFF with the outfit and whose options,
+  each change, each refused press and why).
+
+## Options in the Training popup: `plugin/src/rto_select.cpp` (no new core capability)
+
+- **What**: Training pause menu > "P1 / P2 Character Select" opens a popup (agent `GenericCharacterDetailSetting_FG`,
+  flow `app.UIFlowCharacterDetailSetting`, its Param's `SettingTargetPlayerIndex` = the side it sets, its part
+  `app.UIPartsMatchingFighterSetting` = the live choice; six rows: Costume, Color, Control Type, Button Preset, Button
+  Release Input, Stick Sensitivity). **R1** (any pad) or **C** (the same `select_options_button` / `select_options_key`
+  as the select) shows the options of the outfit the popup's Costume row shows (`FighterId`, `GetCostumeId` of its part:
+  not necessarily the one worn in the fight; `rto::outfit_slot`, the same `has_rows` test as the menus) in the popup's
+  own rows, exactly as the select's mode: titles lose their message link, own spin ranges, Left / Right change the
+  focused row, Up / Down move with a window over the rows and the ▲ / ▼ arrows when there are more than six (hollow /
+  filled), chips and unused rows hidden. Any pad, not the target side's: the pause menu answers whoever opened it, the
+  popup has one panel (on the select each player has his own). The Color Mod's Drive colours DI mode in the popup moved
+  from X / Square to **L1** (any pad) / X (keyboard), as on the select.
+- **Pending until Confirm** (Wael, 21/10): a change made there is kept for this visit of the popup (per outfit, the
+  target side) and shown again if the options are reopened; **Confirm** (the popup's Param `IsDecide`, the edge the
+  Color Mod's colour commit reads) saves them (`costume_choices.json`, `keep_hidden` as the select) and calls
+  `rto::fighters_refresh`: `choices_changed()` bumps the choices' version and a fighters watch starts (10 s), whose
+  `process` re-applies any fighter whose version differs (PlayerBehavior `_PlayerID` 0 / 1, the side's choices, no
+  rebuild needed: the game rebuilds nothing when the costume and colour did not change). When they changed too, the
+  game rebuilds the fighters about a second after the menu closes (21/10: no TrainingManager flag changes) and
+  `SetupAppearance` extends the same watch. Closing the popup without Confirm (Back / Esc on its normal rows) drops the
+  pending changes (logged). Inside the options, Decide or Back return to the popup's normal rows keeping them.
+- **Swap in the restart's black screen** (Wael 22/10, after v1.18.0: the swap behind the pause menu is not wanted, and
+  the fight showed a moment before the restart's fade; v1.18.0 swapped behind the menu, then restarted 10 frames after
+  the menu closed). (1) Every option file of the outfit is asked for when its options open in the popup
+  (`rto::popup_preload`, the Battle Settings preview's `warm_preview` rule, kept in `g_warm_pop` while the popup is up,
+  let go when it closes; the confirmed ones stay as the choices' `g_warm`); `rto select: popup: the N files of the
+  pending options are ready` when they all are. (2) ANY Confirm with option changes (22/10: the "same costume and
+  colour as when the popup opened" test said "changed" on an options-only Confirm, and that path swapped the fighter
+  at once, seen before the game's reload fade): that fighter keeps what it wears (`fighters_refresh(why, side)`,
+  `g_hold_side`: its passes return before any swap, its files still asked for; `rto: P1 P1: its options held until
+  the restart's black screen (N of M files still loading)`, then `.. the M files of its options ready (held)`); the
+  popup's open-vs-now comparison is only logged. (2b) The decision, 4 frames after the menu's 4 FIRST -> 3 CLOSING (a
+  closed training pause menu stays at CLOSING; NONE 0 also counts): the game's own reload of the fighters seen since
+  the Confirm (post-hook of `app.battle.BattleFlowMap.SetupReloadBattleAsset(app.battle.BattleDesc)` answering true,
+  or a pre-hook of `app.bFlowBase.requestTransition` asking scene 20 = `app.battle.bBattleAssetReloadFlow`; traced
+  22/10: both in one frame as the menu closed, the fighters rebuilt about 3 s later; the hooks only store the frame,
+  installed at the first frame): no restart of ours, the held fighter is never changed (the game destroys it), the
+  hold ends when the game rebuilt it (a new fighter GameObject found by the watch, or a `SetupAppearance` since) or
+  after 600 frames, and the rebuilt fighter wears the options through the fighters watch; logged `rto select: the game
+  reloads the fighters (..) at frame F, N frames after the pause menu closed` (the distance, to tune the 4 frames). A
+  reload signal after our own request is not taken (ours may cause it; logged). Not seen: options only, (3). (3) The
+  restart: `app.training.TrainingManager.set_IsReqRefresh(true)`, the pause menu's own Restart Battle flow (checked
+  21/10: MenuState 1 / 2 / 3, `_TrainingState` NOW 1 -> REFRESH_WAIT 3 (REFRESH_START 2) for a few frames, back to
+  NOW), asked at the decision, from LateUpdateBehavior, the singleton fetched then, only when the battle's `Rule.GameMode` is 2
+  (Training) and not online, once per pause. Not taken (still NOW 20 frames later and `get_IsReqRefresh` false): asked
+  once more (logged). (4) The swap: released when `_TrainingState` leaves NOW (2 or 3) after the request, the screen
+  black then: one pass swaps every part with the files ready (a part unit's chain stopped a frame before its swap, its
+  textures on the next pass, still black); `rto: P1's held swap released at frame F (the restart's black screen; menu
+  state m, training state t): N of M files ready, swapped now`. Never left NOW within 120 frames: released anyway (the
+  swap as before, logged). No restart of ours: the game's reload seen (2b), not a Training battle / online / no
+  TrainingManager (released at once); the player's own Restart Battle (MenuState 1 / 2 seen): no request, its black
+  screen releases the swap the same way. Logs: `rto select: training pause menu state a -> b at frame F`, `rto select:
+  training state a -> b at frame F (menu state m); fade controller: ..`, `rto select: training restart requested at
+  frame F ..` (with the frames since the menu closed, or why not). The fade controller singleton's fields
+  (`app.bFadeController`, read only, logged at the request and at each training state change) are there to find a
+  sharper "screen is black" signal later (the game's types name `app.bFadeBase.eState` None / FadeOut / FadeIn); the
+  training state is what is used. `_MenuState` / `_TrainingState` are read as their low byte (small enum values,
+  whatever the enum's size); no TrainingManager: no hold, no restart (the swap as before).
+- **The first Esc**: the popup's Back leaves the mode only. Our hook on the popup agent's `InputCancel` takes it, and
+  the Color Mod's Esc guard (its `UIAgent.InputCancel` / TrainingManager `RequestCloseMenu` / `CloseMenu` hooks, made
+  for its popup DI mode) also holds while the plugin's popup mode is on and 15 frames after
+  (`int SF6Slots_PopupGuard()`), so the pause menu does not close. The popup mode therefore needs a Color Mod that says
+  it covers it: `int SF6ColorMod_PanelCaps()` bit 2 (its popup DI mode takes the claim, its popup guide carries our
+  entry, its guard asks ours); without it (no Color Mod, or an older one) the popup mode stays off (logged once).
+- **How** (differences with the select): the part's `mArrSpin` / `mGroup` (the Color Mod's popup DI mode); each row's
+  spin found by its control's name (its own index first; by index when no name can be read); the rows found in order,
+  four at least; a row whose spin is missing and the rows after it left out (hidden while on). Hooks (installed with
+  the select's, the first time a mode is used): `UIPartsMatchingFighterSetting` SelectChange* / SetMessage /
+  SetMessageColor / Setup*Spin* / SelectionChanged* / ChangeEverything skipped, `GetCostumeId` / `GetColorId` = what
+  it had (the outfit never changes meanwhile); the spin / agent / group set is the select's. The popup's Param is not
+  a method gate (its `IsDecide` is a field; our Decide never reaches the flow). Leaving: rows put back as on the
+  select, then the part's own repaint (`SetMessageColor`, `SetMessage`, `SelectChangeColorChip`; no cache pair, no
+  setter), then the value texts it did not put back, never the Color row's. Arrows: copies made in the popup flow's own
+  update (`app.UIFlowCharacterDetailSetting.Wait` OnUpdate, its own method only); without it, before the titles.
+- **Found from an event** (the plugin never polls): `EV_POPUP` from `UIPartsMatchingFighterSetting.SetupSpin` /
+  `SetMessage` (the popup builds its part; Fighter Settings' part fires too, nothing is found then) and from the popup
+  flow's update; then followed each frame while it shows (`popup_busy`).
+- **One owner**: the popup is held under the claim of the side it sets (`SF6Slots_SelectPanelClaim`, side 1 / 2; the
+  select is never up then). The Color Mod's popup DI mode now takes it too, refuses L1 / X while the plugin holds it;
+  the plugin refuses R1 / C while the DI mode holds it. While the plugin holds it the Color Mod's tracker paints no
+  chip on the popup's Color row and its colour-restore walk (Add / Sub on that spin) waits.
+- **Guide**: the Color Mod writes the popup's guide suffix alone ("L1 Edit Drive Colors" / "X Edit Drive Colors"),
+  then the plugin's entry for the side the popup sets (`SF6Slots_SelectGuideEntry(target, pad, ..)`: "R1 Costume
+  options" / "C Costume options" while that outfit has options and the popup is ready, nothing while the options show);
+  its own entry left out while the plugin holds the popup, the whole suffix while its DI mode is on.
+- Logs: `rto select: Training popup ...`, `rto select: popup ...` (ON / OFF, each pending change, confirmed / dropped),
+  `rto: fighters watch (the Training popup confirmed)`.
+
+## Saved choices and slot numbers
+
+With `on`, the single outfit of a modular mod is its first combination: same files and same id as the first
+variant slot, hence **the same costume number, folder, record and colours** as that slot had (checked offline: slot
+`esf028/006`, costume 5, identical files). The other variants' numbers are freed; the loader already gives every
+unused number the character's Outfit 1 scene, so a save or a replay naming one shows Outfit 1 and never stalls.
+
+To keep what the user chose for the other variants, `costume_options.json` lists them in the kept slot's `former`
+(previous costume number and folder, label, the options that variant was made of) **on the launch that changes the
+layout**. On that launch the plugin (lot B):
+
+- moves a Battle Settings choice (`SF6_CostumeSlots_data\state.json`) that names a former number to the kept slot
+  and writes that variant's options into the choices file (`changed: true`) for that side;
+- Color Mod colours stored per costume folder: the kept slot keeps its folder; colours made for a former folder are
+  offered as-is on the kept slot (lot B checks the Color Mod's keys).
+
+`former` is only known while the old registry is read: if the game does not reach the plugin on that launch, the
+next rebuild no longer lists it (improvement: carry `former` over from the previous manifest).
+
+Built (lot B): `costumes.cpp` `load_state` asks `rto::migrate_former` for every Battle Settings choice whose costume
+number the registry no longer has; with layout `one` and the number in a slot's `former`, the choice moves to the kept
+slot (its colour kept) and that variant's options become the mod's P1 choice (`changed: true`); `state.json` and
+`costume_choices.json` are written, `former_done` notes the manifest. A **game outfit's** `former` (a retouch's slot):
+the choice goes to that game outfit, no slot of ours: the save's `MatchingFighterCostume` gets the game's costume
+number (and the colour, when the carrier has it) the first time the save is reached (`safety_net`); until then
+`state.json` keeps the former number, so a session that ends first does it again. Layout `variants` never migrates (the variant
+slots still exist). Not done: Color Mod colours made for a former folder.
+
+## Presets and "Save as"
+
+- The `variants` of a mod are built-in presets.
+- "Save as" from the menu: a named set of options in the choices file (`presets` per mod key), offered in the menu
+  and shown on the select screen through the same outfit. A real extra slot would need a relaunch (the costume
+  table and scenes are built at launch); if wanted later, the loader can read the saved presets and build one slot
+  per preset at the next launch (the variant code already builds a slot from a set of options).
+
+## Tan
+
+The tan option ships colour files whose only change is the skin entry (entry 0 of clusters `esf_Body00` and
+`esf_Head00`), its own shade per colour number. It can therefore mix with any colour: the Color Mod (later) applies
+it as an overlay per colour number on top of the chosen colour, from the stored `colour` files of the option.
+
+## Color Mod entries for Replays > Settings (contract, `colormod/include/sf6colormod_entries.h`)
+
+The Color Mod's RW / MC entries are not game colours: each rides on the game's colour 02 (id 1) and the Color Mod dresses
+the fighter from its own per-side state. So that the plugin's Replays > Settings tab can offer them, preview them and
+force them in a replay, `SF6_ColorModNative.dll` exports (the suite's usual pattern: `GetModuleHandleW` +
+`GetProcAddress`, plugin side `plugin/src/colormod_link.hpp`):
+- `int SF6ColorMod_EntriesVersion()`: 1 while its colour engine runs (0 or missing: the tab lists 01-10 / EX / DX only);
+- `int SF6ColorMod_Entries(int fighter, int costume, SF6CMEntry* out, int cap)`: a fighter / costume's entries, the Color
+  Mod's order and labels ("RW n", "MC n") with a stable id each (the entry file's path), as its catalogue makes them;
+- `int SF6ColorMod_Request(int scope, int fighter, int costume, const char* id, void* battle)` /
+  `void SF6ColorMod_ClearRequests(int scope)`: what one fighter / costume wears, over the player's own Color Mod choices
+  (state.json is never changed): that entry on colour 02, or `""` = the game's own colours. Scope 1 = the tab's preview
+  (Battle Settings' capture-room fighter outside a battle, set while the character's page is up); scope 2 = one replay's
+  battle (`battle` = its `ReplayFlowMap`), applied only while it is the running flow map and dropped once another runs.
+The tab stores a Color Mod entry as `"color": 1, "colormod": "<entry file path>"` in `replay_outfits.json`; at the
+replay's `setupDesc` every forced fighter is asked for (its entry, or the game colours), replacing the previous replay's
+requests.
+
+**Opponent Outfit Settings** lists the same entries in the game's own colour grid, each as colour 02 for the game. The Color
+Mod gives each RW / MC cell its own squares and dresses the preview with the selected cell through the same scope 1 request
+(`colour_track.cpp` `tick_opponent`), only while that page is up.
+
+Each RW / MC cell ticks on its own. For the game such a tick is colour 02, so the page's list is watched (`opp_watch`,
+`engine/opponent_ticks.hpp` `classify`): the game's list is put back and the tick goes to
+`reframework/data/SF6_ColorSpinExtra_data/opponent_colours.txt` (a header line, then `fighter<TAB>outfit<TAB>entry's file`),
+written at each change. The game's save only ever holds real colours, and colour 02 stays a cell of its own. The summary's lines
+count both (`SF6ColorMod_OpponentTicks` for the lines the Slots Loader copies). The all-colours key: with only entries ticked it
+turns them off; otherwise it follows the game (all on, entries included, then all off). The EX / DX key leaves entries alone.
+The list alone can't tell that key from a tick under the cursor when it turns off a single colour (02 the only one of 01-10
+ticked, the cursor on an entry): a pre-hook on the game's handler of the key (`UIParam.EventOnToggleAllColors`: any of 01-10
+ticked, it unticks them all, else it ticks them all; every call is an action) tells `opp_watch` that the key made the change
+(`classify`'s `all_key`, seen within 10 frames, used once). Without that hook (R18 refused) that one case toggles the cell, as in
+0.24.4.
+
+In a match the pick stays the game's rule (`OtherFighterSettingSaveData.TryGetRandomCostumeAndColor`: evenly among the
+(outfit, colour) pairs of every ticked outfit of that fighter, not the player's own look when there is another, not the last one
+when there is another), with three hooks, each put once the check found no other method entering its code (R18, cached in
+`SF6_ColorSpinExtra_data\codecheck.txt`):
+
+- `GetSelectables`, post: one more pair (outfit, 1) per ticked entry that still exists, in the list of that one call. Nothing goes
+  to the save.
+- `TryGetRandomCostumeAndColor`, post: when the pick lands on colour 1 of an outfit with entries ticked, what it means is settled
+  there (`look_after_pick`: evenly among the entries and colour 02 if 02 is ticked itself; not the player's own look; not last
+  time's). The opponent's model wears it online only (`resolve_tree`). It's a local override, what the game itself does for this
+  page: the game's filter only looks for an empty list, it doesn't check what is owned, and nothing in the code read sends it.
+- `CheckVerify`, post: the page's back key is its only caller. "You haven't chosen a colour" becomes OK when an entry that still
+  exists is ticked for that fighter, since RW 6 alone is a choice.
+
+What can happen: an entry removed after the pick came to it: plain colour 02 of that outfit, and a journal line (`entry ... is
+gone`). Every ticked entry removed before the pick, or the Color Mod gone, with nothing else ticked: the game's pick finds nothing
+and the opponent keeps his own look. The first two hooks refused by R18: a journal line (`hooks REFUSED`), and RW / MC ticks don't
+apply in a match. `CheckVerify` refused: a journal line, and a fighter with only entries ticked keeps the game's warning. A fighter
+with no entry ticked isn't touched: the hooks return at once.
+
+Don't call the page's `UpdateColorGrid` or `UpdateCosColorTextList` from frame code: doing it after a key press crashed the game
+(07/11). What the game drew is repainted cell by cell (`UpdateColorGridItemCheck`).
+
+## Costume options for Replays > Settings (`plugin/src/replay_tab.cpp`, `rto_menu.cpp`, `replay_options.hpp`)
+
+On the Replays > Settings character page, when the fighter is On and its outfit has options: the guide bar shows
+"`<key>` Costume options" (the same key as the stage variation: `app.InputAssign.Digital.Id` 341, R on a keyboard, X on a
+pad; `stages::replay_guide_hint`, a copy of the bar's item template), and one press opens **the same menu as Edit
+Character's** (`rto::menu::open_replay`: the same pages, rows and Restore defaults in the game's `OptionDialog`, which
+`app.UIFlowOptionBGDialog.Start` creates on demand). Only the Player side row is left out and the title has no side: the
+choice belongs to the fighter.
+
+- **Saved** in `replay_outfits.json`, under the fighter, per outfit (its mod key; a slot has its own):
+  `"options": {"esf026/game outfit 1": ["<option id>", ...]}`. An outfit not named wears its defaults. A fighter set to Off
+  keeps them: `{"mode": "off", "options": {...}}`, not forced, nothing worn. Files from before load as they are.
+- **Preview**: the capture room's fighter wears the page's choice (`rto::replay_preview`), not the player's, followed like
+  Battle Settings' preview while the page is up.
+- **In a replay**: the `ReplayFlowMap.setupDesc` post-hook tells the runtime options each forced fighter's outfit and sets
+  (`rto::replay_wear_set`, with the replay's flow map). Their files are asked for at once (`warm_replay`), then again at the
+  fighters' load, before the game builds them. Each fighter and VS model of a forced fighter wears its set (`worn_by`), by
+  fighter so on whichever side, mirror matches included. A forced fighter with nothing saved for its outfit wears that
+  outfit's defaults, not the player's choices: what the page's preview showed.
+- **The player's own choices are never written**: `costume_choices.json` and `g_c` are only read here, so there is nothing
+  to restore. When the replay is over (`ReplayWear`: another flow runs, the Replays screen is back, a select screen, Battle
+  Settings, the next replay) the same lookup falls back to them; the choices' version bump makes a model still up re-apply.
+- **Summary panel**, character page: under the three settings, one line per option not at its default (`option_lines`).
+
+## Not covered yet
+
+- Lot B limits: a model the game rebuilds in a fight without one of the two events (round reload, replay seek...) is
+  not seen until the next one (the probes saw no rebuild on Training resets); the Training pause menu's Character
+  Settings popup has the select's in-row menu only (no preview: the fighter wears the options once the popup is
+  confirmed, in the training restart's black screen); menu texts are English only; no mouse click on the
+  costume row; whether the pad's A on the costume row does something in the game was not checked.
+- **Fluffy installs**: a mod read from Fluffy's archive loads only the options checked in Fluffy, so only those
+  are stored. Lot B: load the unchecked options too, as options only (no outfit), with the checked ones as
+  defaults (`defaults_from: "fluffy"`).
+- Separate add-ons: done (see [Add-ons on other outfits](#add-ons-on-other-outfits-2010-loader-2026-10-20-rto-addons)),
+  and retouches (an add-on applied to the game outfit it modifies included). Not done: a retouch's former outfit
+  migrates for a fighter that still has a slot of ours (the plugin reaches the save entries of those only), a subset's
+  too; the Slotsloader Manager does not see retouches and subsets (no outfit, no `variants.json` row).
+- `other` files (cloth, physics user files) cannot be swapped at runtime: their options apply at the next launch
+  only (or not at all with `on`, the menu says so).
+- Slotsloader Manager compatibility (`variants.json` / `variant_choices.json`): done, see
+  [MANAGER_CONTRACT.md](MANAGER_CONTRACT.md) (with `on`, the Manager's variant choice sets the outfit's defaults).
+
+## Phases
+
+- **A (done; setting off by default in 1.13.0, on since 1.13.1)**: options stored per slot, base copies, material rebinding,
+  `costume_options.json` (options, defaults, presets, former slots), `RuntimeOptions=off|on|variants` (setting removed since: always on).
+- **B (built, to test in game)**: plugin runtime (load, preload, apply per model, rebuild moments), the
+  texture-sharing check (offline: per model; the fallback is not built), choices file, Battle Settings menu,
+  migration of `state.json`. Left for later: Fluffy unchecked options.
+- **C**: tan and colour options through the Color Mod; presets and "Save as"; default `RuntimeOptions=on`.

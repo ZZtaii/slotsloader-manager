@@ -419,7 +419,7 @@ CHARACTER_NAMES = [
     "Dhalsim", "Cammy", "Ken", "Dee Jay", "Lily", "A.K.I.", "Rashid",
     "Blanka", "Juri", "Marisa", "Guile", "Ed", "E. Honda", "Jamie",
     "Akuma", "Sagat", "M. Bison", "Terry", "Mai", "Elena", "C. Viper",
-    "Alex", "Ingrid", "Yasmine", "Arjun",
+    "Alex", "Ingrid", "Yasmine",
 ]
 
 

@@ -2,11 +2,9 @@
 // Vanilla costume inventory: the list of every file one costume of the game uses (scene, prefabs,
 // meshes, materials, textures, user files, chains...), found by walking the references from the
 // costume's scene in the game's paks. It writes the rows costumes/tools/build_vanilla_inventory.py +
-// inventory_to_tsv.py write into vanilla_costume_index.tsv, so that a costume the shipped index does
+// make_vanilla_index.py write into vanilla_costume_index.tsv, so that a costume the shipped index does
 // not know (a fighter or an outfit added by a game update) can be added to the index at run time.
-// The paks are read in the loader's order (base pak first, the DLC paks under it); the Python tool lets
-// the DLC paks win, which only changes the colour rows of JP, Dhalsim, Lily and Guile's Outfit 1
-// (tests/game_derived_real_input.py). No Windows / REFramework dependency beyond pak.hpp.
+// No Windows / REFramework dependency beyond pak.hpp.
 #include "pak.hpp"
 #include <cstdint>
 #include <string>

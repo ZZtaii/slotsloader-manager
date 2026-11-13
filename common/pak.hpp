@@ -23,16 +23,21 @@ constexpr const char* COSTUME_SLOTS_MARKER = "natives/stm/sf6_costume_slots.mark
 constexpr const char* STAGE_SLOTS_MARKER   = "natives/stm/sf6_stage_slots.marker";
 
 // What a re_chunk_000.pak.patch_NNN.pak is, by the marker file it holds (a pak nobody marked is a
-// mod's; a pak whose header cannot be read is counted as a mod's too: it sits in the row).
+// mod's). Shared by the loader and SF6_SlotsClean, so both see the same paks as ours.
 enum class PatchPakKind { Unreadable, Mod, Costume, Stage };
 // entries (optional) receives the number of entries; a loader pak with exactly one is a marker-only
 // placeholder (write_marker_pak), never a real pak: those hold the marker and at least one more file.
 PatchPakKind classify_patch_pak(const char* path, uint32_t* entries = nullptr);
 
-// Writes a valid pak that holds only the costume loader's marker: it keeps its file name in the row
-// of patch paks, loads nothing, and is recognised as the loader's at the next scan. Only
-// PatchPakKind::Costume is written (this build has no stage loader); false otherwise or on error.
+// Writes a valid pak that holds only the marker of a loader (Costume or Stage): it keeps its file
+// name in the row of patch paks, loads nothing, and is recognised as that loader's at the next scan.
 bool write_marker_pak(const char* path, PatchPakKind kind);
+
+// Which of these file names Fluffy Mod Manager's ArchiveList.bin ("ARCH" header, then NUL-separated
+// names) lists, compared on the file name alone, case-insensitively. Empty when the file is absent.
+std::vector<std::string> archive_list_hits(const std::string& archive_list_path,
+                                           const std::vector<std::string>& names);
+
 
 // ============================================================================
 // PakEntry  (48 bytes on disk, v4 format)
@@ -76,20 +81,37 @@ public:
 
     const PakEntry* find(uint64_t hash) const;
 
-    // Tests only: the entry reads as absent, as one a replacement mod manager turned off in the
-    // pak (Fluffy writes zeros over the entry's hash)
+    // A pak the game reads under this one (the DLC paks under re_chunk_000.pak): find() looks in
+    // this pak first, then in the added paks in the order they were added, and read() reads an
+    // entry from the pak it came from. The added pak must outlive this reader.
+    void add_overlay(PakReader* over) { over_.push_back(over); }
+    // Which pak an entry found here comes from: 0 this one, 1.. the added paks in order, -1 none.
+    int source_of(const PakEntry& e) const;
+    // Tests only: the entry reads as turned off (zeroed by a mod manager's PAK method). From ZZtaii's
+    // Slotsloader fork (1.9.9), MIT.
     void forget(uint64_t hash) { entries_.erase(hash); }
 
     // Entries a replacement mod manager turned off (zeros over the hash) that can have held this hash,
     // in this pak then the added ones. The game's tables are sorted by hash and a turned-off entry
     // keeps its row, so only those between the two entries around the hash can. Empty when the
-    // table is not sorted. read() reads them like any other entry.
+    // table is not sorted, or when this pak has the hash. read() reads them like any other entry.
+    // From ZZtaii's Slotsloader fork (1.10.6), MIT.
     std::vector<const PakEntry*> turned_off_candidates(uint64_t hash) const;
 
-    // A pak the game reads under this one (the DLC paks under re_chunk_000.pak): find() looks in
-    // this pak first, then in the added paks in the order they were added, and read() reads an
-    // entry from the pak it came from. The added pak must outlive this reader.
-    void add_overlay(PakReader* over) { over_.push_back(over); }
+    // What was asked of this pak's own table (the added paks are not concerned): each hash find() was given, with
+    // whether the table had it, and each hash turned_off_candidates() was asked for, with the offsets of the rows it
+    // found in this table ("123,456,"). For a caller that keeps what it built from this pak for as long as the same
+    // questions get the same answers (the costume loader in Manager mode: a replacement installed over the game turns
+    // rows off and on). quiet > 0: nothing is noted (the caller notes itself what its question decided). Never set:
+    // nothing is kept, as before.
+    struct Asked {
+        std::unordered_map<uint64_t, bool> found;
+        std::unordered_map<uint64_t, std::string> off;
+        int quiet = 0;
+    };
+    void record_asked(Asked* asked) { asked_ = asked; }
+    // This pak's own table has the hash; nothing is noted.
+    bool has_own(uint64_t hash) const { return entries_.count(hash) > 0; }
 
     // Returns the raw (possibly compressed) blob.
     std::vector<uint8_t> read_raw(const PakEntry& e);
@@ -107,6 +129,7 @@ private:
     // A turned-off entry and the hashes of the entries around it (0 / UINT64_MAX at the table's ends)
     struct TurnedOff { uint64_t after, before; PakEntry e; };
     std::vector<TurnedOff> turned_off_;
+    Asked* asked_ = nullptr;
 
     PakReader* owner_of(const PakEntry& e);
 };
@@ -117,19 +140,30 @@ private:
 
 class PakWriter {
 public:
-    // The caller may reserve hashes before adding entries. This lets a loader
-    // publish private assets without overriding another mod's original paths.
-    void exclude_hashes(std::unordered_set<uint64_t> hashes);
-    bool is_excluded(uint64_t hash) const { return excluded_hashes_.count(hash) != 0; }
-    size_t excluded_write_count() const { return excluded_writes_.size(); }
-
     struct RawEntry {
         uint64_t             hash;
-        std::vector<uint8_t> blob;
+        std::vector<uint8_t> blob;         // the data, when held in memory
         int64_t              attributes;
         int64_t              decompressed_size;
         int64_t              alias = -1;   // index of an entry holding identical data, or -1
+        int64_t              spill_at = -1;   // offset of the data in the spill file, or -1
+        int64_t              prev_at = -1;    // offset of the data in the previous pak (use_previous), or -1
+        uint64_t             size = 0;     // size of the stored (possibly compressed) data
+        uint64_t             sig = 0;      // content signature of that data
+        bool                 replaced = false;
     };
+
+    PakWriter() = default;
+    ~PakWriter();
+    PakWriter(const PakWriter&) = delete;
+    PakWriter& operator=(const PakWriter&) = delete;
+
+    // Data of min_size bytes or more goes to this scratch file as it is added instead of staying in
+    // memory (a costume pak is many GB: held in memory it paged the whole PC out), once such data
+    // already held in memory reaches keep_in_memory bytes. The file is deleted when the writer goes
+    // away, crash included. False (everything stays in memory) when it cannot be made. The pak written
+    // is the same either way.
+    bool spill_to(const char* path, uint64_t min_size = 1 << 20, uint64_t keep_in_memory = 0);
 
     // Store a pre-compressed blob verbatim (passthrough).
     void add_raw(uint64_t hash, std::vector<uint8_t> blob,
@@ -138,15 +172,41 @@ public:
     // Store uncompressed data (attrib = 0).
     void add_uncompressed(uint64_t hash, std::vector<uint8_t> data);
 
+    // The same source again (a mod file, a pak entry, read the same way): the new entry shares the
+    // data of the entry first added from it, exactly as if the data had been read and compared again,
+    // without reading it. False when that cannot be decided without the data (source not seen, or its
+    // entry replaced since): read the source, add it, then note_source().
+    bool add_same_source(uint64_t hash, const std::string& source);
+    // The entry just added was read from this source, unchanged. lasting: the same source named so
+    // that it means the same bytes at the next build (lasting_sources).
+    void note_source(const std::string& source, const std::string& lasting = {});
+
+    // Where a lasting source's data is in a pak written: offset, stored size, attributes, decompressed
+    // size, content signature (the one push() computes: it decides which entries share data).
+    struct SourceData { uint64_t offset = 0, size = 0; int64_t attributes = 0, decompressed_size = 0; uint64_t sig = 0; };
+    // The pak built last time, and where it holds the data of each lasting source: add_previous() takes
+    // that data from it instead of the source, and write() copies it from there. Only for a pak this
+    // writer's code wrote from those very sources (the caller checks it). False when it cannot be opened.
+    bool use_previous(const char* pak_path, std::unordered_map<std::string, SourceData> sources);
+    // A lasting source the previous pak holds: added from it, with the outcome push() would have had
+    // with the source's bytes (the same bytes). False when the previous pak does not hold it.
+    bool add_previous(uint64_t hash, const std::string& lasting);
+    // After write(): where the pak written holds each lasting source noted (entries replaced since left out).
+    std::vector<std::pair<std::string, SourceData>> lasting_sources() const;
+
     // The entry last added under this hash, its data decompressed, or null / empty.
     const RawEntry* find(uint64_t hash) const;
     std::vector<uint8_t> get(uint64_t hash) const;
-    // Data of an entry stored uncompressed, without copy; null otherwise.
-    const std::vector<uint8_t>* peek(uint64_t hash) const;
+    // The first n bytes (fewer if shorter) of an entry stored uncompressed; false otherwise.
+    bool head(uint64_t hash, size_t n, std::vector<uint8_t>& out) const;
+    // n bytes at `at` of an entry stored uncompressed; false otherwise or past its end. total: its size.
+    bool range(uint64_t hash, uint64_t at, size_t n, std::vector<uint8_t>& out, uint64_t* total = nullptr) const;
     // Replaces the data of an entry (stored uncompressed). Entries that shared its data keep it.
     bool replace(uint64_t hash, std::vector<uint8_t> data);
 
-    bool write(const char* path);
+    // durable: the file is flushed to the disk before returning (it is then renamed over a pak).
+    // With a spill file, write() gives its space back as it copies: the writer is done afterwards.
+    bool write(const char* path, bool durable = false);
 
     size_t entry_count() const { return entries_.size(); }
 
@@ -155,15 +215,41 @@ public:
     // one bundle share most of their textures, so this keeps the pak close to the mods' size.
     size_t dedup_count() const { return dedup_count_; }
     uint64_t dedup_bytes() const { return dedup_bytes_; }
+    // Entries shared through add_same_source, and the bytes not read for them.
+    size_t source_hits() const { return source_hits_; }
+    uint64_t source_bytes() const { return source_bytes_; }
+    uint64_t spilled_bytes() const { return spill_end_; }
+    // Entries taken from the previous pak, and the bytes not read from their sources.
+    size_t previous_hits() const { return previous_hits_; }
+    uint64_t previous_bytes() const { return previous_bytes_; }
 
 private:
     void push(RawEntry e);
+    void push_stored(RawEntry e);   // e's data is not in memory (previous pak): same sharing as push()
+    static bool in_memory(const RawEntry& e) { return e.spill_at < 0 && e.prev_at < 0; }
+    void store(RawEntry& e);   // spills e's data when it is big enough
+    bool read_stored(const RawEntry& owner, uint64_t at, void* dst, size_t n) const;
+    bool stored_equals(const RawEntry& owner, const std::vector<uint8_t>& data) const;
+    bool stored_equal(const RawEntry& a, const RawEntry& b) const;
+    void stored_data(const RawEntry& owner, std::vector<uint8_t>& out) const;
 
     std::vector<RawEntry> entries_;
     std::unordered_map<uint64_t, size_t> by_hash_;
     std::unordered_map<uint64_t, std::vector<size_t>> by_sig_;
-    std::unordered_set<uint64_t> excluded_hashes_;
-    std::unordered_set<uint64_t> excluded_writes_;
+    std::unordered_map<std::string, size_t> by_source_;
     size_t dedup_count_ = 0;
     uint64_t dedup_bytes_ = 0;
+    size_t source_hits_ = 0;
+    uint64_t source_bytes_ = 0;
+    void* spill_ = nullptr;    // HANDLE of the spill file
+    uint64_t spill_min_ = 0;
+    uint64_t keep_in_memory_ = 0, kept_in_memory_ = 0;
+    uint64_t spill_end_ = 0;
+    uint64_t given_back_ = 0;  // spill bytes below this were given back by write()
+    void* prev_ = nullptr;     // HANDLE of the previous pak (use_previous), closed by write()
+    std::unordered_map<std::string, SourceData> prev_sources_;
+    size_t previous_hits_ = 0;
+    uint64_t previous_bytes_ = 0;
+    std::vector<std::pair<std::string, size_t>> lasting_;   // lasting source -> entry noted
+    std::vector<int64_t> written_at_;   // offset of each entry's data in the pak written
 };

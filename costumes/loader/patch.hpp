@@ -19,14 +19,15 @@ size_t patch_paths(std::vector<uint8_t>& data,
 #include <unordered_set>
 #include <unordered_map>
 
-// Repoint complete UTF-16LE resource strings using successfully emitted private paths.
-// Keys/values are lowercase unversioned engine paths, without natives/stm/.
-// Equal length only; patches every occurrence, preserving @ prefixes and unchanged bytes.
+// Repoints whole UTF-16LE references (scene, user files) to the slot's copy of a resource.
+// relocated_resources: original -> copy, lowercase, without natives/stm/ and version, same length.
+// Every occurrence; a leading '@', the case and the slashes of the reference are kept.
+// Returns the number of references changed.
 size_t patch_resource_references(std::vector<uint8_t>& data,
     const std::unordered_map<std::string, std::string>& relocated_resources);
 
-// Minimal scene patching: mesh/mdf2/physics USER references in UTF-16LE.
-// Patches both userdata_infos and instance data when the relocated file exists.
+// Minimal scene patching: only mesh/mdf2/CCVD references in UTF-16LE.
+// CCVD: patched only at 2nd occurrence (instance data, not userdata_infos).
 // relocated_paths: set of pak paths in output (for existence check). May be null.
 // suffixes: extension -> version string (e.g. "tex" -> "241101895"). May be null.
 size_t patch_scene_minimal(std::vector<uint8_t>& data,
@@ -54,26 +55,18 @@ size_t patch_mdf2_minimal(std::vector<uint8_t>& data,
 // Returns false and leaves data untouched when the layout is not the expected one.
 // message_for_record (may be null): record id -> id of the message (outfit name) the record must show,
 // so that names follow each other per character whatever slot numbers are in use.
-// Rebase the generated tail of a shipped costume table onto the current game's vanilla table.
-// Every current vanilla instance and record is retained; appended slot references are remapped.
-// Unsupported layouts, type signatures, or collisions fail without modifying data.
-bool refresh_costume_table(std::vector<uint8_t>& data,
-                           const std::vector<uint8_t>& current_vanilla,
-                           std::string* reason = nullptr);
-
 bool trim_costume_table(std::vector<uint8_t>& data,
                         const std::unordered_set<uint32_t>& keep_ids,
                         size_t* kept_records, size_t* removed_records,
                         const std::unordered_map<uint32_t, uint32_t>* message_for_record = nullptr);
 
 // The game's costume table as it ships: (fighter id, costume number) of every record. False when data is
-// not a costume table of the checked layout, or already carries slot records (instances after the root).
+// not a costume table, or already carries slot records (instances after the root).
 bool costume_table_records(const std::vector<uint8_t>& data, std::vector<std::pair<int, int>>& out);
 
-// Slot records of a fighter: index of its block of 100 ids (record id 5000 + index * 100 + slot offset).
-// Fixed for good (saved choices and replays name slots by record): fighters 1-22 -> 0-21, 25 and up ->
-// 22 and up (Arjun, 34 -> 31), the fighter_index of static_meta.json. 23 and 24 are no fighter today;
-// they get blocks past every other one.
+// Slot records of a fighter: index of its block of 100 ids in the table. Fixed for good (saved choices and
+// replays name slots by record): 1-22 -> 0-21, 25 and up -> 22 and up (Arjun, 34 -> 31). 23 and 24 are no
+// fighter today; they get blocks past every other one.
 int costume_slot_index(int fighter);
 
 struct CostumeSlotRecord {
@@ -84,12 +77,11 @@ struct CostumeSlotRecord {
     uint32_t message;      // index into the messages added with it (outfit name)
 };
 
-// Adds slot records to the game's costume table, the way static_slots.py (and make_static_structural.py
-// before it) did: after the root instance, one name message per entry of message_guids (id msg_id_base +
-// n), then the records, each a copy of the game's record of fighter 1 / Outfit 1, not owned by default,
-// visualNo = its costume number. The records go at the end of the root's DataArray; refresh_costume_table
-// and trim_costume_table then apply as to the shipped table. False and data untouched when the layout is
-// not the expected one.
+// Adds slot records to the game's costume table, the way make_static_structural.py did: after the root
+// instance, one name message per entry of message_guids (id msg_id_base + n), then the records, each a copy
+// of the game's record of fighter 1 / Outfit 1, not owned by default, visualNo = its costume number. The
+// records go at the end of the root's DataArray. trim_costume_table then keeps those in use.
+// False and data untouched when the layout is not the expected one.
 bool add_costume_records(std::vector<uint8_t>& data, const std::vector<CostumeSlotRecord>& records,
                          uint32_t msg_id_base, const std::vector<std::vector<uint8_t>>& message_guids,
                          std::string* err = nullptr);
@@ -104,6 +96,12 @@ bool cmd_tints(const std::vector<uint8_t>& data, std::vector<CmdCluster>& out);
 // Mean of each channel (0..1, RGBA) of a block-compressed texture over its first mip level whose sides
 // are both 64 or less (BC1, BC3, BC4, BC5, BC7). False when that level is missing or smaller than 4x4.
 bool texture_channel_means(const std::vector<uint8_t>& tex, float out[4]);
+// The same, from parts of the file: head = its first bytes (TEXTURE_HEAD_MAX is enough), file_size = its
+// size. texture_small_level gives the place of the level to read; texture_level_means its means once read.
+constexpr size_t TEXTURE_HEAD_MAX = 40 + 16 * 15;
+bool texture_small_level(const std::vector<uint8_t>& head, uint64_t file_size, uint64_t& off, uint64_t& size);
+bool texture_level_means(const std::vector<uint8_t>& head, uint64_t file_size, const std::vector<uint8_t>& level,
+                         float out[4]);
 
 // EXPERIMENTAL. Rebuilds a mod's material file (.mdf2) on the game's own file for the same part: same
 // material names required (false otherwise, out untouched); the result is the game's file, with each
@@ -135,6 +133,24 @@ bool upgrade_costume_material_layout(std::vector<uint8_t>& data,
                                      const std::vector<uint8_t>& reference,
                                      size_t* garments_upgraded);
 
+// Runtime options (docs/RUNTIME_OPTIONS.md, Colour entries of an option's materials): adds to a colour file the
+// entries (material clusters, with everything under them) of the materials it does not name, per part type, each
+// taken from the first of `sources` (other colour files, null allowed) that names it. Existing entries are never
+// changed or removed; a new cluster goes at the end of its part's list (a new part at the end of the parts), so every
+// existing entry keeps its position (the Color Mod matches clusters by position and name). Nothing is
+// taken from a source whose type signatures differ from the file's. The result is read back with the same parser
+// (entry count). added: one material name per entry added. False (data untouched, why set) when the file or the
+// result is not understood.
+// bases (a colour file cmd_001.., not the default cmd_000): for each source, the default colour file of its outfit
+// (null allowed). The game colours a material with every slot of the default file, whatever its Enable flag, and a
+// colour file replaces only the slots it enables; a material swapped in at runtime only gets what SetColor applies
+// (the enabled slots of the colour file). So each slot of an added entry is written as the game would show it: the
+// source's colour where it enables the slot, else the default's colour of that slot, and enabled.
+bool cmd_add_missing_clusters(std::vector<uint8_t>& data, const std::vector<const std::vector<uint8_t>*>& sources,
+                              const std::vector<std::string>& materials, std::vector<std::string>& added,
+                              std::string* why = nullptr,
+                              const std::vector<const std::vector<uint8_t>*>* bases = nullptr);
+
 // Test hook: parses a colour file and writes it back unchanged. False if the layout is not understood.
 bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<uint8_t>& out);
 
@@ -144,30 +160,9 @@ bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<ui
 // number of levels left inconsistent; 0 for a texture of unknown format or not a texture.
 int texture_mip_check(std::vector<uint8_t>& tex, bool repair, int* repaired);
 
-// Audited patch recipes only. Refused inputs are never modified. The caller supplies bytes from
-// official base/DLC PAKs, not loose replacements or generated patch PAKs.
-enum class SwapRepairState { Unchanged, Repaired, Refused };
-struct SwapRepairResult {
-    SwapRepairState state = SwapRepairState::Unchanged;
-    size_t changes = 0;
-    std::string reason;
-};
-SwapRepairResult repair_swap_scene(std::vector<uint8_t>& data,
-                                   const std::vector<uint8_t>& current_official);
-
-struct SwapUserProfile {
-    std::string kind;                 // "chain", "mai_self_chain", or C. Viper "model_parts"
-    std::string basename;             // donor basename for chains; target basename for model_parts
-    std::string donor_path;           // exact current official PAK path
-    std::string old_normalized_sha256;
-    std::string current_sha256;       // required: later, unreviewed official updates are refused
-};
-#include <functional>
-using SwapOfficialRead = std::function<std::vector<uint8_t>(const std::string&)>;
-using SwapSha256 = std::function<std::string(const std::vector<uint8_t>&)>;
-SwapRepairResult repair_swap_user(std::vector<uint8_t>& data, const std::string& mod_path,
-                                  const std::vector<SwapUserProfile>& profiles,
-                                  const SwapOfficialRead& official_read, const SwapSha256& sha256);
-const std::vector<SwapUserProfile>& swap_user_profiles();
-SwapRepairResult repair_swap_file(std::vector<uint8_t>& data, const std::string& mod_path,
-                                  const SwapOfficialRead& official_read, const SwapSha256& sha256);
+// Runtime costume options: points every texture binding of a material file (.mdf2) whose path is a key
+// of `to` at the value instead (the new path is appended to the file, as modernize_mdf2 does). Keys:
+// lowercase, '/' separators, no natives/stm/ and no version ("product/model/esf/esf028/001/01/x.tex").
+// Returns the number of bindings changed; 0 (data untouched) when the file is not a material file.
+size_t mdf2_rebind_textures(std::vector<uint8_t>& data,
+                            const std::unordered_map<std::string, std::string>& to);
