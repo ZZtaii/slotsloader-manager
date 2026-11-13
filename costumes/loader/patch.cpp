@@ -6,205 +6,6 @@
 #define BCDEC_IMPLEMENTATION
 #include "bcdec.h"
 
-namespace swaprepair {
-uint32_t u32(const std::vector<uint8_t>& d, size_t o) { uint32_t n; memcpy(&n, d.data() + o, 4); return n; }
-uint64_t u64(const std::vector<uint8_t>& d, size_t o) { uint64_t n; memcpy(&n, d.data() + o, 8); return n; }
-bool range(uint64_t start, uint64_t count, uint64_t width, size_t length) {
-    return start <= length && count <= (length - start) / width;
-}
-SwapRepairResult refused(const std::string& reason) { return {SwapRepairState::Refused, 0, reason}; }
-std::string lower(std::string s) { for (char& c : s) { if (c == '\\') c = '/'; else c = (char)std::tolower((unsigned char)c); } return s; }
-std::string fold(std::string s) { for (char& c : s) c = (char)std::tolower((unsigned char)c); return s; }
-bool digits(const std::string& s) { return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; }); }
-bool fighter(const std::string& s) { return s.size() == 6 && s.substr(0, 3) == "esf" && digits(s.substr(3)); }
-
-// Only the root RSZ instance table is inspected. No raw byte search and no speculative layout edit.
-bool rsz_table(const std::vector<uint8_t>& d, bool scene, size_t& table, uint32_t& count) {
-    const size_t header = scene ? 64 : 48;
-    if (d.size() < header + 48 || memcmp(d.data(), scene ? "SCN\0" : "USR\0", 4)) return false;
-    uint64_t r = u64(d, scene ? 56 : 32);
-    if (r < header || r % 2 || !range(r, 48, 1, d.size()) || memcmp(d.data() + r, "RSZ\0", 4) || u32(d, (size_t)r + 4) != 16) return false;
-    if (scene) {
-    std::vector<std::pair<uint64_t, uint64_t>> spans;
-    auto top = [&](uint64_t offset, uint32_t n, size_t width) {
-        if (!n) return true;
-        if (offset < 64 || offset % 4 || !range(offset, n, width, (size_t)r)) return false;
-        spans.push_back({offset, offset + uint64_t(n) * width}); return true;
-    };
-    if (!top(64, u32(d, 4), 32) || !top(u64(d, 24), u32(d, 12), 8)
-        || !top(u64(d, 32), u32(d, 8), 8) || !top(u64(d, 40), u32(d, 16), 8)
-        || !top(u64(d, 48), u32(d, 20), 16)) return false;
-    std::sort(spans.begin(), spans.end());
-    for (size_t i = 1; i < spans.size(); ++i) if (spans[i].first < spans[i - 1].second) return false;
-    }
-    uint32_t objects = u32(d, (size_t)r + 8), users = u32(d, (size_t)r + 16);
-    count = u32(d, (size_t)r + 12);
-    uint64_t io = u64(d, (size_t)r + 24), data = u64(d, (size_t)r + 32), uo = u64(d, (size_t)r + 40);
-    size_t remain = d.size() - (size_t)r;
-    if (!count || !range(48, objects, 4, remain) || io < 48ull + 4ull * objects || io % 4 || !range(io, count, 8, remain)
-        || data < io + 8ull * count || data > remain || (r + data) % 16 || !range(uo, users, 16, remain)
-        || (users && (uo < io + 8ull * count || uo + 16ull * users > data))
-        || (!users && uo && uo < io + 8ull * count)) return false;
-    table = (size_t)(r + io);
-    if (u32(d, table) || u32(d, table + 4)) return false;
-    for (uint32_t i = 0; i < objects; ++i) if (u32(d, (size_t)r + 48 + 4ull * i) >= count) return false;
-    return true;
-}
-bool scene_table(const std::vector<uint8_t>& d, size_t& table, uint32_t& count) { return rsz_table(d, true, table, count); }
-
-// Recipe prefixes have fixed lengths. Match at UTF-16 boundaries and require the next slash so
-// that 001 cannot match 0010. Everything outside those exact directory prefixes remains byte-exact.
-size_t prefix(std::vector<uint8_t>& d, const std::string& from, const std::string& to) {
-    if (from.size() != to.size()) return 0;
-    size_t count = 0;
-    for (size_t i = 0; i + 1 < d.size(); i += 2) {
-        size_t start = i; std::string s;
-        while (i + 1 < d.size() && !d[i + 1] && d[i] >= 32 && d[i] < 127) { s += (char)d[i]; i += 2; }
-        if (i + 1 >= d.size() || d[i] || d[i + 1]) continue;
-        size_t lead = s.find_first_not_of("@ ");
-        if (lead == std::string::npos || fold(s.substr(lead)).compare(0, from.size() + 1, fold(from) + "/")) continue;
-        for (size_t j = 0; j < to.size(); ++j) { d[start + 2 * (lead + j)] = (uint8_t)to[j]; d[start + 2 * (lead + j) + 1] = 0; }
-        ++count;
-    }
-    return count;
-}
-std::string model_dir(const std::string& path) {
-    const std::string head = "natives/stm/product/model/esf/";
-    if (path.compare(0, head.size(), head)) return {};
-    std::string tail = path.substr(head.size());
-    if (tail.size() < 12 || tail[6] != '/' || tail[10] != '/' || !fighter(tail.substr(0, 6)) || !digits(tail.substr(7, 3)) || tail.find('/', 11) != std::string::npos) return {};
-    return "Product/Model/esf/" + tail.substr(0, 10);
-}
-bool user_header(const std::vector<uint8_t>& d) {
-    size_t table = 0; uint32_t count = 0;
-    return rsz_table(d, false, table, count);
-}
-std::string model_parts_target(const std::vector<uint8_t>& d) {
-    std::unordered_set<std::string> dirs;
-    const std::string head = "product/model/esf/";
-    for (size_t i = 0; i + 1 < d.size(); i += 2) {
-        std::string s;
-        while (i + 1 < d.size() && !d[i + 1] && d[i] >= 32 && d[i] < 127) { s += (char)d[i]; i += 2; }
-        if (i + 1 >= d.size() || d[i] || d[i + 1]) continue;
-        s = fold(s); auto lead = s.find_first_not_of("@ ");
-        if (lead == std::string::npos) continue;
-        s = s.substr(lead);
-        if (s.compare(0, head.size(), head)) continue;
-        s = s.substr(head.size());
-        if (s.size() < 12 || s[6] != '/' || s[10] != '/' || !fighter(s.substr(0, 6)) || !digits(s.substr(7, 3))) continue;
-        if (s.substr(7, 3) == "000") continue;
-        if (s.substr(0, 6) != "esf030") return {};
-        dirs.insert(s.substr(0, 10));
-    }
-    return dirs.size() == 1 ? "Product/Model/esf/" + *dirs.begin() : std::string();
-}
-}
-
-SwapRepairResult repair_swap_scene(std::vector<uint8_t>& data, const std::vector<uint8_t>& current_official) {
-    using namespace swaprepair;
-    size_t table = 0; uint32_t count = 0;
-    if (!scene_table(data, table, count)) return refused("malformed or unsupported SCN/RSZ instance table");
-    constexpr uint32_t type = 0x63515A59, old_crc = 0xADA9B6AE, new_crc = 0xCD9A2E7B;
-    std::vector<size_t> offsets;
-    for (uint32_t i = 1; i < count; ++i) {
-        size_t o = table + 8ull * i;
-        if (u32(data, o) != type) continue;
-        uint32_t crc = u32(data, o + 4);
-        if (crc == old_crc) offsets.push_back(o + 4);
-        else if (crc != new_crc) return refused("unknown Alex scene type CRC; scene preserved");
-    }
-    if (offsets.empty()) return {};
-    if (!scene_table(current_official, table, count)) return refused("current official scene unavailable or unsupported");
-    bool confirmed = false;
-    for (uint32_t i = 1; i < count; ++i) {
-        size_t o = table + 8ull * i;
-        if (u32(current_official, o) != type) continue;
-        if (u32(current_official, o + 4) != new_crc) return refused("current official scene does not confirm the audited Alex CRC");
-        confirmed = true;
-    }
-    if (!confirmed) return refused("current official scene lacks the audited Alex type");
-    for (size_t o : offsets) memcpy(data.data() + o, &new_crc, 4);
-    return {SwapRepairState::Repaired, offsets.size(), "Alex scene type signature updated"};
-}
-
-SwapRepairResult repair_swap_user(std::vector<uint8_t>& data, const std::string& mod_path,
-                                  const std::vector<SwapUserProfile>& profiles,
-                                  const SwapOfficialRead& official_read, const SwapSha256& sha256) {
-    using namespace swaprepair;
-    const std::string path = lower(mod_path), name = path.substr(path.rfind('/') + 1);
-    bool candidate_seen = false, repaired = false;
-    std::string reason = "unrecognized or customized swap USER; preserved";
-    std::vector<uint8_t> output;
-    for (const auto& profile : profiles) {
-        if (name != lower(profile.basename)) continue;
-        std::string target;
-        if (profile.kind == "chain" || profile.kind == "mai_self_chain") target = model_dir(path);
-        else if (profile.kind == "model_parts" && path == "natives/stm/product/charparam/esf/esf030/battle_ud/esf030v01_model_parts.user.2") target = model_parts_target(data);
-        if (target.empty()) continue;
-        const std::string mai = "Product/Model/esf/esf028/";
-        if (profile.kind == "mai_self_chain" && (target.compare(0, mai.size(), mai) || target == model_dir(lower(profile.donor_path)))) continue;
-        candidate_seen = true;
-        if (!official_read || !sha256 || !user_header(data)) return refused("swap USER input or repair services unavailable");
-        std::string donor = profile.kind == "model_parts" ? "Product/Model/esf/esf030/001" : model_dir(lower(profile.donor_path));
-        if (donor.empty() || profile.current_sha256.size() != 64 || profile.old_normalized_sha256.size() != 64) { reason = "incomplete swap repair profile"; continue; }
-        auto current = official_read(profile.donor_path);
-        if (!user_header(current) || lower(sha256(current)) != lower(profile.current_sha256)) { reason = "current official donor missing or changed; USER preserved"; continue; }
-        if (!prefix(current, donor, target)) { reason = "current official donor lacks the documented model directory"; continue; }
-        if (current == data) return {SwapRepairState::Unchanged, 0, "documented swap USER already current"};
-        auto normalized = data;
-        if (!prefix(normalized, target, "Product/Model/esf/esf000/000") || lower(sha256(normalized)) != lower(profile.old_normalized_sha256)) continue;
-        if (repaired && output != current) return refused("ambiguous swap repair profile; USER preserved");
-        output = std::move(current); repaired = true;
-    }
-    if (!candidate_seen) return {};
-    if (!repaired) return refused(reason);
-    data.swap(output);
-    return {SwapRepairState::Repaired, 1, "documented swap USER rebuilt from current official donor"};
-}
-
-const std::vector<SwapUserProfile>& swap_user_profiles() {
-    static const std::vector<SwapUserProfile> profiles = {
-        {"chain", "esf028_001_01_chain.user.2", "natives/stm/product/model/esf/esf028/001/esf028_001_01_chain.user.2",
-         "545126e3dbd0b816c87345a85d369966c28238ddca57df54078dc972987483c2", "1447e93a3804f3d679830b5ab1ff9d961d96d8ab0f14072d11844d98cbbaff01"},
-        {"chain", "esf029_001_01_chain.user.2", "natives/stm/product/model/esf/esf029/001/esf029_001_01_chain.user.2",
-         "b820dbb3fcd680ff9f7e3cba06be2bb35d1b86da97bad9d608fa546a54693c75", "abb9d96fa7b4666964c4e87c67ed7328e105322c4da4171d343bffa75e890495"},
-        {"mai_self_chain", "esf028_001_30_chain.user.2", "natives/stm/product/model/esf/esf028/001/esf028_001_30_chain.user.2",
-         "a7341623c4ffe40d0f364fd982f8b857c267fec8d4f70229be58a3baaf3ea557", "5327c7ecd5d6b373903bb84675705078cfe7e027f26f70e0be35def6a53d47f0"},
-        {"mai_self_chain", "esf028_001_30_throw_chain.user.2", "natives/stm/product/model/esf/esf028/001/esf028_001_30_throw_chain.user.2",
-         "eab461fb038e507a65219dd42dbd58d2418127fb0cdccbcafdd5e521ad15e33d", "c4a97af806f3da8fcd9ce315b1671e48ed23f8345cd98c4dc60567210c473f20"},
-        {"mai_self_chain", "esf028_002_30_chain.user.2", "natives/stm/product/model/esf/esf028/002/esf028_002_30_chain.user.2",
-         "1fd8da67664765a278639897b08a69c77cd8d2633c7d927b119705359ec2b3e6", "e100765efb0c5eb152aeb63dc026fd75ee2c42844635a4f121ec08354cd0e98f"},
-        {"mai_self_chain", "esf028_002_30_throw_chain.user.2", "natives/stm/product/model/esf/esf028/002/esf028_002_30_throw_chain.user.2",
-         "8019251583c9ee672cfe258a8904852a58f369e90d5c04d4451eada4b9778a78", "a8b7332b7ee6b60e57bb79c7fd53a223991c3b8b7f178279751124091ab4f628"},
-    };
-    return profiles;
-}
-SwapRepairResult repair_swap_file(std::vector<uint8_t>& data, const std::string& mod_path,
-                                  const SwapOfficialRead& official_read, const SwapSha256& sha256) {
-    const std::string path = swaprepair::lower(mod_path);
-    if (path.compare(0, 8, "natives/")) return {};
-    if (path.size() >= 7 && path.compare(path.size() - 7, 7, ".scn.20") == 0) {
-        std::vector<uint8_t> current;
-        if (official_read) {
-            current = official_read(path);
-            if (current.empty()) for (const char* fallback : {
-                "natives/stm/product/charparam/esf/esf001/esf001v00.scn.20",
-                "natives/stm/product/charparam/esf/esf002/esf002v00.scn.20",
-                "natives/stm/product/charparam/esf/esf003/esf003v00.scn.20",
-                "natives/stm/product/charparam/esf/esf005/esf005v00.scn.20",
-                "natives/stm/product/charparam/esf/esf030/esf030v00.scn.20"}) {
-                current = official_read(fallback); if (!current.empty()) break;
-            }
-        }
-        return repair_swap_scene(data, current);
-    }
-    auto result = repair_swap_user(data, path, swap_user_profiles(), official_read, sha256);
-    if (result.state == SwapRepairState::Unchanged && result.reason.empty()
-        && path == "natives/stm/product/charparam/esf/esf030/battle_ud/esf030v01_model_parts.user.2")
-        return swaprepair::refused("model-parts repair needs an approved older file profile; preserved");
-    return result;
-}
-
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -329,6 +130,7 @@ size_t patch_resource_references(std::vector<uint8_t>& data,
         for (char& c : key) if (c == '\\') c = '/';
         auto it = relocated_resources.find(key);
         if (it == relocated_resources.end() || it->second.size() != key.size()) continue;
+        // only the characters that differ (the folder digits): the reference keeps its case and slashes
         bool replaced = false;
         for (size_t k = 0; k < key.size(); ++k) {
             if (key[k] == it->second[k]) continue;
@@ -585,173 +387,42 @@ template <class T> void wr(std::vector<uint8_t>& b, size_t o, T v) { memcpy(b.da
 template <class T> void put(std::vector<uint8_t>& b, T v) {
     size_t o = b.size(); b.resize(o + sizeof(T)); memcpy(b.data() + o, &v, sizeof(T));
 }
-
-struct CostumeTableLayout {
-    size_t r = 0, d = 0;
-    uint32_t root = 0, count = 0;
-    std::vector<uint32_t> types, array;
-    std::vector<size_t> start;
-    std::unordered_map<uint32_t, uint32_t> crcs;
-};
-
-bool costume_table_layout(const std::vector<uint8_t>& b, CostumeTableLayout& t,
-                          std::string& reason) {
-    auto fail = [&](const char* s) { reason = s; return false; };
-    // This format has no resource/user-data entries. Do not guess after a schema change.
-    if (b.size() < 104 || memcmp(b.data(), "USR\0", 4) != 0
-        || rd<uint32_t>(b, 4) || rd<uint32_t>(b, 8) || rd<uint32_t>(b, 12)
-        || rd<uint64_t>(b, 16) != 48 || rd<uint64_t>(b, 24) != 48
-        || rd<uint64_t>(b, 32) != 48)
-        return fail("unsupported costume table USR header");
-    t.r = 48;
-    if (memcmp(b.data() + t.r, "RSZ\0", 4) != 0 || rd<uint32_t>(b, t.r + 4) != 16
-        || rd<uint32_t>(b, t.r + 8) != 1 || rd<uint32_t>(b, t.r + 16) != 0
-        || rd<uint64_t>(b, t.r + 24) != 52)
-        return fail("unsupported costume table RSZ header");
-    t.count = rd<uint32_t>(b, t.r + 12);
-    t.root = rd<uint32_t>(b, t.r + 48);
-    const uint64_t d = rd<uint64_t>(b, t.r + 32);
-    if (t.count < 2 || t.count > (b.size() - t.r - 52) / 8
-        || t.root == 0 || t.root >= t.count || d != rd<uint64_t>(b, t.r + 40)
-        || d != align_up(52 + 8ull * t.count, 16) || d > b.size() - t.r
-        || rd<uint64_t>(b, t.r + 52) != 0)
-        return fail("invalid costume table offsets or instance count");
-    t.d = t.r + size_t(d);
-    t.types.resize(t.count); t.start.resize(t.count);
-    size_t pos = 0;
-    for (uint32_t i = 1; i < t.count; ++i) {
-        uint32_t type = rd<uint32_t>(b, t.r + 52 + 8ull * i);
-        uint32_t crc = rd<uint32_t>(b, t.r + 56 + 8ull * i);
-        t.types[i] = type;
-        auto c = t.crcs.emplace(type, crc);
-        if (!c.second && c.first->second != crc) return fail("inconsistent costume table type signature");
-        size_t s = align_up(pos, 4), end = 0;
-        if (s > b.size() - t.d) return fail("truncated costume table data");
-        if (type == T_COSTUME_MSG) end = align_up(s + 4, 8) + 16;
-        else if (type == T_COSTUME_REC) end = s + COSTUME_REC_SIZE;
-        else if (type == T_COSTUME_ROOT && i == t.root) {
-            if (b.size() - t.d - s < 4) return fail("truncated costume table root");
-            uint32_t n = rd<uint32_t>(b, t.d + s);
-            if (n > (b.size() - t.d - s - 4) / 4) return fail("invalid costume table root array");
-            end = s + 4 + 4ull * n;
-            for (uint32_t k = 0; k < n; ++k) t.array.push_back(rd<uint32_t>(b, t.d + s + 4 + 4ull * k));
-        } else return fail("unsupported costume table instance type or root");
-        if (end > b.size() - t.d) return fail("truncated costume table instance");
-        t.start[i] = s; pos = end;
-    }
-    if (t.types[t.root] != T_COSTUME_ROOT || pos != b.size() - t.d)
-        return fail("invalid costume table root or trailing data");
-    std::unordered_set<uint32_t> record_indices, record_ids;
-    for (uint32_t x : t.array)
-        if (x == 0 || x >= t.count || t.types[x] != T_COSTUME_REC || !record_indices.insert(x).second)
-            return fail("invalid or duplicate costume table record reference");
-    for (uint32_t i = 1; i < t.count; ++i) if (t.types[i] == T_COSTUME_REC) {
-        size_t s = t.d + t.start[i];
-        uint32_t m = rd<uint32_t>(b, s + COSTUME_REC_MSG);
-        if (!record_indices.count(i) || !record_ids.insert(rd<uint32_t>(b, s)).second
-            || m == 0 || m >= t.count || t.types[m] != T_COSTUME_MSG)
-            return fail("invalid costume record id, membership or message reference");
-    }
-    return true;
-}
-}
-
-bool refresh_costume_table(std::vector<uint8_t>& b,
-                           const std::vector<uint8_t>& current_vanilla,
-                           std::string* reason) {
-    std::string error;
-    auto fail = [&](const std::string& s) { if (reason) *reason = s; return false; };
-    CostumeTableLayout old, now;
-    if (!costume_table_layout(b, old, error)) return fail("shipped table: " + error);
-    if (!costume_table_layout(current_vanilla, now, error)) return fail("current table: " + error);
-    if (now.root + 1 != now.count) return fail("current vanilla table has instances after its root");
-    if (old.crcs != now.crcs) return fail("costume table type signatures differ from the current game");
-
-    std::unordered_set<uint32_t> record_ids, message_ids;
-    std::unordered_set<uint64_t> costume_keys;
-    std::unordered_set<std::string> message_guids;
-    auto guid = [](const std::vector<uint8_t>& src, const CostumeTableLayout& t, uint32_t i) {
-        size_t p = t.d + align_up(t.start[i] + 4, 8);
-        return std::string(reinterpret_cast<const char*>(src.data() + p), 16);
-    };
-    for (uint32_t i = 1; i < now.count; ++i) {
-        size_t p = now.d + now.start[i];
-        if (now.types[i] == T_COSTUME_MSG) {
-            message_ids.insert(rd<uint32_t>(current_vanilla, p));
-            message_guids.insert(guid(current_vanilla, now, i));
-        } else if (now.types[i] == T_COSTUME_REC) {
-            record_ids.insert(rd<uint32_t>(current_vanilla, p));
-            costume_keys.insert((uint64_t(rd<uint32_t>(current_vanilla, p + 8)) << 32)
-                                  | rd<uint32_t>(current_vanilla, p + 16));
-        }
-    }
-    std::vector<uint32_t> remap(old.count, UINT32_MAX);
-    const uint64_t count = uint64_t(now.count) + old.count - old.root - 1;
-    if (count > UINT32_MAX) return fail("too many costume table instances");
-    for (uint32_t i = old.root + 1; i < old.count; ++i) {
-        remap[i] = now.count + i - old.root - 1;
-        size_t p = old.d + old.start[i];
-        if (old.types[i] == T_COSTUME_MSG) {
-            if (!message_ids.insert(rd<uint32_t>(b, p)).second || !message_guids.insert(guid(b, old, i)).second)
-                return fail("generated costume message id or GUID collides with the current table");
-        } else {
-            uint32_t m = rd<uint32_t>(b, p + COSTUME_REC_MSG);
-            if (m <= old.root) return fail("generated costume record references a vanilla message");
-            if (!record_ids.insert(rd<uint32_t>(b, p)).second)
-                return fail("generated costume record id collides with the current table");
-            uint64_t key = (uint64_t(rd<uint32_t>(b, p + 8)) << 32) | rd<uint32_t>(b, p + 16);
-            if (!costume_keys.insert(key).second)
-                return fail("generated costume slot overlaps a current costume");
-        }
-    }
-    std::vector<uint32_t> array = now.array;
-    for (uint32_t i : old.array) if (i > old.root) array.push_back(remap[i]);
-    const size_t new_data_off = align_up(52 + 8ull * count, 16);
-    std::vector<uint8_t> out(current_vanilla.begin(), current_vanilla.begin() + now.r + 52 + 8ull * now.count);
-    wr<uint32_t>(out, now.r + 12, uint32_t(count));
-    wr<uint64_t>(out, now.r + 32, new_data_off);
-    wr<uint64_t>(out, now.r + 40, new_data_off);
-    out.insert(out.end(), b.begin() + old.r + 52 + 8ull * (old.root + 1),
-                          b.begin() + old.r + 52 + 8ull * old.count);
-    out.resize(now.r + new_data_off, 0);
-    // Preserve the current game's vanilla bytes and instance indices exactly, including metadata.
-    std::vector<uint8_t> data(current_vanilla.begin() + now.d,
-                              current_vanilla.begin() + now.d + now.start[now.root]);
-    auto pad = [&](size_t a) { data.resize(align_up(data.size(), a), 0); };
-    pad(4); put<uint32_t>(data, uint32_t(array.size()));
-    for (uint32_t x : array) put<uint32_t>(data, x);
-    for (uint32_t i = old.root + 1; i < old.count; ++i) {
-        size_t p = old.d + old.start[i];
-        pad(4);
-        if (old.types[i] == T_COSTUME_MSG) {
-            put<uint32_t>(data, rd<uint32_t>(b, p)); pad(8);
-            const std::string g = guid(b, old, i);
-            data.insert(data.end(), g.begin(), g.end());
-        } else {
-            size_t at = data.size();
-            data.insert(data.end(), b.begin() + p, b.begin() + p + COSTUME_REC_SIZE);
-            wr<uint32_t>(data, at + COSTUME_REC_MSG, remap[rd<uint32_t>(b, p + COSTUME_REC_MSG)]);
-        }
-    }
-    out.insert(out.end(), data.begin(), data.end());
-    CostumeTableLayout checked;
-    if (!costume_table_layout(out, checked, error)) return fail("rebased table: " + error);
-    b.swap(out);
-    if (reason) reason->clear();
-    return true;
 }
 
 bool trim_costume_table(std::vector<uint8_t>& b,
                         const std::unordered_set<uint32_t>& keep_ids,
                         size_t* kept_records, size_t* removed_records,
                         const std::unordered_map<uint32_t, uint32_t>* message_for_record) {
-    CostumeTableLayout layout;
-    std::string error;
-    if (!costume_table_layout(b, layout, error)) return false;
-    const size_t R = layout.r, D = layout.d, inst_off = 52;
-    const uint32_t ic = layout.count, root = layout.root;
-    const auto& type = layout.types;
-    const auto& start = layout.start;
+    if (b.size() < 48 || memcmp(b.data(), "USR\0", 4) != 0) return false;
+    const size_t R = (size_t)rd<uint64_t>(b, 32);                    // RSZ block
+    if (R + 56 > b.size() || memcmp(b.data() + R, "RSZ\0", 4) != 0) return false;
+    const uint32_t oc = rd<uint32_t>(b, R + 8), ic = rd<uint32_t>(b, R + 12), udc = rd<uint32_t>(b, R + 16);
+    const size_t inst_off = (size_t)rd<uint64_t>(b, R + 24);
+    const size_t data_off = (size_t)rd<uint64_t>(b, R + 32);
+    const size_t ud_off   = (size_t)rd<uint64_t>(b, R + 40);
+    if (oc != 1 || udc != 0 || data_off != ud_off || inst_off != 52) return false;
+    const int32_t root = rd<int32_t>(b, R + 48);
+    if (root <= 0 || (uint32_t)root >= ic || R + inst_off + 8ull * ic > b.size()) return false;
+    std::vector<uint32_t> type(ic);
+    for (uint32_t i = 0; i < ic; i++) type[i] = rd<uint32_t>(b, R + inst_off + 8ull * i);
+    if (type[root] != T_COSTUME_ROOT) return false;
+
+    // Where every instance starts (relative to the data block)
+    const size_t D = R + data_off;
+    std::vector<size_t> start(ic, 0);
+    size_t pos = 0;
+    for (uint32_t i = 1; i < ic; i++) {
+        size_t s = align_up(pos, 4), e;
+        if (type[i] == T_COSTUME_MSG) e = align_up(s + 4, 8) + 16;
+        else if (type[i] == T_COSTUME_REC) e = s + COSTUME_REC_SIZE;
+        else if (type[i] == T_COSTUME_ROOT) {
+            if (D + s + 4 > b.size()) return false;
+            e = s + 4 + 4ull * rd<uint32_t>(b, D + s);
+        } else return false;
+        if (D + e > b.size()) return false;
+        start[i] = s; pos = e;
+    }
+    if (D + pos != b.size()) return false;
 
     // Tail instances to keep: all messages, the records whose id is wanted
     std::vector<uint32_t> remap(ic, UINT32_MAX), kept;
@@ -823,14 +494,56 @@ bool trim_costume_table(std::vector<uint8_t>& b,
     return true;
 }
 
+namespace {
+// The game's costume table: instance types and where each instance starts in the data block. Same checks as
+// trim_costume_table, plus: nothing after the root (the table as the game ships it).
+struct CostumeTable {
+    size_t R = 0, inst_off = 0, D = 0;
+    uint32_t ic = 0, root = 0;
+    std::vector<uint32_t> type;
+    std::vector<size_t> start;
+};
+
+bool read_costume_table(const std::vector<uint8_t>& b, CostumeTable& t) {
+    if (b.size() < 48 || memcmp(b.data(), "USR\0", 4) != 0) return false;
+    t.R = (size_t)rd<uint64_t>(b, 32);
+    if (t.R + 56 > b.size() || memcmp(b.data() + t.R, "RSZ\0", 4) != 0) return false;
+    const uint32_t oc = rd<uint32_t>(b, t.R + 8), udc = rd<uint32_t>(b, t.R + 16);
+    t.ic = rd<uint32_t>(b, t.R + 12);
+    t.inst_off = (size_t)rd<uint64_t>(b, t.R + 24);
+    const size_t data_off = (size_t)rd<uint64_t>(b, t.R + 32), ud_off = (size_t)rd<uint64_t>(b, t.R + 40);
+    if (oc != 1 || udc != 0 || data_off != ud_off || t.inst_off != 52) return false;
+    const int32_t root = rd<int32_t>(b, t.R + 48);
+    if (root <= 0 || (uint32_t)root != t.ic - 1 || t.R + t.inst_off + 8ull * t.ic > b.size()) return false;
+    t.root = (uint32_t)root;
+    t.type.assign(t.ic, 0);
+    for (uint32_t i = 0; i < t.ic; i++) t.type[i] = rd<uint32_t>(b, t.R + t.inst_off + 8ull * i);
+    if (t.type[t.root] != T_COSTUME_ROOT) return false;
+    t.D = t.R + data_off;
+    t.start.assign(t.ic, 0);
+    size_t pos = 0;
+    for (uint32_t i = 1; i < t.ic; i++) {
+        size_t s = align_up(pos, 4), e;
+        if (t.type[i] == T_COSTUME_MSG) e = align_up(s + 4, 8) + 16;
+        else if (t.type[i] == T_COSTUME_REC) e = s + COSTUME_REC_SIZE;
+        else if (t.type[i] == T_COSTUME_ROOT) {
+            if (t.D + s + 4 > b.size()) return false;
+            e = s + 4 + 4ull * rd<uint32_t>(b, t.D + s);
+        } else return false;
+        if (t.D + e > b.size()) return false;
+        t.start[i] = s; pos = e;
+    }
+    return t.D + pos == b.size();
+}
+}  // namespace
+
 bool costume_table_records(const std::vector<uint8_t>& b, std::vector<std::pair<int, int>>& out) {
-    CostumeTableLayout t;
-    std::string error;
-    if (!costume_table_layout(b, t, error) || t.root + 1 != t.count) return false;
+    CostumeTable t;
+    if (!read_costume_table(b, t)) return false;
     out.clear();
-    for (uint32_t i = 1; i < t.count; i++)
-        if (t.types[i] == T_COSTUME_REC)
-            out.push_back({ (int)rd<uint32_t>(b, t.d + t.start[i] + 8), (int)rd<uint32_t>(b, t.d + t.start[i] + 16) });
+    for (uint32_t i = 1; i < t.ic; i++)
+        if (t.type[i] == T_COSTUME_REC)
+            out.push_back({ (int)rd<uint32_t>(b, t.D + t.start[i] + 8), (int)rd<uint32_t>(b, t.D + t.start[i] + 16) });
     return true;
 }
 
@@ -848,7 +561,7 @@ bool guid_bytes(std::string_view text, std::vector<uint8_t>& out) {
     for (int i = 0; i < 16; i++) {
         unsigned v = 0;
         for (int k = 0; k < 2; k++) {
-            char c = (char)tolower((unsigned char)hex[2 * i + k]);
+            char c = (char)std::tolower((unsigned char)hex[2 * i + k]);
             if (c >= '0' && c <= '9') v = v * 16 + (c - '0');
             else if (c >= 'a' && c <= 'f') v = v * 16 + (c - 'a' + 10);
             else return false;
@@ -864,48 +577,44 @@ bool guid_bytes(std::string_view text, std::vector<uint8_t>& out) {
 bool add_costume_records(std::vector<uint8_t>& b, const std::vector<CostumeSlotRecord>& records,
                          uint32_t msg_id_base, const std::vector<std::vector<uint8_t>>& message_guids,
                          std::string* err) {
-    auto fail = [&](const std::string& why) { if (err) *err = why; return false; };
-    CostumeTableLayout t;
-    std::string error;
-    if (!costume_table_layout(b, t, error)) return fail(error);
-    if (t.root + 1 != t.count) return fail("the game's table already has instances after its root");
+    auto fail = [&](const char* why) { if (err) *err = why; return false; };
+    CostumeTable t;
+    if (!read_costume_table(b, t)) return fail("costume table layout not recognised");
     uint32_t tmpl_rec = 0, tmpl_msg = 0;
-    for (uint32_t i = 1; i < t.count; i++) {
-        if (!tmpl_msg && t.types[i] == T_COSTUME_MSG) tmpl_msg = i;
-        if (!tmpl_rec && t.types[i] == T_COSTUME_REC && rd<uint32_t>(b, t.d + t.start[i] + 8) == 1
-            && rd<uint32_t>(b, t.d + t.start[i] + 16) == 0) tmpl_rec = i;
+    for (uint32_t i = 1; i < t.ic; i++) {
+        if (!tmpl_msg && t.type[i] == T_COSTUME_MSG) tmpl_msg = i;
+        if (!tmpl_rec && t.type[i] == T_COSTUME_REC && rd<uint32_t>(b, t.D + t.start[i] + 8) == 1
+            && rd<uint32_t>(b, t.D + t.start[i] + 16) == 0) tmpl_rec = i;
     }
     if (!tmpl_rec || !tmpl_msg) return fail("no record of fighter 1 / Outfit 1, or no message, to copy");
     for (auto& g : message_guids) if (g.size() != 16) return fail("a message GUID is not 16 bytes");
     for (auto& r : records) if (r.message >= message_guids.size()) return fail("a record names a missing message");
 
-    const size_t R = t.r, inst_off = 52;
     const uint32_t n_msg = (uint32_t)message_guids.size(), n_rec = (uint32_t)records.size();
-    const uint64_t new_count = uint64_t(t.count) + n_msg + n_rec;
-    if (new_count > UINT32_MAX) return fail("too many costume table instances");
-    const uint32_t new_ic = (uint32_t)new_count;
-    const size_t new_data_off = align_up(inst_off + 8ull * new_ic, 16);
+    const uint32_t new_ic = t.ic + n_msg + n_rec;
+    const size_t new_data_off = align_up(t.inst_off + 8ull * new_ic, 16);
 
     // Headers and instance infos: the game's, then a copy of its message's and record's (type, crc)
-    std::vector<uint8_t> out(b.begin(), b.begin() + R + inst_off + 8ull * t.count);
-    wr<uint32_t>(out, R + 12, new_ic);
-    wr<uint64_t>(out, R + 32, new_data_off);
-    wr<uint64_t>(out, R + 40, new_data_off);
-    const size_t info = R + inst_off;
+    std::vector<uint8_t> out(b.begin(), b.begin() + t.R + t.inst_off + 8ull * t.ic);
+    wr<uint32_t>(out, t.R + 12, new_ic);
+    wr<uint64_t>(out, t.R + 32, new_data_off);
+    wr<uint64_t>(out, t.R + 40, new_data_off);
+    const size_t info = t.R + t.inst_off;
     for (uint32_t k = 0; k < n_msg; k++)
         out.insert(out.end(), b.begin() + info + 8ull * tmpl_msg, b.begin() + info + 8ull * tmpl_msg + 8);
     for (uint32_t k = 0; k < n_rec; k++)
         out.insert(out.end(), b.begin() + info + 8ull * tmpl_rec, b.begin() + info + 8ull * tmpl_rec + 8);
-    out.resize(R + new_data_off, 0);
+    out.resize(t.R + new_data_off, 0);
 
     // Data: the game's instances up to the root, the root with the new records at the end of its array,
     // the messages, the records
-    std::vector<uint8_t> data(b.begin() + t.d, b.begin() + t.d + t.start[t.root]);
+    std::vector<uint8_t> data(b.begin() + t.D, b.begin() + t.D + t.start[t.root]);
     auto pad_to = [&](size_t a) { data.resize(align_up(data.size(), a), 0); };
+    const uint32_t n_arr = rd<uint32_t>(b, t.D + t.start[t.root]);
     pad_to(4);
-    put<uint32_t>(data, (uint32_t)t.array.size() + n_rec);
-    for (uint32_t x : t.array) put<uint32_t>(data, x);
-    for (uint32_t k = 0; k < n_rec; k++) put<uint32_t>(data, t.count + n_msg + k);
+    put<uint32_t>(data, n_arr + n_rec);
+    data.insert(data.end(), b.begin() + t.D + t.start[t.root] + 4, b.begin() + t.D + t.start[t.root] + 4 + 4ull * n_arr);
+    for (uint32_t k = 0; k < n_rec; k++) put<uint32_t>(data, t.ic + n_msg + k);
     for (uint32_t k = 0; k < n_msg; k++) {
         pad_to(4); put<uint32_t>(data, msg_id_base + k);
         pad_to(8); data.insert(data.end(), message_guids[k].begin(), message_guids[k].end());
@@ -913,21 +622,19 @@ bool add_costume_records(std::vector<uint8_t>& b, const std::vector<CostumeSlotR
     for (auto& r : records) {
         pad_to(4);
         const size_t o = data.size();
-        data.insert(data.end(), b.begin() + t.d + t.start[tmpl_rec], b.begin() + t.d + t.start[tmpl_rec] + COSTUME_REC_SIZE);
+        data.insert(data.end(), b.begin() + t.D + t.start[tmpl_rec], b.begin() + t.D + t.start[tmpl_rec] + COSTUME_REC_SIZE);
         wr<uint32_t>(data, o + 0, r.id);
         wr<uint32_t>(data, o + 4, r.id);                    // ManageId
         wr<uint32_t>(data, o + 8, r.fighter);
         wr<uint32_t>(data, o + 12, 0);                      // isDefault = false (+3 padding)
         wr<uint32_t>(data, o + 16, r.costume_no);
-        wr<uint32_t>(data, o + COSTUME_REC_MSG, t.count + r.message);
+        wr<uint32_t>(data, o + COSTUME_REC_MSG, t.ic + r.message);
         data[o + 25] = data[o + 26] = data[o + 27] = 0;     // isShowName kept, its padding cleared
         wr<uint32_t>(data, o + 28, r.sort_no);
         wr<uint32_t>(data, o + 32, r.costume_no);           // visualNo
         wr<uint32_t>(data, o + 36, 0);                      // arrangeId
     }
     out.insert(out.end(), data.begin(), data.end());
-    CostumeTableLayout checked;
-    if (!costume_table_layout(out, checked, error)) return fail("table with slot records: " + error);
     b.swap(out);
     return true;
 }
@@ -1135,6 +842,187 @@ bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<ui
     CmdDoc doc;
     if (!cmd_parse(data, doc)) return false;
     out = cmd_write(doc, nullptr);
+    return true;
+}
+
+namespace {
+std::string cmd_name(const CmdInst& in) {   // a ClusterData's Name
+    std::string s;
+    if (in.fields.empty()) return s;
+    const auto& raw = in.fields[0].raw;
+    for (size_t k = 0; k + 1 < raw.size(); k += 2) {
+        const uint16_t ch = uint16_t(raw[k] | (raw[k + 1] << 8));
+        if (!ch) break;
+        s += char(ch);
+    }
+    return s;
+}
+uint32_t cmd_part_type(const CmdInst& md) {   // a MaterialData's Type (ePartsType)
+    uint32_t t = UINT32_MAX;
+    if (!md.fields.empty() && md.fields[0].raw.size() == 4) memcpy(&t, md.fields[0].raw.data(), 4);
+    return t;
+}
+// The MaterialData instances of a colour file (the root's Parts), or empty when the tree is not the expected one
+std::vector<uint32_t> cmd_parts(const CmdDoc& doc) {
+    if (doc.objects.empty() || doc.objects[0] >= doc.inst.size()) return {};
+    const CmdInst& root = doc.inst[doc.objects[0]];
+    if (root.fields.size() != 1 || root.fields[0].kind != 'O') return {};
+    for (uint32_t m : root.fields[0].refs)
+        if (m == 0 || m >= doc.inst.size() || doc.inst[m].fields.size() < 2 || doc.inst[m].fields[1].kind != 'O') return {};
+    return root.fields[0].refs;
+}
+size_t cmd_cluster_count(const CmdDoc& doc) {
+    size_t n = 0;
+    for (uint32_t m : cmd_parts(doc)) n += doc.inst[m].fields[1].refs.size();
+    return n;
+}
+constexpr uint32_t T_CUSTOMIZE_COLOR = 0x123a0e06;   // CustomizeColorData: Enable, Color, Option
+// The CustomizeColorData instances of a material's cluster of a part type in a colour file (empty when not named)
+std::vector<const CmdInst*> cmd_slots(const CmdDoc& doc, uint32_t type, const std::string& name) {
+    std::vector<const CmdInst*> out;
+    for (uint32_t m : cmd_parts(doc)) {
+        if (cmd_part_type(doc.inst[m]) != type) continue;
+        for (uint32_t c : doc.inst[m].fields[1].refs) {
+            if (!c || c >= doc.inst.size() || cmd_name(doc.inst[c]) != name || doc.inst[c].fields.size() < 2) continue;
+            for (uint32_t k : doc.inst[c].fields[1].refs)
+                out.push_back(k && k < doc.inst.size() && doc.inst[k].type == T_CUSTOMIZE_COLOR &&
+                              doc.inst[k].fields.size() >= 2 && doc.inst[k].fields[1].raw.size() == 4 ? &doc.inst[k] : nullptr);
+            return out;
+        }
+    }
+    return out;
+}
+// Inserts instances at index pos (their references already numbered as they will be), every reference to pos and
+// after moving with them
+void cmd_insert(CmdDoc& doc, uint32_t pos, std::vector<CmdInst> block) {
+    const uint32_t k = (uint32_t)block.size();
+    for (auto& in : doc.inst)
+        for (auto& f : in.fields)
+            for (auto& r : f.refs) if (r >= pos) r += k;
+    for (auto& o : doc.objects) if (o >= pos) o += k;
+    doc.inst.insert(doc.inst.begin() + pos, std::make_move_iterator(block.begin()), std::make_move_iterator(block.end()));
+}
+}
+
+bool cmd_add_missing_clusters(std::vector<uint8_t>& data, const std::vector<const std::vector<uint8_t>*>& sources,
+                              const std::vector<std::string>& materials, std::vector<std::string>& added,
+                              std::string* why, const std::vector<const std::vector<uint8_t>*>* bases) {
+    auto fail = [&](const char* w) { if (why) *why = w; return false; };
+    CmdDoc doc;
+    if (!cmd_parse(data, doc) || cmd_parts(doc).empty()) return fail("colour file layout not understood");
+    if (cmd_write(doc, nullptr) != data) return fail("colour file does not read back byte for byte");
+    const size_t before = cmd_cluster_count(doc);
+    std::unordered_map<uint32_t, uint32_t> crc;   // type -> CRC in this file
+    for (size_t i = 1; i < doc.inst.size(); i++) crc.emplace(doc.inst[i].type, doc.inst[i].crc);
+    auto has = [&](uint32_t type, const std::string& name) {
+        for (uint32_t m : cmd_parts(doc))
+            if (cmd_part_type(doc.inst[m]) == type)
+                for (uint32_t c : doc.inst[m].fields[1].refs)
+                    if (c && c < doc.inst.size() && cmd_name(doc.inst[c]) == name) return true;
+        return false;
+    };
+    std::vector<CmdDoc> src(sources.size());
+    std::vector<bool> src_ok(sources.size(), false);
+    for (size_t s = 0; s < sources.size(); s++)
+        src_ok[s] = sources[s] && cmd_parse(*sources[s], src[s]) && !cmd_parts(src[s]).empty();
+    std::vector<CmdDoc> base(sources.size());       // each source's default colour file (bases given)
+    std::vector<bool> base_ok(sources.size(), false);
+    for (size_t s = 0; bases && s < sources.size() && s < bases->size(); s++)
+        base_ok[s] = (*bases)[s] && cmd_parse(*(*bases)[s], base[s]) && !cmd_parts(base[s]).empty();
+    std::vector<std::string> done;
+    for (auto& name : materials) {
+        if (std::find(done.begin(), done.end(), name) != done.end()) continue;
+        done.push_back(name);
+        for (size_t s = 0; s < sources.size(); s++) {   // the first source naming the material gives every entry of it
+            if (!src_ok[s]) continue;
+            const CmdDoc& sd = src[s];
+            bool found = false;
+            for (uint32_t sm : cmd_parts(sd)) {
+                const uint32_t type = cmd_part_type(sd.inst[sm]);
+                for (uint32_t sc : sd.inst[sm].fields[1].refs) {
+                    if (!sc || sc >= sd.inst.size() || cmd_name(sd.inst[sc]) != name) continue;
+                    found = true;
+                    if (has(type, name)) continue;
+                    // The cluster and every instance under it, in the source's order (an instance after the ones
+                    // it references, as the game writes them)
+                    std::vector<uint32_t> sub, todo{sc};
+                    std::vector<bool> seen(sd.inst.size(), false);
+                    bool bad = false;
+                    while (!todo.empty()) {
+                        const uint32_t i = todo.back(); todo.pop_back();
+                        if (!i || seen[i]) continue;
+                        if (i >= sd.inst.size()) { bad = true; break; }
+                        seen[i] = true;
+                        sub.push_back(i);
+                        for (auto& f : sd.inst[i].fields) for (uint32_t r : f.refs) todo.push_back(r);
+                    }
+                    std::sort(sub.begin(), sub.end());
+                    for (uint32_t i : sub) {
+                        auto it = crc.find(sd.inst[i].type);
+                        if (it != crc.end() && it->second != sd.inst[i].crc) bad = true;   // another layout
+                        for (auto& f : sd.inst[i].fields) for (uint32_t r : f.refs) if (r && r > i) bad = true;
+                    }
+                    if (bad || sub.empty() || sub.back() != sc) continue;
+                    // Where it goes: right before the MaterialData of that part type, else a new MaterialData of
+                    // that type right before the root
+                    uint32_t md = 0;
+                    for (uint32_t m : cmd_parts(doc)) if (cmd_part_type(doc.inst[m]) == type) { md = m; break; }
+                    const uint32_t pos = md ? md : doc.objects[0];
+                    std::unordered_map<uint32_t, uint32_t> at;
+                    for (size_t x = 0; x < sub.size(); x++) at[sub[x]] = pos + (uint32_t)x;
+                    std::vector<CmdInst> block;
+                    for (uint32_t i : sub) {
+                        CmdInst in = sd.inst[i];
+                        for (auto& f : in.fields) for (auto& r : f.refs) if (r) r = at.at(r);
+                        block.push_back(std::move(in));
+                    }
+                    const uint32_t cl = pos + (uint32_t)sub.size() - 1;
+                    if (base_ok[s]) {
+                        // each colour slot as the game shows it (the default file's colour unless the source
+                        // enables its own), enabled: SetColor gives it to a material swapped in at runtime
+                        const std::vector<const CmdInst*> def = cmd_slots(base[s], type, name);
+                        const CmdInst& bc = block[cl - pos];
+                        const std::vector<uint32_t> slots = bc.fields.size() >= 2 ? bc.fields[1].refs : std::vector<uint32_t>{};
+                        for (size_t k = 0; k < slots.size(); k++) {
+                            if (slots[k] < pos || slots[k] - pos >= block.size()) continue;
+                            CmdInst& cc = block[slots[k] - pos];
+                            if (cc.type != T_CUSTOMIZE_COLOR || cc.fields.size() < 2 || cc.fields[0].raw.size() != 1 ||
+                                cc.fields[1].raw.size() != 4) continue;
+                            if (!cc.fields[0].raw[0] && k < def.size() && def[k]) cc.fields[1].raw = def[k]->fields[1].raw;
+                            cc.fields[0].raw[0] = 1;
+                        }
+                    }
+                    if (!md) {
+                        if (auto it = crc.find(sd.inst[sm].type); it != crc.end() && it->second != sd.inst[sm].crc) continue;
+                        CmdInst m = sd.inst[sm];
+                        m.fields[1].refs = {cl};
+                        block.push_back(std::move(m));
+                    }
+                    const uint32_t k = (uint32_t)block.size();
+                    for (auto& in : block) crc.emplace(in.type, in.crc);
+                    cmd_insert(doc, pos, std::move(block));
+                    if (md) {
+                        doc.inst[md + k].fields[1].refs.push_back(cl);
+                    } else {
+                        // the new part at the end of the root's Parts: the parts there keep their positions (the
+                        // Color Mod lays its colour trees over the live data part by part, by position)
+                        doc.inst[doc.objects[0]].fields[0].refs.push_back(pos + k - 1);
+                    }
+                    added.push_back(name);
+                }
+            }
+            if (found) break;
+        }
+    }
+    if (added.empty()) return true;
+    std::vector<uint8_t> out = cmd_write(doc, nullptr);
+    // Read back with the same parser: every entry there, the others unchanged
+    CmdDoc back;
+    if (!cmd_parse(out, back) || cmd_cluster_count(back) != before + added.size()) {
+        added.clear();
+        return fail("the written colour file does not read back");
+    }
+    data = std::move(out);
     return true;
 }
 
@@ -1384,7 +1272,35 @@ bool modernize_mdf2(const std::vector<uint8_t>& mod, const std::vector<uint8_t>&
     return true;
 }
 
-bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
+size_t mdf2_rebind_textures(std::vector<uint8_t>& data,
+                            const std::unordered_map<std::string, std::string>& to) {
+    std::vector<MdfMat> mats;
+    if (!mdf_read(data, mats)) return 0;
+    auto norm = [](std::string s) {
+        size_t a = s.find_first_not_of("@ ");
+        s = a == std::string::npos ? std::string() : s.substr(a);
+        for (auto& c : s) c = c == '\\' ? '/' : char(std::tolower((unsigned char)c));
+        for (size_t q; (q = s.find("//")) != std::string::npos; ) s.erase(q, 1);
+        return s;
+    };
+    size_t n = 0;
+    for (auto& m : mats)
+        for (auto& t : m.tex) {
+            auto it = to.find(norm(t.path));
+            if (it == to.end()) continue;
+            // the new path goes to the end of the file, the binding points at it (as modernize_mdf2)
+            const uint64_t at = data.size();
+            for (char c : it->second) { data.push_back((uint8_t)c); data.push_back(0); }
+            data.push_back(0); data.push_back(0);
+            memcpy(data.data() + t.entry_at + 16, &at, 8);
+            n++;
+        }
+    return n;
+}
+
+// The level texture_channel_means reads: format, block size, level size in pixels and blocks, place in the file
+struct SmallLevel { int fmt, bs; uint32_t mw, mh, bw, bh; uint64_t off, size; };
+static bool small_level(const std::vector<uint8_t>& b, uint64_t file_size, SmallLevel& lv) {
     if (b.size() < 40 || memcmp(b.data(), "TEX\0", 4) != 0) return false;
     const uint16_t w = rd<uint16_t>(b, 8), h = rd<uint16_t>(b, 10);
     const int n = b[15] / 16, fmt = rd<int32_t>(b, 16);
@@ -1401,12 +1317,22 @@ bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
         if (40 + 16ull * (i + 1) > b.size() || mw < 4 || mh < 4) return false;
         const uint64_t off = rd<uint64_t>(b, 40 + 16ull * i);
         const uint32_t bw = (mw + 3) / 4, bh = (mh + 3) / 4;
-        if (off + uint64_t(bw) * bh * bs > b.size()) return false;
+        if (off + uint64_t(bw) * bh * bs > file_size) return false;
+        lv = {fmt, bs, mw, mh, bw, bh, off, uint64_t(bw) * bh * bs};
+        return true;
+    }
+    return false;
+}
+
+static void level_means(const SmallLevel& lv, const uint8_t* data, float out[4]) {
+    const int fmt = lv.fmt, bs = lv.bs;
+    const uint32_t mw = lv.mw, mh = lv.mh, bw = lv.bw, bh = lv.bh;
+    {
         double sum[4] = {0, 0, 0, 0};
         uint8_t px[4 * 4 * 4];
         for (uint32_t by = 0; by < bh; by++)
             for (uint32_t bx = 0; bx < bw; bx++) {
-                const uint8_t* blk = b.data() + off + (uint64_t(by) * bw + bx) * bs;
+                const uint8_t* blk = data + (uint64_t(by) * bw + bx) * bs;
                 memset(px, 0, sizeof px);
                 switch (fmt) {
                     case 71: case 72: bcdec_bc1(blk, px, 16); break;
@@ -1428,7 +1354,28 @@ bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
                         for (int c = 0; c < 4; c++) sum[c] += px[(y * 4 + x) * 4 + c];
             }
         for (int c = 0; c < 4; c++) out[c] = float(sum[c] / (255.0 * mw * mh));
-        return true;
     }
-    return false;
+}
+
+bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
+    SmallLevel lv;
+    if (!small_level(b, b.size(), lv)) return false;
+    level_means(lv, b.data() + lv.off, out);
+    return true;
+}
+
+bool texture_small_level(const std::vector<uint8_t>& head, uint64_t file_size, uint64_t& off, uint64_t& size) {
+    SmallLevel lv;
+    if (!small_level(head, file_size, lv)) return false;
+    off = lv.off;
+    size = lv.size;
+    return true;
+}
+
+bool texture_level_means(const std::vector<uint8_t>& head, uint64_t file_size, const std::vector<uint8_t>& level,
+                         float out[4]) {
+    SmallLevel lv;
+    if (!small_level(head, file_size, lv) || level.size() != lv.size) return false;
+    level_means(lv, level.data(), out);
+    return true;
 }

@@ -138,72 +138,43 @@ bool split_name(const std::u16string& u, std::string& fd, int& cno) {
     return true;
 }
 
-std::u16string widen(const std::string& s) { return std::u16string(s.begin(), s.end()); }
+std::u16string widen(const std::string& s) { return std::u16string(s.begin(), s.end()) + u'\0'; }
 
 } // namespace
 
-bool read_scene_costume_folders(const std::vector<uint8_t>& scn, std::map<std::string, std::set<int>>& out,
-                                std::string* err) {
-    out.clear();
+std::map<std::string, std::set<int>> scene_costume_folders(const std::vector<uint8_t>& scn) {
+    std::map<std::string, std::set<int>> out;
     Scene s;
-    if (!parse_scene(scn, s, err)) return false;
+    if (!parse_scene(scn, s, nullptr)) return out;
     for (auto& fi : s.folders) {
         std::string fd; int c;
         if (split_name(s.inst[s.objs[fi.first]].name, fd, c)) out[fd].insert(c);
     }
-    return true;
-}
-
-std::map<std::string, std::set<int>> scene_costume_folders(const std::vector<uint8_t>& scn) {
-    std::map<std::string, std::set<int>> out;
-    if (!read_scene_costume_folders(scn, out, nullptr)) out.clear();
     return out;
 }
 
 bool add_scene_folders(std::vector<uint8_t>& scn, const std::vector<std::string>& fighter_dirs,
-                       SlotTemplate rule, int first, int last, std::string* err) {
+                       bool prefer_v04, int first, int last, std::string* err) {
     Scene s;
     if (!parse_scene(scn, s, err)) return false;
     if (first < 0 || last < first || last > 1000) return fail(err, "bad costume range");
 
-    // Costume folders per fighter, in folder table order
-    std::map<std::string, std::vector<std::pair<int, size_t>>> own;   // dir -> (costume, folder index)
+    // Template per fighter: the lowest rank wins (v04 first when prefer_v04, else v00 only); on a tie
+    // the first folder in the table does.
+    struct Tmpl { int rank; size_t folder; };
+    std::map<std::string, Tmpl> tmpl;
     for (size_t i = 0; i < s.folders.size(); i++) {
         std::string fd; int c;
-        if (split_name(s.inst[s.objs[s.folders[i].first]].name, fd, c)) own[fd].push_back({c, i});
+        if (!split_name(s.inst[s.objs[s.folders[i].first]].name, fd, c)) continue;
+        int rank = prefer_v04 ? (c == 4 ? 0 : 1 + c) : (c == 0 ? 0 : -1);
+        if (rank < 0) continue;
+        auto it = tmpl.find(fd);
+        if (it == tmpl.end() || rank < it->second.rank) tmpl[fd] = {rank, i};
     }
-    // Template per fighter: v00 (root scene) or v04, else the highest costume (version scenes). When two
-    // folders share that name the last one in the table is taken, as static_slots.py does.
-    auto same_look = [&](const Folder& a, const Folder& b) {
-        return a.tag == b.tag && a.upd == b.upd && a.draw == b.draw && a.startup == b.startup
-            && std::memcmp(a.offset, b.offset, sizeof a.offset) == 0;
-    };
+
     std::vector<std::string> dirs(fighter_dirs);
     std::sort(dirs.begin(), dirs.end());
     dirs.erase(std::unique(dirs.begin(), dirs.end()), dirs.end());
-    std::map<std::string, size_t> tmpl;
-    std::vector<std::string> with_v04, others;
-    for (auto& fd : dirs) {
-        auto o = own.find(fd);
-        if (o == own.end()) return fail(err, "a fighter has no costume folder to copy in this scene");
-        int want = -1;
-        for (auto& [c, i] : o->second) {
-            if (rule == SlotTemplate::V00 ? c == 0 : c == 4) want = c;
-        }
-        if (want < 0 && rule == SlotTemplate::V00) return fail(err, "a fighter has no v00 folder to copy");
-        if (want < 0) {
-            // No DriveTech folder (a new fighter): the highest costume, all of them looking the same
-            for (auto& [c, i] : o->second) {
-                want = std::max(want, c);
-                if (!same_look(s.inst[s.objs[s.folders[i].first]], s.inst[s.objs[s.folders[o->second[0].second].first]]))
-                    return fail(err, "a fighter without v04 has costume folders that differ in Tag/flags/offset");
-            }
-        }
-        for (auto& [c, i] : o->second) if (c == want) tmpl[fd] = i;
-        (rule == SlotTemplate::V04_OR_LAST && want != 4 ? others : with_v04).push_back(fd);
-    }
-    dirs = with_v04;
-    dirs.insert(dirs.end(), others.begin(), others.end());
 
     // New instances go at the end of the instance table, new objects at the end of the object table.
     std::vector<uint8_t> data(scn.begin() + s.data, scn.end());
@@ -211,19 +182,16 @@ bool add_scene_folders(std::vector<uint8_t>& scn, const std::vector<std::string>
     auto folders = s.folders;
     size_t ninst = s.inst_count;
     for (auto& fd : dirs) {
-        const auto tf = s.folders[tmpl[fd]];
+        auto it = tmpl.find(fd);
+        if (it == tmpl.end()) continue;
+        const auto tf = s.folders[it->second.folder];
         const Folder& src = s.inst[s.objs[tf.first]];
         for (int c = first; c < last; c++) {
             char nm[32];
             std::snprintf(nm, sizeof nm, "%sv%02d", fd.c_str(), c);
             Folder f = src;
-            // the game's strings end with their NUL; a template without one gives names without
-            auto nul = [](const std::u16string& t, std::u16string v) {
-                if (!t.empty() && t.back() == u'\0') v += u'\0';
-                return v;
-            };
-            f.name = nul(src.name, widen(nm));
-            f.path = nul(src.path, widen("Product/CharParam/esf/" + fd + "/" + nm + ".scn"));
+            f.name = widen(nm);
+            f.path = widen("Product/CharParam/esf/" + fd + "/" + nm + ".scn");
             wr_folder(data, f);
             objs.push_back((int32_t)ninst++);
             folders.push_back({(int32_t)objs.size() - 1, tf.second});

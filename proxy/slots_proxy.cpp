@@ -38,6 +38,50 @@ static wchar_t g_chain_path[MAX_PATH];
 static wchar_t g_dll_dir[MAX_PATH];
 #ifndef SLOTS_NO_STAGES
 static std::vector<StageVariant> g_stage_variants;     // read by the watcher for the whole session
+
+// For the native plugin (SF6_CostumeSlotsNative.dll, plugin/src/stages.cpp): the stage selection of a menu applied at once,
+// when a battle, a training stage or a replay is set up (stage_redirect.hpp). Found with GetProcAddress; an older proxy
+// without it leaves the plugin on state.json alone.
+extern "C" __declspec(dllexport) int SF6StageSlots_Apply(const char* state_json) {
+    __try { return stage_slots_apply(state_json); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+// The title screen's background chosen in the game, served at the next return to the title (stage_redirect.hpp)
+extern "C" __declspec(dllexport) void SF6TitleSlots_Select(const char* choice) {
+    __try { title_slots_select(choice); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+// On "random": the next visit's background (the plugin, once the title screen has been left)
+extern "C" __declspec(dllexport) int SF6TitleSlots_Next() {
+    __try { return title_slots_next(); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+// On "random": another background for the next cycle of the visit on screen (the core's playlist)
+extern "C" __declspec(dllexport) int SF6TitleSlots_Draw(const char* not_key, char* buf, int cap) {
+    __try { return title_slots_draw(not_key, buf, cap); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+// Random's selection, changed in the game (comma-separated keys)
+extern "C" __declspec(dllexport) void SF6TitleSlots_Pool(const char* keys) {
+    __try { title_slots_pool(keys); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+// The background the title shows: "game" or a pack's key (the core's OVERDRIVE EDITION line follows it)
+extern "C" __declspec(dllexport) int SF6TitleSlots_Shown(char* buf, int cap) {
+    __try { return title_slots_shown(buf, cap); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+// The UI packs' choices changed in the game (the plugin's editor, settings.json's "ui_choices" whole): served at once
+extern "C" __declspec(dllexport) int SF6UISlots_Apply(const char* choices_json) {
+    __try { return ui_slots_apply(choices_json); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+// The textures served now that the engine holds otherwise, for the plugin's swap on screen (stage_redirect.hpp)
+extern "C" __declspec(dllexport) int SF6UISlots_Overrides(char* buf, int cap) {
+    __try { return ui_slots_overrides(buf, cap); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
 #endif
 
 // Appends one line to the loader log (same file as loader_core), so a chained module is visible
@@ -93,6 +137,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         // ---- Stage slots: stage pak first (it sits below the costume pak) ----
         slog_open(g_dll_dir);
         run_stage_loader();
+        title_slots_set(stage_loader_titles());
+        ui_slots_set(stage_loader_ui());
 #endif
 
         // ---- Costume loader: synchronous, SEH-wrapped. Never crash the game. ----

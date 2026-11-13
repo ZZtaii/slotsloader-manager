@@ -1,46 +1,32 @@
 // Unit test of plugin/src/ownership.hpp: which slots the player sees from the game's answers.
 // Build and run: build_ownership_test.bat (prints "all ok" and exits 0 when every check passes).
 #include "../src/ownership.hpp"
+#include "../../common/manager_mode.hpp"
 
 #include <cstdio>
 
 using slots::ownership::Book;
 using slots::ownership::State;
-using slots::ownership::always_shown;
 using slots::ownership::outfit_label;
 
 static int fails = 0;
 static void check(bool ok, const char* what) {
-    std::printf("  %-78s %s\n", what, ok ? "ok" : "FAIL");
+    std::printf("  %-72s %s\n", what, ok ? "ok" : "FAIL");
     if (!ok) ++fails;
 }
 
 int main() {
-    const int RYU = 1, KEN = 2, ARJUN = 34;
-    const int O1 = 0, O2 = 1, O3 = 2, O4 = 3, DT = 4;
+    const int RYU = 1, KEN = 2;
+    const int O1 = 0, O2 = 1, O3 = 2, DT = 4;
 
-    // ---- no answer yet ----
     {
         Book b;
-        check(b.check(), "the check is on by default");
         check(b.state(RYU, O2) == State::Unknown, "no answer yet: unknown");
         check(b.shown(RYU, O2), "no answer yet: shown (as before the check)");
         check(b.open(RYU, O2), "no answer yet: asked");
         check(b.shown(RYU, -1), "outfit not known (-1): shown");
         check(!b.open(RYU, -1), "outfit not known (-1): never asked");
     }
-    // ---- Outfit 1 and DriveTech: always shown, never asked ----
-    {
-        Book b;
-        check(always_shown(O1) && always_shown(DT), "Outfit 1 and DriveTech always shown");
-        check(!always_shown(O2) && !always_shown(O3) && !always_shown(O4), "Outfit 2, 3, 4 can be hidden");
-        check(!b.open(RYU, O1) && !b.open(RYU, DT), "Outfit 1 and DriveTech: never asked");
-        b.answer(RYU, DT, {0, 1, 2}); // a list without DriveTech
-        check(b.shown(RYU, DT) && b.state(RYU, DT) == State::Unknown, "DriveTech missing from the list: still shown, not recorded");
-        b.answer(RYU, O1, {0});
-        check(b.shown(RYU, O1), "Outfit 1: shown");
-    }
-    // ---- the game's list ----
     {
         Book b;
         b.answer(RYU, O2, {});
@@ -50,26 +36,22 @@ int main() {
     }
     {
         Book b;
+        b.answer(RYU, O1, {0, 4});
         b.answer(RYU, O2, {0, 4});
+        b.answer(RYU, DT, {0, 4});
+        check(b.shown(RYU, O1) && b.state(RYU, O1) == State::Owned, "Outfit 1 listed: owned, shown");
+        check(b.shown(RYU, DT) && !b.open(RYU, DT), "DriveTech listed: owned, not asked again");
         check(!b.shown(RYU, O2) && b.state(RYU, O2) == State::NotOwned, "Outfit 2 not listed: hidden");
         check(b.open(RYU, O2), "hidden outfit: asked again later");
         check(b.state(KEN, O2) == State::Unknown && b.shown(KEN, O2), "another fighter is not affected");
+
         b.answer(RYU, O2, {});
         check(!b.shown(RYU, O2), "no answer afterwards: stays hidden");
         b.answer(RYU, O2, {0, 1, 4});
         check(b.shown(RYU, O2) && b.state(RYU, O2) == State::Owned, "listed later (bought, DLC, unlock-all): shown");
-        check(!b.open(RYU, O2), "owned: not asked again");
         b.answer(RYU, O2, {0, 4});
         check(b.shown(RYU, O2), "not listed after being owned (online, Lua stopped): stays shown");
     }
-    {
-        Book b;
-        b.answer(RYU, O4, {0, 1, 2, 3, 4});
-        check(b.shown(RYU, O4) && b.state(RYU, O4) == State::Owned, "Outfit 4 listed: owned, shown");
-        b.answer(KEN, O4, {0, 1, 2, 4});
-        check(!b.shown(KEN, O4), "Outfit 4 not listed: hidden");
-    }
-    // ---- before the login ----
     {
         Book b;
         b.answer(RYU, O3, {0, 4}, false);
@@ -79,47 +61,113 @@ int main() {
         b.answer(RYU, O3, {0, 4}, true);
         check(b.shown(RYU, O3), "owned before the login stays shown");
     }
-    // ---- a fighter without DriveTech (Arjun: costumes 0, 1 and 100, no costume id 4 (DriveTech, C5)) ----
-    {
-        Book b;
-        const std::vector<uint32_t> arjun_owns_o1 = {0, 100};
-        b.answer(ARJUN, O1, arjun_owns_o1);
-        b.answer(ARJUN, O2, arjun_owns_o1);
-        check(b.shown(ARJUN, O1), "Arjun, slot of Outfit 1, no DriveTech in the list: shown");
-        check(!b.shown(ARJUN, O2), "Arjun, slot of Outfit 2 not listed: hidden");
-        b.answer(ARJUN, O2, {0, 1, 100});
-        check(b.shown(ARJUN, O2), "Arjun, Outfit 2 listed later: shown");
-        Book t;
-        t.answer(ARJUN, O2, {});   // trial character: nothing listed
-        check(t.shown(ARJUN, O2), "Arjun on trial (empty list): no answer, shown");
-    }
     {
         Book b;
         b.answer(RYU, 9, {0, 1, 4});
         check(!b.shown(RYU, 9), "an outfit the game does not have: hidden");
     }
-    // ---- check off (the private opt-out, or the game's method missing) ----
+
+    // NSFW outfits: shown only while "Display NSFW Outfits" is on
+    check(slots::ownership::nsfw_shown(false, false), "other outfit, setting off: shown");
+    check(!slots::ownership::nsfw_shown(true, false), "NSFW outfit, setting off: hidden");
+    check(slots::ownership::nsfw_shown(true, true), "NSFW outfit, setting on: shown");
     {
-        Book b(false);
-        check(!b.check(), "check off: reported off");
-        check(!b.open(RYU, O2) && !b.open(RYU, O4), "check off: nothing asked");
-        b.answer(RYU, O2, {0, 4});
-        check(b.shown(RYU, O2) && b.state(RYU, O2) == State::Unknown, "check off: an answer is ignored, shown");
-        check(b.shown(RYU, O3) && b.shown(RYU, O1) && b.shown(RYU, DT), "check off: every slot shown");
+        // The game's list keeps NSFW outfits whatever their ownership with an unlock-all script (C. Viper 20/10:
+        // outfits 38 Lace lingerie and 39 Barefoot NSFW, the others shown): their positions, last first
+        using slots::ownership::nsfw_drops;
+        const std::vector<uint32_t> listed = {0, 1, 2, 3, 4, 13, 22, 25, 26, 27, 38, 39};
+        check(nsfw_drops(listed, {38, 39}) == std::vector<int>({11, 10}), "NSFW outfits dropped from the list, last first");
+        check(nsfw_drops(listed, {}).empty(), "no NSFW outfit: the list unchanged");
+        check(nsfw_drops({0, 1, 4}, {38}).empty(), "an NSFW outfit not listed: nothing dropped");
+        std::vector<uint32_t> l = listed;
+        for (int i : nsfw_drops(l, {13, 39})) l.erase(l.begin() + i);
+        check(l == std::vector<uint32_t>({0, 1, 2, 3, 4, 22, 25, 26, 27, 38}), "removed one at a time: the right ones go");
+    }
+    {
+        using slots::ownership::outfit1_colour;
+        const std::vector<int> o1 = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        check(outfit1_colour(3, 0, o1) == 3, "back to Outfit 1: the colour chosen with the outfit");
+        check(outfit1_colour(12, 2, o1) == 2, "back to Outfit 1: a colour Outfit 1 lacks -> the save's");
+        check(outfit1_colour(-1, 15, {1, 2}) == 1, "back to Outfit 1: neither -> Outfit 1's first colour");
+        check(outfit1_colour(3, 0, {}) == -1, "back to Outfit 1: colours not known -> left as is");
+    }
+
+    // Manager mode (the Slotsloader Manager installed the loader): its fork's rules
+    {
+        Book b;
+        b.set_manager_rules(true);
+        const std::vector<uint32_t> base_only = {0, 4};   // Outfit 1 and DriveTech only
+        b.answer(RYU, O1, base_only);
+        b.answer(RYU, O3, base_only);
+        check(b.shown(RYU, O1) && !b.open(RYU, O1), "Manager mode: Outfit 1 slot always shown, never asked");
+        check(b.answer(RYU, DT, {}) == State::Unknown && b.shown(RYU, DT) && !b.open(RYU, DT),
+              "Manager mode: DriveTech slot always shown, never asked");
+        check(!b.shown(RYU, O3), "Manager mode: an outfit not owned is still hidden");
     }
     {
         Book b;
-        b.answer(RYU, O2, {0, 4});
-        check(!b.shown(RYU, O2), "check on: Outfit 2 not listed hidden ...");
-        b.set_check(false);
-        check(b.shown(RYU, O2) && !b.open(RYU, O2), "... then check off (method missing): shown, not asked");
+        b.set_manager_rules(false);   // the Manager's opt-out marker
+        b.answer(RYU, O3, {0, 4});
+        check(b.shown(RYU, O3) && !b.open(RYU, O3), "Manager mode, opt-out: every slot shown, nothing asked");
+    }
+    {
+        Book b;   // normal mode: unchanged (DriveTech asked like any outfit)
+        b.answer(RYU, DT, {0, 1});
+        check(!b.shown(RYU, DT), "normal mode: DriveTech not listed -> hidden, as before");
+    }
+    {
+        using manager_mode::installed_by_manager;
+        const std::string F = "sf6-manager-installs-1";
+        int hashed = 0;
+        const std::string H = "1c2f8a0d4e6b3c5a7f9e1d2c4b6a8f0e1d3c5b7a9f8e6d4c2b0a1f3e5d7c9b8a";
+        auto plugin_hash = [&] { ++hashed; return H; };
+        auto other_hash = [&] { ++hashed; return std::string(64, 'e'); };
+        const std::vector<manager_mode::ListedFile> list = {
+            {true, "natives/stm/product/model/esf/esf001/001/x.mesh", 10, ""},
+            {true, "reframework\\Plugins\\SF6_CostumeSlotsNative.dll", 4096, ""}};
+        check(installed_by_manager(F, list, 4096, plugin_hash), "Manager mode: plugin listed, same size");
+        check(hashed == 0, "no sha256 in the list: the plugin is not hashed (size rule as before)");
+        check(installed_by_manager(F, list, 4096, other_hash), "no sha256 in the list: any bytes at that size match");
+        check(!installed_by_manager(F, list, 4097, plugin_hash), "not Manager mode: plugin replaced since (other size)");
+        check(!installed_by_manager(F, list, -1, plugin_hash), "not Manager mode: no plugin on disk");
+        check(!installed_by_manager("other", list, 4096, plugin_hash), "not Manager mode: unknown list format");
+        check(!installed_by_manager(F, {{false, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, ""}}, 4096, plugin_hash),
+              "not Manager mode: the loader's entry disabled in the Manager");
+        check(!installed_by_manager(F, {{true, "natives/x", 4096, ""}}, 4096, plugin_hash), "not Manager mode: plugin not listed");
+
+        // the list gives the plugin's sha256 (the Manager writes it for every file)
+        std::string upper = H;
+        for (auto& c : upper) c = (char)std::toupper((unsigned char)c);
+        const std::vector<manager_mode::ListedFile> hashed_list = {
+            {true, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, H}};
+        hashed = 0;
+        check(installed_by_manager(F, hashed_list, 4096, plugin_hash), "Manager mode: size and sha256 match");
+        check(hashed == 1, "the plugin hashed once, only for the entry at its size");
+        check(!installed_by_manager(F, hashed_list, 4096, other_hash),
+              "not Manager mode: same size, other sha256 (installed again by hand or by Fluffy)");
+        check(!installed_by_manager(F, hashed_list, 4096, [] { return std::string(); }),
+              "not Manager mode: the plugin could not be hashed");
+        hashed = 0;
+        check(!installed_by_manager(F, hashed_list, 4097, plugin_hash) && hashed == 0,
+              "other size: not Manager mode, and nothing hashed");
+        check(installed_by_manager(F, {{true, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, upper}}, 4096, plugin_hash),
+              "a sha256 in capitals matches");
+        check(installed_by_manager(F, {{true, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, std::string(64, 'e')},
+                                       {true, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, H}}, 4096, plugin_hash),
+              "two mods list the plugin: the one with its sha256 decides");
+        const manager_mode::Decision d = manager_mode::decide(F, hashed_list, 4096, other_hash);
+        check(!d.manager && d.why.find("sha256 differs") != std::string::npos, "the log line says the sha256 differs");
+        check(manager_mode::decide(F, hashed_list, 4096, plugin_hash).why.find("size and sha256 matched") != std::string::npos,
+              "the log line says size and sha256 matched");
+        check(manager_mode::decide(F, list, 4096, plugin_hash).why.find("no sha256") != std::string::npos,
+              "the log line says the list gives no sha256");
     }
 
     check(outfit_label(0) == "Outfit 1", "label of costume 0");
     check(outfit_label(1) == "Outfit 2", "label of costume 1");
     check(outfit_label(3) == "Outfit 4", "label of costume 3");
-    check(outfit_label(4) == "DriveTech", "label of costume id 4 (DriveTech, C5)");
-    check(outfit_label(100) == "costume 100", "label of another number");
+    check(outfit_label(4) == "DriveTech", "label of costume 4");
+    check(outfit_label(7) == "costume 7", "label of another number");
 
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;

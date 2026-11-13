@@ -1,5 +1,8 @@
 // SF6 Slots — native plugin: game access helpers, files, JSON, context.
 #include "slots.hpp"
+#include "perf.hpp"
+#include "replay_bgm.hpp"
+#include "words.hpp"
 
 #include <cstdarg>
 #include <cstdio>
@@ -29,20 +32,40 @@ void log_open() {
     g_log_bytes = 0;
 }
 
+// A line is formatted here and written by perf's background writer (in the order logged): opening, writing and closing
+// the file for each line cost the game thread up to milliseconds when a model's options were swapped (a line per part,
+// 24/10). Before the first frame (plugin init: no thread waited on there) the line is written here, as before; while
+// the game closes, logf waits for the line to be written (200 ms at most).
 void logf(const char* fmt, ...) {
     if (g_log_bytes > 2 * 1024 * 1024) return;          // one session never writes more than 2 MB
-    FILE* f = fopen(kLog, "ab");
-    if (!f) return;
     time_t now = time(nullptr);
     struct tm t; localtime_s(&t, &now);
     char head[32];
     int n = snprintf(head, sizeof head, "%02d:%02d:%02d f%u ", t.tm_hour, t.tm_min, t.tm_sec, g_frame);
-    fwrite(head, 1, static_cast<size_t>(n), f);
+    std::string line(head, static_cast<size_t>(n > 0 ? n : 0));
+    char buf[1024];
     va_list a; va_start(a, fmt);
-    int m = vfprintf(f, fmt, a);
+    int m = vsnprintf(buf, sizeof buf, fmt, a);
     va_end(a);
-    fputc('\n', f);
-    fclose(f);
+    if (m >= static_cast<int>(sizeof buf)) {
+        std::string big(static_cast<size_t>(m) + 1, '\0');
+        va_start(a, fmt);
+        vsnprintf(big.data(), big.size(), fmt, a);
+        va_end(a);
+        line.append(big.data(), static_cast<size_t>(m));
+    } else if (m > 0) {
+        line.append(buf, static_cast<size_t>(m));
+    }
+    line += '\n';
+    if (g_frame == 0) {
+        FILE* f = fopen(kLog, "ab");
+        if (!f) return;
+        fwrite(line.data(), 1, line.size(), f);
+        fclose(f);
+    } else {
+        perf::bg_write(kLog, line);
+        if (g_closing.load(std::memory_order_relaxed)) perf::bg_flush(200);
+    }
     g_log_bytes += static_cast<size_t>(n + (m > 0 ? m : 0) + 1);
 }
 
@@ -96,6 +119,85 @@ bool set_obj(Obj* o, const char* name, Obj* v) {
     void* p = field_ptr(o, name); if (!p) return false;
     *reinterpret_cast<Obj**>(p) = v;
     return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The game's text language
+// ---------------------------------------------------------------------------------------------
+
+static const char* lang_code(int32_t v) {
+    switch (v) {
+    case 0: return "ja"; case 1: return "en"; case 2: return "fr"; case 3: return "it"; case 4: return "de";
+    case 5: return "es"; case 6: return "ru"; case 7: return "pl"; case 8: return "nl"; case 9: case 10: return "pt";
+    case 11: return "ko"; case 12: return "zh-Hant"; case 13: return "zh-Hans"; case 21: return "ar"; case 32: return "es-419";
+    default: return nullptr;
+    }
+}
+
+std::string game_language() {
+    auto* tdb = api().tdb();
+    int32_t val = 0;
+    bool got = false;
+    Method* opt_get = tdb->find_method("app.Option", "GetOptionValue");
+    API::Field* list_f = tdb->find_field("app.Option", "LanguageList");
+    if (opt_get && list_f) {
+        auto ri = opt_get->invoke(nullptr, std::vector<void*>{ arg_i32(611) });           // app.Option.ValueType.DispLanguage
+        void* slot = ri.exception_thrown ? nullptr : list_f->get_data_raw(nullptr, false);
+        Obj* arr = slot ? *reinterpret_cast<Obj**>(slot) : nullptr;
+        const int32_t idx = static_cast<int32_t>(ri.dword);
+        if (arr && idx >= 0) {
+            TD* td = arr->get_type_definition();
+            auto rl = call(method_of(td, "get_Length", 0), arr);
+            const int32_t n = rl.exception_thrown ? 0 : static_cast<int32_t>(rl.dword);
+            if (idx < n) {
+                auto rv = call(method_of(td, "get_Item(System.Int32)", 1), arr, { arg_i32(idx) });
+                if (!rv.exception_thrown) { val = static_cast<int32_t>(rv.dword); got = true; }
+            }
+        }
+    }
+    if (!got) {
+        if (Method* sys = tdb->find_method("via.SystemService", "get_Language")) {
+            auto r = sys->invoke(nullptr, std::vector<void*>{});
+            if (!r.exception_thrown) { val = static_cast<int32_t>(r.dword); got = true; }
+        }
+    }
+    const char* c = got ? lang_code(val) : nullptr;
+    return c ? c : "en";
+}
+
+// The game's own message (via.gui.message.get: the game's language), "" when not found
+std::string game_message(const uint8_t guid[16]) {
+    static Method* m = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        TD* t = api().tdb()->find_type("via.gui.message");
+        m = t ? method_of(t, "get(System.Guid)", 1) : nullptr;
+        if (!m) logf("words: via.gui.message.get not found: the game's words stay in English");
+    }
+    return m ? str(call_obj(m, nullptr, { const_cast<uint8_t*>(guid) })) : std::string();
+}
+
+// The language of words.hpp follows the game's Options, read as the Color Mod's and the Recording Manager's do (every 60 frames);
+// the game's words are asked once per language (what a message file not loaded yet did not give: asked again next time).
+void language_tick() {
+    static uint32_t next = 0;
+    static std::string last;
+    if (g_frame < next) return;
+    next = g_frame + 60;
+    try {
+        const std::string code = game_language();
+        if (code != last) {
+            last = code;
+            words::set_lang(code);
+            logf("words: the game's text language is %s", code.c_str());
+        }
+        words::resolve_game_words([](const char* guid) -> std::string {
+            uint8_t g[16];
+            return replay::parse_guid(guid, g) ? game_message(g) : std::string();
+        });
+    } catch (...) {
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -296,6 +398,7 @@ int hook_all(TD* td, const char* method, REFPreHookFn pre, REFPostHookFn post) {
             if (!m || !m->get_name() || strcmp(m->get_name(), method) != 0 || done.count(m)) continue;
             done.insert(m);
             m->add_hook(pre ? pre : hook_pass, post ? post : hook_post_pass, false);
+            { auto* dt = m->get_declaring_type(); logf("hook: %s.%s hooked on declaring type %s", td->get_full_name().c_str(), method, dt ? dt->get_full_name().c_str() : "?"); }
             ++n;
         }
         if (n) break;   // the type's own methods (overrides), not the ones they replace
@@ -340,119 +443,5 @@ bool file_mtime(const char* path, FILETIME& out) {
 }
 
 bool file_exists(const char* path) { return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES; }
-
-// ---------------------------------------------------------------------------------------------
-// JSON
-// ---------------------------------------------------------------------------------------------
-
-const Json* Json::get(const char* key) const {
-    if (kind != Object) return nullptr;
-    for (auto& [k, v] : obj) if (k == key) return &v;
-    return nullptr;
-}
-
-namespace {
-struct Parser {
-    const std::string& t; size_t i = 0; int depth = 0;
-    explicit Parser(const std::string& text) : t(text) {}
-    void ws() { while (i < t.size() && (t[i] == ' ' || t[i] == '\t' || t[i] == '\n' || t[i] == '\r')) ++i; }
-    bool lit(const char* w) { size_t n = strlen(w); if (t.compare(i, n, w) != 0) return false; i += n; return true; }
-    static void utf8(std::string& o, uint32_t c) {
-        if (c < 0x80) o += static_cast<char>(c);
-        else if (c < 0x800) { o += static_cast<char>(0xC0 | (c >> 6)); o += static_cast<char>(0x80 | (c & 0x3F)); }
-        else { o += static_cast<char>(0xE0 | (c >> 12)); o += static_cast<char>(0x80 | ((c >> 6) & 0x3F)); o += static_cast<char>(0x80 | (c & 0x3F)); }
-    }
-    bool string(std::string& o) {
-        if (i >= t.size() || t[i] != '"') return false;
-        ++i;
-        while (i < t.size() && t[i] != '"') {
-            char c = t[i++];
-            if (c != '\\') { o += c; continue; }
-            if (i >= t.size()) return false;
-            char e = t[i++];
-            switch (e) {
-                case 'n': o += '\n'; break; case 't': o += '\t'; break; case 'r': o += '\r'; break;
-                case 'b': o += '\b'; break; case 'f': o += '\f'; break;
-                case 'u': {
-                    if (i + 4 > t.size()) return false;
-                    uint32_t c16 = static_cast<uint32_t>(strtoul(t.substr(i, 4).c_str(), nullptr, 16));
-                    i += 4;
-                    utf8(o, c16);
-                    break;
-                }
-                default: o += e;
-            }
-        }
-        if (i >= t.size()) return false;
-        ++i;
-        return true;
-    }
-    bool value(Json& v) {
-        if (++depth > 64) return false;
-        ws();
-        if (i >= t.size()) return false;
-        char c = t[i];
-        bool ok = true;
-        if (c == '{') {
-            v.kind = Json::Object; ++i; ws();
-            if (i < t.size() && t[i] == '}') { ++i; }
-            else for (;;) {
-                ws(); std::string k;
-                if (!string(k)) { ok = false; break; }
-                ws(); if (i >= t.size() || t[i] != ':') { ok = false; break; }
-                ++i;
-                Json child;
-                if (!value(child)) { ok = false; break; }
-                v.obj.emplace_back(std::move(k), std::move(child));
-                ws();
-                if (i < t.size() && t[i] == ',') { ++i; continue; }
-                if (i < t.size() && t[i] == '}') { ++i; break; }
-                ok = false; break;
-            }
-        } else if (c == '[') {
-            v.kind = Json::Array; ++i; ws();
-            if (i < t.size() && t[i] == ']') { ++i; }
-            else for (;;) {
-                Json child;
-                if (!value(child)) { ok = false; break; }
-                v.arr.push_back(std::move(child));
-                ws();
-                if (i < t.size() && t[i] == ',') { ++i; continue; }
-                if (i < t.size() && t[i] == ']') { ++i; break; }
-                ok = false; break;
-            }
-        } else if (c == '"') {
-            v.kind = Json::String; ok = string(v.s);
-        } else if (lit("true")) { v.kind = Json::Bool; v.b = true; }
-        else if (lit("false")) { v.kind = Json::Bool; v.b = false; }
-        else if (lit("null")) { v.kind = Json::Null; }
-        else {
-            char* end = nullptr;
-            v.num = strtod(t.c_str() + i, &end);
-            if (end == t.c_str() + i) ok = false;
-            else { v.kind = Json::Number; i = static_cast<size_t>(end - t.c_str()); }
-        }
-        --depth;
-        return ok;
-    }
-};
-} // namespace
-
-bool json_parse(const std::string& text, Json& out) {
-    Parser p(text);
-    out = Json{};
-    return p.value(out);
-}
-
-std::string json_escape(const std::string& s) {
-    std::string o;
-    for (char c : s) {
-        if (c == '"' || c == '\\') { o += '\\'; o += c; }
-        else if (c == '\n') o += "\\n";
-        else if (static_cast<unsigned char>(c) < 0x20) { char b[8]; snprintf(b, sizeof b, "\\u%04x", c); o += b; }
-        else o += c;
-    }
-    return o;
-}
 
 } // namespace slots

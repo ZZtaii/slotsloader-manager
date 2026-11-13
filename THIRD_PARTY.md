@@ -16,7 +16,8 @@ deflate and zip handling used when a costume mod is delivered as an archive.
 ## bcdec — `common/third_party/bcdec.h`
 
 [bcdec](https://github.com/iOrange/bcdec) by Sergii Kudlai, dual licensed MIT or public domain (Unlicense).
-Decodes the block-compressed colour masks of costume materials, used to compute the colour swatches.
+Decodes the block-compressed colour masks of costume materials, used to compute the colour swatches. The stage slots
+use it to decode a stage mod's own menu pictures (tex_StageImage / tex_StageThumb) into their previews.
 
 ## stb_image, stb_image_write, stb_dxt — `stages/loader/third_party/`
 
@@ -49,6 +50,25 @@ This code is not under the MIT licence of the rest of the repository.
 
 Headers from [REFramework](https://github.com/praydog/REFramework) by praydog, MIT licence, taken at tag
 v1.5.8. They define the C interface a native plugin uses to reach the game through REFramework.
+
+The core, the Color Mod and the Recording Manager (`crsm/`) use the same headers at REFramework commit 76520cac
+(plugin API 1.15.0), in `core/third_party/reframework/include/reframework/` (origin noted in `SOURCE.txt` there).
+
+## Lua 5.4.3 — `core/third_party/lua/`
+
+[Lua](https://www.lua.org) by Lua.org, PUC-Rio, MIT licence. Compiled into the core for its small Lua bridge
+(`SF6Core` in REFramework's Lua state).
+
+## JSON for Modern C++ — `colormod/third_party/nlohmann/json.hpp`
+
+[nlohmann/json](https://github.com/nlohmann/json) by Niels Lohmann, MIT licence. The Color Mod's settings files;
+the Recording Manager (`crsm/`) uses the same copy for its files and the Community protocol.
+
+## LL's REFramework helpers — `core/src/options/ll_common.hpp`, `colormod/src/ll_common.hpp`
+
+Helpers for native REFramework plugins (logging, `Method::invoke` argument slots, field and method lookup through the
+type chain, managed strings) and the technique that clones a native menu row, by **LL**. Used and redistributed here
+with his permission.
 
 ## AMD AGS
 

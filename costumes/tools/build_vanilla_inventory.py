@@ -7,7 +7,11 @@ user-data, chains, etc.). The output is a single JSON file that a mod
 loader can use to detect which vanilla files a mod pak overwrites.
 
 Usage:
-    python build_vanilla_inventory.py
+    python build_vanilla_inventory.py [--out <dir>]
+
+The output folder defaults to OUT_DIR under the game folder; override it with
+--out <dir> or the VANILLA_INVENTORY_OUT environment variable (the game folder
+is then only read, never written).
 """
 
 import os
@@ -28,18 +32,6 @@ _pakfile_mod = importlib.util.module_from_spec(_spec)
 sys.modules["pakfile_standalone"] = _pakfile_mod
 _spec.loader.exec_module(_pakfile_mod)
 PakFile = _pakfile_mod.PakFile
-
-# Current REasy releases expose entry extraction as a module function instead of
-# PakFile.read_entry. Provide the method the inventory code expects.
-if not hasattr(PakFile, "read_entry"):
-    def _read_entry(self, entry, out_stream):
-        stream = getattr(self, "_inventory_stream", None)
-        if stream is None:
-            stream = open(self.filepath, "rb")
-            self._inventory_stream = stream
-        _pakfile_mod._read_entry_raw(
-            entry, stream, out_stream, chunk_table=getattr(self, "chunk_table", ()))
-    PakFile.read_entry = _read_entry
 
 # RSZ & MDF parsers
 from file_handlers.rsz.rsz_file import RszFile
@@ -102,6 +94,10 @@ def filepath_hash(filepath: str) -> int:
 # ---------------------------------------------------------------------------
 GAME_DIR = r"C:\Program Files (x86)\Steam\steamapps\common\Street Fighter 6"
 OUT_DIR  = os.path.join(GAME_DIR, "reframework", "agent", "tmp", "costume_loader")
+if "--out" in sys.argv:
+    OUT_DIR = sys.argv[sys.argv.index("--out") + 1]
+elif os.environ.get("VANILLA_INVENTORY_OUT"):
+    OUT_DIR = os.environ["VANILLA_INVENTORY_OUT"]
 REGISTRY_PATH = os.path.join(REASY, "resources", "data", "dumps", "rszsf6.json")
 
 PAK_PATHS = [
@@ -158,9 +154,8 @@ def load_paks():
             pak.read_contents(f)
         print(f"  {len(pak.entries)} entries")
         paks.append(pak)
-        remap = getattr(pak, "remap_stored_to_public", None) or {}
         for e in pak.entries:
-            combined[remap.get(e.combined_hash, e.combined_hash)] = (pak, e)
+            combined[e.combined_hash] = (pak, e)
     print(f"Combined index: {len(combined)} unique hashes")
     return paks, combined
 
@@ -614,6 +609,7 @@ def build_inventory():
     output["unresolved"] = dict(unresolved) if unresolved else {}
     output["costumes"] = costumes_out
 
+    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, "vanilla_costume_paths.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
@@ -640,40 +636,5 @@ def build_inventory():
     print(f"\n  Output: {out_path}")
     print(f"{'='*60}")
 
-def _configure_from_args():
-    """Optional overrides; without arguments the historical defaults apply.
-
-    Only the base and DLC archives may be listed. Never pass a generated
-    re_chunk_000.pak.patch_*.pak: the inventory must describe vanilla files.
-    """
-    import argparse
-    global GAME_DIR, OUT_DIR, REGISTRY_PATH, PAK_PATHS
-    ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    ap.add_argument("--game", help="SF6 directory (read-only)")
-    ap.add_argument("--out-dir", help="directory for vanilla_costume_paths.json")
-    ap.add_argument("--registry", help="SF6 RSZ type dump (rszsf6.json)")
-    ap.add_argument("--pak", action="append", help="archive to index; repeat in priority order")
-    args = ap.parse_args()
-    if args.game:
-        GAME_DIR = args.game
-        OUT_DIR = os.path.join(GAME_DIR, "reframework", "agent", "tmp", "costume_loader")
-        PAK_PATHS = [
-            os.path.join(GAME_DIR, "re_chunk_000.pak"),
-            os.path.join(GAME_DIR, "dlc", "re_dlc_stm_1792750.pak"),
-            os.path.join(GAME_DIR, "dlc", "re_dlc_stm_1792751.pak"),
-        ]
-    if args.out_dir:
-        OUT_DIR = args.out_dir
-    if args.registry:
-        REGISTRY_PATH = args.registry
-    if args.pak:
-        PAK_PATHS = list(args.pak)
-    for p in PAK_PATHS:
-        if ".patch_" in os.path.basename(p).lower():
-            ap.error(f"refusing patch archive (not vanilla): {p}")
-    os.makedirs(OUT_DIR, exist_ok=True)
-
-
 if __name__ == "__main__":
-    _configure_from_args()
     build_inventory()
