@@ -229,8 +229,13 @@ namespace SlotsInstaller
             Require(nodes[body.Id].Checked && form.CurrentNeeds.Count == 0 && notice.Text == "", "Ticking an option no longer ticks what it needs.");
             nodes[body.Id].Checked = false;
             Require(!nodes[hair.Id].Checked && order.Count == 0 && notice.Text == "", "Unticking an option left the options under it ticked.");
+            // The option an option sits under in the list comes back with it, even after a hand untick (review of PR 29:
+            // a child alone installs without its body). Only Requirement= and Required options stay out once unticked.
             nodes[hair.Id].Checked = true;
-            Require(!nodes[body.Id].Checked && order.SequenceEqual(new[] { hair.Id }), "An option unticked by hand was ticked again behind the user's back.");
+            Require(nodes[body.Id].Checked && order.Contains(body.Id) && order.Contains(hair.Id) && form.CurrentNeeds.Count == 0 && notice.Text == "", "Ticking an option did not bring back the option it sits under.");
+            // A saved selection that leaves the body out (an earlier build allowed it) is opened as it was
+            Call(form, "FillComponents", new List<string> { hair.Id });
+            Require(!nodes[body.Id].Checked && order.SequenceEqual(new[] { hair.Id }), "A saved selection's left-out option was ticked when the mod was opened.");
             Require(form.CurrentNeeds.Single().Needed == body && form.CurrentNeeds.Single().By == hair && notice.Text == "May not work without “Body”", "The line does not name the option left out: " + notice.Text);
             // 13 Nov 2026: a changed tick lights no row up (the user: only at Install). The row is drawn as any other.
             Require(!form.IsFlashing(body.Id) && !form.IsFlashing(hair.Id), "A changed tick lit a row up.");
@@ -270,16 +275,16 @@ namespace SlotsInstaller
             nodes[body.Id].Checked = true;
             Require(form.CurrentNeeds.Count == 0 && notice.Text == "" && !form.IsFlashing(body.Id), "The line stayed after the option was ticked again.");
             nodes[hair.Id].Checked = false; nodes[body.Id].Checked = false; nodes[body.Id].Checked = true; nodes[body.Id].Checked = false; nodes[hair.Id].Checked = true;
-            Require(!nodes[body.Id].Checked, "The last hand untick did not count.");
+            Require(nodes[body.Id].Checked, "After hand unticks, ticking the option under it did not bring it back.");
             Call(form, "FillComponents", new List<string> { hair.Id });
             // Opening a selection that leaves an option out says so in the line and lights nothing up (13 Nov 2026).
             Require(notice.Text == "May not work without “Body”" && form.CurrentNeeds.Count == 1, "Opening a selection that leaves an option out did not say so.");
             Require(!form.IsFlashing(body.Id) && !form.IsFlashing(hair.Id), "Opening a mod with an option left out lit its row up.");
             nodes[hair.Id].Checked = false; nodes[hair.Id].Checked = true;
-            Require(!nodes[body.Id].Checked, "A saved selection's left-out option was ticked again.");
+            Require(nodes[body.Id].Checked && notice.Text == "", "Ticking an option of a saved selection did not bring back the option it sits under.");
             Call(form, "ClosePackage");
             Require(notice.Text == "" && form.CurrentNeeds.Count == 0, "The line stayed after the mod was closed.");
-            report.Add("PASS: what the ticks leave out (1.0.19): an option unticked by hand stays out when the option under it is ticked again, the line under the preview picture names it (\"May not work without “Body”\"), no row lights up for a tick or for an opened mod, a click on the line lights its row in a light grey with a grey edge (13 Nov 2026), Install stays on and the footer repeats the note; the Assistant's strict list still holds the old error; ticking it again or closing the mod clears the line; the options list has no indent.");
+            report.Add("PASS: what the ticks leave out (1.0.19): ticking an option brings back the option it sits under; a saved selection that leaves it out opens as it was, the line under the preview picture names it (\"May not work without “Body”\"), no row lights up for a tick or for an opened mod, a click on the line lights its row in a light grey with a grey edge (13 Nov 2026), Install stays on and the footer repeats the note; the Assistant's strict list still holds the old error; ticking it again or closing the mod clears the line; the options list has no indent.");
         }
 
         private static void CheckDrop(MainForm form, string archive, string folder, string root, List<string> report)

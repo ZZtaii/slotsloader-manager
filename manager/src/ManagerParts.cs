@@ -41,6 +41,9 @@ namespace SlotsInstaller
     {
         public string Stamp = "", Entry = "";
         public Dictionary<string, ManagerPartsFile> Files = new Dictionary<string, ManagerPartsFile>();
+        // The mods the files were read from (the outfit's own and its parts'), each with its stamp then
+        // (ManagerParts.SourceStamp). A mod that changed since makes the outfit again; one that is not there keeps it.
+        public Dictionary<string, string> Sources;
     }
     public sealed class ManagerPartsFile { public long Size; public string From = ""; }
 
@@ -117,8 +120,11 @@ namespace SlotsInstaller
 
         // The list and the folders follow the installed outfits; true when something in the game folder changed.
         // `wanted`: a suite-line loader of this Manager is installed and "Costume options in the game" is on.
-        internal static bool Apply(string gameRoot, bool wanted)
+        internal static bool Apply(string gameRoot, bool wanted) { bool held; return Apply(gameRoot, wanted, out held); }
+        // `held`: another task is changing the costume folder, so nothing was done.
+        private static bool Apply(string gameRoot, bool wanted, out bool held)
         {
+            held = false;
             try
             {
                 if (String.IsNullOrEmpty(gameRoot)) return false;
@@ -127,10 +133,41 @@ namespace SlotsInstaller
                 if (!wanted || !Directory.Exists(costumes)) return Remove(gameRoot);
                 IDisposable hold;
                 try { hold = Installer.AcquireMutation(costumes); }
-                catch (IOException) { return false; }   // an outfit is being changed right now: the refresh after it comes here again
+                catch (IOException) { held = true; return false; }   // an outfit is being changed right now: the refresh after it comes here again
                 using (hold) return Write(gameRoot, costumes);
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.LogLine(FileName + " not written (" + ex.GetType().Name + ": " + ex.Message + ")."); return false; }
+        }
+
+        // Apply on a background thread (a box ticked in Settings: the window stays responsive while mods are read). One
+        // run at a time; a call made while one runs is done after it, with the newest values only. While another task
+        // holds the costume folder it is tried again for a while (that task's refresh comes here too).
+        private static readonly object laterGate = new object();
+        private static bool laterRunning, laterAgain, laterWanted;
+        private static string laterRoot;
+        internal static void ApplyLater(string gameRoot, bool wanted)
+        {
+            lock (laterGate)
+            {
+                laterRoot = gameRoot; laterWanted = wanted;
+                if (laterRunning) { laterAgain = true; return; }
+                laterRunning = true;
+            }
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                while (true)
+                {
+                    string root; bool want;
+                    lock (laterGate) { root = laterRoot; want = laterWanted; laterAgain = false; }
+                    try
+                    {
+                        bool held;
+                        for (int tries = 0; tries < 40; tries++) { Apply(root, want, out held); if (!held) break; System.Threading.Thread.Sleep(250); }
+                    }
+                    catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+                    lock (laterGate) { if (!laterAgain) { laterRunning = false; return; } }
+                }
+            });
         }
 
         private static bool Remove(string gameRoot)
@@ -159,38 +196,52 @@ namespace SlotsInstaller
             }
             // Short folder names keep deep texture paths under Windows' limit; two outfits with the same first 12 digits
             // of their id (never seen) get the whole id.
-            var shortIds = outfits.GroupBy(o => o.Key.Manifest.Id.Substring(0, 12), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+            Func<string, string> shortId = id => id.Length > 12 ? id.Substring(0, 12) : id;   // an Id is 32 digits; a shorter one (edited by hand) is used whole
+            outfits.RemoveAll(o => String.IsNullOrEmpty(o.Key.Manifest.Id));
+            var shortIds = outfits.GroupBy(o => shortId(o.Key.Manifest.Id), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
             bool changed = false;
             var listed = new List<Listed>();
+            // Folders of outfits whose build failed this time: kept as they are (not listed unless the last build still
+            // stands), so the files that are right keep their dates for the next try (the loader's fingerprint holds them).
+            var failed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             string sevenZip = null;
             Func<string> zip = delegate { return sevenZip ?? (sevenZip = SevenZip() ?? ""); };
             foreach (var o in outfits.OrderBy(x => x.Value, StringComparer.OrdinalIgnoreCase))
             {
                 InstallManifest m = o.Key.Manifest;
-                string key = shortIds[m.Id.Substring(0, 12)] == 1 ? m.Id.Substring(0, 12) : m.Id, home = Path.Combine(folder, key);
+                string key = shortIds[shortId(m.Id)] == 1 ? shortId(m.Id) : m.Id, home = Path.Combine(folder, key);
+                ManagerPartsBuilt before = null; string stamp = null; bool touched = false;
+                Func<bool> intact = delegate { return before != null && before.Stamp == stamp && !String.IsNullOrEmpty(before.Entry) && before.Files != null && before.Files.Count > 0 && before.Files.All(f => f.Value != null && SizeOf(Safety.Under(home, f.Key)) == f.Value.Size); };
                 try
                 {
-                    string stamp = ReplaceEngine.Sha(Encoding.UTF8.GetBytes(Builder + "|" + o.Value + "|" + key + "|" + ReplaceEngine.Sha(o.Key.Before)));
-                    ManagerPartsBuilt before = ReadBuilt(home);
-                    if (before != null && before.Stamp == stamp && !String.IsNullOrEmpty(before.Entry) && before.Files != null && before.Files.Count > 0 && before.Files.All(f => f.Value != null && SizeOf(Safety.Under(home, f.Key)) == f.Value.Size))
+                    stamp = ReplaceEngine.Sha(Encoding.UTF8.GetBytes(Builder + "|" + o.Value + "|" + key + "|" + ReplaceEngine.Sha(o.Key.Before)));
+                    before = ReadBuilt(home);
+                    // The mods the files came from must be as they were too (a mod that is not there now keeps the build)
+                    if (intact() && SourcesAsBuilt(before))
                     { listed.Add(new Listed { Source = o.Value, Key = key, Entry = before.Entry }); continue; }
-                    ManagerPartsBuilt made = Build(o.Key, o.Value, home, key, stamp, before, zip, ref changed);
+                    ManagerPartsBuilt made = Build(o.Key, o.Value, home, key, stamp, before, zip, ref touched);
                     listed.Add(new Listed { Source = o.Value, Key = key, Entry = made.Entry });
                 }
                 catch (Exception ex)
                 {
                     if (ex is OutOfMemoryException) throw;
-                    // Not listed: the loader then leaves the outfit as its folder has it. Said once per run and reason.
+                    // Said once per run and reason. Nothing of the folder is deleted here.
                     bool first; lock (said) first = said.Add(m.Id + "|" + ex.Message);
                     if (first) Program.LogLine("Added parts of " + o.Value + " are not offered in the game (" + FileName + "): " + ex.Message.TrimEnd('.') + ".");
-                    try { if (Directory.Exists(home)) { Safety.DeleteGenerated(home, folder); changed = true; } }
-                    catch (Exception cleanup) { if (cleanup is OutOfMemoryException) throw; Program.Log(cleanup); }
+                    if (Directory.Exists(home)) failed.Add(key);
+                    try
+                    {
+                        // Only a mod changed and nothing in the folder was touched: the last build still stands (tried again next time)
+                        if (!touched && intact()) { Json.Write(Path.Combine(home, BuiltName), before); listed.Add(new Listed { Source = o.Value, Key = key, Entry = before.Entry }); }
+                    }
+                    catch (Exception keep) { if (keep is OutOfMemoryException) throw; Program.Log(keep); }
                 }
+                finally { changed |= touched; }
             }
             // Folders of outfits that are gone, off, disabled or without parts now
             if (Directory.Exists(folder))
             {
-                var keep = new HashSet<string>(listed.Select(l => l.Key), StringComparer.OrdinalIgnoreCase);
+                var keep = new HashSet<string>(listed.Select(l => l.Key).Concat(failed), StringComparer.OrdinalIgnoreCase);
                 foreach (string entry in Directory.EnumerateFileSystemEntries(folder).ToList())
                 {
                     if (keep.Contains(Path.GetFileName(entry))) continue;
@@ -199,7 +250,8 @@ namespace SlotsInstaller
                     changed = true;
                 }
             }
-            if (listed.Count == 0) return Remove(gameRoot) || changed;
+            if (listed.Count == 0 && failed.Count == 0) return Remove(gameRoot) || changed;
+            if (listed.Count == 0) { if (File.Exists(file)) { Safety.NoReparseChain(file); File.Delete(file); changed = true; } return changed; }
             string text = "{\n  \"format\": " + Quote(Format) + ",\n  \"outfits\": [\n" + String.Join(",\n", listed.Select(l => l.Entry)) + "\n  ]\n}\n";
             if (File.Exists(file) && File.ReadAllText(file, Encoding.UTF8) == text) return changed;
             Safety.NoReparseChain(file);
@@ -208,6 +260,28 @@ namespace SlotsInstaller
         }
 
         private static long SizeOf(string file) { var info = new FileInfo(file); return info.Exists ? info.Length : -1; }
+        // A mod's stamp: an archive's size and date; a folder's file count and newest file date; null when it is not there.
+        internal static string SourceStamp(string path)
+        {
+            try
+            {
+                if (String.IsNullOrEmpty(path)) return null;
+                if (File.Exists(path)) return SourceReader.Stamp(path);
+                if (!Directory.Exists(path)) return null;
+                int count = 0; long newest = 0;
+                foreach (string f in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)) { count++; newest = Math.Max(newest, File.GetLastWriteTimeUtc(f).Ticks); }
+                return "folder:" + count + ":" + newest;
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return null; }
+        }
+        // Each mod a build read is as it was then, or not there now (its files in the folder are then all there is).
+        // A build of an earlier Manager build has no list: made again once (files that are right keep their dates).
+        private static bool SourcesAsBuilt(ManagerPartsBuilt built)
+        {
+            if (built.Sources == null) return false;
+            foreach (var kv in built.Sources) { string now = SourceStamp(kv.Key); if (now != null && now != kv.Value) return false; }
+            return true;
+        }
         private static ManagerPartsBuilt ReadBuilt(string home)
         {
             try { string file = Path.Combine(home, BuiltName); return File.Exists(file) ? Json.Read<ManagerPartsBuilt>(file) : null; }
@@ -225,6 +299,10 @@ namespace SlotsInstaller
             InstallManifest m = snapshot.Manifest;
             string outfit = Path.GetDirectoryName(Path.GetFullPath(snapshot.File));
             List<KeyValuePair<PartGraft, bool>> parts = Ordered(m);
+            // The mods' stamps before they are read: a change while they are read makes the outfit again next time
+            var sources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in new[] { m.SourcePath }.Concat(parts.Select(p => p.Key.SourcePath)))
+            { string s = SourceStamp(path); if (s != null && !sources.ContainsKey(path)) sources[path] = s; }
             string[] ids = Ids(parts.Select(p => p.Key).ToList());
             var recorded = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var kv in m.Sha256) recorded[Norm(kv.Key)] = kv.Value ?? "";
@@ -377,7 +455,7 @@ namespace SlotsInstaller
                     entry.Append("        { \"id\": ").Append(Quote(ids[k])).Append(", \"name\": ").Append(Quote(Title(parts[k].Key))).Append(", \"on\": ").Append(parts[k].Value ? "true" : "false")
                          .Append(", \"dir\": ").Append(Quote(FolderName + "/" + key + "/" + ids[k])).Append(" }").Append(k < parts.Count - 1 ? ",\n" : "\n");
                 entry.Append("      ]\n    }");
-                var built = new ManagerPartsBuilt { Stamp = stamp, Entry = entry.ToString() };
+                var built = new ManagerPartsBuilt { Stamp = stamp, Entry = entry.ToString(), Sources = sources };
                 foreach (Want w in wants.Values) built.Files[w.Rel] = new ManagerPartsFile { Size = w.Size, From = w.From };
                 Json.Write(Path.Combine(home, BuiltName), built);
                 return built;

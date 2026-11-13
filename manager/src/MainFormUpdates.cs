@@ -282,7 +282,8 @@ namespace SlotsInstaller
                     menu.Set(choices, settingsGameMenus[i].Checked);
                 }
                 LoaderFlags.Save(AppConfig.DataDir, choices);
-                if (!busy && !String.IsNullOrWhiteSpace(config.GameRoot) && Directory.Exists(config.GameRoot)) LoaderFlags.Sync(ReplaceEngine.ForConfig(config));
+                // The added-parts list may read mods and copy files: made in the background, not on this thread.
+                if (!busy && !String.IsNullOrWhiteSpace(config.GameRoot) && Directory.Exists(config.GameRoot)) LoaderFlags.Sync(ReplaceEngine.ForConfig(config), true);
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
             LoadLoaderFlagFields();
@@ -297,7 +298,7 @@ namespace SlotsInstaller
                 LoaderFlagChoices choices = LoaderFlags.Load(AppConfig.DataDir);
                 choices.OthersSeePending = value;
                 LoaderFlags.Save(AppConfig.DataDir, choices);
-                if (!busy && !String.IsNullOrWhiteSpace(config.GameRoot) && Directory.Exists(config.GameRoot)) LoaderFlags.Sync(ReplaceEngine.ForConfig(config));
+                if (!busy && !String.IsNullOrWhiteSpace(config.GameRoot) && Directory.Exists(config.GameRoot)) LoaderFlags.Sync(ReplaceEngine.ForConfig(config), true);
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
             LoadLoaderFlagFields();

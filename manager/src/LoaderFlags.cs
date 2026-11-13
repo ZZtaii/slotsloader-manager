@@ -148,8 +148,10 @@ namespace SlotsInstaller
         }
         internal static bool HasNativeCore(ReplaceState state) { return state != null && state.Mods.Any(m => m != null && m.Enabled && Has(m, CorePlugin)); }
 
-        // True when a file in the game folder changed.
-        internal static bool Apply(string gameRoot, string dataDir, ReplaceState state)
+        // True when a file in the game folder changed. `partsLater` (a box ticked in Settings, on the window's thread): the
+        // added-parts list, which may read mods and copy files, is made in the background (ManagerParts.ApplyLater), and
+        // the result does not count it.
+        internal static bool Apply(string gameRoot, string dataDir, ReplaceState state, bool partsLater = false)
         {
             try
             {
@@ -161,7 +163,9 @@ namespace SlotsInstaller
                 // 13 Nov 2026: the parts added to outfits, for the loader to offer them in the game (ManagerParts.cs): listed
                 // while this loader is installed and "Costume options in the game" is on, else the list is removed. Also
                 // while SF6 runs: the loader reads it at its next start only, and the outfits may have changed meanwhile.
-                bool changed = ManagerParts.Apply(gameRoot, loader && IsOn(LoaderMenu.ById("options"), want, gameRoot));
+                bool partsWanted = loader && IsOn(LoaderMenu.ById("options"), want, gameRoot), changed = false;
+                if (partsLater) ManagerParts.ApplyLater(gameRoot, partsWanted);
+                else changed = ManagerParts.Apply(gameRoot, partsWanted);
                 if (GameProcesses.Probe.IsGameRunning()) return changed;   // the settings: applied at the next refresh
                 // The update check: always off, never a choice.
                 changed |= Sync(Path.Combine(gameRoot, UpdateStateRelative), gameRoot, loader || core,
@@ -187,9 +191,9 @@ namespace SlotsInstaller
             keys.Reverse();
             return keys.ToArray();
         }
-        internal static bool Sync(ReplaceEngine engine)
+        internal static bool Sync(ReplaceEngine engine, bool partsLater = false)
         {
-            try { return engine != null && Apply(engine.GameRoot, engine.DataDir, engine.LoadState()); }
+            try { return engine != null && Apply(engine.GameRoot, engine.DataDir, engine.LoadState(), partsLater); }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.LogLine("Loader settings not synced (" + ex.GetType().Name + ")."); return false; }
         }
 
@@ -262,7 +266,7 @@ namespace SlotsInstaller
             try
             {
                 if (!File.Exists(path)) return null;
-                Dictionary<string, object> o = Parse(File.ReadAllText(path, Encoding.UTF8));
+                Dictionary<string, object> o = Parse(File.ReadAllText(path, Encoding.UTF8).TrimStart('﻿'));
                 object v;
                 return o != null && o.TryGetValue(key, out v) && v is bool ? (bool?)(bool)v : null;
             }
@@ -287,32 +291,48 @@ namespace SlotsInstaller
         internal static string WithText(string text, string key, string value)
         {
             if (value == null || !Regex.IsMatch(value, "^[A-Za-z0-9 ]*$")) throw new ArgumentException("A plain text is needed.", "value");
+            return WithValues(text, new[] { new KeyValuePair<string, object>(key, value) });
+        }
+        // What WithKeys and WithText share. A value is a bool or a plain text (nothing to escape). A key that already has
+        // a value of the same kind has it replaced in place; a new key goes first, in the file's own indentation. The
+        // edit is checked by reading it back: when it does not give the wanted object, the whole object is written again
+        // (layout lost, keys kept). Null: `text` is not a JSON object.
+        private static string WithValues(string text, IList<KeyValuePair<string, object>> values)
+        {
             string t = text ?? "";
             if (t.Length > 0 && t[0] == '\uFEFF') t = t.Substring(1);
             Dictionary<string, object> before = t.Trim().Length == 0 ? new Dictionary<string, object>() : Parse(t);
             if (before == null) return null;
+            var expected = new HashSet<string>(before.Keys);
             if (before.Count == 0) t = "{\n}\n";
-            object old;
-            bool had = before.TryGetValue(key, out old);
-            if (had && old is string && (string)old == value) return text;
-            string edited = null;
-            if (had)
+            Func<object, string> json = v => v is bool ? ((bool)v ? "true" : "false") : "\"" + (string)v + "\"";
+            if (values.All(kv => { object v; return before.TryGetValue(kv.Key, out v) && Object.Equals(v, kv.Value); })) return text;   // already so: the file as it is
+            foreach (KeyValuePair<string, object> kv in values)
             {
-                Match m = Regex.Match(t, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
-                if (old is string && m.Success) edited = t.Substring(0, m.Groups[1].Index) + value + t.Substring(m.Groups[1].Index + m.Groups[1].Length);
-            }
-            else
-            {
+                object old;
+                if (before.TryGetValue(kv.Key, out old))
+                {
+                    if (Object.Equals(old, kv.Value)) continue;
+                    string key = "\"" + Regex.Escape(kv.Key) + "\"\\s*:\\s*";
+                    Match m = old is bool && kv.Value is bool ? Regex.Match(t, "(" + key + ")(true|false)\\b")
+                        : old is string && kv.Value is string ? Regex.Match(t, "(" + key + "\")((?:[^\"\\\\]|\\\\.)*)\"") : Match.Empty;
+                    if (!m.Success) { t = null; break; }   // another type, or not where the pattern looks: rebuilt below
+                    string replaced = kv.Value is bool ? json(kv.Value) : (string)kv.Value;
+                    t = t.Substring(0, m.Groups[2].Index) + replaced + t.Substring(m.Groups[2].Index + m.Groups[2].Length);
+                    continue;
+                }
                 int brace = t.IndexOf('{');
                 Match indent = Regex.Match(t, "\\n([ \\t]+)\"");
                 bool empty = Regex.IsMatch(t.Substring(brace + 1), "^\\s*\\}");
-                edited = t.Substring(0, brace + 1) + "\n" + (indent.Success ? indent.Groups[1].Value : "  ") + "\"" + key + "\": \"" + value + "\"" + (empty ? "\n}" + t.Substring(t.IndexOf('}', brace) + 1) : "," + t.Substring(brace + 1));
+                t = t.Substring(0, brace + 1) + "\n" + (indent.Success ? indent.Groups[1].Value : "  ") + "\"" + kv.Key + "\": " + json(kv.Value) + (empty ? "\n}" + t.Substring(t.IndexOf('}', brace) + 1) : "," + t.Substring(brace + 1));
+                before[kv.Key] = kv.Value; expected.Add(kv.Key);
             }
-            Dictionary<string, object> after = edited == null ? null : Parse(edited);
-            object now;
-            if (after != null && after.Count == before.Count + (had ? 0 : 1) && after.TryGetValue(key, out now) && now as string == value && before.Keys.All(after.ContainsKey)) return edited;
-            before[key] = value;   // the in-place edit did not give the wanted object: written again whole (layout lost, keys kept)
-            return Json.Serializer().Serialize(before) + "\n";
+            Dictionary<string, object> after = t == null ? null : Parse(t);
+            if (after != null && after.Count == expected.Count && expected.All(after.ContainsKey) && values.All(kv => { object v; return after.TryGetValue(kv.Key, out v) && Object.Equals(v, kv.Value); })) return t;
+            Dictionary<string, object> whole = (text ?? "").Trim().Length == 0 ? new Dictionary<string, object>() : Parse(text.TrimStart('\uFEFF'));
+            if (whole == null) return null;
+            foreach (KeyValuePair<string, object> kv in values) whole[kv.Key] = kv.Value;
+            return Json.Serializer().Serialize(whole) + "\n";
         }
         private static bool OnlyKeys(string text, IEnumerable<string> keys)
         {
@@ -351,35 +371,7 @@ namespace SlotsInstaller
         // a JSON object.
         internal static string WithKeys(string text, IEnumerable<KeyValuePair<string, bool>> keys)
         {
-            string t = text ?? "";
-            if (t.Length > 0 && t[0] == '\uFEFF') t = t.Substring(1);
-            Dictionary<string, object> before = t.Trim().Length == 0 ? new Dictionary<string, object>() : Parse(t);
-            if (before == null) return null;
-            if (before.Count == 0) t = "{\n}\n";
-            foreach (KeyValuePair<string, bool> k in keys)
-            {
-                string value = k.Value ? "true" : "false";
-                object old;
-                if (before.TryGetValue(k.Key, out old))
-                {
-                    Match m = Regex.Match(t, "(\"" + Regex.Escape(k.Key) + "\"\\s*:\\s*)(true|false)\\b");
-                    if (!(old is bool) || !m.Success) { t = null; break; }   // another type, or not where the pattern looks: rebuilt below
-                    t = t.Substring(0, m.Groups[2].Index) + value + t.Substring(m.Groups[2].Index + m.Groups[2].Length);
-                    continue;
-                }
-                int brace = t.IndexOf('{');
-                Match indent = Regex.Match(t, "\\n([ \\t]+)\"");
-                bool empty = Regex.IsMatch(t.Substring(brace + 1), "^\\s*\\}");
-                t = t.Substring(0, brace + 1) + "\n" + (indent.Success ? indent.Groups[1].Value : "  ") + "\"" + k.Key + "\": " + value + (empty ? "\n}" + t.Substring(t.IndexOf('}', brace) + 1) : "," + t.Substring(brace + 1));
-                before[k.Key] = k.Value;
-            }
-            Dictionary<string, object> after = t == null ? null : Parse(t);
-            if (after != null && keys.All(k => { object v; return after.TryGetValue(k.Key, out v) && v is bool && (bool)v == k.Value; }) && after.Count >= before.Count) return t;
-            // The in-place edit did not give the wanted object: the whole object is written again (layout lost, keys kept).
-            Dictionary<string, object> whole = (text ?? "").Trim().Length == 0 ? new Dictionary<string, object>() : Parse(text.TrimStart('\uFEFF'));
-            if (whole == null) return null;
-            foreach (KeyValuePair<string, bool> k in keys) whole[k.Key] = k.Value;
-            return Json.Serializer().Serialize(whole) + "\n";
+            return WithValues(text, keys.Select(k => new KeyValuePair<string, object>(k.Key, k.Value)).ToList());
         }
     }
 

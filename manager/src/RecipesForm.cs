@@ -198,7 +198,16 @@ namespace SlotsInstaller
         // Nothing recorded (a recipe installed by an earlier build, or its mods installed by hand): it still reads
         // installed when what is there is exactly the recipe, the same mods with the same options and nothing else
         // of it turned off; never "changed", and never a record of a mod only because the recipe names that mod.
+        // Set while MainForm.ApplyFilters runs: each recipe's answer is read once in that pass.
+        private Dictionary<OutfitRecipe, RecipeInstall> recipeInstallPass;
         internal RecipeInstall InstalledRecipe(OutfitRecipe recipe)
+        {
+            RecipeInstall known;
+            if (recipeInstallPass == null || recipe == null) return InstalledRecipeNow(recipe);
+            if (!recipeInstallPass.TryGetValue(recipe, out known)) recipeInstallPass[recipe] = known = InstalledRecipeNow(recipe);
+            return known;
+        }
+        private RecipeInstall InstalledRecipeNow(OutfitRecipe recipe)
         {
             var found = new RecipeInstall();
             if (recipe == null || recipe.Base == null) return found;

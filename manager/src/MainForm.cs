@@ -1784,15 +1784,23 @@ namespace SlotsInstaller
             // are sorted with the mods (Added: when the recipe was made; Last used: its last install; Installed: installed
             // ones first), no longer in front of them. A search with a recipe word (rc, recipe, outfits) still lists
             // them first, in the same order among themselves.
-            List<LibraryEntry> recipeRows = RecipeRows(fighters, kindsOn);
-            if (installedOn) recipeRows = recipeRows.Where(x => InstalledRecipe(x.Recipe).Any).ToList();   // "installed only" keeps the installed recipes
-            bool recipesFirst = recipeRows.Count > 0 && HasRecipeWord(search.Text);
-            if (!recipesFirst) foreach (LibraryEntry recipeRow in recipeRows) ranked.Add(new KeyValuePair<LibraryEntry, int>(recipeRow, LibrarySearch.Direct));
-            List<LibraryEntry> rows = SortLibraryRows(ranked);
-            if (recipesFirst) rows = SortLibraryRows(recipeRows.Select(x => new KeyValuePair<LibraryEntry, int>(x, LibrarySearch.Direct)).ToList()).Concat(rows).ToList();
-            // 1.0.19: a colour word in the search ("color pack", "cmd") lists the colour packs first, then the other mods
-            // with colour files, then the rest, each group in the order above (LibrarySearch.ColourRank).
-            if (query.Colour != null) rows = rows.OrderBy(x => LibrarySearch.ColourRank(x)).ToList();
+            // What each recipe has installed is read once in this pass (the filter, the Installed sort, Last used).
+            recipeInstallPass = new Dictionary<OutfitRecipe, RecipeInstall>();
+            List<LibraryEntry> rows, recipeRows;
+            try
+            {
+                recipeRows = RecipeRows(fighters, kindsOn);
+                if (installedOn) recipeRows = recipeRows.Where(x => InstalledRecipe(x.Recipe).Any).ToList();   // "installed only" keeps the installed recipes
+                bool recipesFirst = recipeRows.Count > 0 && HasRecipeWord(search.Text);
+                if (!recipesFirst) foreach (LibraryEntry recipeRow in recipeRows) ranked.Add(new KeyValuePair<LibraryEntry, int>(recipeRow, LibrarySearch.Direct));
+                rows = SortLibraryRows(ranked);
+                // 1.0.19: a colour word in the search ("color pack", "cmd") lists the colour packs first, then the other mods
+                // with colour files, then the rest, each group in the order above (LibrarySearch.ColourRank). Before the
+                // recipes are put in front, so a recipe word still lists them first.
+                if (query.Colour != null) rows = rows.OrderBy(x => LibrarySearch.ColourRank(x)).ToList();
+                if (recipesFirst) rows = SortLibraryRows(recipeRows.Select(x => new KeyValuePair<LibraryEntry, int>(x, LibrarySearch.Direct)).ToList()).Concat(rows).ToList();
+            }
+            finally { recipeInstallPass = null; }
             bool sameRows = modList.Items.Count == rows.Count;
             for (int i = 0; sameRows && i < rows.Count; i++) sameRows = Object.ReferenceEquals(modList.Items[i].Tag, rows[i]);
             if (!sameRows) UpdateLibraryRows(rows);
@@ -2475,15 +2483,16 @@ namespace SlotsInstaller
             else if (e.Node.Checked)
             {
                 // 1.0.19 (the user: "relax requirements ... install the mod anyways. this helps to mix and match
-                // options"): what an option needs is still ticked with it, except what the user unticked by hand
-                // (leftOut): that stays out, and the line under the picture says so (MainFormNeeds.cs).
+                // options"): what an option names in Requirement= or the bundle marks Required is still ticked with it,
+                // except what the user unticked by hand (leftOut): that stays out, and the line under the picture says
+                // so (MainFormNeeds.cs). The option it sits under in the list always comes back with it, as before.
                 leftOut.Remove(component.Id);
                 EnforceBranchChoice(e.Node);
                 foreach (OptionNode ancestor in Ancestors(e.Node))
                 {
                     EnforceBranchChoice(ancestor);
                     ModComponent c = ancestor.Tag as ModComponent;
-                    if (c != null && !c.IsDummy && c.HasFiles(IsReplaceMode) && !ancestor.Checked && !leftOut.Contains(c.Id)) { ancestor.Checked = true; if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
+                    if (c != null && !c.IsDummy && c.HasFiles(IsReplaceMode) && !ancestor.Checked) { ancestor.Checked = true; leftOut.Remove(c.Id); if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
                 }
                 // 1.0.16: an addon option's Requirement=Main files ticks the main mod's option of that name.
                 // 1.0.18: and a Requirement= naming an option of the same archive ticks that option.
