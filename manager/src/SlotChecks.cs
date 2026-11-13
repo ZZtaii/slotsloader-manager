@@ -63,6 +63,7 @@ namespace SlotsInstaller
                         check("Renamed archive reinstall (1.0.5): keeps the installed filename, record and variant choices; outside-root records are ignored; changed, wrong-character and ambiguous copies are refused", delegate { RenamedArchiveReinstall(root); });
                         check("Archive records from another game (1.0.5): existing and absent old copies do not block a new root; their files and records stay untouched", delegate { ArchiveOtherGameRoots(root); });
                         check("Same option name, another mod (1.0.15): an edited copy of an installed mod suggests \"<name> 2\" with no hint and installs beside it, the first mod's slot and source untouched; typing the first slot's name says \"Replaces this slot, installed from <its source>.\"", delegate { OtherSourceName(form, mods, game); });
+                        check("List header (13 Nov 2026): a mod whose top row is an option with files and with options under it gets its own name as a header above the list; that option has no arrow of its own and does not fold, ticking what is under it still ticks it, the header folds everything and selecting it is harmless; a mod without such a row gets no header", delegate { ListHeader(form, mods); });
                         form.Close();
                     }
                 }
@@ -144,6 +145,44 @@ namespace SlotsInstaller
             Require(form.SlotHintText == "", "hint in Replace mode");
             Call(form, "SetInstallMode", InstallModes.Slot, true); WaitIdle(form);
             Require(Name(form) == both, "slot mode name: " + Name(form));
+        }
+
+        // The user's Marisa bundle: "Hair" (an outfit) with "Clean" and a group of skins under it showed a tick box with an
+        // arrow before it. The mod's name is the header instead.
+        private static void ListHeader(MainForm form, string mods)
+        {
+            string m = Path.Combine(mods, "Header Bundle"), plain = Path.Combine(mods, "Header Plain");
+            Put(m, "Top/modinfo.ini", "name=Top Outfit\r\n");
+            Put(m, "Top/natives/stm/product/model/esf/esf002/001/01/esf002_001_01.mesh.230110883", "top body");
+            Put(m, "Extra/modinfo.ini", "name=Extra Hair\r\nAddonFor=Top Outfit\r\n");
+            Put(m, "Extra/natives/stm/product/model/esf/esf002/001/02/esf002_001_02.mesh.230110883", "extra hair");
+            Put(plain, "Only/modinfo.ini", "name=Only Outfit\r\n");
+            Put(plain, "Only/natives/stm/product/model/esf/esf002/001/01/esf002_001_01.mesh.230110883", "only body");
+            Call(form, "ShowPage", Get<Panel>(form, "libraryPage"));
+            Call(form, "LoadPackage", new LibraryEntry { SourcePath = m, Name = "Header Bundle" }); WaitIdle(form);
+            OptionTree tree = Get<OptionTree>(form, "componentTree");
+            Dictionary<string, OptionNode> nodes = Get<Dictionary<string, OptionNode>>(form, "componentNodes");
+            OptionNode top = nodes.Values.First(n => ((ModComponent)n.Tag).Name == "Top Outfit"), extra = nodes.Values.First(n => ((ModComponent)n.Tag).Name == "Extra Hair");
+            Require(tree.Nodes.Count == 1, "one header row on top: " + tree.Nodes.Count);
+            OptionNode header = tree.Nodes[0]; ModComponent headerTag = (ModComponent)header.Tag;
+            Require(headerTag.Id == MainForm.ListHeaderId && headerTag.IsDummy && headerTag.Name == Get<Label>(form, "packageTitle").Text && headerTag.Name.Length > 0 && !nodes.ContainsKey(headerTag.Id) && !nodes.Values.Contains(header),
+                "the header carries the mod's name and is no option: " + headerTag.Name);
+            Require(top.Parent == header && extra.Parent == top && top.NoToggle && !extra.NoToggle && top.IsExpanded && header.IsExpanded, "the option stands under the header, open, with no arrow of its own");
+            // the ticks still follow the mod's own structure: the option's add-on is ticked with it, and goes with it
+            if (!top.Checked) Tick(form, ((ModComponent)top.Tag).Id, true);
+            Tick(form, ((ModComponent)extra.Tag).Id, true);
+            Require(extra.Checked && top.Checked && !header.Checked && Ticks(form).Count == 2, "the option and what is under it: " + String.Join(",", Ticks(form)));
+            tree.SelectedNode = header; Application.DoEvents(); WaitIdle(form);
+            header.Checked = true; Application.DoEvents(); WaitIdle(form);
+            Require(!header.Checked && extra.Checked && top.Checked && Ticks(form).Count == 2, "the header is not an option: selecting or ticking it changes nothing");
+            // a click where its arrow used to stand ticks or unticks it like the rest of the row, and does not fold it
+            LayoutChecks.ClickOption(tree, new Point(top.Bounds.X - DpiMetrics.Px(tree, 10), top.Bounds.Y + tree.ItemHeight / 2), 0x201); Application.DoEvents(); WaitIdle(form);
+            Require(top.IsExpanded && !top.Checked && !extra.Checked && Ticks(form).Count == 0, "a click left of its tick box must untick it and what is under it, not fold it: " + String.Join(",", Ticks(form)));
+            header.Collapse(); Application.DoEvents();
+            Require(tree.GetNodeAt(new Point(DpiMetrics.Px(tree, 40), tree.ItemHeight + tree.ItemHeight / 2)) == null, "the header folds every row under it");
+            header.Expand(); Application.DoEvents();
+            Call(form, "LoadPackage", new LibraryEntry { SourcePath = plain, Name = "Header Plain" }); WaitIdle(form);
+            Require(tree.Nodes.Count == 1 && ((ModComponent)tree.Nodes[0].Tag).Id != MainForm.ListHeaderId && ((ModComponent)tree.Nodes[0].Tag).Name == "Only Outfit" && !tree.Nodes[0].NoToggle, "a mod with one plain option gets no header");
         }
 
         // Ingrid C1 NO SCN v2 and its "no jcn" copy: one option name, so the copy took over the first one's slot on Install

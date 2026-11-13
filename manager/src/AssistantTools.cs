@@ -411,7 +411,7 @@ namespace SlotsInstaller
                 var unknown = optionIds.Where(id => package.Find(id) == null).ToList();
                 if (unknown.Count > 0) return Error("Unknown option_id(s): " + String.Join(", ", unknown.Select(id => "'" + id + "'")) + ". Use IDs from get_mod_options.", "check_outfit: unknown options");
                 CompositionPlan plan = Composer.Plan(package, optionIds);
-                var errors = plan.Errors.Select(workspace.Scrub).ToList();
+                var errors = plan.StrictErrors().Select(workspace.Scrub).ToList();   // 1.0.19: the Assistant keeps the strict rules (MissingNeed)
                 bool characterValid = who.Length > 0 && Characters.Names.Contains(who);
                 if (!characterValid) errors.Add(who.Length == 0 ? "The mod's character could not be detected; pass the character explicitly." : "Unknown character '" + who + "'.");
                 else { string wrong = AssistantWorkspace.CharacterOfFiles(plan, who); if (wrong != null) errors.Add(wrong); }
@@ -421,7 +421,7 @@ namespace SlotsInstaller
                 var duplicates = workspace.Installed().Where(o => o.Managed && String.Equals(o.SourcePath, entry.SourcePath, StringComparison.OrdinalIgnoreCase) && o.SelectedIds != null && chosen.SetEquals(o.SelectedIds)).ToList();
                 var result = new JsonObj().Add("can_install", can).Add("character", who).Add("character_valid", characterValid)
                     .Add("already_installed_as", duplicates.Select(o => new JsonObj().Add("name", o.Name).Add("character", o.Character).Add("loader_label", o.LoaderOutfitName ?? "").Add("enabled", o.Enabled)).ToList())
-                    .Add("errors", errors).Add("warnings", plan.Warnings.Select(w => workspace.Scrub(Clip(w, 300))).ToArray())
+                    .Add("errors", errors).Add("warnings", plan.StrictWarnings().Select(w => workspace.Scrub(Clip(w, 300))).ToArray())
                     .Add("layers_in_order", plan.Layers.Select(c => c.Name).ToArray())
                     .Add("file_count", plan.Files.Count).Add("total_size", Utilities.FriendlyBytes(plan.TotalBytes))
                     .Add("overrides", new JsonObj().Add("count", plan.Overrides.Count).Add("examples", plan.Overrides.Take(3).Select(o => new JsonObj().Add("file", Path.GetFileName(o.Path)).Add("previous", o.Previous).Add("winner", o.Winner)).ToList()));

@@ -157,12 +157,20 @@ namespace SlotsInstaller
             var tree = Get<OptionTree>(form, "componentTree"); tree.ExpandAll();
             var unresolved = Get<List<ModComponent>>(form, "unresolvedChoices");
             var order = Get<List<string>>(form, "selectedOrder");
-            var planNames = Composer.Plan(package, order).Errors.Where(e => e.StartsWith("Choose an option in '")).Select(e => e.Substring(21).TrimEnd('.', '\'')).OrderBy(n => n).ToArray();
-            Require(unresolved.Select(g => g.Name).OrderBy(n => n).SequenceEqual(planNames) && planNames.Length == 2, "Live required groups differ from the composition plan: [" + String.Join(", ", unresolved.Select(g => g.Name)) + "] vs [" + String.Join(", ", planNames) + "]");
-            Label summary = Get<Label>(form, "planSummary");
-            Require(summary.Text == "Choose: Outfit, Skin", "Footer does not list the required choices briefly: " + summary.Text);
-            Require(!Get<Button>(form, "installButton").Enabled, "Install enabled with unresolved required choices.");
+            // 1.0.19 (the user: "relax requirements ... show a popup (less annoying though) around the image that it may
+            // not work without x mod and highlight the required mod temporarily but install the mod anyways"): the two
+            // empty required groups are notes in the plan and one line under the preview picture, not a stop.
+            CompositionPlan mainsOnly = Composer.Plan(package, order);
+            var planNames = mainsOnly.Needs.Where(n => n.Needed.IsDummy).Select(n => n.Needed.Name).OrderBy(n => n).ToArray();
+            Require(unresolved.Select(g => g.Name).OrderBy(n => n).SequenceEqual(planNames) && planNames.Length == 2 && mainsOnly.Errors.All(e => !e.StartsWith("Choose an option")), "Live required groups differ from the composition plan: [" + String.Join(", ", unresolved.Select(g => g.Name)) + "] vs [" + String.Join(", ", planNames) + "]");
+            Label summary = Get<Label>(form, "planSummary"); Label notice = form.NeedNotice;
+            Require(!form.ChoicesBlock && summary.Text != "Choose: Outfit, Skin", "An empty required group still held the footer with main files ticked: " + summary.Text);
+            Require(notice.Text == "May not work without an option from “Outfit choices” and an option from “Skin choices”" && OverlayScroller.OwnVisible(notice), "The line under the preview picture does not name the empty required groups: " + notice.Text);
+            Require(notice.Parent.BackColor == Palette.Background && notice.BackColor == Palette.Raised && notice.Bottom == notice.Parent.ClientSize.Height && notice.Width == notice.Parent.ClientSize.Width, "The line is not the strip under the picture.");
             var nodes = Get<Dictionary<string, OptionNode>>(form, "componentNodes");
+            // 13 Nov 2026 (the user: "highlights should never happen on mod hovers, only on mod installs"): opening a mod
+            // lights nothing up, whatever its ticks leave out. The line above and the marker below are all there is.
+            Require(!unresolved.Any(g => form.IsFlashing(g.Id)) && form.CurrentNeeds.Count == 2, "Opening a mod lit rows up.");
             OptionNode outfitGroup = nodes[unresolved[0].Id];
             // The marker is drawn into the row: an accent edge at the left of the group row.
             outfitGroup.EnsureVisible(); tree.Update();
@@ -173,14 +181,23 @@ namespace SlotsInstaller
                 Require(image.GetPixel(DpiMetrics.Px(tree, 1), row.Y + row.Height / 2).ToArgb() == Palette.Accent.ToArgb(), "Unresolved required group is not marked in the option list.");
                 image.Save(Path.Combine(root, "polish-required-" + tree.DeviceDpi + ".png"), ImageFormat.Png);
             }
-            // Scroll away, then click the footer summary: it jumps to the first unresolved group.
-            tree.TopNode = tree.VisibleNodes[tree.VisibleNodes.Count - 1]; tree.SelectedNode = null;
-            typeof(Control).GetMethod("OnClick", PrivateInstance).Invoke(summary, new object[] { EventArgs.Empty });
-            Require(tree.SelectedNode == outfitGroup && tree.ClientRectangle.IntersectsWith(outfitGroup.Bounds) && outfitGroup.IsExpanded, "Footer click did not jump to and reveal the first required group.");
-            Require(Get<Label>(form, "statusText").Text.Contains(outfitGroup.Text), "Jump did not explain the required choice in the status strip.");
+            // The main files alone make no outfit (no model): that still keeps Install off, the empty groups do not.
+            WaitIdle(form);
+            Require(summary.Text == "1 required change" && Get<Label>(form, "planDetails").Text.StartsWith("The selection has no outfit mesh") && !Get<Button>(form, "installButton").Enabled, "A selection with no model was not held back: " + summary.Text);
+            // Scroll away, then click the line under the picture: it shows the first group left empty and lights it again.
+            outfitGroup = nodes[unresolved[0].Id];   // the review may have reloaded the fixture: the rows are new objects
+            tree.CollapseAll(); tree.TopNode = tree.VisibleNodes[tree.VisibleNodes.Count - 1]; tree.SelectedNode = null; Call(form, "Flash", new List<string>());
+            typeof(Control).GetMethod("OnClick", PrivateInstance).Invoke(notice, new object[] { EventArgs.Empty });
+            Require(tree.ClientRectangle.IntersectsWith(outfitGroup.Bounds) && outfitGroup.IsExpanded && form.IsFlashing(unresolved[0].Id), "A click on the line did not show and light the first group left empty: bounds " + outfitGroup.Bounds + " in " + tree.ClientRectangle + ", expanded " + outfitGroup.IsExpanded + ", lit " + form.IsFlashing(unresolved[0].Id) + ", " + form.CurrentNeeds.Count + " left out.");
+            Get<ComboBox>(form, "targetCharacter").SelectedItem = "Ingrid"; Get<PaddedTextField>(form, "outfitName").Text = "Polish fixture";
             nodes[package.Components.First(c => c.Name == "Dress").Id].Checked = true;
-            Require(unresolved != Get<List<ModComponent>>(form, "unresolvedChoices") && Get<List<ModComponent>>(form, "unresolvedChoices").Count == 1 && summary.Text == "Choose: Skin", "Resolving one group did not update the marker list: " + summary.Text);
+            Require(unresolved != Get<List<ModComponent>>(form, "unresolvedChoices") && Get<List<ModComponent>>(form, "unresolvedChoices").Count == 1 && notice.Text == "May not work without an option from “Skin choices”", "Resolving one group did not update the marker list: " + notice.Text);
+            // Install is on with the skin group still empty; the footer repeats the note in the accent colour.
+            WaitIdle(form);
+            Require(summary.Text.StartsWith("Ready to install") && Get<Button>(form, "installButton").Enabled && Get<Label>(form, "planDetails").Text == "May not work without an option from “Skin choices” · View notes" && Get<Label>(form, "planDetails").ForeColor == Palette.Accent,
+                "An empty required group kept Install off, or the footer does not say what is left out: " + summary.Text + " / " + Get<Label>(form, "planDetails").Text);
             nodes[package.Components.First(c => c.Name == "Tan skin").Id].Checked = true;
+            Require(Get<List<ModComponent>>(form, "unresolvedChoices").Count == 0 && form.CurrentNeeds.Count == 0 && notice.Text == "" && !OverlayScroller.OwnVisible(notice), "The line stayed after every group was answered: " + notice.Text);
             Require(Get<List<ModComponent>>(form, "unresolvedChoices").Count == 0 && form.ReviewPending && summary.Text == "", "Resolving every group did not start the automatic review (1.0.12: the footer waits for the result): " + summary.Text);
             Require(!Get<FlatButton>(form, "previewButton").Emphasis, "Review files is emphasised although the review runs automatically.");
             WaitIdle(form);
@@ -191,7 +208,78 @@ namespace SlotsInstaller
             Get<ComboBox>(form, "targetCharacter").SelectedItem = "Ingrid"; Get<PaddedTextField>(form, "outfitName").Text = "Polish fixture";
             Require(Get<Button>(form, "installButton").Enabled && summary.Text.StartsWith("Ready to install"), "A complete, reviewed fixture selection did not enable Install: " + summary.Text);
             Require(!Get<FlatButton>(form, "previewButton").Emphasis, "Review files stayed emphasised after review.");
-            report.Add("PASS: required choose-one groups are computed exactly as the composition plan reports them, marked in the list (accent edge + label), summarised in the footer (\"Choose: Outfit, Skin\"), the footer jumps to the first one, and resolving them updates the marker, footer and Install state.");
+            report.Add("PASS: required choose-one groups are computed exactly as the composition plan notes them, marked in the list (accent edge + label) and named in one line under the preview picture; a click on the line shows the first one; Install is on with a group left empty and the footer repeats the note; answering them clears the line (1.0.19).");
+            CheckLeftOut(form, Path.Combine(root, "Fixture left out"), report);
+        }
+
+        // 1.0.19: an option the user unticks by hand stays out when the option that needs it is ticked again; the line
+        // under the picture names it, its row lights up, and Install stays on.
+        private static void CheckLeftOut(MainForm form, string source, List<string> report)
+        {
+            Put(source, "body/modinfo.ini", "name=Body\n"); Put(source, "body/" + Mesh, "body mesh"); Put(source, "body/" + Material, "body material");
+            Put(source, "body/hair/modinfo.ini", "name=Long hair\n"); Put(source, "body/hair/" + Mesh.Replace("/01/", "/02/").Replace("_01.", "_02."), "hair mesh");
+            ModPackage package = PackageReader.Load(source, "");
+            ModComponent body = package.Components.Single(c => c.Name == "Body"), hair = package.Components.Single(c => c.Name == "Long hair");
+            Require(String.Equals(hair.ParentId, body.Id, StringComparison.OrdinalIgnoreCase), "Fixture: the hair option is not under the body option.");
+            Set(form, "package", package);
+            Call(form, "FillComponents", new List<string>());
+            var nodes = Get<Dictionary<string, OptionNode>>(form, "componentNodes"); var order = Get<List<string>>(form, "selectedOrder"); Label notice = form.NeedNotice;
+            Require(form.CurrentNeeds.Count == 0 && notice.Text == "", "An empty selection showed the line: " + notice.Text);
+            nodes[hair.Id].Checked = true;
+            Require(nodes[body.Id].Checked && form.CurrentNeeds.Count == 0 && notice.Text == "", "Ticking an option no longer ticks what it needs.");
+            nodes[body.Id].Checked = false;
+            Require(!nodes[hair.Id].Checked && order.Count == 0 && notice.Text == "", "Unticking an option left the options under it ticked.");
+            nodes[hair.Id].Checked = true;
+            Require(!nodes[body.Id].Checked && order.SequenceEqual(new[] { hair.Id }), "An option unticked by hand was ticked again behind the user's back.");
+            Require(form.CurrentNeeds.Single().Needed == body && form.CurrentNeeds.Single().By == hair && notice.Text == "May not work without “Body”", "The line does not name the option left out: " + notice.Text);
+            // 13 Nov 2026: a changed tick lights no row up (the user: only at Install). The row is drawn as any other.
+            Require(!form.IsFlashing(body.Id) && !form.IsFlashing(hair.Id), "A changed tick lit a row up.");
+            var tree = Get<OptionTree>(form, "componentTree"); tree.SelectedNode = null; tree.Update();
+            using (var image = new Bitmap(tree.Width, tree.Height))
+            {
+                tree.DrawToBitmap(image, tree.ClientRectangle);
+                Rectangle row = nodes[body.Id].Bounds;
+                Require(image.GetPixel(DpiMetrics.Px(tree, 1), row.Y + row.Height / 2).ToArgb() == Palette.Surface.ToArgb() && image.GetPixel(row.Right - DpiMetrics.Px(tree, 6), row.Y + row.Height / 2).ToArgb() == Palette.Surface.ToArgb(), "The row of the option left out is drawn lit although nothing was installed or clicked.");
+                // No indent (the user: "yes no indent"): the option under Body starts at the same column as Body.
+                Require(nodes[hair.Id].Bounds.X == nodes[body.Id].Bounds.X, "The options list indents a level.");
+            }
+            // A click on the line lights it: a light grey that lifts the row a little, with a grey edge at the left (the
+            // user, 13 Nov 2026: "change the highlight from orang'ish to more lightish grey that kind of blends in").
+            typeof(Control).GetMethod("OnClick", PrivateInstance).Invoke(notice, new object[] { EventArgs.Empty });
+            Require(form.IsFlashing(body.Id) && !form.IsFlashing(hair.Id), "A click on the line did not light the option left out.");
+            tree.SelectedNode = null; tree.Update();
+            using (var image = new Bitmap(tree.Width, tree.Height))
+            {
+                tree.DrawToBitmap(image, tree.ClientRectangle);
+                Rectangle row = nodes[body.Id].Bounds;
+                Color edge = image.GetPixel(DpiMetrics.Px(tree, 1), row.Y + row.Height / 2), lit = image.GetPixel(row.Right - DpiMetrics.Px(tree, 6), row.Y + row.Height / 2);
+                Color wanted = MainForm.Blend(Palette.Surface, MainForm.NeedTint, MainForm.NeedFlashStrength);
+                Func<Color, bool> grey = c => Math.Max(c.R, Math.Max(c.G, c.B)) - Math.Min(c.R, Math.Min(c.G, c.B)) <= 20;
+                Require(grey(MainForm.NeedTint) && grey(MainForm.NeedEdge) && edge.ToArgb() != Palette.Accent.ToArgb() && grey(edge) && edge.R > lit.R, "The edge of a lit row is not a grey: " + edge);
+                Require(lit.ToArgb() != Palette.Surface.ToArgb() && grey(lit) && lit.R >= Palette.Surface.R && lit.R <= wanted.R && lit.R - Palette.Surface.R <= 24 && wanted.R - Palette.Surface.R >= 12,
+                    "The lit row is not a light grey a little above the row's own colour: " + lit + " for " + wanted);
+                image.Save(Path.Combine(Path.GetDirectoryName(source), "polish-left-out-lit-" + tree.DeviceDpi + ".png"), ImageFormat.Png);
+            }
+            Call(form, "Flash", new List<string>());
+            Get<ComboBox>(form, "targetCharacter").SelectedItem = "Ingrid"; Get<PaddedTextField>(form, "outfitName").Text = "Left out fixture";
+            WaitIdle(form);
+            CompositionPlan plan = Get<CompositionPlan>(form, "plan");
+            Require(plan != null && plan.CanInstall && plan.Warnings.Contains("'Long hair' may not work without 'Body'.") && plan.StrictErrors().Contains("'Long hair' needs its parent 'Body'."), "The plan does not carry the note: " + (plan == null ? "no plan" : String.Join(" / ", plan.Errors.Concat(plan.Warnings))));
+            Require(Get<Label>(form, "planSummary").Text.StartsWith("Ready to install") && Get<Button>(form, "installButton").Enabled && Get<Label>(form, "planDetails").Text.StartsWith("May not work without “Body”"), "Install is off, or the footer is silent, with an option left out: " + Get<Label>(form, "planSummary").Text + " / " + Get<Label>(form, "planDetails").Text);
+            // Ticking it again takes the line away, and from then on it is ticked with the option that needs it.
+            nodes[body.Id].Checked = true;
+            Require(form.CurrentNeeds.Count == 0 && notice.Text == "" && !form.IsFlashing(body.Id), "The line stayed after the option was ticked again.");
+            nodes[hair.Id].Checked = false; nodes[body.Id].Checked = false; nodes[body.Id].Checked = true; nodes[body.Id].Checked = false; nodes[hair.Id].Checked = true;
+            Require(!nodes[body.Id].Checked, "The last hand untick did not count.");
+            Call(form, "FillComponents", new List<string> { hair.Id });
+            // Opening a selection that leaves an option out says so in the line and lights nothing up (13 Nov 2026).
+            Require(notice.Text == "May not work without “Body”" && form.CurrentNeeds.Count == 1, "Opening a selection that leaves an option out did not say so.");
+            Require(!form.IsFlashing(body.Id) && !form.IsFlashing(hair.Id), "Opening a mod with an option left out lit its row up.");
+            nodes[hair.Id].Checked = false; nodes[hair.Id].Checked = true;
+            Require(!nodes[body.Id].Checked, "A saved selection's left-out option was ticked again.");
+            Call(form, "ClosePackage");
+            Require(notice.Text == "" && form.CurrentNeeds.Count == 0, "The line stayed after the mod was closed.");
+            report.Add("PASS: what the ticks leave out (1.0.19): an option unticked by hand stays out when the option under it is ticked again, the line under the preview picture names it (\"May not work without “Body”\"), no row lights up for a tick or for an opened mod, a click on the line lights its row in a light grey with a grey edge (13 Nov 2026), Install stays on and the footer repeats the note; the Assistant's strict list still holds the old error; ticking it again or closing the mod clears the line; the options list has no indent.");
         }
 
         private static void CheckDrop(MainForm form, string archive, string folder, string root, List<string> report)
@@ -384,7 +472,8 @@ namespace SlotsInstaller
             package.PrepareChoices();
             var defaults = Composer.DefaultSelection(package);
             var live = Composer.UnresolvedChoiceGroups(package, defaults).Select(g => g.Name).OrderBy(n => n).ToArray();
-            var plan = Composer.Plan(package, defaults).Errors.Where(e => e.StartsWith("Choose an option in '")).Select(e => e.Substring(21).TrimEnd('.', '\'')).OrderBy(n => n).ToArray();
+            // 1.0.19: with something ticked, an empty required group is a note in the plan (Needs), not an error.
+            var plan = defaults.Count == 0 ? live : Composer.Plan(package, defaults).Needs.Where(n => n.Needed.IsDummy).Select(n => n.Needed.Name).OrderBy(n => n).ToArray();
             Require(live.SequenceEqual(plan), "Real archive: live required groups differ from the plan.");
             report.Add("PASS: real archive (read only) " + Path.GetFileName(archive) + ": live required groups match the plan: " + String.Join(", ", live) + "; footer shows \"" + "Choose: " + String.Join(", ", Composer.UnresolvedChoiceGroups(package, defaults).Select(g => MainForm.ShortGroupName(g, package))) + "\".");
         }
@@ -665,7 +754,7 @@ namespace SlotsInstaller
                 found.AddRange(UiAudit.ToolTipFindings(form));
             }
             Call(form, "ShowSettingsTab", true); Application.DoEvents(); found.AddRange(UiAudit.ToolTipFindings(form));
-            Call(form, "ShowUpdatesTab"); Application.DoEvents(); found.AddRange(UiAudit.ToolTipFindings(form));
+            Call(form, "ShowLoaderTab"); Application.DoEvents(); found.AddRange(UiAudit.ToolTipFindings(form));
             Call(form, "ShowSettingsTab", false); Call(form, "ShowPage", typeof(MainForm).GetField("libraryPage", PrivateInstance).GetValue(form)); Application.DoEvents();
             Require(found.Count == 0, "tooltips in the window: " + String.Join("; ", found.Distinct()));
             report.Add("PASS: no tooltips (2.4.0): " + scanned + " method bodies scanned for ToolTip / ToolTipText; every page and Settings tab of the window has no ToolTip, list, tree or menu tooltip.");

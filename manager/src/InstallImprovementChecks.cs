@@ -219,7 +219,9 @@ namespace SlotsInstaller
                 Require(plan.CanInstall && plan.Layers.SequenceEqual(new[] { main, alt }) && plan.Files[model + "02/hair.mesh.230110883"].Component == alt && plan.Files[model + "01/body.mesh.230110883"].Component == main && plan.Overrides.Count == 3,
                     "main + overlay plan (" + String.Join(",", order) + "): " + String.Join(" / ", plan.Errors) + " layers " + String.Join(",", plan.Layers.Select(c => c.Name)));
             }
-            Require(Composer.Plan(package, new[] { alt.Id }, true).Errors.Contains("'Alt hairstyle' needs 'Swimsuit C2'."), "the overlay alone was accepted");
+            // 1.0.19 (the user: "relax requirements ... install the mod anyways"): the overlay alone installs, with a note.
+            var alone = Composer.Plan(package, new[] { alt.Id }, true);
+            Require(alone.CanInstall && alone.Needs.Single().Needed == main && alone.Needs.Single().By == alt && alone.Warnings.Contains("'Alt hairstyle' may not work without 'Swimsuit C2'."), "the overlay alone did not say what it leaves out: " + String.Join(" / ", alone.Errors.Concat(alone.Warnings)));
             Require(Composer.Plan(package, new[] { main.Id }, true).CanInstall, "the main option alone was refused");
             // A second hairstyle needing the same main: the two hairstyles are alternatives again, the main stays outside.
             ini("03 Alt2", "name=Short hairstyle\nAddonFor=Swimsuit Test\nRequirement=Swimsuit C2\nMenuPriority=80\n");

@@ -600,6 +600,7 @@ namespace SlotsInstaller
                 File.Delete(JournalPath);
             }
             using (InstallMetrics.Measure("manager installs")) ManagerInstalls.Write(GameRoot, next);   // never throws
+            LoaderFlags.Apply(GameRoot, DataDir, next);   // 1.0.19: the suite loader's updater and menu settings follow the state (never throws)
         }
 
         // Recoverable uninstall: the removed mod's stored files and its record move to <store>\.removed.

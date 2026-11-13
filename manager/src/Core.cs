@@ -140,6 +140,10 @@ namespace SlotsInstaller
         // "REFramework & code"; null = not known yet (an older index record: read again in the background).
         public List<string> CodeKinds;
         public bool? HasPakPayload; // null = older index: backfill without discarding known identity
+        // 1.0.19 colour packs (Library.CountFileMix): the mod's files in fighter outfit folders, how many of them are
+        // colour files (esfNNN_NNN_cmd_NNN.user.2) and how many are models. null = not known yet (an older index record:
+        // read once in the background). LibrarySearch.IsColourPack reads it.
+        public List<int> FileMix;
         // 2.3.0 categories (ModCategories): stage numbers of the native files ("0000" = ess0000, Training Room;
         // "other" = stage folders without a code) and the Misc labels ("UI", "Sound", "VFX", ...).
         public List<string> StageIds = new List<string>();
@@ -184,6 +188,9 @@ namespace SlotsInstaller
         // 1.0.16 (still index v4, additive): LibraryCode kinds. A record without them keeps its identity: one with tool
         // kinds is read again once in the background (as HasPakPayload), one without any has none (no read).
         public List<string> CodeKinds;
+        // 1.0.19 (still index v4, additive): LibraryEntry.FileMix. A record without it and without outfit files has none
+        // (no read); one with outfit files is read again once in the background.
+        public List<int> FileMix;
         public bool? HasPakPayload;
         public int? OptionCount;
         public List<string> OptionIds;
@@ -277,7 +284,7 @@ namespace SlotsInstaller
         private static LibraryIdentityRecord CopyIdentity(LibraryIdentityRecord record)
         {
             return new LibraryIdentityRecord { SourcePath = record.SourcePath, Stamp = record.Stamp, CharacterCodes = record.CharacterCodes.ToList(),
-                OptionCount = record.OptionCount, OptionIds = record.OptionIds.ToList(), CostumeKeys = record.CostumeKeys.ToList(), ToolKinds = record.ToolKinds.ToList(), CodeKinds = record.CodeKinds == null ? null : record.CodeKinds.ToList(),
+                OptionCount = record.OptionCount, OptionIds = record.OptionIds.ToList(), CostumeKeys = record.CostumeKeys.ToList(), ToolKinds = record.ToolKinds.ToList(), CodeKinds = record.CodeKinds == null ? null : record.CodeKinds.ToList(), FileMix = record.FileMix == null ? null : record.FileMix.ToList(),
                 HasPakPayload = record.HasPakPayload, StageIds = record.StageIds.ToList(), MiscAreas = record.MiscAreas.ToList(), Authors = record.Authors == null ? null : record.Authors.ToList(), AddedUtc = record.AddedUtc, CodesVersion = record.CodesVersion, DisplayName = record.DisplayName, OptionNames = record.OptionNames == null ? null : record.OptionNames.ToList() };
         }
         // Only archive content metadata is reusable. Capture it while the old source still exists; incomplete or
@@ -391,7 +398,7 @@ namespace SlotsInstaller
                 OperationContext.ThrowIfCancellationRequested();
                 if (entry.Detection == "Error") continue;
                 if (!ApplyCached(entry, tool)) { MarkPending(entry); pending.Add(entry); }
-                else if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null) pending.Add(entry); // retain identity while backfilling the payload fact (1.0.16: or the code kinds)
+                else if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null || entry.FileMix == null) pending.Add(entry); // retain identity while backfilling the payload fact (1.0.16: or the code kinds; 1.0.19: or the file mix)
                 else if (entry.NamesPending) namesPending.Add(entry);
             }
             SaveIdentityCache();   // Added times filled in from this listing
@@ -414,7 +421,7 @@ namespace SlotsInstaller
                 if (cached != null && added != null && cached.AddedUtc != added) { cached.AddedUtc = added; cacheDirty = true; }
                 if (cached == null) return false;
                 entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas); entry.HasPakPayload = cached.HasPakPayload;
-                entry.CodeKinds = CachedCodeKinds(cached);
+                entry.CodeKinds = CachedCodeKinds(cached); entry.FileMix = CachedFileMix(cached);
                 if (NamesKnown(cached)) { entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); entry.NamesPending = false; }
                 else entry.NamesPending = true;
                 ApplyCodes(entry, new List<string>(cached.CharacterCodes));
@@ -430,6 +437,32 @@ namespace SlotsInstaller
         {
             if (cached.CodeKinds == null && cached.ToolKinds != null && cached.ToolKinds.Count == 0 && cached.OptionCount > 0) { cached.CodeKinds = new List<string>(); cacheDirty = true; }
             return cached.CodeKinds == null ? null : new List<string>(cached.CodeKinds);
+        }
+        // 1.0.19: a record's file mix (a copy), null while unknown. A record from before it whose files touch no fighter
+        // outfit folder has no outfit files at all: zeros, without reading the archive (CacheLock held).
+        private static List<int> CachedFileMix(LibraryIdentityRecord cached)
+        {
+            if (cached.FileMix == null && cached.CostumeKeys != null && cached.CostumeKeys.Count == 0) { cached.FileMix = new List<int> { 0, 0, 0 }; cacheDirty = true; }
+            return cached.FileMix == null || cached.FileMix.Count < 3 ? null : new List<int>(cached.FileMix);
+        }
+        private static readonly Regex ColourFile = new Regex(@"/product/model/esf/esf\d{3}/\d{3}/[^/]*_cmd_[^/]*\.user\.\d+$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex MeshFile = new Regex(@"\.mesh\.\d+$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        // { files in fighter outfit folders (natives/stm/(streaming/)product/model/esf/esfNNN/NNN/), the colour files
+        // among them (esfNNN_NNN_cmd_NNN.user.2, one per colour), the models among them }, over every option of the mod.
+        internal static List<int> CountFileMix(IEnumerable<string> entries)
+        {
+            int outfit = 0, colours = 0, models = 0;
+            foreach (string path in entries ?? new string[0])
+            {
+                string[] parts = (path ?? "").Replace('\\', '/').Split('/');
+                int boundary = Array.FindIndex(parts, part => part.Equals("natives", StringComparison.OrdinalIgnoreCase));
+                if (boundary < 0) continue;
+                string native = "/" + String.Join("/", parts.Skip(boundary + 1));
+                if (!CostumeFolder.IsMatch(native)) continue;
+                outfit++;
+                if (ColourFile.IsMatch(native)) colours++; else if (MeshFile.IsMatch(native)) models++;
+            }
+            return new List<int> { outfit, colours, models };
         }
         // Until it is read: the file-name fighter (as for a mod without fighter files), no options or kinds yet.
         private static void MarkPending(LibraryEntry entry)
@@ -479,7 +512,7 @@ namespace SlotsInstaller
         internal static void TakeIdentity(LibraryEntry entry, LibraryEntry found)
         {
             entry.CharacterCodes = found.CharacterCodes; entry.Character = found.Character; entry.Detection = found.Detection; entry.DetectionError = found.DetectionError;
-            entry.OptionCount = found.OptionCount; entry.OptionIds = found.OptionIds; entry.CostumeKeys = found.CostumeKeys; entry.ToolKinds = found.ToolKinds; entry.StageIds = found.StageIds; entry.MiscAreas = found.MiscAreas; entry.HasPakPayload = found.HasPakPayload; entry.CodeKinds = found.CodeKinds;
+            entry.OptionCount = found.OptionCount; entry.OptionIds = found.OptionIds; entry.CostumeKeys = found.CostumeKeys; entry.ToolKinds = found.ToolKinds; entry.StageIds = found.StageIds; entry.MiscAreas = found.MiscAreas; entry.HasPakPayload = found.HasPakPayload; entry.CodeKinds = found.CodeKinds; entry.FileMix = found.FileMix;
             entry.Authors = found.Authors; entry.DisplayName = found.DisplayName; entry.OptionNames = found.OptionNames; entry.FilenameCharacter = found.FilenameCharacter;
             entry.Pending = false; entry.NamesPending = found.NamesPending;
         }
@@ -643,8 +676,8 @@ namespace SlotsInstaller
                 }
                 List<string> codes;
                 if (cached != null) { codes = new List<string>(cached.CharacterCodes); entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas); entry.HasPakPayload = cached.HasPakPayload;
-                    lock (CacheLock) entry.CodeKinds = CachedCodeKinds(cached);
-                    if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null)
+                    lock (CacheLock) { entry.CodeKinds = CachedCodeKinds(cached); entry.FileMix = CachedFileMix(cached); }
+                    if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null || entry.FileMix == null)
                     {
                         bool pak = !entry.HasPakPayload.HasValue;   // 1.0.16: one listing backfills both
                         try
@@ -653,10 +686,11 @@ namespace SlotsInstaller
                             {
                                 if (pak) entry.HasPakPayload = ReadPakPayload(entry.SourcePath, reader);
                                 if (entry.CodeKinds == null) entry.CodeKinds = LibraryCode.Classify(reader.Entries.Keys, entry.Name);
+                                if (entry.FileMix == null) entry.FileMix = CountFileMix(reader.Entries.Keys);   // 1.0.19
                             }
                         }
                         catch (Exception ex) { if (ex is OutOfMemoryException || ex is OperationCanceledException) throw; Program.Log(ex); } // optional backfill cannot erase known identity
-                        lock (CacheLock) { if (pak) cached.HasPakPayload = entry.HasPakPayload; if (entry.CodeKinds != null) cached.CodeKinds = new List<string>(entry.CodeKinds); cacheDirty = true; }
+                        lock (CacheLock) { if (pak) cached.HasPakPayload = entry.HasPakPayload; if (entry.CodeKinds != null) cached.CodeKinds = new List<string>(entry.CodeKinds); if (entry.FileMix != null) cached.FileMix = new List<int>(entry.FileMix); cacheDirty = true; }
                     }
                     if (NamesKnown(cached)) { entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); entry.NamesPending = false; }
                     else if (readNames) IndexNames(entry, sevenZipPath);   // a names failure costs only the names
@@ -696,6 +730,7 @@ namespace SlotsInstaller
                         }
                         entry.HasPakPayload = ReadPakPayload(entry.SourcePath, reader);
                         entry.CodeKinds = LibraryCode.Classify(reader.Entries.Keys, entry.Name);   // 1.0.16
+                        entry.FileMix = CountFileMix(reader.Entries.Keys);   // 1.0.19
                         if (readNames) { ModInfoSummary info = ReadModInfo(reader); entry.Authors = info.Authors; entry.DisplayName = info.DisplayName; entry.OptionNames = info.OptionNames; entry.NamesPending = false; }
                         else entry.NamesPending = true;
                     }
@@ -711,7 +746,7 @@ namespace SlotsInstaller
                     {
                         lock (CacheLock)
                         {
-                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, HasPakPayload = entry.HasPakPayload, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), CodeKinds = new List<string>(entry.CodeKinds), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = readNames ? new List<string>(entry.Authors) : null, CodesVersion = CodesVersion, DisplayName = readNames ? entry.DisplayName ?? "" : null, OptionNames = readNames ? new List<string>(entry.OptionNames) : null };
+                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, HasPakPayload = entry.HasPakPayload, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), CodeKinds = new List<string>(entry.CodeKinds), FileMix = new List<int>(entry.FileMix), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = readNames ? new List<string>(entry.Authors) : null, CodesVersion = CodesVersion, DisplayName = readNames ? entry.DisplayName ?? "" : null, OptionNames = readNames ? new List<string>(entry.OptionNames) : null };
                             cacheDirty = true;
                         }
                     }
@@ -725,7 +760,7 @@ namespace SlotsInstaller
                 // Failed reads are not cached, so Refresh can recover from temporary IO errors.
                 ForgetIdentity(entry.SourcePath);
                 entry.Character = ""; entry.FilenameCharacter=""; entry.Detection = "Error"; entry.DetectionError = ex.Message;
-                entry.HasPakPayload = null; entry.CodeKinds = null; entry.CharacterCodes.Clear(); entry.OptionIds.Clear(); entry.OptionCount=-1; entry.CostumeKeys.Clear(); entry.ToolKinds.Clear(); entry.StageIds.Clear(); entry.MiscAreas.Clear(); entry.Authors.Clear(); entry.DisplayName = ""; entry.OptionNames.Clear(); entry.NamesPending = false;
+                entry.HasPakPayload = null; entry.CodeKinds = null; entry.FileMix = null; entry.CharacterCodes.Clear(); entry.OptionIds.Clear(); entry.OptionCount=-1; entry.CostumeKeys.Clear(); entry.ToolKinds.Clear(); entry.StageIds.Clear(); entry.MiscAreas.Clear(); entry.Authors.Clear(); entry.DisplayName = ""; entry.OptionNames.Clear(); entry.NamesPending = false;
             }
         }
         // The fighter of a mod from its native codes (one known fighter), else its file-name guess when allowed.

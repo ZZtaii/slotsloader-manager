@@ -318,7 +318,7 @@ namespace SlotsInstaller
                 planSummary.Text = "Saved options are missing"; planSummary.ForeColor = Palette.Red;
                 planDetails.Text = "Click Health to review the changed selection.";
             }
-            else if (unresolvedChoices.Count > 0)
+            else if (choicesBlock)   // 1.0.19: only while nothing is ticked (MainFormNeeds.cs)
             {
                 planSummary.Text = RequiredChoiceSummary(); planSummary.ForeColor = Palette.Accent;
                 planDetails.Text = unresolvedChoices.All(g => g.InferredChoice) ? "Select an option to install · click to choose" : "Required before Install · click to jump to the first choice";
@@ -389,7 +389,7 @@ namespace SlotsInstaller
         private void UpdateReplaceButtons()
         {
             if (openRecipe != null && package == null) { UpdateRecipeButtons(); return; }   // 1.0.18: a recipe is open (RecipesForm.cs)
-            bool ready = !busy && !ReviewPending && replacePlan != null && replacePlan.CanInstall && missingRestoredOptions.Count == 0 && unresolvedChoices.Count == 0;
+            bool ready = !busy && !ReviewPending && replacePlan != null && replacePlan.CanInstall && missingRestoredOptions.Count == 0 && !choicesBlock;
             bool whileRunning = replacePlan != null && replacePlan.Method == ReplaceMethods.Loose && replacePlan.RootFiles == 0;
             installButton.Enabled = ready && (!gameRunning || whileRunning) && !FluffyBlocksPlan;
             previewButton.Emphasis = false;
@@ -505,6 +505,7 @@ namespace SlotsInstaller
             // the addon's record uninstalled when none of its options is ticked (MainFormAddons.cs).
             AddonSplit split = package.MergedFrom == null || editingReplacement != null ? null : LibraryAddons.Split(package, selectedOrder, true);
             var shown = new HashSet<string>(shownAddonRecords, StringComparer.OrdinalIgnoreCase);
+            FlashNeedsAtInstall();   // 13 Nov 2026: what the ticks leave out lights up now, and only now (MainFormNeeds.cs)
             Work("Installing replacement…", delegate
             {
                 if (convert) engine.SwitchMethod(ReplaceMethods.Pak);
@@ -628,6 +629,7 @@ namespace SlotsInstaller
                 catch (Exception ex) { Program.Log(ex); }
                 SwapRepairFlag.Ensure(engine.GameRoot);
                 ManagerInstalls.Sync(engine);   // 1.0.9: the installs list other costume loaders read follows the state
+                LoaderFlags.Sync(engine);       // 1.0.19: no update check and no added menus in the game unless the user chose them
                 // 1.0.1: a gap in the patch PAK row (any tool's) is filled at start-up and every refresh, with SF6 and
                 // the external mod manager closed.
                 try
@@ -1124,16 +1126,16 @@ namespace SlotsInstaller
             var row = new Panel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(0, 0, 0, 4) };
             settingsGeneralTab = Button("General", false, 96, delegate { ShowSettingsTab(false); });
             settingsReplaceTab = Button("Game files & replacements", false, 210, delegate { ShowSettingsTab(true); });
-            settingsUpdatesTab = Button("Updates", false, 96, delegate { ShowUpdatesTab(); });
             settingsAboutTab = Button("About", false, 84, delegate { ShowAboutTab(); });   // 2.5.9 (MainFormSupport.cs)
-            foreach (FlatButton b in new[] { settingsAboutTab, settingsUpdatesTab, settingsReplaceTab, settingsGeneralTab }) { b.Dock = DockStyle.Left; b.Height = 30; b.Font = Palette.Small; b.Navigation = true; row.Controls.Add(b); }
+            settingsLoaderTab = Button("Slotsloader", false, 110, delegate { ShowLoaderTab(); });   // 13 Nov 2026 (MainFormLoaderTab.cs): the loader's options, and the update settings (no Updates tab any more)
+            foreach (FlatButton b in new[] { settingsAboutTab, settingsLoaderTab, settingsReplaceTab, settingsGeneralTab }) { b.Dock = DockStyle.Left; b.Height = 30; b.Font = Palette.Small; b.Navigation = true; row.Controls.Add(b); }
             row.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 10 });
             subtitle.Dock = DockStyle.Fill; subtitle.Padding = new Padding(12, 6, 0, 0);
             row.Controls.Add(subtitle); subtitle.BringToFront(); settingsSubtitle = subtitle;
             settingsReplacePanel = BuildReplaceSettings();
             content.Controls.Add(settingsReplacePanel);
-            settingsUpdatesPanel = BuildUpdatesSettings();
-            content.Controls.Add(settingsUpdatesPanel);
+            settingsLoaderPanel = BuildLoaderSettings();
+            content.Controls.Add(settingsLoaderPanel);
             settingsAboutPanel = BuildAboutSettings();
             content.Controls.Add(settingsAboutPanel);
             settingsGeneralTab.SetActive(true);
@@ -1145,8 +1147,8 @@ namespace SlotsInstaller
             foreach (Control c in settingsGeneralParts) c.Visible = !replace;
             if (settingsSubtitle != null) settingsSubtitle.Visible = !replace;
             settingsReplacePanel.Visible = replace;
-            if (settingsUpdatesPanel != null) { settingsUpdatesPanel.Visible = false; settingsUpdatesTab.SetActive(false); }
             HideAboutTab();   // 2.5.9
+            HideLoaderTab();
             if (replace) { settingsReplacePanel.BringToFront(); LoadReplaceSettingsFields(); installSlotsLoaderButton.Text = "Install Slotsloader " + CurrentInstallPin().Version; }
             settingsGeneralTab.SetActive(!replace); settingsReplaceTab.SetActive(replace);
         }

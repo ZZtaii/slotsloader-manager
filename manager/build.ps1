@@ -20,7 +20,11 @@ if (-not $?) { throw 'Assistant knowledge pack failed.' }
 & (Join-Path $taskRoot 'tools\Check-PublicPaths.ps1') -Project $taskRoot -Extra @($knowledge)
 # 2.5.1: no other product named in the user docs or the knowledge pack.
 & (Join-Path $taskRoot 'tools\Check-Wording.ps1') -Project $taskRoot -Extra @($knowledge)
-$sourceFiles = Get-ChildItem -LiteralPath (Join-Path $taskRoot 'src') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName }
+# The pictures of Settings > Slotsloader (MainFormLoaderTab.cs): assets\loader-previews\<option id>.png, each embedded as
+# SlotsInstaller.LoaderPreview.<option id>.png. None yet: the app draws a placeholder for an option without one.
+$previewDir = Join-Path $taskRoot 'assets\loader-previews'
+$previews = @(if (Test-Path -LiteralPath $previewDir) { Get-ChildItem -LiteralPath $previewDir -Filter '*.png' | Sort-Object Name | ForEach-Object { "/resource:$($_.FullName),SlotsInstaller.LoaderPreview.$($_.Name.ToLowerInvariant())" } })
+$sourceFiles = @($previews) + @(Get-ChildItem -LiteralPath (Join-Path $taskRoot 'src') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })
 & $compiler /nologo /target:winexe /main:SlotsInstaller.Program /platform:x64 /optimize+ "/out:$target" "/win32manifest:$(Join-Path $taskRoot 'src\app.manifest')" "/win32icon:$appIcon" "/resource:$appIcon,SlotsInstaller.AppIcon" "/resource:$knowledge,SlotsInstaller.AssistantKnowledge.md" "/resource:$loaderPin,SlotsInstaller.LoaderPin.json" "/resource:$brewedLogo,SlotsInstaller.BrewedVfx.png" "/resource:$help,SlotsInstaller.Help.md" /r:Accessibility.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Web.Extensions.dll /r:System.Net.Http.dll /r:System.Security.dll /r:Microsoft.VisualBasic.dll $sourceFiles
 if ($LASTEXITCODE -ne 0) { throw 'Compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $taskRoot 'src\app.config') -Destination ($target + '.config') -Force

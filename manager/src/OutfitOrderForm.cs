@@ -19,7 +19,7 @@ namespace SlotsInstaller
 
         internal void ShowOutfitOrder()
         {
-            if (busy || String.IsNullOrWhiteSpace(config.GameRoot)) return;
+            if (busy || String.IsNullOrWhiteSpace(config.GameRoot) || LoaderFlags.SuiteLoaderInstalled) return;   // 1.0.19: the suite-line loader keeps its numbers in files of another shape
             InstalledOutfit picked = GetInstalledSelection(); OutfitGroup group = GetGroupSelection();
             string start = picked != null ? picked.Character : group != null ? group.Character : installedCharacters.FirstOrDefault();
             string game = config.GameRoot;

@@ -22,6 +22,8 @@ namespace SlotsInstaller
     // Code injectors (LibraryCode).
     // 2.3.0 category terms: "stage(s)" and "misc" list that category (OR-ed with the name match, like the tool
     // words); is:stage / is:misc / is:character keep only that category (ModCategories).
+    // 1.0.19 colour terms: "color pack(s)", "colour bundle(s)", "colors", "colours" list the colour packs and "cmd(s)"
+    // every mod with colour files (OR-ed with the name match); the colour packs come first (ColourKeyword).
     internal static class LibrarySearch
     {
         internal const int Direct = 0, SharedParts = 1, TitleOnly = 2;
@@ -37,7 +39,37 @@ namespace SlotsInstaller
 
         // 1.0.6: one word of a plain query ("juri barefoot" = juri AND barefoot); a fighter spelled in several words
         // ("chun li", "dee jay") stays one word.
-        internal sealed class Word { internal string Text, Character, Tool, Category; }
+        internal sealed class Word { internal string Text, Character, Tool, Category, Colour; }
+
+        // ---- 1.0.19 colour packs (the user: "detect color packs or color bundles too. this would be mods that have
+        // mostly color cmd's in them", and "mods with cmd's are also fine to come up in searches but we want to
+        // prioritize color packs more if cmd keyword is searched") ----
+        // A colour pack: a mod without a model whose files in the fighters' outfit folders are mostly colour files
+        // (esfNNN_NNN_cmd_NNN.user.2: at least half of them, so a few colours with their own textures still count),
+        // read from the library index (LibraryEntry.FileMix), whatever its name.
+        // "color pack(s)", "colour bundle(s)", "colors", "colours" list the colour packs; "cmd"/"cmds" lists every mod
+        // with colour files. Both are OR-ed with the usual name match, and the colour packs come first, then the other
+        // mods with colour files, then the rest (ColourRank, in every sort).
+        internal const string ColourPack = "pack", ColourCmd = "cmd";
+        private static readonly Regex ColourPackWord = new Regex(@"^colou?rs?(?: (?:packs?|bundles?))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex ColourStart = new Regex(@"^colou?rs?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex ColourEnd = new Regex(@"^(?:packs?|bundles?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        internal static string ColourKeyword(string term)
+        {
+            string t = Regex.Replace((term ?? "").Trim(), @"\s+", " ");
+            if (t.Equals("cmd", StringComparison.OrdinalIgnoreCase) || t.Equals("cmds", StringComparison.OrdinalIgnoreCase)) return ColourCmd;
+            return ColourPackWord.IsMatch(t) ? ColourPack : null;
+        }
+        internal static bool HasColourFiles(LibraryEntry e) { return e != null && e.FileMix != null && e.FileMix.Count >= 3 && e.FileMix[1] > 0; }
+        internal static bool IsColourPack(LibraryEntry e) { return HasColourFiles(e) && e.FileMix[2] == 0 && e.FileMix[1] * 2 >= e.FileMix[0]; }
+        internal static bool MatchesColour(LibraryEntry e, string keyword)
+        {
+            return keyword == ColourPack ? IsColourPack(e) : keyword == ColourCmd && HasColourFiles(e);
+        }
+        // 0 = a colour pack, 1 = another mod with colour files, 2 = the rest.
+        internal static int ColourRank(LibraryEntry e) { return IsColourPack(e) ? 0 : HasColourFiles(e) ? 1 : 2; }
+        // "Colour pack" for the library row, or "".
+        internal static string ColourLabel(LibraryEntry e) { return IsColourPack(e) ? "Colour pack" : ""; }
 
         internal sealed class Query
         {
@@ -60,6 +92,10 @@ namespace SlotsInstaller
             // that character's mods match too, besides the name/path substring.
             internal string PlainCharacter;
             internal Dictionary<string, string> NameCategories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // 1.0.19: the colour word of the plain query and of comma name terms (ColourKeyword), and whether the query
+            // has one anywhere (the colour packs are then listed first).
+            internal string PlainColour, Colour;
+            internal Dictionary<string, string> NameColours = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             internal bool HasCostume { get { return Costumes.Count > 0; } }
         }
 
@@ -172,6 +208,8 @@ namespace SlotsInstaller
                         if (tool != null) q.NameTools[term] = tool;
                         string category = ModCategories.Keyword(term);
                         if (category != null) q.NameCategories[term] = category;
+                        string colour = ColourKeyword(term);
+                        if (colour != null) q.NameColours[term] = colour;
                         List<Word> words = Words(term, characterTerm);
                         if (words.Count > 1) q.NameWords[term] = words;
                     }
@@ -195,11 +233,13 @@ namespace SlotsInstaller
                         query = String.Join(" ", split.Where(w => w.Character == null).Select(w => w.Text));
                         character = query.Length > 0 ? characterTerm(query) : null;
                     }
-                    q.Plain = query; q.PlainTool = ToolKeyword(query); q.PlainCategory = ModCategories.Keyword(query); q.PlainCharacter = character;
+                    q.Plain = query; q.PlainTool = ToolKeyword(query); q.PlainCategory = ModCategories.Keyword(query); q.PlainCharacter = character; q.PlainColour = ColourKeyword(query);
                     List<Word> words = Words(query, characterTerm);
                     if (words.Count > 1) q.PlainWords = words;
                 }
             }
+            q.Colour = q.PlainColour ?? q.PlainWords.Select(w => w.Colour).FirstOrDefault(c => c != null) ?? q.NameColours.Values.FirstOrDefault()
+                ?? q.NameWords.Values.SelectMany(ws => ws).Select(w => w.Colour).FirstOrDefault(c => c != null);
             return q;
         }
 
@@ -235,8 +275,11 @@ namespace SlotsInstaller
                 string word = String.Join(" ", raw.Skip(i).Take(taken));
                 if (taken == 1 && PakKeyword(word) && i + 1 < raw.Count && Regex.IsMatch(raw[i + 1], @"^mods?$", RegexOptions.IgnoreCase))
                 { taken = 2; word += " " + raw[i + 1]; }
+                // 1.0.19: "color pack", "colour bundles" are one word (ColourKeyword), like "pak mods".
+                if (taken == 1 && ColourStart.IsMatch(word) && i + 1 < raw.Count && ColourEnd.IsMatch(raw[i + 1]))
+                { taken = 2; word += " " + raw[i + 1]; }
                 if (character == null) character = characterTerm(word);
-                words.Add(new Word { Text = word, Character = character, Tool = ToolKeyword(word), Category = ModCategories.Keyword(word) });
+                words.Add(new Word { Text = word, Character = character, Tool = ToolKeyword(word), Category = ModCategories.Keyword(word), Colour = ColourKeyword(word) });
                 i += taken;
             }
             return words;
@@ -374,7 +417,7 @@ namespace SlotsInstaller
             // One or two letters/digits: the start of a word only ("a manual" = A Manual, not Barefoot Manual; "v2").
             if (compact.Length <= 2)
                 return (w.Character != null && matchesCharacter(e, w.Character)) || ShortWordIn(NameTokens(e), compact) || (deep && ShortWordIn(OptionTokens(e), compact));
-            return MatchesPak(e, w.Text) || (w.Character != null && matchesCharacter(e, w.Character)) || (w.Tool != null && MatchesTool(e, w.Tool)) || (w.Category != null && ModCategories.InCategory(e, w.Category))
+            return MatchesPak(e, w.Text) || (w.Colour != null && MatchesColour(e, w.Colour)) || (w.Character != null && matchesCharacter(e, w.Character)) || (w.Tool != null && MatchesTool(e, w.Tool)) || (w.Category != null && ModCategories.InCategory(e, w.Category))
                 || MatchesAuthor(e, w.Text) || matchesName(e, w.Text) || Has(e.Character, w.Text) || (e.CharacterCodes ?? new List<string>()).Any(code => ("esf" + code).IndexOf(w.Text, StringComparison.OrdinalIgnoreCase) >= 0)
                 || (deep && OptionMatches(e, w.Text));
         }
@@ -425,14 +468,15 @@ namespace SlotsInstaller
             {
                 // With a costume term the character is already applied by the costume rank (native key or title).
                 bool characterOk = q.Characters.Count == 0 || q.HasCostume || q.Characters.Any(name => matchesCharacter(e, name));
-                string tool, category; List<Word> words;
+                string tool, category, colour; List<Word> words;
                 // 1.0.6: a term of several words also matches word by word ("goth juri, barefoot"), and deep search
                 // looks into the option folders and names.
-                return characterOk && q.Names.All(term => MatchesPak(e, term) || matchesName(e, term) || MatchesAuthor(e, term) || (q.NameTools.TryGetValue(term, out tool) && MatchesTool(e, tool)) || (q.NameCategories.TryGetValue(term, out category) && ModCategories.InCategory(e, category))
+                return characterOk && q.Names.All(term => MatchesPak(e, term) || (q.NameColours.TryGetValue(term, out colour) && MatchesColour(e, colour)) || matchesName(e, term) || MatchesAuthor(e, term) || (q.NameTools.TryGetValue(term, out tool) && MatchesTool(e, tool)) || (q.NameCategories.TryGetValue(term, out category) && ModCategories.InCategory(e, category))
                     || (q.Deep && OptionMatches(e, term)) || (q.NameWords.TryGetValue(term, out words) && words.All(w => WordMatches(e, w, q.Deep, matchesCharacter, matchesName))));
             }
             string query = q.Plain;
             if (MatchesPak(e, query)) return true;
+            if (q.PlainColour != null && MatchesColour(e, q.PlainColour)) return true;
             if (query.Length == 0 || (q.PlainCharacter != null && matchesCharacter(e, q.PlainCharacter)) || (q.PlainTool != null && MatchesTool(e, q.PlainTool)) || (q.PlainCategory != null && ModCategories.InCategory(e, q.PlainCategory)) || MatchesAuthor(e, query) || matchesName(e, query) || Has(e.SourcePath, query) || Has(e.Character, query) || (e.CharacterCodes ?? new List<string>()).Any(code => ("esf" + code).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)) return true;
             // 1.0.6: several words match one by one, in any order ("juri barefoot" = a Juri mod named …Barefoot…).
             if (q.Deep && OptionMatches(e, query)) return true;

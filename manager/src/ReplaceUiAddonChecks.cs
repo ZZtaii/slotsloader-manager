@@ -136,8 +136,33 @@ namespace SlotsInstaller
                 Require(merged.PreviewBytes(bare.Id, "").SequenceEqual(AddonPreview), "Barefoot's preview was not read from the addon");
                 Require(!mainEntry.OptionIds.Any(id => id.StartsWith(LibraryAddons.PrefixHead)), "the main row lists the addon's options: " + String.Join(",", mainEntry.OptionIds));
                 Require(Get<Label>(form, "packageHint").Text.StartsWith("With options from " + Path.GetFileName(addon)), "no hint about the addon: " + Get<Label>(form, "packageHint").Text);
-                // Requirement=Main files: ticking Barefoot ticks Main files again; Barefoot unticks Full (choose one).
-                node("Full").Checked = true; node("Main files").Checked = false; node("Barefoot").Checked = true; node("Short").Checked = true; WaitReview(form);
+                // 1.0.19 (the user: "relax requirements ... install the mod anyways. this helps to mix and match options"):
+                // Main files unticked by hand stays out when Barefoot (Requirement=Main files) is ticked; the line under
+                // the preview picture names it and its row lights up. Ticked again by hand, it is back for good.
+                node("Full").Checked = true; node("Main files").Checked = false; node("Barefoot").Checked = true;
+                Require(ticked("Barefoot") && !ticked("Full") && !ticked("Main files") && form.NeedNotice.Text.StartsWith("May not work without “Main files”") && form.CurrentNeeds.Any(n => n.Needed.Name == "Main files"),
+                    "Main files unticked by hand did not stay out with a note: " + form.NeedNotice.Text + " / " + state());
+                // 13 Nov 2026 (the user: "highlights should never happen on mod hovers, only on mod installs if there are
+                // possibly some pre-requisites missing"): the ticks lit nothing up. Install lights the row of what is left
+                // out, once, and installs all the same.
+                string mainFilesId = ((ModComponent)node("Main files").Tag).Id;
+                Func<bool> litAtInstall = delegate
+                {
+                    DateTime until = DateTime.UtcNow.AddSeconds(20);
+                    while (!form.IsFlashing(mainFilesId) && form.Working && DateTime.UtcNow < until) { Application.DoEvents(); System.Threading.Thread.Sleep(5); }
+                    return form.IsFlashing(mainFilesId);
+                };
+                Require(!form.IsFlashing(mainFilesId), "a tick lit the row of the option left out");
+                WaitReview(form);
+                Require(Get<FlatButton>(form, "installButton").Enabled && form.CurrentNeeds.Any(n => n.Needed.Id == mainFilesId) && !form.IsFlashing(mainFilesId), "Install is off with Main files left out, or the review lit its row: " + state());
+                Call(form, "InstallCurrent");
+                Require(litAtInstall(), "Install with Main files left out did not light its row: " + state());
+                WaitIdle(form); WaitReview(form);
+                Require(engine.LoadState().Mods.Any(m => isMain(m.SourcePath) && !m.SelectedIds.Contains(mainFilesId)), "the install with Main files left out did not go ahead: " + state());
+                cleanup(); Call(form, "RefreshInstalled", (string)null); WaitIdle(form); WaitReview(form);
+                // Barefoot unticked Full (choose one); Main files goes back in by hand.
+                node("Main files").Checked = true; node("Short").Checked = true; WaitReview(form);
+                Require(form.NeedNotice.Text == "", "the line stayed with Main files ticked: " + form.NeedNotice.Text);
                 Require(ticked("Barefoot") && !ticked("Full") && ticked("Main files") && ticked("Short"), "ticks after Barefoot: " + state());
                 ReplacePlan health = Get<ReplacePlan>(form, "replacePlan");
                 Require(health != null && health.CanInstall && health.Items.Any(i => i.Text == "Also installs Barefoot from " + Path.GetFileName(addon) + " on top.") && Get<FlatButton>(form, "installButton").Enabled, "health: " + state() + (health == null ? "" : " / " + String.Join(" / ", health.Items.Select(i => i.Text))));
@@ -198,6 +223,18 @@ namespace SlotsInstaller
                 Call(form, "InstallCurrent"); WaitIdle(form); WaitReview(form);
                 outfitNow = Installer.ListInstalled(root).Single(o => o.Name == "Addon Extra");
                 Require((outfitNow.Parts == null || outfitNow.Parts.Count == 0) && File.ReadAllText(mesh) == "full mesh" && Get<Label>(form, "statusText").Text.Contains("removed Barefoot"), "the graft stayed: parts " + (outfitNow.Parts == null ? 0 : outfitNow.Parts.Count) + " mesh " + File.ReadAllText(mesh) + " / " + state());
+                // 13 Nov 2026: the same for an extra outfit. Reopened, the mod lights nothing up; Main files left out by hand
+                // lights up when Install is pressed, and the outfit is installed without it.
+                open(addonEntry); open(mainEntry);
+                mainFilesId = ((ModComponent)node("Main files").Tag).Id;
+                Require(!form.IsFlashing(mainFilesId), "opening the mod lit a row up");
+                node("Main files").Checked = false; Get<PaddedTextField>(form, "outfitName").Text = "Addon Extra"; WaitReview(form);
+                Require(Get<FlatButton>(form, "installButton").Enabled && form.CurrentNeeds.Any(n => n.Needed.Id == mainFilesId) && !form.IsFlashing(mainFilesId), "Extra outfit: Install is off with Main files left out, or a tick lit its row: " + state());
+                Call(form, "InstallCurrent");
+                Require(litAtInstall(), "Extra outfit: Install with Main files left out did not light its row: " + state());
+                WaitIdle(form); WaitReview(form);
+                outfitNow = Installer.ListInstalled(root).Single(o => o.Name == "Addon Extra");
+                Require(!outfitNow.SelectedIds.Contains(mainFilesId) && Get<Label>(form, "statusText").Text.Contains("Installed Addon Extra"), "Extra outfit: the install with Main files left out did not go ahead: " + String.Join(",", outfitNow.SelectedIds) + " / " + state());
             }
             finally
             {

@@ -210,8 +210,9 @@ namespace SlotsInstaller
         {
             var codes = new HashSet<string>(selected ?? new string[0], StringComparer.OrdinalIgnoreCase);
             if (codes.Count == 0) return ordered;
-            Func<LibraryEntry, bool> single = e => !e.Pending && (e.Detection == "Native" || e.Detection == "UnknownNative")
-                && e.CharacterCodes.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1 && codes.Contains(e.CharacterCodes[0]);
+            // 1.0.19: a recipe is one fighter's (the fighter filter already kept only the selected fighters' recipes).
+            Func<LibraryEntry, bool> single = e => e.Recipe != null || (!e.Pending && (e.Detection == "Native" || e.Detection == "UnknownNative")
+                && e.CharacterCodes.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1 && codes.Contains(e.CharacterCodes[0]));
             // Stable partition: specificity outranks direction/relevance; every
             // existing sort and tie-break remains intact inside each group.
             return ordered.Where(single).Concat(ordered.Where(e => !single(e))).ToList();
@@ -373,10 +374,12 @@ namespace SlotsInstaller
         // from the cached index).
         private List<LibraryEntry> SortLibraryRows(List<KeyValuePair<LibraryEntry, int>> ranked)
         {
-            Func<LibraryEntry, bool> isInstalled = delegate(LibraryEntry e) { return CachedInstallState(e) != LibraryInstallState.None; };
+            // 1.0.19: a recipe's row (LibraryEntry.Recipe) is sorted like a mod's: installed = the recipe is installed,
+            // last used = its last install (RecipesForm.cs), added = when it was made (its AddedUtc).
+            Func<LibraryEntry, bool> isInstalled = delegate(LibraryEntry e) { return e.Recipe != null ? InstalledRecipe(e.Recipe).Any : CachedInstallState(e) != LibraryInstallState.None; };
             Func<LibraryEntry, long> lastUsed = null;
             if (librarySort == LibrarySortKey.LastUsed)
-                lastUsed = delegate(LibraryEntry e) { DateTime? t = LibraryLastUsed(e); return t.HasValue ? t.Value.Ticks : 0; };
+                lastUsed = delegate(LibraryEntry e) { if (e.Recipe != null) return RecipeLastUsedTicks(e.Recipe); DateTime? t = LibraryLastUsed(e); return t.HasValue ? t.Value.Ticks : 0; };
             return LibrarySorting.SpecificFirst(LibrarySorting.Order(ranked, librarySort, librarySortAscending, isInstalled, lastUsed, LibraryRowName), filterPanel == null ? null : filterPanel.Grid.Selected);
         }
 

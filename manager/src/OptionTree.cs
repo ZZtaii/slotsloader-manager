@@ -19,7 +19,8 @@ namespace SlotsInstaller
         private OptionNode selected;
         private int updates, itemHeight=32, indent=18, wheelRemainder;
         internal int ItemHeight { get {return itemHeight;} set {itemHeight=Math.Max(1,value); Rebuild();} }
-        internal int Indent { get {return indent;} set {indent=Math.Max(1,value); Invalidate();} }
+        // 0 = every level starts at the same column (the Library's options list since 1.0.19).
+        internal int Indent { get {return indent;} set {indent=Math.Max(0,value); Invalidate();} }
         // Kept explicit for regression checks: there are no native state images
         // or native tooltip windows in this control.
         internal bool CheckBoxes {get {return false;} set {}}
@@ -143,7 +144,7 @@ namespace SlotsInstaller
                     // its own) expands or collapses wherever it is clicked.
                     bool header=node.Nodes.Count>0 && (component==null || component.IsDummy);
                     if(header) {SelectedNode=node; if(node.IsExpanded) node.Collapse(); else node.Expand();}
-                    else if(node.Nodes.Count>0 && e.X>=bounds.X-DpiMetrics.Px(this,20) && e.X<bounds.X)
+                    else if(node.Nodes.Count>0 && !node.NoToggle && e.X>=bounds.X-DpiMetrics.Px(this,20) && e.X<bounds.X)
                     {if(node.IsExpanded) node.Collapse(); else node.Expand();}
                     else
                     {
@@ -176,7 +177,7 @@ namespace SlotsInstaller
             else if(e.KeyCode==Keys.Right && selected!=null && selected.Nodes.Count>0)
             {if(!selected.IsExpanded) selected.Expand(); else next=rows.IndexOf(selected.Nodes[0]); e.Handled=true;}
             else if(e.KeyCode==Keys.Left && selected!=null)
-            {if(selected.IsExpanded && selected.Nodes.Count>0) selected.Collapse(); else if(selected.Parent!=null) next=rows.IndexOf(selected.Parent); e.Handled=true;}
+            {if(selected.IsExpanded && selected.Nodes.Count>0 && !selected.NoToggle) selected.Collapse(); else if(selected.Parent!=null) next=rows.IndexOf(selected.Parent); e.Handled=true;}
             if(next>=0 && next<rows.Count && next!=index) {SelectedNode=rows[next]; SelectedNode.EnsureVisible(); e.Handled=true;}
             base.OnKeyDown(e);
         }
@@ -253,7 +254,8 @@ namespace SlotsInstaller
         internal bool IsExpanded {get;private set;}
         internal bool Checked {get {return selected;} set {if(selected==value)return; selected=value; if(TreeView!=null) TreeView.CheckedChanged(this);}}
         internal Rectangle Bounds {get {return TreeView==null ? Rectangle.Empty : TreeView.NodeBounds(this);}}
-        internal OptionNode(string text) {Text=text; Nodes=new OptionNodeCollection(null,this);}
+        // An option that has options under it but no arrow of its own: it stays open, and the header above it folds it.
+        internal bool NoToggle;        internal OptionNode(string text) {Text=text; Nodes=new OptionNodeCollection(null,this);}
         internal void Attach(OptionTree tree,OptionNode parent) {TreeView=tree;Parent=parent;foreach(var child in Nodes) child.Attach(tree,this);}
         internal void Expand() {if(IsExpanded)return; IsExpanded=true; if(TreeView!=null)TreeView.Rebuild();}
         internal void Collapse() {if(!IsExpanded)return; IsExpanded=false; if(TreeView!=null)TreeView.Rebuild();}

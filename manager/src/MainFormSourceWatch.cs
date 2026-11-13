@@ -187,6 +187,7 @@ namespace SlotsInstaller
             packageTitle.Text = "Choose a mod"; SetByline(null); SetVersion(null); packageDescription.Text = ""; packageHint.Text = ""; componentTitle.Text = "OPTION PREVIEW";
             SetPreview(null); ClearPreviewCache(); previewButton.Enabled = false;
             foreach (ListViewItem row in modList.SelectedItems.Cast<ListViewItem>().ToList()) row.Selected = false;
+            leftOut.Clear(); UpdateRequiredChoices();   // 1.0.19: no "May not work without …" line for a closed mod
             RequestReview(1); UpdateFooter(); UpdateInstallButton(); UpdateLibraryUninstall(); UpdateModeUi();
         }
 

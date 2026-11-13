@@ -11,7 +11,7 @@ namespace SlotsInstaller
     // Data folder (beside the executable) and safety checks as the app window.
     internal static class ReplaceCommandLine
     {
-        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
+        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "loader-flags", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
         // 2.5.1: the fluffy-* names keep working (left out of the help).
         internal static readonly Dictionary<string, string> Aliases = new Dictionary<string, string> { { "fluffy-status", "manager-status" }, { "fluffy-uninstall", "manager-uninstall" }, { "fluffy-restore", "manager-restore" } };
 
@@ -25,6 +25,7 @@ namespace SlotsInstaller
         internal static int Run(string[] raw)
         {
             if (raw[0].TrimStart('-') == "variants") return VariantsCommandLine.Run(raw);   // 2.5.0 (VariantChoices.cs)
+            if (raw[0].TrimStart('-') == "loader-flags") return LoaderFlagsCommandLine.Run(raw);   // 1.0.19 (LoaderFlags.cs)
             Args a;
             try { a = Parse(raw); }
             catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 2; }

@@ -153,7 +153,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 1. Select a library mod (Ctrl+F, type, Enter opens the top match), use Open archive / Open folder, or drop an archive or folder on the window.
 2. Click a main-file or option row to toggle it. Hover changes only the side preview. Enter toggles the focused option (2.4.1; Space now installs); arrow keys navigate/expand groups. Later checked options win file conflicts, with main files applied first.
 3. Choose the matching character and an outfit name. This app does not retarget assets to another fighter.
-4. Groups marked **Required** need one choice; the footer lists them and jumps to the first. The merged files are composed automatically; Review files / Merged files shows the winning files and any required changes.
+4. Groups marked **Required** get one choice ticked for you. Unticking what a mod needs shows "May not work without ..." under the preview picture; Install still works. The merged files are composed automatically; Review files / Merged files shows the winning files and any required changes.
 5. Click **Install** (or press Space), then restart SF6 for Slotsloader to assign its in-game outfit numbers.
 
 The result is `reframework/costume_mods/<Character>/<Outfit name>/natives/...`, with the app's provenance record (`.slots-installer.json`). Sources are preserved. You can install several named combinations from one bundle.

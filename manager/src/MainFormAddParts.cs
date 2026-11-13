@@ -129,12 +129,8 @@ namespace SlotsInstaller
             if (addedPartsOutfit == null) { addedPartList.SetRows(new VariantList.Row[0]); return; }
             addedPartsCaption.Text = "ADDED PARTS · " + on.Count + " OF " + (on.Count + off.Count) + " ON";
             // "Hair B from Hair Bundle"; a part that is its whole mod is named once ("Manon Victorias Secret C1 - barefoot").
-            Func<PartGraft, string> shownPart = delegate(PartGraft g)
-            {
-                string mod = String.IsNullOrEmpty(g.Mod) ? System.IO.Path.GetFileNameWithoutExtension(g.SourcePath ?? "") : g.Mod;
-                bool whole = g.Options == null || g.Options.Count == 0 || (g.Options.Count == 1 && String.Equals(g.Options[0], mod, StringComparison.OrdinalIgnoreCase));
-                return (whole ? mod : Installer.GraftText(g)) + (g.Parts != null && g.Parts.Count > 0 ? " · " + OutfitParts.Labels(g.Parts) + " only" : "");
-            };
+            // (ManagerParts.Title: the same words name the part in the game's costume options)
+            Func<PartGraft, string> shownPart = ManagerParts.Title;
             addedPartList.SetRows(addedPartRows.Select(r => new VariantList.Row { Label = Installer.GraftText(r.Key), Display = shownPart(r.Key), On = r.Value,
                 Note = PartSourceGone(r.Key) ? "its mod is gone" : r.Value ? ReplacePlanner.N((r.Key.Files ?? new List<string>()).Count, "file") : "off", NoteAccent = PartSourceGone(r.Key) }));
             addedPartList.Enabled = !busy;
