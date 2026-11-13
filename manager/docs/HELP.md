@@ -31,8 +31,10 @@ The Manager installs Street Fighter 6 mods from your own mod folders: ZIP, RAR a
 
 ### Your first extra outfit
 - Open **Mod library** and pick a mod. Ctrl+F searches, and Enter opens the top match. You can also drop an archive or folder on the window.
-- Tick the options you want. Groups marked **Required** need one choice; the footer lists what is still missing.
+- Search also finds mods by what is in them: `color pack` lists the colour packs (mods that are mostly colour files, whatever their name), and `cmd` lists every mod with colour files, colour packs first.
+- Tick the options you want. Groups marked **Required** get one choice ticked for you.
 - **Main files** marks an option recognized by its name: ticked for you, but not required.
+- To mix and match, untick anything, also what the mod marks as required. A line under the preview picture says "May not work without" and names it, and **Install** still works.
 - Under **INSTALL AS**, choose **Extra outfit**. If the line under it says REFramework or Slotsloader is missing, click that line to install it. If your external mod manager installed REFramework, install or update it there.
 - Check **CHARACTER** and **OUTFIT NAME**, then click **Install** (or press Space).
 - Click **Launch SF6**. New outfits show on the character select screen once SF6 has started.
@@ -201,7 +203,7 @@ Once a day the Manager checks its official GitHub releases for a new Manager or 
 - **Manager update:** downloads the release, checks its SHA-256, replaces the program files and restarts. Your settings and records in `Data` stay. The previous version is kept: with the Manager closed, run `& '.\Slotsloader Manager.exe' update-rollback` in PowerShell in its folder to put it back.
 - **Slotsloader update:** offered for a Slotsloader the Manager installed. It goes through the health check and installs over the old one at the same priority. Close SF6 first.
 
-**Settings → Updates** has **Check automatically (daily)**, **Include test builds** (pre-releases) and **Check now**.
+**Settings → Slotsloader** has **Check automatically (daily)**, **Include test builds** (pre-releases) and **Check now**.
 
 # When things go wrong
 

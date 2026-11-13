@@ -52,7 +52,7 @@ namespace SlotsInstaller
         // without them and clear the flag (2.0.1-2.4.1 opened the report directly and the footer flag stayed).
         private bool FooterClearsMissingOptions()
         {
-            if (package == null || busy || missingRestoredOptions.Count == 0 || unresolvedChoices.Count > 0) return false;
+            if (package == null || busy || missingRestoredOptions.Count == 0 || choicesBlock) return false;
             BuildPlan(true);
             return true;
         }

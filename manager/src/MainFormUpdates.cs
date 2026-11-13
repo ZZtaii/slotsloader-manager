@@ -13,9 +13,10 @@ namespace SlotsInstaller
     // update in place and the Manager self-update (AppUpdater).
     internal sealed partial class MainForm
     {
-        private FlatButton settingsUpdatesTab;
-        private Panel settingsUpdatesPanel;
         private CheckBox settingsAutoUpdate, settingsPrereleases;
+        private CheckBox[] settingsGameMenus;   // 1.0.19: one per LoaderMenu.All (LoaderFlags.cs)
+        private RadioButton[] settingsOthersSee;   // 13 Nov 2026: Outfit 1, DriveTech (LoaderFlags.OthersSee)
+        private NoteLabel settingsGameNote;
         private FlatButton settingsCheckUpdates;
         private Label settingsUpdateResult, settingsUpdateSkipped;
         private FlowLayoutPanel toastHost;
@@ -239,38 +240,97 @@ namespace SlotsInstaller
             });
         }
 
-        // ---- Settings → Updates (the tab names it: no heading inside)
-        private Panel BuildUpdatesSettings()
+        // ---- Settings → Slotsloader, upper section. 13 Nov 2026 (the user): the update settings have no tab of their own
+        // any more; they stand on the Slotsloader tab above its options ("so the ... options have some breathing space
+        // and don't immediately start on the tab"). One row: the two boxes and Check now; under it the one-line result,
+        // the skipped releases and the note. `add` puts a control under the ones before it.
+        private void AddUpdateSettings(Action<Control> add)
         {
-            var panel = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(0, 8, 0, 0) };
-            var column = new Panel { Dock = DockStyle.Left, Width = 640 };
-            Action<Control> add = delegate(Control c) { c.Dock = DockStyle.Top; column.Controls.Add(c); c.BringToFront(); };
-            settingsAutoUpdate = new CheckBox { Text = "Check automatically (daily)", Height = 30, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0), AccessibleName = "Check for updates automatically (daily)" };
-            settingsPrereleases = new CheckBox { Text = "Include test builds", Height = 30, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0), AccessibleName = "Include test builds (pre-releases)" };
+            Label caption = Caption("UPDATES"); caption.Name = "settingsUpdatesCaption"; add(caption);
+            settingsAutoUpdate = new CheckBox { Text = "Check automatically (daily)", Dock = DockStyle.Left, Width = 200, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0), TabIndex = 0, AccessibleName = "Check for updates automatically (daily)" };
+            settingsPrereleases = new CheckBox { Text = "Include test builds", Dock = DockStyle.Left, Width = 200, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0), TabIndex = 1, AccessibleName = "Include test builds (pre-releases)" };
             settingsAutoUpdate.CheckedChanged += delegate { if (loadingUpdateFields) return; UpdateSettings s = UpdateSettings.Load(); s.AutoCheck = settingsAutoUpdate.Checked; s.Save(); };
             settingsPrereleases.CheckedChanged += delegate { if (loadingUpdateFields) return; UpdateSettings s = UpdateSettings.Load(); s.IncludePrereleases = settingsPrereleases.Checked; s.Save(); };
-            add(settingsAutoUpdate); add(settingsPrereleases); add(Rhythm.Gap(Rhythm.Related));
             settingsCheckUpdates = Button("Check now", false, 110, delegate { RunUpdateCheck(true); });
             settingsCheckUpdates.Height = 32; settingsCheckUpdates.Font = Palette.Small; settingsCheckUpdates.Margin = Padding.Empty; settingsCheckUpdates.AccessibleName = "Check for updates now";
-            var row = new Panel { Height = 32 }; settingsCheckUpdates.Dock = DockStyle.Left; row.Controls.Add(settingsCheckUpdates); add(row);
+            settingsCheckUpdates.Dock = DockStyle.Left; settingsCheckUpdates.TabIndex = 2;
+            // Docked left, the control added last stands first.
+            var row = new Panel { Height = 32, Name = "settingsUpdatesRow" };
+            row.Controls.Add(settingsCheckUpdates); row.Controls.Add(settingsPrereleases); row.Controls.Add(settingsAutoUpdate); add(row);
             add(Rhythm.Gap(Rhythm.AfterAction));
             settingsUpdateResult = new NoteLabel { Height = 26, MinLines = 1, ForeColor = Palette.Text, Font = Palette.Small, Name = "settingsUpdateResult" };
             add(settingsUpdateResult);
             settingsUpdateSkipped = new NoteLabel { Height = 0, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdateSkipped" };
             add(settingsUpdateSkipped);
-            add(Rhythm.Gap(Rhythm.Group));
+            add(Rhythm.Gap(Rhythm.Related));
             add(new NoteLabel { Height = 26, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdatePrivacy", Text = "Checks GitHub (" + LoaderPin.Repo + ") once a day. Nothing installs without your OK." });
-            panel.Controls.Add(column);
-            return panel;
         }
-        private bool loadingUpdateFields;
-        private void ShowUpdatesTab()
+        // 1.0.19: the choice is saved at once and written to the game folder when nothing else is changing it (else at
+        // the next refresh, as after a change made while SF6 runs).
+        private void SaveLoaderFlags(LoaderMenu changed)
         {
-            foreach (Control c in settingsGeneralParts) c.Visible = false;
-            if (settingsSubtitle != null) settingsSubtitle.Visible = false;
-            settingsReplacePanel.Visible = false; settingsUpdatesPanel.Visible = true; settingsUpdatesPanel.BringToFront();
-            settingsGeneralTab.SetActive(false); settingsReplaceTab.SetActive(false); settingsUpdatesTab.SetActive(true);
-            HideAboutTab();   // 2.5.9
+            if (loadingUpdateFields) return;
+            try
+            {
+                LoaderFlagChoices choices = LoaderFlags.Load(AppConfig.DataDir);
+                for (int i = 0; i < settingsGameMenus.Length; i++)
+                {
+                    LoaderMenu menu = LoaderMenu.All[i];
+                    // 13 Nov 2026: a switch never chosen here (the costume options) shows what the game folder holds. It
+                    // becomes a choice only when its own box changes, not when another box is ticked.
+                    if (menu.Unchosen != null && menu.Unchosen(choices) && menu != changed) continue;
+                    menu.Set(choices, settingsGameMenus[i].Checked);
+                }
+                LoaderFlags.Save(AppConfig.DataDir, choices);
+                // The added-parts list may read mods and copy files: made in the background, not on this thread.
+                if (!busy && !String.IsNullOrWhiteSpace(config.GameRoot) && Directory.Exists(config.GameRoot)) LoaderFlags.Sync(ReplaceEngine.ForConfig(config), true);
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            LoadLoaderFlagFields();
+        }
+        // 13 Nov 2026: the outfit other players see. Saved as a change that waits (LoaderFlagChoices.OthersSeePending) and
+        // written to the game folder at once when nothing else is changing it and SF6 is closed, else at the next refresh.
+        private void SaveOthersSee(string value)
+        {
+            if (loadingUpdateFields) return;
+            try
+            {
+                LoaderFlagChoices choices = LoaderFlags.Load(AppConfig.DataDir);
+                choices.OthersSeePending = value;
+                LoaderFlags.Save(AppConfig.DataDir, choices);
+                if (!busy && !String.IsNullOrWhiteSpace(config.GameRoot) && Directory.Exists(config.GameRoot)) LoaderFlags.Sync(ReplaceEngine.ForConfig(config), true);
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            LoadLoaderFlagFields();
+        }
+        // The boxes are offered only when the installed loader reads them: a suite-line Slotsloader.
+        private void LoadLoaderFlagFields()
+        {
+            LoaderFlagChoices choices = LoaderFlags.Load(AppConfig.DataDir);
+            bool loader = false;
+            try
+            {
+                if (!String.IsNullOrWhiteSpace(config.GameRoot) && Directory.Exists(config.GameRoot))
+                    loader = ReplaceEngine.ForConfig(config).LoadState().Mods.Any(LoaderFlags.IsSuiteLoader);
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            loadingUpdateFields = true;
+            for (int i = 0; i < settingsGameMenus.Length; i++) settingsGameMenus[i].Checked = LoaderFlags.IsOn(LoaderMenu.All[i], choices, config.GameRoot);
+            // No loader that reads it: neither choice is marked (nothing is set anywhere).
+            string seen = loader ? LoaderFlags.OthersSee(config.GameRoot, AppConfig.DataDir) : null;
+            foreach (RadioButton radio in settingsOthersSee) radio.Checked = radio.Text == seen;
+            loadingUpdateFields = false;
+            // Not offered = muted text and no response to a click. Never Enabled = false: Windows then draws the text in its
+            // own dark grey, which cannot be read on this background (the user, 12 Nov 2026).
+            foreach (CheckBox box in settingsGameMenus) Offer(box, loader);
+            foreach (RadioButton radio in settingsOthersSee) { radio.AutoCheck = loader; radio.TabStop = loader && radio.Checked; radio.ForeColor = loader ? Palette.Text : Palette.Muted; }
+            settingsGameNote.Text = loader ? "A change applies the next time SF6 starts." : "The installed Slotsloader adds no menus.";
+        }
+        private static void Offer(CheckBox box, bool offered) { box.AutoCheck = offered; box.TabStop = offered; box.ForeColor = offered ? Palette.Text : Palette.Muted; }
+        private bool loadingUpdateFields;
+        // The update boxes as saved, and the last check's result when none is shown yet (ShowLoaderTab).
+        private void LoadUpdateFields()
+        {
             UpdateSettings s = UpdateSettings.Load();
             loadingUpdateFields = true; settingsAutoUpdate.Checked = s.AutoCheck; settingsPrereleases.Checked = s.IncludePrereleases; loadingUpdateFields = false;
             if (settingsUpdateResult.Text.Length > 0) return;

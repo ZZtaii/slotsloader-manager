@@ -18,23 +18,46 @@ namespace SlotsInstaller
         public List<string> Errors=new List<string>(),Warnings=new List<string>();
         public long TotalBytes { get { return Files.Values.Sum(x=>x.Asset.Size); } }
         public bool CanInstall { get { return Errors.Count==0 && Files.Count>0; } }
-        // In-scope main files that are not selected: an error when the bundle marks them Required, else a warning.
+        // In-scope main files that are not selected (each is also in Needs).
         internal List<ModComponent> MissingMains=new List<ModComponent>();
+        // 1.0.19: what the selection leaves out that the mod marks as needed, or that looks needed (MissingNeed).
+        internal List<MissingNeed> Needs=new List<MissingNeed>();
+        // The errors plus what Needs was an error for until 1.0.18, and the warnings without those (the Assistant).
+        internal List<string> StrictErrors() { return Errors.Concat(Needs.Where(n=>n.Strict!=null).Select(n=>n.Strict)).Distinct().ToList(); }
+        internal List<string> StrictWarnings() { return Warnings.Where(w=>!Needs.Any(n=>n.Strict!=null && n.Text==w)).ToList(); }
         // 1.0.18: only these parts of the selection were kept (OutfitParts.Keep); empty = all of it.
         internal List<string> OnlyParts=new List<string>();
     }
+    // 1.0.19 (the user, 13 Nov 2026: "i also want to relax requirements. when a mod has some files tagged as requirement
+    // or guessed etc. then we should show a popup (less annoying though) around the image that it may not work without x
+    // mod and highlight the required mod temporarily but install the mod anyways. this helps to mix and match options"):
+    // an option the selection leaves out although another option names it (its parent, Requirement=), the bundle marks
+    // it Required, its name looks like main files, or a "Required · choose one" group has nothing picked (Needed is the
+    // group then). It is a note in Warnings and by the preview picture, never an error. Still errors: nothing ticked,
+    // an option that is gone, two picks in a choose-one group, and an Extra outfit with no mesh at all.
+    // Strict is the error this was until 1.0.18 (null for main files guessed from a name, which were a note already):
+    // the Assistant still refuses on it (CompositionPlan.StrictErrors), because a model that forgets a required choice
+    // looks the same as a user who left it out on purpose.
+    internal sealed class MissingNeed { internal ModComponent Needed, By; internal string Text, Strict; }
     public static partial class Composer
     {
         // "Main menu", "main screen" and "main theme" name a place in the game, not the mod's main files
         // ("TRUE Faster StartUp (MAIN MENU)" next to "(TRAINING)": two alternatives, neither needs the other).
-        // "(base costume boots)" describes which boots an option keeps; "Base costume" by itself is still main files.
+        // 13 Nov 2026 (the user, of "Marisa Base Model - Hair" and its add-on "Marisa Base Model - Clean", both labelled
+        // Main files, the add-on lit up as left out: "why this mod has highlights for this? its a wrong guess", then
+        // "I guess we should remove the base as a main files keyword"): "base" in a name is no longer a sign of main
+        // files. "Main", "main files", "mandatory" and "required" still are; an option named "Base" is an ordinary option.
         internal static bool IsBase(ModComponent c) { return c.BundleRule == "Required" || (c.BundleRule != "Optional" && (c.AuthorBase ?? NamedLikeMain(c.Name))); }
-        internal static bool NamedLikeMain(string name) { return Regex.IsMatch(name ?? "",@"\b(main(?![\s_-]*(menu|screen|theme)\b)\s*(files?)?|base(?!\s+(costume|outfit|game)\s+\w)|mandatory|required)\b",RegexOptions.IgnoreCase); }
+        internal static bool NamedLikeMain(string name) { return Regex.IsMatch(name ?? "",@"\b(main(?![\s_-]*(menu|screen|theme)\b)\s*(files?)?|mandatory|required)\b",RegexOptions.IgnoreCase); }
+        // The plain one among options that write the same files ("C1 L base" beside "C1 L + Chest"): named like main
+        // files, or "base". Only WithoutAlternatives asks, to tick the plain one first; it is no main-files guess.
+        // "(base costume boots)" describes which boots an option keeps.
+        internal static bool NamedLikePlain(string name) { return NamedLikeMain(name) || Regex.IsMatch(name ?? "",@"\bbase(?!\s+(costume|outfit|game)\s+\w)\b",RegexOptions.IgnoreCase); }
         // Main files the bundle's own layout marks Required. IsBase also holds for a name that only looks like main
         // files: that guess orders layers, ticks defaults and shows a "Main files" label, but never blocks an install.
         internal static bool IsRequired(ModComponent c) { return c.BundleRule == "Required"; }
-        // Options named like main files that write exactly the same files as a sibling are alternatives ("C1 L base",
-        // "C1 XL base", "C1 XXL - Base": three sizes of one mesh), so none of them is required with the others.
+        // Options named like main files that write exactly the same files as a sibling are alternatives ("C1 L main",
+        // "C1 XL main", "C1 XXL - Main": three sizes of one mesh), so none of them is required with the others.
         // Main files of different outfits ("C1 - Main files", "C2 - Main files") write different files and stay.
         internal static void DropTwinMains(ModPackage package)
         {
@@ -123,8 +146,8 @@ namespace SlotsInstaller
             if (options.Count<2) return options;
             var kept=new List<ModComponent>(); var taken=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             // Among alternatives, one named "base" or "main" is the plain one ("C1 L base" before "C1 L + Chest"), so it is
-            // the one ticked, even when DropTwinMains found it is not main files.
-            foreach (ModComponent c in options.Select((c,i)=>new{c,i}).OrderByDescending(x=>x.c.IsDefaultChoice).ThenByDescending(x=>NamedLikeMain(x.c.Name)).ThenBy(x=>x.i).Select(x=>x.c))
+            // the one ticked, although it is not main files (NamedLikePlain; "base" is no main-files word since 13 Nov 2026).
+            foreach (ModComponent c in options.Select((c,i)=>new{c,i}).OrderByDescending(x=>x.c.IsDefaultChoice).ThenByDescending(x=>NamedLikePlain(x.c.Name)).ThenBy(x=>x.i).Select(x=>x.c))
             {
                 var mine=(replaceMode ? c.Assets.Concat(c.RootAssets) : c.Assets).Select(a=>a.DestinationPath).ToList();
                 if (kept.Count>0 && mine.Any(taken.Contains) && !package.RequiredOptions(c).Any(kept.Contains)) continue;
@@ -185,28 +208,13 @@ namespace SlotsInstaller
                     if (p.Files.TryGetValue(f.DestinationPath,out old)) p.Overrides.Add(new FileOverride {Path=f.DestinationPath,Previous=old.Component.Name,Winner=c.Name});
                     p.Files[f.DestinationPath]=new PlannedFile {Asset=f,Component=c};
                 }
-                ModComponent parent=c.ParentId==null ? null : package.Find(c.ParentId);
-                while (parent != null && parent.IsDummy && (package.HasBundleLayout || parent.Id.StartsWith(":hair-choice:", StringComparison.Ordinal)) && parent.ParentId != null) parent = package.Find(parent.ParentId);
-                if (parent!=null && !parent.IsDummy && parent.HasFiles(replaceMode) && !p.Layers.Contains(parent)) p.Errors.Add("'"+c.Name+"' needs its parent '"+parent.Name+"'.");
-                foreach (ModComponent need in package.RequiredOptions(c))
-                    if (need.HasFiles(replaceMode) && !IsRequired(need) && !p.Layers.Contains(need)) p.Errors.Add("'"+c.Name+"' needs '"+need.Name+"'.");
             }
-            // The user: main files guessed from a name get a label, not a requirement, so a wrong guess ("(MAIN MENU)")
-            // can no longer block an install. Only an option the bundle marks Required must be included.
-            foreach (ModComponent main in package.Components.Where(c=>!c.IsDummy && c.HasFiles(replaceMode) && IsBase(c) && ScopeIsActive(package,c.ParentId,p.Layers)))
-            {
-                if (p.Layers.Contains(main)) continue;
-                p.MissingMains.Add(main);
-                if (IsRequired(main)) p.Errors.Add("Include main files: "+main.Name);
-                else p.Warnings.Add("'"+main.Name+"' looks like this mod's main files and is not selected. Most options need them.");
-            }
+            FindNeeds(p);
+            foreach (MissingNeed need in p.Needs) if (!p.Warnings.Contains(need.Text)) p.Warnings.Add(need.Text);
             foreach (ModComponent group in package.Components.Where(package.IsChoice))
             {
                 if (!ScopeIsActive(package,group.ParentId,p.Layers) && !p.Layers.Any(c=>IsDescendant(package,c,group))) continue;
-                int count=p.Layers.Where(c=>IsDescendant(package,c,group)).Select(c=>ChoiceBranch(package,c,group))
-                    .Where(id=>package.IsChoiceBranch(group,package.Find(id))).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-                if (count>1 && !(savedWinnerCheck && group.InferredChoice)) p.Errors.Add("Choose one option in '"+group.Name+"'.");
-                if (count==0 && group.RequiresChoice) p.Errors.Add("Choose an option in '"+group.Name+"'.");
+                if (ChoicesIn(package,group,p.Layers)>1 && !(savedWinnerCheck && group.InferredChoice)) p.Errors.Add("Choose one option in '"+group.Name+"'.");
             }
             if (replaceMode)
             {
@@ -235,10 +243,59 @@ namespace SlotsInstaller
             if (p.Overrides.Count>0) p.Warnings.Add(p.Overrides.Count+" file overrides: main files go first, then options in selection order; the last one wins.");
             return p;
         }
-        // The choose-one groups for which Plan reports "Choose an option in ...",
-        // evaluated without building the file plan. Used to mark them live in
-        // the option list. The caller must have run PrepareChoices for this
-        // package (FillComponents does); Plan itself is unchanged.
+        // 1.0.19: fills p.Needs (and p.MissingMains) from p.Layers. Nothing here blocks an install (see MissingNeed).
+        private static void FindNeeds(CompositionPlan p)
+        {
+            ModPackage package=p.Package; bool replaceMode=p.ReplaceMode;
+            Action<ModComponent,ModComponent,string,string> add=delegate(ModComponent needed,ModComponent by,string text,string strict)
+            {
+                if (!p.Needs.Any(n=>n.Needed==needed && n.By==by)) p.Needs.Add(new MissingNeed {Needed=needed,By=by,Text=text,Strict=strict});
+            };
+            foreach (ModComponent c in p.Layers)
+            {
+                ModComponent parent=c.ParentId==null ? null : package.Find(c.ParentId);
+                while (parent != null && parent.IsDummy && (package.HasBundleLayout || parent.Id.StartsWith(":hair-choice:", StringComparison.Ordinal)) && parent.ParentId != null) parent = package.Find(parent.ParentId);
+                if (parent!=null && !parent.IsDummy && parent.HasFiles(replaceMode) && !p.Layers.Contains(parent)) add(parent,c,"'"+c.Name+"' may not work without '"+parent.Name+"'.","'"+c.Name+"' needs its parent '"+parent.Name+"'.");
+                foreach (ModComponent need in package.RequiredOptions(c))
+                    if (need.HasFiles(replaceMode) && !IsRequired(need) && !p.Layers.Contains(need)) add(need,c,"'"+c.Name+"' may not work without '"+need.Name+"'.","'"+c.Name+"' needs '"+need.Name+"'.");
+            }
+            // Main files: marked Required by the bundle, or guessed from a name ("(MAIN MENU)" was a wrong guess once).
+            foreach (ModComponent main in package.Components.Where(c=>!c.IsDummy && c.HasFiles(replaceMode) && IsBase(c) && ScopeIsActive(package,c.ParentId,p.Layers)))
+            {
+                if (p.Layers.Contains(main)) continue;
+                p.MissingMains.Add(main);
+                if (IsRequired(main)) add(main,null,"This selection may not work without '"+main.Name+"' (the mod marks it Required).","Include main files: "+main.Name);
+                else add(main,null,"'"+main.Name+"' looks like this mod's main files and is not selected. Most options need them.",null);
+            }
+            foreach (ModComponent group in package.Components.Where(package.IsChoice))
+            {
+                if (!group.RequiresChoice) continue;
+                if (!ScopeIsActive(package,group.ParentId,p.Layers) && !p.Layers.Any(c=>IsDescendant(package,c,group))) continue;
+                if (ChoicesIn(package,group,p.Layers)==0) add(group,null,"This selection may not work without an option from '"+group.Name+"'.","Choose an option in '"+group.Name+"'.");
+            }
+        }
+        // How many branches of a choose-one group the layers pick.
+        private static int ChoicesIn(ModPackage package,ModComponent group,List<ModComponent> layers)
+        {
+            return layers.Where(c=>IsDescendant(package,c,group)).Select(c=>ChoiceBranch(package,c,group))
+                .Where(id=>package.IsChoiceBranch(group,package.Find(id))).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        }
+        // 1.0.19: the same list Plan puts in Needs, without building the file plan: the Library shows it by the preview
+        // picture as soon as a tick changes. Empty while nothing with files is ticked (Plan reports that as an error).
+        internal static List<MissingNeed> MissingNeeds(ModPackage package,IEnumerable<string> selectedIds,bool replaceMode)
+        {
+            var p=new CompositionPlan {Package=package,ReplaceMode=replaceMode};
+            if (package==null) return p.Needs;
+            package.PrepareChoices();
+            p.Layers=selectedIds.Distinct(StringComparer.OrdinalIgnoreCase).Select(id=>package.Find(id)).Where(c=>c!=null && !c.IsDummy && c.HasFiles(replaceMode)).ToList();
+            if (p.Layers.Count>0) FindNeeds(p);
+            return p.Needs;
+        }
+        // The "Required · choose one" groups with nothing picked, evaluated without
+        // building the file plan. Used to mark them live in the option list and to
+        // fill the default ticks. Since 1.0.19 an open group blocks an install only
+        // while nothing at all is ticked; with a selection it is a note (FindNeeds).
+        // The caller must have run PrepareChoices for this package (FillComponents does).
         internal static List<ModComponent> UnresolvedChoiceGroups(ModPackage package,IEnumerable<string> selectedIds) { return UnresolvedChoiceGroups(package,selectedIds,false); }
         internal static List<ModComponent> UnresolvedChoiceGroups(ModPackage package,IEnumerable<string> selectedIds,bool replaceMode)
         {
@@ -251,9 +308,7 @@ namespace SlotsInstaller
             foreach (ModComponent group in package.Components.Where(package.IsChoice))
             {
                 if (!ScopeIsActive(package,group.ParentId,layers) && !layers.Any(c=>IsDescendant(package,c,group))) continue;
-                int count=layers.Where(c=>IsDescendant(package,c,group)).Select(c=>ChoiceBranch(package,c,group))
-                    .Where(id=>package.IsChoiceBranch(group,package.Find(id))).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-                if (count==0 && group.RequiresChoice) result.Add(group);
+                if (group.RequiresChoice && ChoicesIn(package,group,layers)==0) result.Add(group);
             }
             return result;
         }
@@ -289,11 +344,13 @@ namespace SlotsInstaller
             while ((c=package.Find(c.ParentId))!=null) depth++;
             return depth;
         }
-        internal static IEnumerable<ModComponent> RequiredForSelection(ModPackage package,List<string> ids,bool replace)
+        // The Required options a selection brings in, ticked for the user. 1.0.19: not the ones in leftOut (the user
+        // unticked them by hand; Plan then names them in Needs), nor what only those would bring in.
+        internal static IEnumerable<ModComponent> RequiredForSelection(ModPackage package,List<string> ids,bool replace,ICollection<string> leftOut=null)
         {
             var layers=ids.Select(package.Find).Where(c=>c!=null).ToList();
             foreach (var item in package.Components.Where(c=>c.BundleRule=="Required" && c.HasFiles(replace)).OrderBy(c=>Depth(package,c)))
-                if (!layers.Contains(item) && ScopeIsActive(package,item.ParentId,layers))
+                if (!layers.Contains(item) && (leftOut==null || !leftOut.Contains(item.Id)) && ScopeIsActive(package,item.ParentId,layers))
                 {
                     layers.Add(item);
                     yield return item;

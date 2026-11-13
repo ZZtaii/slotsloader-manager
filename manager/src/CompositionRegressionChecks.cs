@@ -28,7 +28,8 @@ namespace SlotsInstaller
             Check("case-insensitive IDs, dependencies and previews retain canonical identities",delegate { CaseHandling(Path.Combine(run,"case-handling")); },ref failures);
             Check("options follow MenuPriority (higher first), else plain options before groups, then name",delegate { OptionOrder(Path.Combine(run,"option-order")); },ref failures);
             Check("an option named after the game's main menu is not the mod's main files",delegate { MainMenuName(Path.Combine(run,"main-menu-name")); },ref failures);
-            Console.WriteLine("Composition regression checks: "+(8-failures)+" passed, "+failures+" failed.");
+            Check("'base' in an option's name does not make it main files",delegate { BaseInName(Path.Combine(run,"base-in-name")); },ref failures);
+            Console.WriteLine("Composition regression checks: "+(9-failures)+" passed, "+failures+" failed.");
             return failures;
         }
 
@@ -107,10 +108,15 @@ namespace SlotsInstaller
             Put(source,"skins/default/modinfo.ini","name=Default skin\n"); Put(source,"skins/default/"+Texture,"skin texture");
             ModPackage package=Load(source);
             CompositionPlan missing=Plan(package,"outfits/dress");
-            // Main files guessed from the name are a warning, not an error; the required skin choice still blocks.
-            Require(!missing.CanInstall && missing.Errors.All(e=>!e.Contains("Main files")) && missing.Warnings.Any(w=>w.Contains("'Main files' looks like")) && missing.MissingMains.Count==1 && missing.Errors.Any(e=>e.Contains("Skin choices")),"Nested outfit bypassed implicit-root requirements: "+Errors(missing));
+            // 1.0.19 (the user: "relax requirements ... install the mod anyways"): the main files guessed from the name
+            // and the empty required skin group are both notes (Needs, Warnings); neither is an error.
+            Require(missing.CanInstall && missing.Errors.Count==0 && missing.Warnings.Any(w=>w.Contains("'Main files' looks like")) && missing.MissingMains.Count==1
+                && missing.Needs.Select(n=>n.Needed.Name).OrderBy(n=>n).SequenceEqual(new[]{"Main files","Skin choices"}) && missing.Warnings.Any(w=>w.Contains("an option from 'Skin choices'")),"Nested outfit lost its implicit-root notes: "+Errors(missing)+" / "+String.Join(" ",missing.Warnings));
             Require(Plan(package,"outfits/dress","skins/default").CanInstall,"Main files guessed from a name still blocked an install.");
-            Require(!Plan(package,"main","outfits/dress").CanInstall,"Required skin choice was not enforced.");
+            CompositionPlan noSkin=Plan(package,"main","outfits/dress");
+            Require(noSkin.CanInstall && noSkin.Needs.Single().Needed.Name=="Skin choices" && noSkin.Needs.Single().Needed.IsDummy,"The empty required skin group was not a note: "+Errors(noSkin));
+            Require(Composer.MissingNeeds(package,new[]{"main","outfits/dress"},false).Single().Needed.Name=="Skin choices" && Composer.MissingNeeds(package,new string[0],false).Count==0,"MissingNeeds differs from the plan.");
+            Require(!Plan(package).CanInstall,"Nothing ticked was installable.");
             InstallAndCheck(Plan(package,"main","outfits/dress","skins/default"),root,"required shared material");
             Require(File.ReadAllText(Safety.Under(source,"main/"+Material))=="required shared material","Source material changed.");
         }
@@ -128,13 +134,24 @@ namespace SlotsInstaller
         }
         private static void MainMenuName(string root)
         {
-            foreach (string name in new[]{"Main","Main files","MAIN FILE","Mainfiles","Main mod","Base","Required"})
+            foreach (string name in new[]{"Main","Main files","MAIN FILE","Mainfiles","Main mod","Mandatory","Required"})
                 Require(Composer.IsBase(new ModComponent {Name=name}),"'"+name+"' is no longer main files.");
-            foreach (string name in new[]{"Base costume","C1 XXL - Base","!BASE: Mai C1 ORIGINAL TEXTURE FILES","MAIN: Mai C1 L","(Main) Belly Dancer 2.0"})
+            foreach (string name in new[]{"MAIN: Mai C1 L","(Main) Belly Dancer 2.0"})
                 Require(Composer.IsBase(new ModComponent {Name=name}),"'"+name+"' is no longer main files.");
             foreach (string name in new[]{"Faster StartUp (MAIN MENU)","Main-menu music","Main screen","Main theme","Training","Regular - shorts (base costume boots) no tights"})
                 Require(!Composer.IsBase(new ModComponent {Name=name}),"'"+name+"' was taken for main files.");
-            // Sizes of one mesh named "base" are alternatives; main files of two outfits are both still required.
+            // 13 Nov 2026 (the user: "I guess we should remove the base as a main files keyword"): "base" in a name is an
+            // ordinary word. These five were main files by their name until then.
+            foreach (string name in new[]{"Base","Base costume","C1 XXL - Base","!BASE: Mai C1 ORIGINAL TEXTURE FILES","Marisa Base Model - Hair"})
+                Require(!Composer.IsBase(new ModComponent {Name=name}) && !Composer.NamedLikeMain(name),"'"+name+"' was taken for main files.");
+            // Sizes of one mesh named "main" are alternatives (DropTwinMains), as sizes named "base" were while "base" counted.
+            string twins=Path.Combine(root,"twins");
+            foreach (string size in new[]{"L","XL"}) { Put(twins,"C1 "+size+"/modinfo.ini","name=C1 "+size+" main\n"); Put(twins,"C1 "+size+"/"+Mesh,size+" mesh"); }
+            Put(twins,"C1 chest/modinfo.ini","name=C1 L + Chest\n"); Put(twins,"C1 chest/"+Material,"chest");
+            ModPackage twinned=Load(twins);
+            Require(Composer.NamedLikeMain("C1 L main") && !Composer.IsBase(Named(twinned,"C1 L main")) && !Composer.IsBase(Named(twinned,"C1 XL main")),"Two sizes of one mesh were both main files.");
+            Require(Composer.MissingNeeds(twinned,new[]{Named(twinned,"C1 XL main").Id},false).Count==0,"One size asked for the other.");
+            // Sizes named "base": neither is main files; main files of two outfits are both still required.
             string sizes=Path.Combine(root,"sizes");
             foreach (string size in new[]{"L","XL"}) { Put(sizes,"C1 "+size+"/modinfo.ini","name=C1 "+size+" base\n"); Put(sizes,"C1 "+size+"/"+Mesh,size+" mesh"); }
             Put(sizes,"C1 chest/modinfo.ini","name=C1 L + Chest\n"); Put(sizes,"C1 chest/"+Material,"chest");
@@ -160,6 +177,30 @@ namespace SlotsInstaller
             CompositionPlan plan=Composer.Plan(package,new[]{"training"},true);
             Require(plan.CanInstall,"The TRAINING option alone was rejected: "+Errors(plan));
         }
+        // 13 Nov 2026 (the user, of "Marisa Base Model - Hair and Clean": "why this mod has highlights for this? its a
+        // wrong guess", then "I guess we should remove the base as a main files keyword"): two options with "Base" in
+        // their names, the second an add-on of the first. Neither is main files, and the first alone leaves nothing out.
+        private static void BaseInName(string root)
+        {
+            string source=Path.Combine(root,"source");
+            Put(source,"00 Base - A/modinfo.ini","name=X Base Model - A\nMenuPriority=100\nNameAsBundle=X Base Model Bundle\n");
+            Put(source,"00 Base - A/"+Mesh,"a mesh"); Put(source,"00 Base - A/"+Material,"a material");
+            Put(source,"01 Base - B/modinfo.ini","name=X Base Model - B\nMenuPriority=90\nAddonFor=X Base Model - A\nRequirement=X Base Model - A\n");
+            Put(source,"01 Base - B/"+Material,"b material");
+            ModPackage package=Load(source);
+            ModComponent a=Named(package,"X Base Model - A"), b=Named(package,"X Base Model - B");
+            Require(package.Name=="X Base Model Bundle" && String.Equals(b.ParentId,a.Id,StringComparison.OrdinalIgnoreCase),"Fixture: B is not an add-on of A in '"+package.Name+"'.");
+            Require(!Composer.IsBase(a) && !Composer.IsBase(b),"An option with 'Base' in its name is labelled Main files.");
+            Require(Composer.DefaultSelection(package).SequenceEqual(new[]{a.Id}),"Default ticks: "+String.Join(" | ",Composer.DefaultSelection(package)));
+            CompositionPlan alone=Plan(package,a.Id);
+            Require(alone.CanInstall && alone.Needs.Count==0 && alone.MissingMains.Count==0 && Composer.MissingNeeds(package,new[]{a.Id},false).Count==0
+                && !alone.Warnings.Any(w=>w.Contains("may not work without") || w.Contains("looks like")),"A alone has a note: "+String.Join(" | ",alone.Warnings));
+            // The add-on without the option it names still says so (its AddonFor and Requirement, not a guess).
+            var needs=Composer.MissingNeeds(package,new[]{b.Id},false);
+            Require(needs.Count==1 && needs[0].Needed==a && needs[0].By==b,"B alone: "+String.Join(" | ",needs.Select(n=>n.Text)));
+            CompositionPlan both=Plan(package,b.Id,a.Id);
+            Require(both.CanInstall && both.Needs.Count==0 && both.Files[Material].Component==b,"A and B: the add-on does not win the file they share, or a note is left: "+Errors(both)+" / "+String.Join(" | ",both.Warnings));
+        }
         private static void InferredAlternatives(string root)
         {
             Put(root,"modinfo.ini","name=Outfit bundle\ndummymod=true\n");
@@ -182,7 +223,8 @@ namespace SlotsInstaller
             ModPackage package=Load(root);
             Require(Plan(package,"A-main","A-skin").CanInstall,"Inactive Bundle B blocked a complete Bundle A.");
             CompositionPlan missing=Plan(package,"A-main");
-            Require(!missing.CanInstall && missing.Errors.Any(e=>e.Contains("A skin")) && missing.Errors.All(e=>!e.Contains("B skin")),"Independent branch requirements escaped their scope.");
+            // 1.0.19: the empty required group of the branch in use is a note; nothing of Bundle B is named.
+            Require(missing.CanInstall && missing.Needs.Single().Needed.Name=="A skin options" && missing.Warnings.All(w=>!w.Contains("B skin")),"Independent branch requirements escaped their scope: "+Errors(missing)+" / "+String.Join(" ",missing.Warnings));
             // 1.0.18: A's required skin group gets its option ticked too; nothing of Bundle B.
             Require(Composer.DefaultSelection(package).SequenceEqual(new[]{"A-main","A-skin"}),"Default selection crossed bundle branches: "+String.Join(",",Composer.DefaultSelection(package)));
         }

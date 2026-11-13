@@ -108,9 +108,10 @@ namespace SlotsInstaller
         {
             foreach (Control c in settingsGeneralParts) c.Visible = false;
             if (settingsSubtitle != null) settingsSubtitle.Visible = false;
-            settingsReplacePanel.Visible = false; settingsUpdatesPanel.Visible = false;
+            settingsReplacePanel.Visible = false;
+            HideLoaderTab();
             settingsAboutPanel.Visible = true; settingsAboutPanel.BringToFront();
-            settingsGeneralTab.SetActive(false); settingsReplaceTab.SetActive(false); settingsUpdatesTab.SetActive(false); settingsAboutTab.SetActive(true);
+            settingsGeneralTab.SetActive(false); settingsReplaceTab.SetActive(false); settingsAboutTab.SetActive(true);
         }
         private void HideAboutTab() { if (settingsAboutPanel != null) { settingsAboutPanel.Visible = false; settingsAboutTab.SetActive(false); } }
 

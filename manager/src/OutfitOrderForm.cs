@@ -19,7 +19,13 @@ namespace SlotsInstaller
 
         internal void ShowOutfitOrder()
         {
-            if (busy || String.IsNullOrWhiteSpace(config.GameRoot)) return;
+            if (busy || String.IsNullOrWhiteSpace(config.GameRoot) || LoaderFlags.SuiteLoaderInstalled) return;   // 1.0.19: the suite-line loader keeps its numbers in files of another shape
+            // The flag above is what the last sync saw (none may have run yet at start-up): the installed loader is read
+            // again here, and a state that cannot be read keeps the window shut.
+            bool suite;
+            try { suite = ReplaceEngine.ForConfig(config).LoadState().Mods.Any(LoaderFlags.IsSuiteLoader); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); return; }
+            if (suite) { LoaderFlags.SuiteLoaderInstalled = true; ShowInstalledSelection(); return; }
             InstalledOutfit picked = GetInstalledSelection(); OutfitGroup group = GetGroupSelection();
             string start = picked != null ? picked.Character : group != null ? group.Character : installedCharacters.FirstOrDefault();
             string game = config.GameRoot;

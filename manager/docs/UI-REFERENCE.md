@@ -37,6 +37,29 @@ Read this before changing layout, navigation, option selection, previews, or scr
 
 These cover the custom screens. **Edit options** loads a managed outfit back into the existing Options view; it is not another editor window. Archive/executable pickers and folder browsers are standard Windows dialogs. Since 2.4.1 there are no confirmations for recoverable actions (they act at once with Undo) and errors are inline; the few remaining questions (permanent deletes, another tool's changes) use the themed message box (2.0.3; standard MessageBoxes before). A successful install uses a green checked status line rather than a popup. Taking screenshots does not require installing, disabling, removing, or replacing an outfit.
 
+## Unreleased: requirements are notes, options list without indent, 2026-11-13
+
+Source: `MissingNeed`, `Composer.FindNeeds` and `Composer.MissingNeeds` in [Composition.cs](../src/Composition.cs), [MainFormNeeds.cs](../src/MainFormNeeds.cs), `MainForm.ComponentChecked` and `DrawComponentNode`, [OptionTree.cs](../src/OptionTree.cs). Checks: `--self-test-extra` (composition regression), `--polish-check` ("required choose-one groups", "what the ticks leave out").
+
+- **Nothing a mod marks as needed blocks an install any more.** An option's parent, an option named in `Requirement=`, an option the bundle marks Required, main files guessed from a name and a "Required · choose one" group with nothing picked are notes (`CompositionPlan.Needs`, repeated in `Warnings`). Still errors: nothing ticked, an option that no longer exists, two picks in one choose-one group, and an Extra outfit with no model at all.
+- **The line under the preview picture.** "May not work without “Main files”" (a second name, or "and 2 more"; a group reads "an option from “Skin”"), accent text on a Raised strip that takes its height from the picture. It shows while the ticks leave something out and goes when they don't. No dialog, no hover text and nothing to dismiss. A click scrolls the first option left out into view and lights everything left out; the full sentences are in the report's Notes.
+- **The option lights up.** Only when Install is pressed with something left out, or the line is clicked: its row turns a light grey with a grey edge for about a second, then fades. Never for an opened mod or a tick. An option inside a closed group lights the nearest row on show.
+- **Ticks.** Ticking an option ticks its parent, its `Requirement=` options and the bundle's Required options. One of the last two unticked by hand stays out until ticked again or the mod is opened again. Opening a mod whose saved ticks leave something out keeps it out.
+- **Footer.** "Ready to install · N files", then the same "May not work without ..." text in accent before "View notes". "Choose: Outfit, Skin" with "Required before Install" is shown only while nothing with files is ticked.
+- **The Assistant** keeps the strict rules (`CompositionPlan.StrictErrors`): it picks the options itself, and a forgotten required choice looks the same as one left out on purpose.
+- **Options list.** No level is indented. A group's arrow stands in the column of the tick boxes, so arrows and tick boxes of every level are one column at the left edge; an option that has options under it keeps a small arrow before its tick box.
+
+## Unreleased: colour packs in search, recipes sorted with the mods, 2026-11-13
+
+Source: [LibrarySearch.cs](../src/LibrarySearch.cs) (`ColourKeyword`, `IsColourPack`, `ColourRank`), `Library.CountFileMix` in [Core.cs](../src/Core.cs), `MainForm.ApplyFilters`, [LibrarySort.cs](../src/LibrarySort.cs), [RecipesForm.cs](../src/RecipesForm.cs). Checks: `--filter-check` ("colour packs (1.0.19)", "colour pack index (1.0.19)", "colour words and recipes in the list (1.0.19)").
+
+- **Colour pack.** A mod without a model whose files in the fighters' outfit folders are mostly colour files (`esfNNN_NNN_cmd_NNN.user.2`, at least half of them, so a few colours shipped with their own textures still count). It is found by what is in it, whatever its name. Its library row says **Colour pack** after its outfits ("C1 · Colour pack").
+- **Search words.** `color pack`, `colour pack`, `color bundle` (also plural) and `colors` / `colours` list the colour packs; `cmd` / `cmds` lists every mod with colour files. Both also keep the mods whose name has the word, and combine with a fighter or a comma term ("juri color pack", "cammy, cmd").
+- **Order.** With one of these words the colour packs come first, then the other mods with colour files, then the rest, each group in the order of the sort chip (also under Added and Last used).
+- **Recipe builder.** The same words work in "Search this fighter's mods", colour packs first.
+- **Index.** Stored as `FileMix` in index v4 records (outfit files, colour files, models). Older records keep their identity: one with outfit files is read again once in the background ("· READING n%"), one without gets zeros without a read. Until a mod is read it is not called a colour pack.
+- **Recipes in the Mod library** are sorted with the mods, no longer in front of them: Installed (installed recipes with the installed mods, then by name), Added (when the recipe was made), Last used (its last install, never-installed last). A search with a recipe word (`rc`, `recipe`, `recipes`, `ou`, `outfit`, `outfits`) still lists the recipes first. With a fighter picked in the filters a recipe stays with that fighter's own mods.
+
 ## 1.0.16: REFramework & code filter, 2026-11-03
 
 Source: [LibraryCode.cs](../src/LibraryCode.cs) (the kinds), [FilterPanel.cs](../src/FilterPanel.cs) (tile and chips), `MainForm.ApplyFilters`. Check: `--filter-check` ("REFramework & code …").

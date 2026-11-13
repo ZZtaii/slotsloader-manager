@@ -219,8 +219,8 @@ namespace SlotsInstaller
                 Target = gameFiles, Width = delegate { return Math.Min(Px(560), gameFiles().Left - Px(32)); }, Place = delegate(Rectangle hole, Size size) { return new Point(hole.Left - Px(16) - size.Width, hole.Top); } });
             tour.Steps.Add(new TourStep { Title = "External mod manager", Body = new[] { "What your other mod manager has installed, and whether it is open. While it has mods installed, Replace original stays off.", "- Import external preset brings one of its presets over.", "- Migrate installed mods moves its active mods here in the same order. You review them, uninstall them there, and the Manager installs them again." }, Prepare = replace,
                 Target = external, Width = delegate { return external().Width + Px(12); }, Place = delegate(Rectangle hole, Size size) { return new Point(hole.Left, hole.Top - Px(16) - size.Height); } });
-            tour.Steps.Add(new TourStep { Title = "Updates", Body = new[] { "The Manager checks for new versions of itself and of Slotsloader, and offers them here when they are out." }, Prepare = replace,
-                Target = delegate { return TourRect(settingsUpdatesTab); }, Width = delegate { return Px(430); }, Place = delegate(Rectangle hole, Size size) { return new Point(hole.Left, hole.Bottom + Px(16)); } });
+            tour.Steps.Add(new TourStep { Title = "Slotsloader and updates", Body = new[] { "The Manager checks for new versions of itself and of Slotsloader, and offers them here when they are out. This tab also holds what Slotsloader adds to the game's menus." }, Prepare = replace,
+                Target = delegate { return TourRect(settingsLoaderTab); }, Width = delegate { return Px(430); }, Place = delegate(Rectangle hole, Size size) { return new Point(hole.Left, hole.Bottom + Px(16)); } });
             return tour;
         }
     }

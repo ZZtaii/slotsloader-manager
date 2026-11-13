@@ -318,7 +318,7 @@ namespace SlotsInstaller
             // splitter minimums after they have a real client extent.
             if(librarySplit.Width>=Px(952)) {librarySplit.SplitterWidth=Px(12);librarySplit.Panel1MinSize=Px(220);librarySplit.Panel2MinSize=Px(720);RestoreSplitter(librarySplit,Px(libraryWidthChosen ? libraryLogicalWidth : DefaultLibraryFor()));}
             if(installedSplit.Width>=Px(768)) {installedSplit.SplitterWidth=Px(18);installedSplit.Panel1MinSize=Px(460);installedSplit.Panel2MinSize=Px(290);RestoreSplitter(installedSplit,Px(installedLogicalWidth));}
-            componentTree.ItemHeight=Px(32); componentTree.Indent=Px(18);
+            componentTree.ItemHeight=Px(32); componentTree.Indent=0;   // 1.0.19 (the user: "yes no indent")
             foreach(var list in new[]{modList,installedList,fileList,batchList})   // 1.0.6: the queue list too
             {
                 if(list==null) continue;
@@ -797,8 +797,8 @@ namespace SlotsInstaller
             planSummary.Cursor = Cursors.Hand; planDetails.Cursor = Cursors.Hand;
             // Unresolved required choices: the summary jumps to the first one.
             // Otherwise both lines open the full composition report.
-            planSummary.Click += delegate { if (FooterClearsMissingOptions()) return; if (unresolvedChoices.Count > 0) JumpToFirstRequiredChoice(); else if (IsReplaceMode) ShowReviewOrWait(true); else ShowCompositionReport(); };   // 2.4.2: missing options clear like Health (MainFormRecovery.cs)
-            planDetails.Click += delegate { if (FooterClearsMissingOptions()) return; if (unresolvedChoices.Count > 0 && (plan == null || IsReplaceMode)) JumpToFirstRequiredChoice(); else if (IsReplaceMode) ShowReviewOrWait(true); else if (plan != null) ShowCompositionReport(); };
+            planSummary.Click += delegate { if (FooterClearsMissingOptions()) return; if (choicesBlock) JumpToFirstRequiredChoice(); else if (IsReplaceMode) ShowReviewOrWait(true); else ShowCompositionReport(); };   // 2.4.2: missing options clear like Health (MainFormRecovery.cs)
+            planDetails.Click += delegate { if (FooterClearsMissingOptions()) return; if (choicesBlock && (plan == null || IsReplaceMode)) JumpToFirstRequiredChoice(); else if (IsReplaceMode) ShowReviewOrWait(true); else if (plan != null) ShowCompositionReport(); };
             planSummary.AccessibleRole = AccessibleRole.Link; planDetails.AccessibleRole = AccessibleRole.Link;
             footer.Controls.Add(summary); footer.Controls.Add(actions);
             detail.Controls.Add(footer);
@@ -820,7 +820,10 @@ namespace SlotsInstaller
             choiceTabs.Controls.Add(new Panel { Dock = DockStyle.Left, Width = Rhythm.Related });
             choiceTabs.Controls.Add(componentTab);
             componentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
-            componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 18, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font("Segoe UI", 10.5F) };
+            // 1.0.19 (the user, 13 Nov 2026: "i preferred options and arrows being in line", then "yes no indent"): no
+            // level is indented; every arrow is in one column at the left edge, the tick boxes a little to its right
+            // (DrawComponentNode).
+            componentTree = new OptionTree { Dock = DockStyle.Fill, Indent = 0, ItemHeight = 32, BackColor = Palette.Surface, ForeColor = Palette.Text, Font = new Font("Segoe UI", 10.5F) };
             componentTree.EmptyText = NoModText;
             componentTree.DrawNode += DrawComponentNode;
             componentTree.ContextMenuStrip = BuildOptionMenu();   // 1.0.18: open the option's archive (an addon's own) in Explorer
@@ -887,6 +890,7 @@ namespace SlotsInstaller
             preview = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Palette.Background };
             noPreview = new Label { UseMnemonic=false, Text = "No preview", TextAlign = ContentAlignment.MiddleCenter, Dock = DockStyle.Fill, ForeColor = Palette.Border, Font = new Font("Segoe UI", 16F, FontStyle.Bold) };
             preview.Cursor = Cursors.Hand; preview.Click += delegate { EnlargePreview(); };  visual.Controls.Add(preview); visual.Controls.Add(noPreview);
+            Control leftOutLine = BuildNeedNotice(); visual.Controls.Add(leftOutLine); leftOutLine.SendToBack();   // 1.0.19: "May not work without …" under the picture (MainFormNeeds.cs)
             componentTitle = new Label { UseMnemonic=false, Text = "OPTION PREVIEW", Dock = DockStyle.Top, Height = 30, Font = Palette.Strong, AutoEllipsis = true, Padding = new Padding(0, 7, 0, 0) };
             // 1.0.5 (the user): the modinfo.ini version, right-aligned on the title row (SetVersion).
             componentVersion = new Label { UseMnemonic=false, Text = "", ForeColor = Palette.Muted, Font = Palette.Small, AutoEllipsis = true, TextAlign = ContentAlignment.TopRight, Anchor = AnchorStyles.Top | AnchorStyles.Right, Visible = false, AccessibleName = "Mod version" };
@@ -1420,13 +1424,26 @@ namespace SlotsInstaller
             Rectangle row = new Rectangle(0, e.Bounds.Y, componentTree.ClientSize.Width, componentTree.ItemHeight);
             e.Graphics.SetClip(row, CombineMode.Intersect);
             bool hovered = e.Node == hoverNode;
-            using (Brush bg = new SolidBrush(selected || hovered ? Palette.Raised : Palette.Surface)) e.Graphics.FillRectangle(bg, row);
+            // 1.0.19: an option the ticks leave out lights up for a moment (MainFormNeeds.cs).
+            bool flash = flashIds.Contains(component.Id);
+            Color rowColor = selected || hovered ? Palette.Raised : Palette.Surface;
+            using (Brush bg = new SolidBrush(flash ? FlashColor(rowColor) : rowColor)) e.Graphics.FillRectangle(bg, row);
             int x = e.Bounds.X + Px(18);
             bool required = component.IsDummy && unresolvedIds.Contains(component.Id);
-            // Unresolved choose-one groups carry an accent edge as well as a label.
-            if (required) using (Brush edge = new SolidBrush(Palette.Accent)) e.Graphics.FillRectangle(edge, 0, row.Y + Px(6), Px(3), row.Height - Px(12));
-            if (e.Node.Nodes.Count > 0)
+            // Unresolved choose-one groups carry an accent edge as well as a label. A row that only lights up has a grey
+            // edge that fades with it (the user, 13 Nov 2026: a light grey that blends in, not the orange; MainFormNeeds.cs).
+            if (required || flash) using (Brush edge = new SolidBrush(required ? Palette.Accent : FlashEdgeColor(rowColor))) e.Graphics.FillRectangle(edge, 0, row.Y + Px(6), Px(3), row.Height - Px(12));
+            // The user, 13 Nov 2026, over three rounds ("i preferred options and arrows being in line", "yes no indent", then
+            // "its fine for the options to be indented a bit but not the header options"): no level is indented
+            // (componentTree.Indent = 0), every arrow stands in one column at the left edge, and a tick box stands a little
+            // to its right. A group header has no tick box, so its name starts where the tick boxes start; the options
+            // under it then read as set in a bit. An option that has options under it has its arrow in that same left
+            // column, before its tick box (OptionTree.OnMouseDown expands on a click there); at the top of a mod it has
+            // none, the mod's name is the header above it (FillComponents, OptionNode.NoToggle).
+            if (e.Node.Nodes.Count > 0 && !e.Node.NoToggle)
                 Glyphs.Chevron(e.Graphics, new PointF(e.Bounds.X - Px(11), row.Y + row.Height / 2F), Px(4), e.Node.IsExpanded ? ChevronDirection.Down : ChevronDirection.Right, hovered ? Palette.Text : Palette.Muted, 1.6F * DeviceDpi / 96F);
+            // Where the name starts: after the tick box for an option, in the tick boxes' column for a group header.
+            int textX = component.IsDummy ? e.Bounds.X - Px(1) : x + Px(3);
             if (!component.IsDummy)
             {
                 ModComponent parent = e.Node.Parent == null ? null : e.Node.Parent.Tag as ModComponent;
@@ -1451,18 +1468,18 @@ namespace SlotsInstaller
             ModPackage shown = package;
             bool fromAddon = shown != null && LibraryAddons.IsAddonId(shown, component.Id);
             int addonTagWidth = fromAddon ? MeasuredWidth(AddonTag, Palette.Tiny) + Px(16) : 0;
-            int available = Math.Max(1, row.Width - x - Px(8) - (fromAddon ? addonTagWidth + Px(12) : 0));
+            int available = Math.Max(1, row.Width - (textX - Px(3)) - Px(8) - (fromAddon ? addonTagWidth + Px(12) : 0));
             int pillWidth = 0; string pill = component.InferredChoice ? "Choose an option" : "Required · choose one";
             if (required) pillWidth = MeasuredWidth(pill, Palette.Tiny) + Px(20);
             int nameWidth = required ? Math.Min(MeasuredWidth(name, nameFont), Math.Max(Px(40), available - pillWidth - Px(10))) : available;
             const string defaultTag = "  ·  Default";   // 1.0.4: what the mod installs when nothing in the group is picked (OptionOrder)
             if (component.IsDefaultChoice) nameWidth = Math.Min(MeasuredWidth(name, nameFont), Math.Max(Px(40), available - MeasuredWidth(defaultTag, nameFont)));
-            TextRenderer.DrawText(e.Graphics, name, nameFont, new Rectangle(x + Px(3), row.Y, nameWidth, row.Height), component.IsDummy ? (required ? Palette.Text : Palette.Muted) : Palette.Text, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(e.Graphics, name, nameFont, new Rectangle(textX, row.Y, nameWidth, row.Height), component.IsDummy ? (required ? Palette.Text : Palette.Muted) : Palette.Text, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter);
             if (component.IsDefaultChoice)
-                TextRenderer.DrawText(e.Graphics, defaultTag, nameFont, new Rectangle(x + Px(3) + nameWidth, row.Y, Math.Max(1, available - nameWidth), row.Height), Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(e.Graphics, defaultTag, nameFont, new Rectangle(textX + nameWidth, row.Y, Math.Max(1, available - nameWidth), row.Height), Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter);
             if (required)
             {
-                var badge = new Rectangle(x + Px(3) + nameWidth + Px(10), row.Y + (row.Height - Px(22)) / 2, pillWidth, Px(22));
+                var badge = new Rectangle(textX + nameWidth + Px(10), row.Y + (row.Height - Px(22)) / 2, pillWidth, Px(22));
                 Glyphs.FillRounded(e.Graphics, Color.FromArgb(64, 44, 27), badge, badge.Height / 2F);
                 TextRenderer.DrawText(e.Graphics, pill, Palette.Tiny, badge, Palette.Accent, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
@@ -1761,11 +1778,29 @@ namespace SlotsInstaller
             // rank, so they lead with no filter, with any filter and among equally relevant search results.
             // 2.4.1 sort chips (LibrarySort.cs): Installed (default ↓) keeps that relevance first; Added and Last used
             // replace it. Ties fall back to the name.
-            List<LibraryEntry> rows = SortLibraryRows(ranked);
-            // 1.0.18: the recipes that pass the search and the fighter filter are the first rows (RecipesForm.cs).
-            List<LibraryEntry> recipeRows = RecipeRows(fighters, kindsOn);
-            if (installedOn) recipeRows = recipeRows.Where(x => InstalledRecipe(x.Recipe).Any).ToList();   // "installed only" keeps the installed recipes
-            if (recipeRows.Count > 0) { rows = recipeRows.Concat(rows).ToList(); }
+            // 1.0.18: the recipes that pass the search and the fighter filter are rows of the list (RecipesForm.cs).
+            // 1.0.19 (the user: recipes "are always on top, and don't get superseded by more recent mods ... they should
+            // act like normal mods/slots that go down as they get older and superseded by newer mods or recipes"): they
+            // are sorted with the mods (Added: when the recipe was made; Last used: its last install; Installed: installed
+            // ones first), no longer in front of them. A search with a recipe word (rc, recipe, outfits) still lists
+            // them first, in the same order among themselves.
+            // What each recipe has installed is read once in this pass (the filter, the Installed sort, Last used).
+            recipeInstallPass = new Dictionary<OutfitRecipe, RecipeInstall>();
+            List<LibraryEntry> rows, recipeRows;
+            try
+            {
+                recipeRows = RecipeRows(fighters, kindsOn);
+                if (installedOn) recipeRows = recipeRows.Where(x => InstalledRecipe(x.Recipe).Any).ToList();   // "installed only" keeps the installed recipes
+                bool recipesFirst = recipeRows.Count > 0 && HasRecipeWord(search.Text);
+                if (!recipesFirst) foreach (LibraryEntry recipeRow in recipeRows) ranked.Add(new KeyValuePair<LibraryEntry, int>(recipeRow, LibrarySearch.Direct));
+                rows = SortLibraryRows(ranked);
+                // 1.0.19: a colour word in the search ("color pack", "cmd") lists the colour packs first, then the other mods
+                // with colour files, then the rest, each group in the order above (LibrarySearch.ColourRank). Before the
+                // recipes are put in front, so a recipe word still lists them first.
+                if (query.Colour != null) rows = rows.OrderBy(x => LibrarySearch.ColourRank(x)).ToList();
+                if (recipesFirst) rows = SortLibraryRows(recipeRows.Select(x => new KeyValuePair<LibraryEntry, int>(x, LibrarySearch.Direct)).ToList()).Concat(rows).ToList();
+            }
+            finally { recipeInstallPass = null; }
             bool sameRows = modList.Items.Count == rows.Count;
             for (int i = 0; sameRows && i < rows.Count; i++) sameRows = Object.ReferenceEquals(modList.Items[i].Tag, rows[i]);
             if (!sameRows) UpdateLibraryRows(rows);
@@ -2172,6 +2207,9 @@ namespace SlotsInstaller
             string costume = LibrarySearch.CostumeLabel(entry);
             if (searchRank == LibrarySearch.SharedParts) costume = "Shared parts (all outfits)";
             else if (searchRank == LibrarySearch.TitleOnly) costume = (costume.Length > 0 ? costume + " · " : "") + "title match";
+            // 1.0.19: a colour pack says so after its outfits ("C1, C2 · Colour pack").
+            string colours = LibrarySearch.ColourLabel(entry);
+            if (colours.Length > 0) costume = (costume.Length > 0 ? costume + " · " : "") + colours;
             if (costume.Length > 0) return costume;
             string tool = LibrarySearch.ToolLabel(entry);
             // 2.3.0: stage and Misc mods name what they touch ("Stage · Training Room", "UI · Sound").
@@ -2367,21 +2405,41 @@ namespace SlotsInstaller
                 componentNodes[c.Id] = node;
                 if (node.Checked) selectedOrder.Add(c.Id);
             }
+            var roots = new List<OptionNode>();
             foreach (ModComponent c in package.Components)
             {
                 OptionNode node = componentNodes[c.Id]; OptionNode parent;
                 if (c.ParentId != null && componentNodes.TryGetValue(c.ParentId, out parent) && !Object.ReferenceEquals(node, parent) && !WouldCycle(node, parent)) parent.Nodes.Add(node);
-                else componentTree.Nodes.Add(node);
+                else roots.Add(node);
             }
+            // The user, 13 Nov 2026, of a bundle whose first row was an option with files and with options under it (so a
+            // tick box with an arrow before it): "add the bundle name as the header in these cases, just so we don't
+            // have it so the options also has a arrow". When a top row is such an option, the mod's name stands above
+            // the list as a header of its own (not an option of the mod: ListHeaderId) and holds every top row; the
+            // option under it is drawn and clicked as a plain option (OptionNode.NoToggle), its options follow it, and
+            // the header's arrow folds them all.
+            Func<OptionNode, bool> ownOptions = r => !((ModComponent)r.Tag).IsDummy && r.Nodes.Count > 0;
+            if (roots.Any(ownOptions))
+            {
+                var header = new OptionNode(package.Name) { Tag = new ModComponent { Id = ListHeaderId, Name = package.Name, IsDummy = true } };
+                componentTree.Nodes.Add(header);
+                foreach (OptionNode root in roots) { header.Nodes.Add(root); root.NoToggle = ownOptions(root); }
+            }
+            else foreach (OptionNode root in roots) componentTree.Nodes.Add(root);
             selectedOrder.Clear(); selectedOrder.AddRange(defaults.Where(id => componentNodes.ContainsKey(id) && componentNodes[id].Checked).Select(id => ((ModComponent)componentNodes[id].Tag).Id).Distinct(StringComparer.OrdinalIgnoreCase));
             componentTree.EndUpdate();
             foreach (OptionNode root in componentTree.Nodes) root.Expand();
+            foreach (OptionNode root in roots) root.Expand();
             foreach (string id in selectedOrder) foreach (OptionNode ancestor in Ancestors(componentNodes[id])) ancestor.Expand();
-            changingChecks = false; UpdateSelectedCount(); UpdateRequiredChoices();
+            leftOut.Clear(); needs.Clear(); flashIds.Clear();   // 1.0.19: per opened mod (MainFormNeeds.cs)
+            changingChecks = false; UpdateSelectedCount(); UpdateRequiredChoices(true);
             componentTree.ShowNodeToolTips = false;
             // A new selection invalidates the last automatic review.
             plan = null; replacePlan = null; RequestReview(ReviewDelay);
         }
+
+        // The id of the header row FillComponents puts above the options of some mods: no option of any mod has it.
+        internal const string ListHeaderId = "\u0001list-header";
 
         private static bool WouldCycle(OptionNode node, OptionNode parent)
         {
@@ -2424,24 +2482,30 @@ namespace SlotsInstaller
             }
             else if (e.Node.Checked)
             {
+                // 1.0.19 (the user: "relax requirements ... install the mod anyways. this helps to mix and match
+                // options"): what an option names in Requirement= or the bundle marks Required is still ticked with it,
+                // except what the user unticked by hand (leftOut): that stays out, and the line under the picture says
+                // so (MainFormNeeds.cs). The option it sits under in the list always comes back with it, as before.
+                leftOut.Remove(component.Id);
                 EnforceBranchChoice(e.Node);
                 foreach (OptionNode ancestor in Ancestors(e.Node))
                 {
                     EnforceBranchChoice(ancestor);
                     ModComponent c = ancestor.Tag as ModComponent;
-                    if (c != null && !c.IsDummy && c.HasFiles(IsReplaceMode) && !ancestor.Checked) { ancestor.Checked = true; if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
+                    if (c != null && !c.IsDummy && c.HasFiles(IsReplaceMode) && !ancestor.Checked) { ancestor.Checked = true; leftOut.Remove(c.Id); if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
                 }
                 // 1.0.16: an addon option's Requirement=Main files ticks the main mod's option of that name.
                 // 1.0.18: and a Requirement= naming an option of the same archive ticks that option.
                 foreach (ModComponent need in LibraryAddons.IsAddonId(package, component.Id) ? LibraryAddons.Requirements(package, component) : package.RequiredOptions(component))
                     {
                         OptionNode required;
-                        if (need.HasFiles(IsReplaceMode) && componentNodes.TryGetValue(need.Id, out required) && !required.Checked) { required.Checked = true; if (!selectedOrder.Contains(need.Id)) selectedOrder.Insert(0, need.Id); }
+                        if (need.HasFiles(IsReplaceMode) && !leftOut.Contains(need.Id) && componentNodes.TryGetValue(need.Id, out required) && !required.Checked) { required.Checked = true; if (!selectedOrder.Contains(need.Id)) selectedOrder.Insert(0, need.Id); }
                     }
                 selectedOrder.Remove(component.Id); selectedOrder.Add(component.Id);
             }
             else
             {
+                leftOut.Add(component.Id);
                 selectedOrder.Remove(component.Id);
                 foreach (OptionNode child in Descendants(e.Node))
                 {
@@ -2450,7 +2514,7 @@ namespace SlotsInstaller
                 }
             }
             if (package.HasBundleLayout)
-                foreach (var needed in Composer.RequiredForSelection(package,selectedOrder,IsReplaceMode))
+                foreach (var needed in Composer.RequiredForSelection(package,selectedOrder,IsReplaceMode,leftOut))
                 {
                     componentNodes[needed.Id].Checked=true;
                     selectedOrder.Add(needed.Id);
@@ -2740,10 +2804,13 @@ namespace SlotsInstaller
         }
 
         // ---- Required choices and the footer -----------------------------------
-        private void UpdateRequiredChoices()
+        private void UpdateRequiredChoices(bool fill = false)
         {
             unresolvedChoices = package == null ? new List<ModComponent>() : Composer.UnresolvedChoiceGroups(package, selectedOrder, IsReplaceMode);
             unresolvedIds.Clear(); foreach (ModComponent group in unresolvedChoices) unresolvedIds.Add(group.Id);
+            // 1.0.19: with something ticked, an empty required group is a note under the picture, not a stop.
+            choicesBlock = unresolvedChoices.Count > 0 && !selectedOrder.Any(id => { ModComponent c = package.Find(id); return c != null && !c.IsDummy && c.HasFiles(IsReplaceMode); });
+            UpdateNeeds(fill);
             componentTree.Invalidate();
             UpdateFooter();
         }
@@ -2790,7 +2857,7 @@ namespace SlotsInstaller
                 planDetails.Text = "Click Health to check the remaining selection.";
                 tip = "Missing saved options: " + String.Join(", ", missingRestoredOptions);
             }
-            else if (unresolvedChoices.Count > 0)
+            else if (choicesBlock)   // 1.0.19: only while nothing is ticked; with a selection an empty group is a note (MainFormNeeds.cs)
             {
                 planSummary.Text = RequiredChoiceSummary(); planSummary.ForeColor = Palette.Accent;
                 planDetails.Text = unresolvedChoices.All(g => g.InferredChoice) ? "Select an option to install · click to choose" : "Required before Install · click to jump to the first choice" + (plan != null && plan.Errors.Count > 0 ? " · " + plan.Errors.Count + " required changes" : "");
@@ -2818,9 +2885,9 @@ namespace SlotsInstaller
                 planSummary.Text = "Ready to install · " + ReplacePlanner.N(plan.Files.Count, "file"); planSummary.ForeColor = Palette.Green;
                 bool named = targetCharacter.SelectedIndex >= 0 && !String.IsNullOrWhiteSpace(outfitName.Text);
                 InstalledOutfit duplicate = DuplicateExtraOutfit();
-                planDetails.Text = !named ? "Choose a character and outfit name to install." : duplicate != null ? DuplicateText(duplicate) + (String.Equals(duplicate.Name, outfitName.Text.Trim(), StringComparison.OrdinalIgnoreCase) ? " · Install updates it" : " · installing again adds another extra outfit") : (plan.MissingMains.Count > 0 ? "Main files not selected · " : Utilities.FriendlyBytes(plan.TotalBytes) + " · " + plan.Overrides.Count + " overrides · ") + (plan.Warnings.Count > 0 ? "View notes" : "Selection reviewed");
-                // Main files guessed from a name no longer block Install, so leaving them out is said where it is seen.
-                if (named && (duplicate != null || plan.MissingMains.Count > 0)) detailColor = Palette.Accent;
+                planDetails.Text = !named ? "Choose a character and outfit name to install." : duplicate != null ? DuplicateText(duplicate) + (String.Equals(duplicate.Name, outfitName.Text.Trim(), StringComparison.OrdinalIgnoreCase) ? " · Install updates it" : " · installing again adds another extra outfit") : (needs.Count > 0 ? NeedsText() + " · " : Utilities.FriendlyBytes(plan.TotalBytes) + " · " + plan.Overrides.Count + " overrides · ") + (plan.Warnings.Count > 0 ? "View notes" : "Selection reviewed");
+                // What the ticks leave out no longer blocks Install (1.0.19), so it is said where it is seen.
+                if (named && (duplicate != null || needs.Count > 0)) detailColor = Palette.Accent;
                 tip = String.Join(Environment.NewLine, (duplicate == null ? new string[0] : new[] { DuplicateText(duplicate) + "." }).Concat(plan.Warnings).Concat(plan.Overrides.Select(o => o.Path + ": " + o.Previous + " → " + o.Winner)));
             }
             planDetails.ForeColor = detailColor;
@@ -2933,6 +3000,7 @@ namespace SlotsInstaller
             var ticked = split == null ? new List<KeyValuePair<AddonPart, List<string>>>() : split.Ticked.ToList();
             List<CompositionPlan> addParts = ticked.Select(p => Installer.SelectionFiles(p.Key.Package, p.Value)).ToList();
             string added = String.Concat(ticked.Select((p, i) => " · added " + Installer.OptionText(addParts[i]) + " from " + p.Key.RecordName));
+            FlashNeedsAtInstall();   // 13 Nov 2026: what the ticks leave out lights up now, and only now (MainFormNeeds.cs)
             Work("Installing extra outfit…", delegate
             {
                 InstallResult installedOutfit = Installer.Install(current, root, character, name, sevenZip, replace, addonSources, addParts);
@@ -3151,7 +3219,7 @@ namespace SlotsInstaller
             editInstalledButton.Visible = toggleInstalledButton.Visible = outfit != null && outfit.Managed;removeInstalledButton.Visible=selected.Count>0;
             reinstallButton.Visible = outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath); reinstallButton.Enabled = !busy;
             removePartButton.Visible = InstalledActionShown(removePartButton); removePartButton.Enabled = !busy;   // 1.0.18
-            loadOrderButton.Visible = InstalledActionShown(loadOrderButton); loadOrderButton.Enabled = !busy;
+            loadOrderButton.Visible = !LoaderFlags.SuiteLoaderInstalled && InstalledActionShown(loadOrderButton); loadOrderButton.Enabled = !busy;   // 1.0.19: not on a suite-line loader (LoaderFlags.cs)
             removeInstalledButton.Text=selected.Count>1 ? "Uninstall selection" : "Uninstall outfit";
             if (outfit != null) toggleInstalledButton.Text = outfit.Enabled ? "Health" : "Enable outfit";
             disableInstalledButton.Visible = outfit != null && outfit.Managed && outfit.Enabled && selected.Count == 1; disableInstalledButton.Enabled = !busy; disableInstalledButton.Text = "Disable outfit";
@@ -3963,6 +4031,7 @@ namespace SlotsInstaller
                         UpdateBanner();
                     }
                     else if (String.Equals(screenshotPage, "merged", StringComparison.OrdinalIgnoreCase)) { ShowDetailTab(true); }
+                    else if (String.Equals(screenshotPage, "needs", StringComparison.OrdinalIgnoreCase)) ShowNeedsForScreenshot();   // 1.0.19 (MainFormNeeds.cs)
                     else if (screenshotPage != null && screenshotPage.StartsWith("search=", StringComparison.OrdinalIgnoreCase)) { search.Text = screenshotPage.Substring(7); FlushLibraryFilter(); ApplyFilters(); if (modList.Items.Count > 0) modList.EnsureVisible(0); }
                     else if (String.Equals(screenshotPage, "settings", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); if (settingsLibraries.Items.Count > 0) settingsLibraries.SelectedIndex = 0; }
                     else if (String.Equals(screenshotPage, "about", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); ShowAboutTab(); }   // 1.0.11
@@ -3980,6 +4049,8 @@ namespace SlotsInstaller
                     }
                     else if (String.Equals(screenshotPage, "settings-replace", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); ShowSettingsTab(true); }
                     else if (String.Equals(screenshotPage, "settings-about", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); ShowAboutTab(); }
+                    else if (String.Equals(screenshotPage, "settings-updates", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); ShowLoaderTab(); }   // 1.0.19; 13 Nov 2026: the update settings are on the Slotsloader tab
+                    else if (String.Equals(screenshotPage, "settings-loader", StringComparison.OrdinalIgnoreCase)) { ShowPage(settingsPage); LoadSettingsFields(); ShowLoaderTab(); }   // 13 Nov 2026
                     else if (String.Equals(screenshotPage, "assistant", StringComparison.OrdinalIgnoreCase)) ShowPage(EnsureAssistantPage());
                     else if (String.Equals(screenshotPage, "installed-conflicts", StringComparison.OrdinalIgnoreCase))
                     {

@@ -462,9 +462,15 @@ namespace SlotsInstaller
                     UpdateCheck.ApiUrl = server.Base + "/missing"; asked.Clear();
                     runs = form.UpdateChecksRun; form.RunUpdateCheck(false); wait(() => form.UpdateChecksRun > runs, "the 404 check");
                     Require(asked.Count == 0 && File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("Update check: HTTP 404"), "a 404 must be silent and logged");
-                    // Settings → Updates: the 404 reason, then (with no newer release) one line "Up to date · Slotsloader 1.9.8 · Manager 2.4.0".
+                    // Settings → Slotsloader, upper section (13 Nov 2026, the user: the update settings have no tab of their own; they
+                    // stand above the Slotsloader options): the 404 reason, then (with no newer release) one line
+                    // "Up to date · Slotsloader 1.9.8 · Manager 2.4.0".
                     typeof(MainForm).GetMethod("ShowPage", Any).Invoke(form, new object[] { typeof(MainForm).GetField("settingsPage", Any).GetValue(form) });
-                    typeof(MainForm).GetMethod("ShowUpdatesTab", Any).Invoke(form, null); Application.DoEvents();
+                    FlatButton loaderTab = (FlatButton)typeof(MainForm).GetField("settingsLoaderTab", Any).GetValue(form);
+                    Panel loaderPanel = (Panel)typeof(MainForm).GetField("settingsLoaderPanel", Any).GetValue(form);
+                    loaderTab.PerformClick(); Application.DoEvents();
+                    Require(loaderTab.Text == "Slotsloader" && loaderTab.Active && loaderPanel.Visible && typeof(MainForm).GetField("settingsUpdatesTab", Any) == null && typeof(MainForm).GetField("settingsUpdatesPanel", Any) == null
+                        && !AllControls(form).OfType<FlatButton>().Any(b => b.Text == "Updates"), "the Slotsloader tab must open its page, and there must be no Updates tab");
                     runs = form.UpdateChecksRun; form.RunUpdateCheck(true); wait(() => form.UpdateChecksRun > runs, "the manual 404 check");
                     Require(form.LastUpdateMessage.StartsWith("Couldn't check for updates: HTTP 404"), "manual 404: " + form.LastUpdateMessage);
                     UpdateCheck.ApiUrl = server.Base + "/releases";
@@ -476,13 +482,111 @@ namespace SlotsInstaller
                     Label skipped = (Label)typeof(MainForm).GetField("settingsUpdateSkipped", Any).GetValue(form);
                     Require(result.Text == upToDate && result.Visible && skipped.Text == "Skipped loader-v2.0.0: no checksum" && skipped.ForeColor == Palette.Muted, "the Settings result: " + result.Text + " / " + skipped.Text);
                     Require(File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("refused loader-v2.0.0: SF6_SlotsLoader_v2.0.0.zip has no SHA-256 digest"), "the full reason of a skipped release belongs in the log");
-                    // 2.4.0 copy and spacing: no heading in the tab, "Check now" is a normal button, a clear gap before the one-line result.
+                    // Copy and spacing: a caption names the section, "Check now" is a normal button in the row of the two boxes, a clear
+                    // gap before the one-line result.
                     FlatButton checkNow = (FlatButton)typeof(MainForm).GetField("settingsCheckUpdates", Any).GetValue(form);
                     int gap = result.PointToScreen(Point.Empty).Y - checkNow.PointToScreen(new Point(0, checkNow.Height)).Y;
                     Require(checkNow.Text == "Check now" && !checkNow.Primary && gap >= DpiMetrics.Px(form, 12) && ((NoteLabel)result).LineCount == 1, "Check now button and result spacing: gap " + gap + " px, result lines " + ((NoteLabel)result).LineCount);
-                    Panel updatesPanel = (Panel)typeof(MainForm).GetField("settingsUpdatesPanel", Any).GetValue(form);
-                    Require(!AllControls(updatesPanel).OfType<Label>().Any(l => l.Text == "Updates"), "the Updates tab must not repeat its name as a heading");
+                    CheckBox autoUpdate = (CheckBox)typeof(MainForm).GetField("settingsAutoUpdate", Any).GetValue(form), prereleases = (CheckBox)typeof(MainForm).GetField("settingsPrereleases", Any).GetValue(form);
+                    Require(autoUpdate.Visible && prereleases.Visible && autoUpdate.Top == prereleases.Top && autoUpdate.Left < prereleases.Left && prereleases.Right <= checkNow.Left
+                        && autoUpdate.Width >= autoUpdate.PreferredSize.Width && prereleases.Width >= prereleases.PreferredSize.Width && AllControls(loaderPanel).OfType<Label>().Count(l => l.Text == "UPDATES") == 1,
+                        "the two update boxes and Check now stand in one row under the UPDATES caption, their words whole: " + autoUpdate.Bounds + " " + prereleases.Bounds + " " + checkNow.Bounds);
                     Render(form, Path.Combine(root, "settings-updates-up-to-date.png"));
+                    // 1.0.19: the in-game menus switches (LoaderFlags.cs). The fixture's Slotsloader (1.9.8) adds no menus: the boxes
+                    // are shown unticked and not offered, and a choice is saved the moment a box changes. The update check inside
+                    // the game is not offered at all (the user: not even as an option).
+                    // One box per addition since the split (the user: "so i can pick and choose"), in LoaderMenu.All's order.
+                    CheckBox[] gameMenus = (CheckBox[])typeof(MainForm).GetField("settingsGameMenus", Any).GetValue(form);
+                    Label gameNote = (Label)typeof(MainForm).GetField("settingsGameNote", Any).GetValue(form);
+                    Func<string> chosen = delegate { LoaderFlagChoices c = LoaderFlags.Load(AppConfig.DataDir); return String.Concat(LoaderMenu.All.Select(m => m.Get(c) ? "1" : "0")); };
+                    Require(typeof(MainForm).GetField("settingsGameUpdates", Any) == null && !AllControls(loaderPanel).OfType<CheckBox>().Any(c => c.Text.IndexOf("inside the game", StringComparison.OrdinalIgnoreCase) >= 0),
+                        "the update check inside the game must not be an option");
+                    Require(gameMenus.Length == LoaderMenu.All.Length && gameMenus.Select((b, i) => b.Text == LoaderMenu.All[i].Label).All(same => same)
+                        && !AllControls(loaderPanel).OfType<CheckBox>().Any(c => c.Text.IndexOf("Show the menus", StringComparison.OrdinalIgnoreCase) >= 0), "one box per addition, no single switch for all of them");
+                    Require(gameMenus.All(b => b.Visible && !b.Checked && !b.AutoCheck) && gameNote.Text == "The installed Slotsloader adds no menus.", "in-game switches with a Slotsloader that adds no menus: " + gameNote.Text);
+                    // Not offered is muted text that stays readable, never a disabled control (Windows' own dark grey on this background).
+                    Require(gameMenus.All(b => b.Enabled && b.ForeColor == Palette.Muted && !b.TabStop), "a switch not offered must be muted, not disabled");
+                    typeof(CheckBox).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(gameMenus[0], new object[] { EventArgs.Empty }); Application.DoEvents();   // a click, without touching the keyboard or the mouse
+                    Require(!gameMenus[0].Checked && chosen() == "0000000", "a box that is not offered must not tick");
+                    int noteTop = gameNote.PointToScreen(Point.Empty).Y;
+                    Require(gameMenus.All(b => b.PointToScreen(new Point(0, b.Height)).Y <= noteTop && b.Height >= b.PreferredSize.Height - DpiMetrics.Px(form, 2) && b.Width >= b.PreferredSize.Width)
+                        && gameNote.PointToScreen(new Point(0, gameNote.Height)).Y <= loaderPanel.PointToScreen(new Point(0, loaderPanel.Height)).Y,
+                        "the in-game switches must show their words whole and fit the tab with their note: " + String.Join(", ", gameMenus.Select(b => b.Width + "x" + b.Height + " for " + b.PreferredSize.Width + "x" + b.PreferredSize.Height)));
+                    Require(gameMenus.Select(b => b.Bounds).Distinct().Count() == gameMenus.Length && gameMenus[0].Top == gameMenus[1].Top && gameMenus[0].Left < gameMenus[1].Left && gameMenus[2].Top > gameMenus[0].Top, "the switches stand in two columns, none over another");
+                    // The update settings stand above the options, with a clear gap before the options' caption (the user: "so
+                    // the ... options have some breathing space and don't immediately start on the tab").
+                    Control privacy = AllControls(loaderPanel).First(c => c.Name == "settingsUpdatePrivacy"), gameCaption = AllControls(loaderPanel).First(c => c.Name == "settingsGameCaption");
+                    int breathing = gameCaption.PointToScreen(Point.Empty).Y - privacy.PointToScreen(new Point(0, privacy.Height)).Y;
+                    Require(privacy.Visible && breathing >= DpiMetrics.Px(form, 16) && gameCaption.PointToScreen(Point.Empty).Y - loaderPanel.PointToScreen(Point.Empty).Y >= DpiMetrics.Px(form, 100),
+                        "the options must start under the update settings, after a gap: " + breathing + " px");
+                    // 13 Nov 2026: "Outfit Others See" as two choices under the boxes. With a Slotsloader that does not read it:
+                    // muted, neither marked, and a click takes nothing.
+                    RadioButton[] othersSee = (RadioButton[])typeof(MainForm).GetField("settingsOthersSee", Any).GetValue(form);
+                    Require(othersSee.Length == 2 && othersSee[0].Text == "Outfit 1" && othersSee[1].Text == "DriveTech" && othersSee.All(r => r.Visible && r.Enabled && !r.Checked && !r.AutoCheck && r.ForeColor == Palette.Muted),
+                        "the outfit others see, not offered: " + String.Join(", ", othersSee.Select(r => r.Text + " " + r.Checked + "/" + r.AutoCheck)));
+                    int menusBottom = gameMenus.Max(b => b.PointToScreen(new Point(0, b.Height)).Y);
+                    Require(othersSee[0].Top == othersSee[1].Top && othersSee[0].Left < othersSee[1].Left && othersSee[0].PointToScreen(Point.Empty).X == gameMenus[0].PointToScreen(Point.Empty).X
+                        && othersSee.All(r => r.PointToScreen(Point.Empty).Y >= menusBottom && r.PointToScreen(new Point(0, r.Height)).Y <= noteTop && r.Width >= r.PreferredSize.Width && r.Height >= r.PreferredSize.Height - DpiMetrics.Px(form, 2)),
+                        "the two choices stand under the boxes, side by side, above the note, their words whole");
+                    typeof(RadioButton).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(othersSee[1], new object[] { EventArgs.Empty }); Application.DoEvents();
+                    Require(!othersSee[1].Checked && LoaderFlags.Load(AppConfig.DataDir).OthersSeePending == null, "a choice that is not offered must not be taken");
+                    // The picture, name and words of one option beside the list (the user: "help users learn what is what"): the
+                    // first option when the tab opens, then the one the pointer or the keyboard is on.
+                    LoaderPreviewPanel preview = (LoaderPreviewPanel)typeof(MainForm).GetField("settingsLoaderPreview", Any).GetValue(form);
+                    Rectangle picture = preview.PictureBounds;
+                    Require(preview.Visible && preview.OptionId == LoaderMenu.All[0].Id && preview.Title == LoaderMenu.All[0].Label && preview.About == LoaderMenu.All[0].About, "the first option is shown when the tab opens: " + preview.OptionId);
+                    Require(preview.PointToScreen(Point.Empty).X >= gameMenus[1].PointToScreen(new Point(gameMenus[1].Width, 0)).X && picture.Width >= DpiMetrics.Px(form, 120) && picture.Height == picture.Width * 9 / 16
+                        && picture.Right <= preview.ClientSize.Width && picture.Bottom + DpiMetrics.Px(form, 60) <= preview.ClientSize.Height && preview.BackColor != Palette.Background,
+                        "the picture stands beside the options, 16:9, inside its panel with room for its words: " + picture + " in " + preview.ClientSize);
+                    // The whole tab fits the smallest window the app allows (1110 x 650): the note under the options and the
+                    // picture with its words.
+                    Size usual = form.Size;
+                    form.Size = new Size(DpiMetrics.Px(form, 1110), DpiMetrics.Px(form, 650)); Application.DoEvents();
+                    Rectangle small = preview.PictureBounds;
+                    Require(gameNote.PointToScreen(new Point(0, gameNote.Height)).Y <= loaderPanel.PointToScreen(new Point(0, loaderPanel.Height)).Y && small.Width >= DpiMetrics.Px(form, 240)
+                        && small.Bottom + DpiMetrics.Px(form, 60) <= preview.ClientSize.Height && small.Right <= preview.ClientSize.Width,
+                        "the tab must fit the smallest window: note bottom " + gameNote.PointToScreen(new Point(0, gameNote.Height)).Y + " in " + loaderPanel.PointToScreen(new Point(0, loaderPanel.Height)).Y + ", picture " + small + " in " + preview.ClientSize);
+                    form.Size = usual; Application.DoEvents();
+                    typeof(Control).GetMethod("OnMouseEnter", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(gameMenus[3], new object[] { EventArgs.Empty });
+                    Require(preview.OptionId == LoaderMenu.All[3].Id && preview.Title == LoaderMenu.All[3].Label && preview.About == LoaderMenu.All[3].About, "the pointer on an option shows that option: " + preview.OptionId);
+                    typeof(Control).GetMethod("OnEnter", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(othersSee[0], new object[] { EventArgs.Empty });
+                    Require(preview.OptionId == LoaderMenu.OthersSeeId && preview.Title == LoaderMenu.OthersSeeLabel && preview.About == LoaderMenu.OthersSeeAbout, "the keyboard on a choice shows that choice: " + preview.OptionId);
+                    Require(LoaderMenu.All.All(m => m.About.Length > 20 && m.About.EndsWith(".") && m.About.IndexOf('—') < 0) && LoaderMenu.All.Select(m => m.About).Distinct().Count() == LoaderMenu.All.Length
+                        && gameMenus.Select((b, i) => b.AccessibleDescription == LoaderMenu.All[i].About).All(same => same), "every addition says what it is, to a screen reader too");
+                    gameMenus[2].Checked = true; Application.DoEvents();
+                    Require(chosen() == "0010000" && gameMenus[2].Checked && gameMenus.Count(b => b.Checked) == 1 && LoaderFlags.Load(AppConfig.DataDir).OutfitOptions == null, "ticking one box saves that choice alone, and does not choose the costume options: " + chosen());
+                    gameMenus[5].Checked = true; gameMenus[2].Checked = false; Application.DoEvents();
+                    Require(chosen() == "0000010" && gameMenus.Count(b => b.Checked) == 1, "each box is its own choice: " + chosen());
+                    gameMenus[5].Checked = false; Application.DoEvents();
+                    Require(chosen() == "0000000" && !File.Exists(Path.Combine(engine.GameRoot, LoaderFlags.UpdateStateRelative)) && !File.Exists(Path.Combine(engine.GameRoot, LoaderFlags.PluginSettingsRelative)),
+                        "unticked again, and with a Slotsloader that reads none of this nothing is written to the game folder");
+                    // 13 Nov 2026: the seventh switch, the in-game costume options, second in the list. Never chosen here, its box
+                    // shows what the game folder holds (the user's game had "menu_outfit_options": true set by hand): ticked for
+                    // true, and ticking another box does not make it a choice. Its own box does.
+                    CheckBox optionsBox = gameMenus[1];
+                    string pluginSettings = Path.Combine(engine.GameRoot, LoaderFlags.PluginSettingsRelative);
+                    Require(LoaderMenu.All[1].Id == "options" && optionsBox.Text == "Costume options in the game" && !optionsBox.Checked && LoaderFlags.Load(AppConfig.DataDir).OutfitOptions == null,
+                        "the costume options box stands second and starts not chosen: " + optionsBox.Text);
+                    var madeFolders = new List<string>();
+                    for (string dir = Path.GetDirectoryName(pluginSettings); !Directory.Exists(dir); dir = Path.GetDirectoryName(dir)) madeFolders.Add(dir);
+                    Directory.CreateDirectory(Path.GetDirectoryName(pluginSettings));
+                    File.WriteAllText(pluginSettings, "{\n  \"menu_outfit_options\": true,\n  \"display_nsfw\": false\n}\n");
+                    typeof(MainForm).GetMethod("LoadLoaderFlagFields", Any).Invoke(form, null);
+                    Require(optionsBox.Checked && gameMenus.Count(b => b.Checked) == 1 && LoaderFlags.Load(AppConfig.DataDir).OutfitOptions == null, "true in the game folder must show the costume options ticked without making it a choice");
+                    gameMenus[4].Checked = true; Application.DoEvents();
+                    Require(optionsBox.Checked && gameMenus[4].Checked && LoaderFlags.Load(AppConfig.DataDir).OutfitOptions == null && LoaderFlags.Read(pluginSettings, "menu_outfit_options") == true,
+                        "another box ticked: the costume options stay not chosen and the game's true stays");
+                    gameMenus[4].Checked = false; Application.DoEvents();
+                    optionsBox.Checked = false; Application.DoEvents();
+                    Require(!optionsBox.Checked && LoaderFlags.Load(AppConfig.DataDir).OutfitOptions == false && LoaderFlags.Read(pluginSettings, "menu_outfit_options") == true,
+                        "its own box unticked: a choice now (off); with a Slotsloader that reads none of this the game folder is not written");
+                    optionsBox.Checked = true; Application.DoEvents();
+                    Require(optionsBox.Checked && LoaderFlags.Load(AppConfig.DataDir).OutfitOptions == true && chosen() == "0100000", "its own box ticked: chosen on: " + chosen());
+                    optionsBox.Checked = false; Application.DoEvents();
+                    File.Delete(pluginSettings);
+                    foreach (string dir in madeFolders) if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
+                    Require(chosen() == "0000000" && !File.Exists(pluginSettings), "the costume options check must leave the fixture as it found it");
+                    Render(form, Path.Combine(root, "settings-loader-not-offered.png"));
                     Publish(server, catalogue());
                     form.Close();
                 }
