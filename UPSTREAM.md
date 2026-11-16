@@ -6,7 +6,7 @@ Since 14 Nov 2026 the Slots Loader here is the one of the SF6 Mod Suite line, co
 
 ## Copied from
 
-Synced to: `c1b87912c74ef5ad9d68a6a2510c367834ff8fc4` (release `v1.37.0`).
+Synced to: `633a934d566f755c5b7da4e642ae92c2ef635da1` (release `v1.38.0`).
 
 The paths in [.github/upstream-paths.txt](.github/upstream-paths.txt) are byte for byte that commit:
 
