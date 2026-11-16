@@ -1,0 +1,79 @@
+name: Sync with the SF6 Mod Suite
+
+# Opens a pull request when Wael3rd/SF6-ModSuite publishes a release: the Slots Loader source
+# (.github/upstream-paths.txt) and dependencies.json move to it. Merging the pull request is the
+# approval; nothing reaches the Manager before that. See UPSTREAM.md.
+#
+# Needs, once, in the repository settings: Actions > General > Workflow permissions >
+# "Allow GitHub Actions to create and approve pull requests".
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Suite release tag (empty = the latest), e.g. v1.37.0. An older tag goes back to it."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-suite
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Copy the release and update dependencies.json
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          args=(--out "$RUNNER_TEMP/sync")
+          if [ -n "$RELEASE" ]; then args+=(--release "$RELEASE" --allow-older); else args+=(--scheduled); fi
+          python3 .github/scripts/sync_suite.py "${args[@]}"
+
+      - name: Open the pull request
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.sync.outputs.branch }}
+        run: |
+          title=$(cat "$RUNNER_TEMP/sync/title.txt")
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            known=$(gh pr list --head "$BRANCH" --state all --limit 1 --json url --jq '.[0].url // ""')
+            if [ -n "$known" ]; then
+              echo "This exact sync already has a pull request: $known. Nothing done."
+              exit 0
+            fi
+            echo "The branch $BRANCH exists without a pull request: opening one from it."
+          else
+            git config user.name "ZZtaii"
+            git config user.email "41491341+ZZtaii@users.noreply.github.com"
+            git switch -c "$BRANCH"
+            git commit -q -m "$title" -m "$(cat "$RUNNER_TEMP/sync/body.md")"
+            git push -q origin "$BRANCH"
+          fi
+          url=$(gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/sync/body.md")
+          echo "Opened $url"
+          # Each pull request is a full copy of one release, so an older one still open is no longer needed.
+          gh pr list --state open --limit 200 --json number,headRefName,isCrossRepository |
+            jq -r --arg b "$BRANCH" '.[] | select(.isCrossRepository == false and (.headRefName | startswith("suite-sync/")) and .headRefName != $b) | .number' |
+          while read -r n; do
+            gh pr close "$n" --delete-branch --comment "Replaced by $url: each sync pull request is a full copy of its release, so only the newest one is kept open." || true
+          done

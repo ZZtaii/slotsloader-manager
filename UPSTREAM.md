@@ -6,7 +6,9 @@ Since 14 Nov 2026 the Slots Loader here is the one of the SF6 Mod Suite line, co
 
 ## Copied from
 
-Wael3rd/SF6-ModSuite `main` at `38a51b8` (after v1.36.0). The paths below are byte for byte that commit:
+Synced to: `c1b87912c74ef5ad9d68a6a2510c367834ff8fc4` (release `v1.37.0`).
+
+The paths in [.github/upstream-paths.txt](.github/upstream-paths.txt) are byte for byte that commit:
 
 - the Slots Loader: `costumes/`, `plugin/`, `common/`, `proxy/`, `stages/`, `updater/`, `tools/`, `packaging/`,
   `build.bat`, `TESTING.md`, `THIRD_PARTY.md`;
@@ -23,10 +25,17 @@ It includes the Manager-mode work merged there from this side (pull requests #3,
 - `core/src/`, `colormod/src/`: the Native Core and the Color Mod, which hold LL's REFramework helpers
   (`ll_common.hpp`), used and redistributed by Wael with LL's permission. They are installed from Wael's own zips.
 - `report_mod/` (Report a bug): it is built with much of the Recording Manager's code (`crsm/src`: Steam ticket,
-  community HTTP). The Manager's loader package leaves Report a bug out, and Manager mode keeps it off.
+  community HTTP). It ships inside the official Slots Loader zip, and Manager mode keeps it off.
 - `crsm/`, `profile_mod/`, `custom_combos/`: other modules of the suite, not part of the Slots Loader.
 - His `README.md`, `CHANGELOG.md`, `COMPATIBILITY.md`, `LICENSE`, `.gitignore`: this repository keeps its own (the
   Manager's Assistant reads `README.md` and `COMPATIBILITY.md` here; `LICENSE` here is MIT, Wael and ZZtaii).
+
+## What the Manager installs
+
+The Manager installs the official zips from the suite's releases, unchanged. [dependencies.json](dependencies.json)
+names the approved version of each, its release, file name, size and SHA-256. The Manager reads that file from this
+repository's `main` branch, downloads the file from the suite's release page and refuses it unless size and SHA-256
+match. A new version reaches users only once this file names it.
 
 ## Building
 
@@ -36,5 +45,17 @@ Manager).
 
 ## Syncing
 
-Copy the same paths from a newer commit of Wael3rd/SF6-ModSuite, check each path's tree hash against that commit,
-and name the commit in the message ("Slots Loader: sync to Wael3rd/SF6-ModSuite <commit>").
+The workflow [Sync with the SF6 Mod Suite](.github/workflows/sync-suite.yml) runs every day and on demand
+(Actions, **Run workflow**, optionally with a release tag such as `v1.37.0`; an older tag goes back to it). When the
+suite has a new release it opens a pull request that copies the paths above from that release's commit, checks each
+path's tree hash, updates `dependencies.json` and the "Synced to" line above. Merging the pull request after testing
+is the approval. Each pull request is a full copy of one release, so skipping releases is fine: a newer pull request
+closes the older open ones. When a file name already approved shows another SHA-256 upstream (a zip re-uploaded under
+the same name), the pull request is titled "Re-uploaded" and says to compare the files before merging; until then
+Managers refuse the new file. An older release or package is only taken when asked for by tag on **Run workflow**.
+
+The repository needs, once: Settings, Actions, General, Workflow permissions, "Allow GitHub Actions to create and
+approve pull requests".
+
+By hand, from the repository root: `python .github/scripts/sync_suite.py [--release vX.Y.Z] [--allow-older]`, then
+review `git diff --cached` and commit.
