@@ -152,6 +152,9 @@ CORE_README = CRLF.join([
     "(Windows 11 sometimes ignored the game's request: sessions stuck at 45 fps); it checks this every second and asks",
     "again when needed. An empty reframework/data/sf6core/timer_off.txt turns this off.",
     "",
+    "AFTER A CRASH: reframework/data/sf6core/SF6_CrashReport.bat (double-click it BEFORE starting the game again) gathers",
+    "the crash files into one zip and offers to send the report to the mods' team. Nothing is sent before you say yes.",
+    "",
     "It also adds the OVERDRIVE EDITION line under the logo of the title screen. Its position and size are in",
     "reframework/data/sf6core/title.ini, made at the first launch and read when the game starts (pos_x and pos_y from 0 to 1, font_size).",
     "",
@@ -286,7 +289,9 @@ CC_PRIVATE = re.compile(rb"[A-Za-z]:[\\/]|\\\\\\\\|[\\/]Users[\\/]|://|127\.0\.0
 
 # A shipped trial: an import (source "sf6cm:<id>"), never a recording, with only the keys an import holds.
 CC_TRIAL_KEYS = {"schema", "character", "fighter_id", "control", "gauges", "steps", "start", "demo", "end_delay", "source",
-                 "author", "notes", "title", "level", "order", "dummy_counter", "dummy"}
+                 "author", "notes", "title", "level", "order", "dummy_counter", "dummy", "recipe", "unique"}
+# "unique": the fighter's own gauge at the trial's start (Ryu's Denjin Charge on: { "type": 1, "timer": 1 }), a setting
+# the DLL reads like "gauges"; an import carries it when its combo was recorded with that state.
 
 def cc_trial_check(rel, j, fighters):
     """the reason a file of <Fighter>/ may not ship, or None"""
@@ -297,6 +302,8 @@ def cc_trial_check(rel, j, fighters):
         return "names another fighter than its folder"
     if j.get("recorded") or not re.fullmatch(r"sf6cm:[0-9a-f]{8,64}", str(j.get("source") or "")):
         return "is no import (a recording or a trial of the owner's does not ship)"
+    if "unique" in j and not (isinstance(j["unique"], dict) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in j["unique"].values())):
+        return "has a \"unique\" setting that is not a set of numbers"
     extra = set(j) - CC_TRIAL_KEYS
     if extra:
         return "holds keys an import does not have: " + ", ".join(sorted(extra)[:6])
@@ -304,6 +311,14 @@ def cc_trial_check(rel, j, fighters):
         return "has no steps or no example"
     if j.get("level") not in (0, 1, 2) or j.get("control") not in ("classic", "modern"):
         return "has no level or control type the lists know"
+    # "recipe": the fighters' start values the DLL writes on the mission (apply_recipe_raw): { "teams": [ {name: number} ] }
+    if "recipe" in j:
+        r = j["recipe"]
+        teams = r.get("teams") if isinstance(r, dict) and set(r) == {"teams"} else None
+        if not isinstance(teams, list) or not 1 <= len(teams) <= 2 or not all(
+                isinstance(t, dict) and all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) for k, v in t.items())
+                for t in teams):
+            return "has a recipe that is not { teams: [ { name: number } ] }"
     return None
 
 def cc_data():
@@ -553,7 +568,11 @@ def main():
     write_zip(core_zip,
               "name=SF6 Native Core\nversion=%s\ndescription=Shared native-UI core of the SF6 mods (SF6 Color Mod and SF6 Recording Manager need it). Changes nothing on its own.\nauthor=Wael\nNameAsBundle=SF6 Native Core\n" % core_v,
               CORE_README % core_v,
-              [(os.path.join(REPO, "build", "core", "sf6core_native.dll"), "reframework/plugins/sf6core_native.dll")])
+              [(os.path.join(REPO, "build", "core", "sf6core_native.dll"), "reframework/plugins/sf6core_native.dll"),
+               # The crash report script, so that an update made in game brings it: under reframework/data/sf6core/ and
+               # not at the game's root, because the updaters already installed refuse a root file they do not know
+               # (update_logic.cpp kRootFiles) and would stop the whole update.
+               (os.path.join(REPO, "tools", "crash_report", "SF6_CrashReport.bat"), "reframework/data/sf6core/SF6_CrashReport.bat")])
 
     print("== SF6 Color Mod %s" % cm_v)
     cm_zip = os.path.join(a.out, "SF6_ColorMod_%s.zip" % cm_v)
