@@ -516,7 +516,7 @@ namespace SlotsInstaller
             UpdateCheckResult last = updates.Last;
             var update = new JsonObj().Add("automatic_check", updates.AutoCheck).Add("include_test_builds", updates.IncludePrereleases)
                 .Add("last_check", String.IsNullOrEmpty(updates.LastCheckUtc) ? "never" : updates.LastCheckUtc)
-                .Add("latest_slotsloader", last == null || last.Loader == null ? "unknown" : last.Loader.Version + (last.Loader.Prerelease ? " (test build)" : ""))
+                .Add("latest_slotsloader", updates.ApprovedLoader() == null ? "unknown" : updates.ApprovedLoader().Version)   // 1.0.19: the approved version
                 .Add("latest_manager", last == null || last.Manager == null ? "unknown" : last.Manager.Version)
                 .Add("skipped_slotsloader", updates.SkipLoader).Add("skipped_manager", updates.SkipManager);
             var result = new JsonObj().Add("manager_version", SafeHttp.AppVersion()).Add("game_folder_found", gameFound)

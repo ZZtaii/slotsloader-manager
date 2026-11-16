@@ -515,6 +515,7 @@ namespace SlotsInstaller
             }, delegate(AddonInstall installed)
             {
                 editingReplacement = null; UpdateModeUi(); LoaderUpdateInstalled();
+                if (installed != null && LoaderCostumePak.IsLoaderMod(installed.Main)) ShowUpdateToasts();   // 1.0.19: a takeover's offer goes
                 FinishAddonInstall(installed, delegate(AddonInstall r)
                 {
                     ReplaceMod mod = r.Main;
@@ -1258,7 +1259,8 @@ namespace SlotsInstaller
                 settingsToolStatus.ForeColor = tools.SlotsLoader && !tools.ReFrameworkOffer && tools.ReFramework ? Palette.Muted : Palette.Accent;
                 // 1.0.18: while outfit mods are off, the Manager's own Slotsloader is only switched off: no second install.
                 bool loaderParked = state != null && state.ModsOff != null && state.ModsOff.LoaderId.Length > 0;
-                installSlotsLoaderButton.Enabled = !tools.SlotsLoader && !loaderParked;
+                // 1.0.19: a Slotsloader installed outside the Manager can be taken over (installed again through it).
+                installSlotsLoaderButton.Enabled = (!tools.SlotsLoader || (state != null && InstalledLoader.Record(state) == null)) && !loaderParked;
                 if (loaderParked) settingsToolStatus.Text = tools.ReFrameworkDetail + Environment.NewLine + "Slotsloader is switched off with the outfit mods.";
                 installReFrameworkButton.Visible = tools.ReFrameworkOffer;
                 installReFrameworkButton.Text = (tools.ReFrameworkFile ? "Update to " : "Install ") + ReFrameworkRelease.Pin.Label;

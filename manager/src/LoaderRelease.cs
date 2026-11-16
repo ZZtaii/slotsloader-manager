@@ -9,43 +9,104 @@ using System.Threading;
 
 namespace SlotsInstaller
 {
-    // 2.3.1: the one SlotsLoader build the "install Slotsloader" offer and `loader-fetch` install, pinned to a GitHub
-    // release asset of our fork. 2.5.9: the values come from assets\loader-pin.json, embedded at build time;
-    // tools\Package-Release.ps1 rewrites it with the newest published loader-v* release (and bundles that zip).
+    // 2.3.1: the one SlotsLoader build the "install Slotsloader" offer and `loader-fetch` install. 1.0.19: the approved
+    // `slots_loader` entry of the repository's dependencies.json (DependencyList below), embedded by build.ps1 from the
+    // repo root: the same file the update check reads online, so there is one source of truth. The files stay on the
+    // upstream releases (LoaderPin.Source); a download is allowed only from there (DownloadRefusal).
     internal sealed class LoaderPin
     {
-        internal string Tag, Version, Asset, Sha256, Url, ReleasePage, Origin;
+        internal string Tag, Version, Asset, Sha256, Url, ReleasePage, Origin, Name = "";
         internal long Size;
 
-        internal const string Repo = "ZZtaii/slotsloader-manager", ResourceName = "SlotsInstaller.LoaderPin.json";
-        internal static readonly LoaderPin Release = FromJson(ReadResource());
+        // Repo: this Manager's repository (manager-v* releases and the approved list). Source: where the approved Slots
+        // Loader zips are published.
+        internal const string Repo = "ZZtaii/slotsloader-manager", Source = "Wael3rd/SF6-ModSuite", ResourceName = "SlotsInstaller.Dependencies.json";
+        internal const string DownloadPrefix = "https://github.com/" + Source + "/releases/download/";
+        internal static readonly LoaderPin Release = FromList(ReadResource());
 
-        // {"tag","version","asset","size","sha256"}; the download URL, release page and origin follow the tag and repo.
-        internal static LoaderPin FromJson(string json)
-        {
-            var d = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
-            Func<string, string> text = delegate(string key) { object v; if (!d.TryGetValue(key, out v) || !(v is string) || ((string)v).Trim().Length == 0) throw new InvalidDataException("loader-pin.json: '" + key + "' is missing."); return ((string)v).Trim(); };
-            string tag = text("tag"), asset = text("asset"), sha = text("sha256").ToUpperInvariant();
-            object sizeValue; long size;
-            if (!d.TryGetValue("size", out sizeValue) || !Int64.TryParse(Convert.ToString(sizeValue, System.Globalization.CultureInfo.InvariantCulture), out size) || size <= 0) throw new InvalidDataException("loader-pin.json: 'size' is missing.");
-            if (sha.Length != 64 || sha.Any(c => !Uri.IsHexDigit(c))) throw new InvalidDataException("loader-pin.json: 'sha256' is not a SHA-256.");
-            if (!tag.StartsWith("loader-v", StringComparison.Ordinal) || asset.IndexOfAny(new[] { '/', '\\' }) >= 0 || !asset.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("loader-pin.json: bad tag or asset name.");
-            return new LoaderPin
-            {
-                Tag = tag, Version = text("version"), Asset = asset, Size = size, Sha256 = sha,
-                Url = "https://github.com/" + Repo + "/releases/download/" + tag + "/" + Uri.EscapeDataString(asset),
-                ReleasePage = "https://github.com/" + Repo + "/releases/tag/" + tag,
-                Origin = "github.com/" + Repo
-            };
-        }
+        // dependencies.json -> its slots_loader entry (InvalidDataException with the reason when it can't be used).
+        internal static LoaderPin FromList(string json) { return DependencyList.Parse(json).Loader; }
         private static string ReadResource()
         {
             using (Stream s = typeof(LoaderPin).Assembly.GetManifestResourceStream(ResourceName))
             {
-                if (s == null) throw new InvalidDataException("The build has no " + ResourceName + " (build.ps1 embeds assets\\loader-pin.json).");
+                if (s == null) throw new InvalidDataException("The build has no " + ResourceName + " (build.ps1 embeds the repository's dependencies.json).");
                 using (var r = new StreamReader(s)) return r.ReadToEnd();
             }
         }
+
+        // 1.0.19: null when a loader may be downloaded from url, else why not. HTTPS addresses must be a release download
+        // of Source on github.com (SafeHttp then follows GitHub's HTTPS redirects); anything that is not HTTPS is left
+        // to SafeHttp, which refuses it (a test's loopback http aside).
+        internal static string DownloadRefusal(string url)
+        {
+            Uri u;
+            if (!Uri.TryCreate(url ?? "", UriKind.Absolute, out u)) return "the download address is not valid";
+            if (u.Scheme != Uri.UriSchemeHttps) return null;
+            string[] parts = u.AbsolutePath.Split('/');
+            bool ok = u.IsDefaultPort && u.UserInfo.Length == 0 && u.Query.Length == 0 && u.Fragment.Length == 0 && u.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+                && u.AbsolutePath.StartsWith("/" + Source + "/releases/download/", StringComparison.OrdinalIgnoreCase) && parts.Length == 7 && parts.Skip(1).All(p => p.Length > 0 && p != "." && p != "..");
+            return ok ? null : "only release downloads of " + Source + " on github.com are allowed, not " + u.Host + u.AbsolutePath;
+        }
+    }
+
+    // 1.0.19: the repository's dependencies.json, written by the maintainer's approval (a merged pull request):
+    // {"format":1,"source":"Wael3rd/SF6-ModSuite","packages":{"slots_loader":{name,version,release,file,size,sha256},...}}.
+    // Only slots_loader is used; every other package (native_core) and every unknown key is ignored. A missing or
+    // malformed slots_loader entry, another format or another source is refused with the reason (never a crash).
+    internal sealed class DependencyList
+    {
+        internal int Format;
+        internal LoaderPin Loader;
+        internal List<string> IgnoredPackages = new List<string>();
+        internal static string TestDownloadBase;   // tests: download URLs on a loopback server instead of github.com
+
+        private static readonly System.Text.RegularExpressions.Regex TagPattern = new System.Text.RegularExpressions.Regex(@"^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$");
+        private static readonly System.Text.RegularExpressions.Regex FilePattern = new System.Text.RegularExpressions.Regex(@"^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.zip$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        internal static DependencyList Parse(string json)
+        {
+            object root;
+            try { root = new System.Web.Script.Serialization.JavaScriptSerializer { MaxJsonLength = 1024 * 1024, RecursionLimit = 16 }.DeserializeObject(json ?? ""); }
+            catch (Exception ex) { if (ex is ArgumentException || ex is InvalidOperationException) throw Bad("it is not valid JSON"); throw; }
+            var d = root as Dictionary<string, object>;
+            if (d == null) throw Bad("it is not a JSON object");
+            object value;
+            if (!d.TryGetValue("format", out value) || !(value is int) || (int)value != 1) throw Bad("format " + (value ?? "(missing)") + " is not format 1");
+            string source = Text(d, "source", "");
+            if (!source.Equals(LoaderPin.Source, StringComparison.OrdinalIgnoreCase)) throw Bad("source '" + source + "' is not " + LoaderPin.Source);
+            var packages = d.TryGetValue("packages", out value) ? value as Dictionary<string, object> : null;
+            if (packages == null) throw Bad("it has no packages");
+            var list = new DependencyList { Format = 1 };
+            list.IgnoredPackages.AddRange(packages.Keys.Where(k => k != "slots_loader").OrderBy(k => k, StringComparer.Ordinal));
+            var e = packages.TryGetValue("slots_loader", out value) ? value as Dictionary<string, object> : null;
+            if (e == null) throw Bad("it has no slots_loader entry");
+            string version = Text(e, "version", "slots_loader."), release = Text(e, "release", "slots_loader."), file = Text(e, "file", "slots_loader."), sha = Text(e, "sha256", "slots_loader.").ToUpperInvariant();
+            if (version.Length > 40 || UpdateCheck.ParseVersion(version) == null) throw Bad("slots_loader.version '" + version + "' is not a version");
+            if (!TagPattern.IsMatch(release) || release.Contains("..")) throw Bad("slots_loader.release '" + release + "' is not a release tag");
+            if (!FilePattern.IsMatch(file) || file.Contains("..")) throw Bad("slots_loader.file '" + file + "' is not a .zip file name");
+            if (sha.Length != 64 || sha.Any(c => !Uri.IsHexDigit(c))) throw Bad("slots_loader.sha256 is not a SHA-256");
+            object sizeValue; long size = 0;
+            if (e.TryGetValue("size", out sizeValue) && (sizeValue is int || sizeValue is long)) size = Convert.ToInt64(sizeValue, System.Globalization.CultureInfo.InvariantCulture);
+            if (size <= 0 || size > 512L * 1024 * 1024) throw Bad("slots_loader.size is not a size in bytes");
+            object nameValue; string name = e.TryGetValue("name", out nameValue) && nameValue is string ? ((string)nameValue).Trim() : "";
+            string escaped = Uri.EscapeDataString(release) + "/" + Uri.EscapeDataString(file);
+            list.Loader = new LoaderPin
+            {
+                Name = name.Length > 0 ? name : "SF6 Slots Loader", Tag = release, Version = version, Asset = file, Size = size, Sha256 = sha,
+                Url = (TestDownloadBase != null ? TestDownloadBase.TrimEnd('/') + "/" : LoaderPin.DownloadPrefix) + escaped,
+                ReleasePage = "https://github.com/" + LoaderPin.Source + "/releases/tag/" + Uri.EscapeDataString(release),
+                Origin = "github.com/" + LoaderPin.Source
+            };
+            return list;
+        }
+        private static string Text(Dictionary<string, object> d, string key, string prefix)
+        {
+            object v;
+            if (!d.TryGetValue(key, out v) || !(v is string) || ((string)v).Trim().Length == 0) throw Bad(prefix + key + " is missing");
+            return ((string)v).Trim();
+        }
+        private static InvalidDataException Bad(string why) { return new InvalidDataException("dependencies.json: " + why + "."); }
     }
 
     // 2.5.9: Bundled = the zip shipped in the app folder's SlotsLoader\ subfolder (tools\Package-Release.ps1).
@@ -139,6 +200,8 @@ namespace SlotsInstaller
         // renamed to <asset>. Any failure deletes the .part file and throws LoaderFetchException.
         internal static LoaderFile Download(LoaderPin pin, string downloadDir)
         {
+            string refused = LoaderPin.DownloadRefusal(pin.Url);   // 1.0.19: only from the approved source's releases
+            if (refused != null) { Program.LogLine("Slotsloader download refused: " + refused + "."); throw new LoaderFetchException(pin, refused); }
             try
             {
                 string path = SafeHttp.Download(pin.Url, downloadDir, pin.Asset, pin.Size, pin.Sha256, "Downloading Slotsloader " + pin.Version, "pinned");

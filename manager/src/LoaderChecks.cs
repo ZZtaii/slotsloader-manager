@@ -37,20 +37,67 @@ namespace SlotsInstaller
                 server.Routes["/release/loader.zip"] = new LoopbackServer.Route { Status = 302, Location = "/objects/loader.zip" };
                 server.Routes["/objects/loader.zip"] = new LoopbackServer.Route { Body = good };
 
-                check("the pin is the GitHub release asset embedded from assets\\loader-pin.json (2.5.9; HTTPS, size, SHA-256), malformed pin files are refused, and nothing else can change it", delegate
+                check("1.0.19: the pin is the approved slots_loader entry of the repository's dependencies.json, embedded by build.ps1 (the same file the update check reads): a release download of Wael3rd/SF6-ModSuite with size and SHA-256; nothing else can change it", delegate
                 {
                     LoaderPin r = LoaderPin.Release;
-                    Require(r.Tag == "loader-v" + r.Version && r.Asset.EndsWith(".zip") && r.Size > 0 && r.Sha256.Length == 64 && r.Sha256 == r.Sha256.ToUpperInvariant(), "pin values: " + r.Tag + " " + r.Asset + " " + r.Size + " " + r.Sha256);
-                    Require(r.Url == "https://github.com/ZZtaii/slotsloader-manager/releases/download/" + r.Tag + "/" + r.Asset && r.ReleasePage == "https://github.com/ZZtaii/slotsloader-manager/releases/tag/" + r.Tag, "URLs: " + r.Url);
+                    string repoList = Path.Combine(Path.GetDirectoryName(Environment.GetEnvironmentVariable("SLOTSLOADER_PROJECT") ?? ""), "dependencies.json");
+                    Require(r.Asset.EndsWith(".zip") && r.Size > 0 && r.Sha256.Length == 64 && r.Sha256 == r.Sha256.ToUpperInvariant() && UpdateCheck.ParseVersion(r.Version) != null && r.Tag.Length > 0, "pin values: " + r.Tag + " " + r.Asset + " " + r.Size + " " + r.Sha256);
+                    Require(r.Url == "https://github.com/Wael3rd/SF6-ModSuite/releases/download/" + r.Tag + "/" + r.Asset && r.ReleasePage == "https://github.com/Wael3rd/SF6-ModSuite/releases/tag/" + r.Tag && LoaderPin.DownloadRefusal(r.Url) == null, "URLs: " + r.Url);
                     Require(LoaderRelease.Pin == r && !LoaderRelease.AllowLoopbackHttp, "default pin");
-                    Require(LoaderRelease.Description(r) == r.Asset + " (" + Utilities.FriendlyBytes(r.Size) + ") from github.com/ZZtaii/slotsloader-manager", "description: " + LoaderRelease.Description(r));
-                    LoaderPin parsed = LoaderPin.FromJson("{\"tag\":\"loader-v1.10.0\",\"version\":\"1.10.0\",\"asset\":\"SF6_SlotsLoader_v1.10.0.zip\",\"size\":1400000,\"sha256\":\"" + new string('a', 64) + "\"}");
-                    Require(parsed.Sha256 == new string('A', 64) && parsed.Url.EndsWith("/releases/download/loader-v1.10.0/SF6_SlotsLoader_v1.10.0.zip"), "parsed pin: " + parsed.Url);
-                    foreach (string bad in new[] { "{}", "{\"tag\":\"v1\",\"version\":\"1\",\"asset\":\"a.zip\",\"size\":1,\"sha256\":\"" + new string('a', 64) + "\"}", "{\"tag\":\"loader-v1\",\"version\":\"1\",\"asset\":\"../a.zip\",\"size\":1,\"sha256\":\"" + new string('a', 64) + "\"}", "{\"tag\":\"loader-v1\",\"version\":\"1\",\"asset\":\"a.zip\",\"size\":0,\"sha256\":\"" + new string('a', 64) + "\"}", "{\"tag\":\"loader-v1\",\"version\":\"1\",\"asset\":\"a.zip\",\"size\":1,\"sha256\":\"abc\"}" })
+                    Require(LoaderRelease.Description(r) == r.Asset + " (" + Utilities.FriendlyBytes(r.Size) + ") from github.com/Wael3rd/SF6-ModSuite", "description: " + LoaderRelease.Description(r));
+                    if (File.Exists(repoList))
                     {
-                        bool refused = false; try { LoaderPin.FromJson(bad); } catch (InvalidDataException) { refused = true; }
-                        Require(refused, "accepted a bad pin file: " + bad);
+                        LoaderPin file = LoaderPin.FromList(File.ReadAllText(repoList));
+                        Require(file.Version == r.Version && file.Sha256 == r.Sha256 && file.Size == r.Size && file.Asset == r.Asset && file.Tag == r.Tag, "the embedded pin is not the repository's dependencies.json: " + file.Version + " / " + r.Version);
+                        report.Add("  pin: Slots Loader " + r.Version + " · " + r.Tag + " · " + r.Asset + " · " + r.Size + " bytes · SHA-256 " + r.Sha256.Substring(0, 12) + "… (= " + repoList + ")");
                     }
+                });
+                check("1.0.19 dependencies.json parsing: the good list (native_core and unknown packages and keys ignored); malformed JSON, another format or source, no packages, no slots_loader, and every bad field are refused with the reason, never an exception of another kind", delegate
+                {
+                    string sha = new string('a', 64);
+                    LoaderPin parsed = LoaderPin.FromList(ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, ",\"native_core\":{\"name\":\"SF6 Native Core\",\"version\":\"0.9.14\",\"release\":\"v1.37.0\",\"file\":\"SF6_NativeCore_0.9.14.zip\",\"size\":684069,\"sha256\":\"" + sha + "\"},\"future_thing\":{\"anything\":[1,2,3]}", ",\"generated\":\"2026-11-16\",\"notes\":{\"x\":1}"));
+                    Require(parsed.Version == "1.27.7" && parsed.Tag == "v1.40.0" && parsed.Sha256 == sha.ToUpperInvariant() && parsed.Size == 1400000 && parsed.Name == "SF6 Slots Loader"
+                        && parsed.Url == "https://github.com/Wael3rd/SF6-ModSuite/releases/download/v1.40.0/SF6_SlotsLoader_v1.27.7.zip" && parsed.ReleasePage == "https://github.com/Wael3rd/SF6-ModSuite/releases/tag/v1.40.0", "parsed: " + parsed.Url);
+                    DependencyList list = DependencyList.Parse(ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, ",\"native_core\":{\"version\":\"0.9.14\"},\"zzz\":5", ""));
+                    Require(list.IgnoredPackages.SequenceEqual(new[] { "native_core", "zzz" }), "ignored packages: " + String.Join(", ", list.IgnoredPackages));
+                    string goodList = ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, "", "");
+                    var bad = new Dictionary<string, string>
+                    {
+                        { "not JSON", "{\"format\":1," }, { "an array", "[1,2]" }, { "empty", "" },
+                        { "format 2", goodList.Replace("\"format\":1", "\"format\":2") }, { "format as text", goodList.Replace("\"format\":1", "\"format\":\"1\"") }, { "no format", goodList.Replace("\"format\":1,", "") },
+                        { "another source", goodList.Replace("Wael3rd/SF6-ModSuite", "Someone/Else") }, { "no packages", "{\"format\":1,\"source\":\"Wael3rd/SF6-ModSuite\"}" },
+                        { "no slots_loader", "{\"format\":1,\"source\":\"Wael3rd/SF6-ModSuite\",\"packages\":{\"native_core\":{\"version\":\"0.9.14\"}}}" },
+                        { "slots_loader not an object", "{\"format\":1,\"source\":\"Wael3rd/SF6-ModSuite\",\"packages\":{\"slots_loader\":\"1.27.7\"}}" },
+                        { "no version", goodList.Replace("\"version\":\"1.27.7\",", "") }, { "bad version", goodList.Replace("\"1.27.7\"", "\"latest\"") },
+                        { "release with a slash", goodList.Replace("\"v1.40.0\"", "\"v1/../x\"") }, { "file with a path", goodList.Replace("\"SF6_SlotsLoader_v1.27.7.zip\"", "\"../SF6_SlotsLoader_v1.27.7.zip\"") },
+                        { "file not a zip", goodList.Replace("SF6_SlotsLoader_v1.27.7.zip", "SF6_SlotsLoader_v1.27.7.exe") }, { "size 0", goodList.Replace("1400000", "0") }, { "size as text", goodList.Replace("1400000", "\"1400000\"") },
+                        { "size with a fraction", goodList.Replace("1400000", "1400000.5") }, { "short sha256", goodList.Replace(sha, "abc") }, { "sha256 not hex", goodList.Replace(sha, new string('g', 64)) }
+                    };
+                    foreach (var b in bad)
+                    {
+                        string why = null; try { LoaderPin.FromList(b.Value); } catch (InvalidDataException ex) { why = ex.Message; }
+                        Require(why != null && why.StartsWith("dependencies.json: "), "accepted a bad list (" + b.Key + "): " + b.Value);
+                    }
+                    report.Add("  " + bad.Count + " malformed lists refused, e.g. " + Reason(bad["no slots_loader"]) + " / " + Reason(bad["another source"]));
+                });
+                check("1.0.19 download host: an HTTPS loader download is allowed only as a release download of Wael3rd/SF6-ModSuite on github.com (refused before any request: this repository's old loader-v* assets, other repositories, other hosts, odd paths)", delegate
+                {
+                    foreach (string ok in new[] { "https://github.com/Wael3rd/SF6-ModSuite/releases/download/v1.37.0/SF6_SlotsLoader_v1.27.4.zip", "https://github.com/wael3rd/sf6-modsuite/releases/download/v1.37.0/x.zip" })
+                        Require(LoaderPin.DownloadRefusal(ok) == null, "refused " + ok);
+                    string[] refused = { "https://github.com/ZZtaii/slotsloader-manager/releases/download/loader-v1.10.9/SF6_Slotsloader_Fork_v1.10.9.zip", "https://github.com/Wael3rd/Other/releases/download/v1/x.zip",
+                        "https://objects.githubusercontent.com/Wael3rd/SF6-ModSuite/releases/download/v1/x.zip", "https://github.com.example.invalid/Wael3rd/SF6-ModSuite/releases/download/v1/x.zip", "https://github.com:8443/Wael3rd/SF6-ModSuite/releases/download/v1/x.zip",
+                        "https://user@github.com/Wael3rd/SF6-ModSuite/releases/download/v1/x.zip", "https://github.com/Wael3rd/SF6-ModSuite/releases/download/v1/x.zip?y=1", "https://github.com/Wael3rd/SF6-ModSuite/releases/download/x.zip",
+                        "https://github.com/Wael3rd/SF6-ModSuite/releases/download/v1/sub/x.zip", "https://github.com/Wael3rd/SF6-ModSuite/releases/tag/v1", "not a url" };
+                    int requests = server.Requests; string cache = Dir(root, "host");
+                    foreach (string url in refused)
+                    {
+                        Require(LoaderPin.DownloadRefusal(url) != null, "allowed " + url);
+                        if (!url.StartsWith("https://")) continue;
+                        LoaderFetchException ex = Fails(delegate { LoaderRelease.Download(With(pin, url), cache); });
+                        Require(ex.Reason.StartsWith("only release downloads of Wael3rd/SF6-ModSuite on github.com are allowed") && Empty(cache), url + ": " + ex.Reason);
+                    }
+                    Require(server.Requests == requests, "a refused address was requested");
+                    report.Add("  refused: " + LoaderPin.DownloadRefusal(refused[0]));
                 });
                 check("2.5.9: the zip bundled in the app folder's Slotsloader\\ is used first (no library hashing, no request); a bundled file that does not verify is skipped and left alone", delegate
                 {
@@ -282,6 +329,12 @@ namespace SlotsInstaller
             string hash; using (var sha = System.Security.Cryptography.SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
             return new LoaderPin { Version = "1.9.7", Asset = "SF6_SlotsLoader_fixture.zip", Size = bytes.Length, Sha256 = hash, Url = url, ReleasePage = "https://github.com/ZZtaii/slotsloader-manager/releases/tag/fixture", Origin = "fixture server" };
         }
+        // 1.0.19: a dependencies.json with one slots_loader entry (packages: more package entries; top: more top-level keys).
+        internal static string ListJson(string version, string release, string file, long size, string sha, string packages, string top)
+        {
+            return "{\"format\":1,\"source\":\"Wael3rd/SF6-ModSuite\"" + top + ",\"packages\":{\"slots_loader\":{\"name\":\"SF6 Slots Loader\",\"version\":\"" + version + "\",\"release\":\"" + release + "\",\"file\":\"" + file + "\",\"size\":" + size + ",\"sha256\":\"" + sha + "\"}" + packages + "}}";
+        }
+        private static string Reason(string json) { try { LoaderPin.FromList(json); return "accepted"; } catch (InvalidDataException ex) { return ex.Message; } }
         internal static LoaderPin With(LoaderPin pin, string url) { return new LoaderPin { Version = pin.Version, Asset = pin.Asset, Size = pin.Size, Sha256 = pin.Sha256, Url = url, ReleasePage = pin.ReleasePage, Origin = pin.Origin }; }
         // A small SlotsLoader-shaped tool package (proxy, real AGS, plugin, loader data); the marker makes builds differ.
         internal static byte[] FixtureZip(string marker)

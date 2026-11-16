@@ -198,12 +198,13 @@ Presets live in `reframework\.slotsloader-installer-presets` in the game folder.
 ## Updates
 > How the Manager and Slotsloader stay up to date.
 
-Once a day the Manager checks its official GitHub releases for a new Manager or Slotsloader. When there is one, a notice appears at the bottom right with **Update**, **What's new**, **Skip this version** and ✕. Nothing installs until you click **Update**.
+At start and once a day the Manager checks GitHub for a new Manager or approved Slotsloader. When there is one, a notice appears at the bottom right with **Update**, **What's new**, **Skip this version** and ✕. Nothing installs until you click **Update**.
 
 - **Manager update:** downloads the release, checks its SHA-256, replaces the program files and restarts. Your settings and records in `Data` stay. The previous version is kept: with the Manager closed, run `& '.\Slotsloader Manager.exe' update-rollback` in PowerShell in its folder to put it back.
-- **Slotsloader update:** offered for a Slotsloader the Manager installed. It goes through the health check and installs over the old one at the same priority. Close SF6 first.
+- **Slotsloader update:** offered for a Slotsloader the Manager installed. It goes through the health check and installs over the old one at the same priority. Close SF6 first. An approval taken back offers **Go back**.
+- **Slotsloader installed outside the Manager:** **Install** in the notice lets the Manager's settings apply. With another mod manager, turn off its Slotsloader entry first.
 
-**Settings → Slotsloader** has **Check automatically (daily)**, **Include test builds** (pre-releases) and **Check now**.
+**Settings → Slotsloader** has **Check automatically (daily)**, **Include test builds** (Manager pre-releases) and **Check now**.
 
 # When things go wrong
 

@@ -32,7 +32,7 @@ namespace SlotsInstaller
         private PendingLoaderUpdate pendingLoaderUpdate;
 
         internal static string AppDir { get { return AppDirOverride ?? AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'); } }
-        private LoaderPin CurrentInstallPin() { return LoaderRelease.Pin != LoaderPin.Release ? LoaderRelease.Pin : UpdateCheck.InstallPin(UpdateSettings.Load().Last); }
+        private LoaderPin CurrentInstallPin() { return LoaderRelease.Pin != LoaderPin.Release ? LoaderRelease.Pin : UpdateCheck.InstallPin(UpdateSettings.Load().ApprovedLoader()); }
 
         // ---- Start-up: clean up after a self-update, then the background check (never blocks the window).
         private void StartUpdates()
@@ -45,9 +45,35 @@ namespace SlotsInstaller
                 updateTimer.Stop();
                 UpdateSettings s = UpdateSettings.Load();
                 if (s.AutoCheck && s.Due(DateTime.UtcNow)) RunUpdateCheck(false);
-                else ShowUpdateToasts();
+                else { ShowUpdateToasts(); if (s.AutoCheck) RunListRead(); }   // 1.0.19: the approved list at every start
             };
             updateTimer.Start();
+        }
+
+        // 1.0.19: the approved Slots Loader list alone (at start, between the daily checks), in the background. Quiet:
+        // a failure is one log line (UpdateCheck.ReadList); the last approval read stays in use.
+        internal int ListReadsRun;                       // tests
+        internal void RunListRead()
+        {
+            var thread = new Thread(delegate()
+            {
+                string why; ReleaseOffer approved;
+                try { approved = UpdateCheck.ReadList(out why); }
+                catch (Exception ex) { Program.Log(ex); approved = null; }
+                try
+                {
+                    if (!IsDisposed) BeginInvoke((Action)delegate
+                    {
+                        if (approved != null)
+                            try { UpdateSettings s = UpdateSettings.Load(); s.RememberApproved(approved, DateTime.UtcNow.ToString("o")); s.Save(); }
+                            catch (Exception ex) { Program.Log(ex); }
+                        ListReadsRun++;
+                        if (approved != null) ShowUpdateToasts();
+                    });
+                }
+                catch (InvalidOperationException) { }
+            }) { IsBackground = true, Name = "approved list" };
+            thread.Start();
         }
 
         // Background (manual = false: a failure is one log line, no toast or dialog) or from Settings.
@@ -70,6 +96,7 @@ namespace SlotsInstaller
             UpdateChecksRun++; LastUpdateResult = r;
             UpdateSettings s = UpdateSettings.Load();
             s.LastCheckUtc = r.CheckedUtc;
+            s.RememberApproved(r.Loader, r.CheckedUtc);   // 1.0.19: also when the releases API failed
             if (r.Ok) { s.Last = r; s.DismissedLoader = ""; s.DismissedManager = ""; }
             else Program.LogLine("Update check: " + r.Reason + (r.Status == 404 ? " (expected while the repository is private)" : "") + ".");
             try { s.Save(); } catch (Exception ex) { Program.Log(ex); }
@@ -84,12 +111,17 @@ namespace SlotsInstaller
         internal string UpdateSummary(UpdateCheckResult r)
         {
             if (!r.Ok) return "Couldn't check for updates: " + r.Reason + ".";
-            string source; string installed = InstalledLoaderVersion(out source);
-            ReleaseOffer loader = UpdateCheck.LoaderUpdate(r, installed), manager = UpdateCheck.ManagerUpdate(r, UpdateCheck.Running);
+            LoaderNow now = InstalledLoaderNow();
+            string installed = now.Version;
+            // 1.0.19: the approval this check read, else the last one read (a list that couldn't be read keeps it).
+            ReleaseOffer approved = r.Loader != null && r.Loader.IsApproval ? r.Loader : UpdateSettings.Load().ApprovedLoader();
+            ReleaseOffer loader = UpdateCheck.LoaderUpdate(approved, installed, now.FromApproval), manager = UpdateCheck.ManagerUpdate(r, UpdateCheck.Running);
             string running = UpdateCheck.ShortVersion(SafeHttp.AppVersion());
-            string loaderPart = loader != null ? "Slotsloader " + loader.Version + " (you have " + UpdateCheck.ShortVersion(installed) + ")"
+            bool newer = loader == null && approved != null && installed != null && UpdateCheck.GoesBack(approved, installed);
+            string loaderPart = loader != null ? (UpdateCheck.GoesBack(loader, installed) ? "back to Slotsloader " : "Slotsloader ") + loader.Version + " (you have " + UpdateCheck.ShortVersion(installed) + ")"
+                : newer ? "Slotsloader " + UpdateCheck.ShortVersion(installed) + " (newer than the approved " + approved.Version + ")"
                 : installed != null ? "Slotsloader " + UpdateCheck.ShortVersion(installed)
-                : "Slotsloader not installed by the Manager" + (r.Loader != null ? " (newest " + r.Loader.Version + ")" : "");
+                : (now.Outside ? "Slotsloader installed outside the Manager" : "Slotsloader not installed by the Manager") + (approved != null ? " (approved " + approved.Version + ")" : "");
             string managerPart = "Manager " + (manager != null ? manager.Version + " (you have " + running + ")" : running);
             int updates = (loader != null ? 1 : 0) + (manager != null ? 1 : 0);
             string lead = updates == 2 ? "Updates available" : updates == 1 ? "Update available" : installed != null ? "Up to date" : "Manager up to date";
@@ -99,8 +131,11 @@ namespace SlotsInstaller
         // Releases without a checksum: one short muted line; the full reason is in Data\log.txt (UpdateCheck logs it).
         internal static string SkippedSummary(UpdateCheckResult r)
         {
-            if (r == null || !r.Ok || r.Refused.Count == 0) return "";
-            return "Skipped " + String.Join(", ", r.Refused.Select(x => x.Split(':')[0])) + ": no checksum";
+            if (r == null || !r.Ok) return "";
+            // 1.0.19: the approved Slotsloader list that couldn't be used (the last one read stays in use).
+            string list = String.IsNullOrEmpty(r.ListReason) ? "" : "Couldn't read the approved Slotsloader list: " + r.ListReason;
+            if (r.Refused.Count == 0) return list;
+            return "Skipped " + String.Join(", ", r.Refused.Select(x => x.Split(':')[0])) + ": no checksum" + (list.Length > 0 ? " · " + list : "");
         }
         private void ShowUpdateResult(string summary, string skipped, bool ok)
         {
@@ -108,12 +143,23 @@ namespace SlotsInstaller
             settingsUpdateSkipped.Text = skipped;
         }
 
-        private string InstalledLoaderVersion(out string source)
+        // 1.0.19: the Slotsloader the Manager installed (its record's version, and whether it came from an approved zip),
+        // or none with Outside true when a Slotsloader is in the game folder all the same (by hand or another tool).
+        internal sealed class LoaderNow { internal string Version, Source = ""; internal bool FromApproval, Outside; }
+        internal LoaderNow InstalledLoaderNow()
         {
-            source = "";
-            try { return InstalledLoader.Version(InstalledLoader.Record(Engine().LoadState()), out source); }
-            catch (Exception ex) { Program.Log(ex); return null; }
+            var now = new LoaderNow();
+            try
+            {
+                ReplaceMod record = InstalledLoader.Record(Engine().LoadState());
+                now.Version = InstalledLoader.Version(record, out now.Source);
+                now.FromApproval = UpdateCheck.FromApproval(record, UpdateSettings.Load());
+                now.Outside = record == null && !String.IsNullOrWhiteSpace(config.GameRoot) && Directory.Exists(config.GameRoot) && LoaderCostumePak.LoaderPresent(config.GameRoot);
+            }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            return now;
         }
+        private string InstalledLoaderVersion(out string source) { LoaderNow now = InstalledLoaderNow(); source = now.Source; return now.Version; }
 
         // ---- Toasts: bottom-right above the status strip, one per product, until acted on.
         internal void ShowUpdateToasts()
@@ -121,12 +167,16 @@ namespace SlotsInstaller
             if (toastHost == null) BuildToastHost();
             UpdateSettings s = UpdateSettings.Load();
             UpdateCheckResult r = s.Last;
-            string source; string installed = InstalledLoaderVersion(out source);
-            ReleaseOffer loader = UpdateCheck.LoaderUpdate(r, installed), manager = UpdateCheck.ManagerUpdate(r, UpdateCheck.Running);
-            SetToast(UpdateProducts.Loader, loader != null && loader.Version != s.SkipLoader && loader.Version != s.DismissedLoader ? loader : null, installed);
+            LoaderNow now = InstalledLoaderNow();
+            ReleaseOffer approved = s.ApprovedLoader();
+            ReleaseOffer loader = UpdateCheck.LoaderUpdate(approved, now.Version, now.FromApproval), manager = UpdateCheck.ManagerUpdate(r, UpdateCheck.Running);
+            // 1.0.19: a Slotsloader installed outside the Manager runs without the Manager's settings: the approved one is
+            // offered to take its place (Install opens it like Install Slotsloader; its files are not kept as originals).
+            bool takeover = loader == null && now.Outside && approved != null;
+            if (takeover) loader = approved;
+            SetToast(UpdateProducts.Loader, loader != null && loader.Version != s.SkipLoader && loader.Version != s.DismissedLoader ? loader : null, now.Version, takeover);
             SetToast(UpdateProducts.Manager, manager != null && manager.Version != s.SkipManager && manager.Version != s.DismissedManager ? manager : null, SafeHttp.AppVersion());
         }
-
         private void BuildToastHost()
         {
             toastHost = new FlowLayoutPanel { FlowDirection = FlowDirection.BottomUp, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Palette.Background, Padding = Padding.Empty, Margin = Padding.Empty, Visible = false, AccessibleName = "Updates available", AccessibleRole = AccessibleRole.Grouping };
@@ -143,23 +193,30 @@ namespace SlotsInstaller
         }
         internal Panel UpdateToast(string product) { return toastHost == null ? null : toastHost.Controls.OfType<Panel>().FirstOrDefault(p => (string)p.Tag == product); }
 
-        private void SetToast(string product, ReleaseOffer offer, string installed)
+        private void SetToast(string product, ReleaseOffer offer, string installed) { SetToast(product, offer, installed, false); }
+        private void SetToast(string product, ReleaseOffer offer, string installed, bool takeover)
         {
             Panel old = UpdateToast(product);
             if (offer == null) { if (old != null) { toastHost.Controls.Remove(old); old.Dispose(); } toastHost.Visible = toastHost.Controls.Count > 0; PlaceToasts(); return; }
             string name = product == UpdateProducts.Loader ? "Slotsloader" : "Slotsloader Manager";
-            string text = name + " " + offer.Version + " is available" + (String.IsNullOrEmpty(installed) ? "" : " (you have " + UpdateCheck.ShortVersion(installed) + ")") + (offer.Prerelease ? " · test build" : "");
-            if (old != null && (string)old.AccessibleDescription == offer.Version) return;
+            // 1.0.19: an approval taken back offers the approved, older version: worded as going back to it.
+            bool back = product == UpdateProducts.Loader && !takeover && UpdateCheck.GoesBack(offer, installed);
+            // A Slotsloader installed outside the Manager: the approved one through the Manager, to use its settings.
+            string text = takeover ? "Install Slotsloader " + offer.Version + " through the Manager to use its settings"
+                : back ? "Go back to Slotsloader " + offer.Version + ", the approved version (you have " + UpdateCheck.ShortVersion(installed) + ")"
+                : name + " " + offer.Version + " is available" + (String.IsNullOrEmpty(installed) ? "" : " (you have " + UpdateCheck.ShortVersion(installed) + ")") + (offer.Prerelease ? " · test build" : "");
+            string key = offer.Version + (takeover ? "|install" : back ? "|back" : "");
+            if (old != null && (string)old.AccessibleDescription == key) return;
             if (old != null) { toastHost.Controls.Remove(old); old.Dispose(); }
-            var toast = new Panel { Tag = product, Width = Px(470), Height = Px(86), BackColor = Palette.Raised, Padding = new Padding(Px(12), Px(8), Px(8), Px(8)), Margin = new Padding(0, Px(8), 0, 0), AccessibleName = text, AccessibleDescription = offer.Version, AccessibleRole = AccessibleRole.Alert };
+            var toast = new Panel { Tag = product, Width = Px(470), Height = Px(86), BackColor = Palette.Raised, Padding = new Padding(Px(12), Px(8), Px(8), Px(8)), Margin = new Padding(0, Px(8), 0, 0), AccessibleName = text, AccessibleDescription = key, AccessibleRole = AccessibleRole.Alert };
             toast.Paint += delegate(object sender, PaintEventArgs e) { using (var pen = new Pen(Palette.Accent, Math.Max(1F, Px(1)))) e.Graphics.DrawRectangle(pen, 0, 0, toast.Width - 1, toast.Height - 1); };
             var label = new Label { UseMnemonic = false, Text = text, Dock = DockStyle.Top, Height = Px(28), ForeColor = Palette.Text, Font = Palette.Normal, AutoEllipsis = true, Name = "toastText" };
             var row = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = Padding.Empty };
-            FlatButton update = Button("Update", true, 92, delegate { if (product == UpdateProducts.Loader) StartLoaderUpdate(offer, installed); else StartManagerUpdate(offer); });
+            FlatButton update = Button(takeover ? "Install" : back ? "Go back" : "Update", true, 92, delegate { if (takeover) OfferSlotsLoaderInstall(); else if (product == UpdateProducts.Loader) StartLoaderUpdate(offer, installed); else StartManagerUpdate(offer); });
             FlatButton notes = Button("What's new", false, 110, delegate { OpenReleasePage(offer.HtmlUrl); });
             FlatButton skip = Button("Skip this version", false, 140, delegate { UpdateSettings s = UpdateSettings.Load(); if (product == UpdateProducts.Loader) s.SkipLoader = offer.Version; else s.SkipManager = offer.Version; s.Save(); SetToast(product, null, null); });
             FlatButton close = Button("✕", false, 40, delegate { UpdateSettings s = UpdateSettings.Load(); if (product == UpdateProducts.Loader) s.DismissedLoader = offer.Version; else s.DismissedManager = offer.Version; s.Save(); SetToast(product, null, null); });
-            update.AccessibleName = "Update " + name + " to " + offer.Version; notes.AccessibleName = "What's new in " + name + " " + offer.Version + " (opens the release page)";
+            update.AccessibleName = (takeover ? "Install " + name + " " : back ? "Go back to " + name + " " : "Update " + name + " to ") + offer.Version; notes.AccessibleName = "What's new in " + name + " " + offer.Version + " (opens the release page)";
             skip.AccessibleName = "Skip " + name + " " + offer.Version; close.AccessibleName = "Dismiss the " + name + " update until the next check";
             foreach (FlatButton b in new[] { update, notes, skip, close }) { b.Width = Px(b.Width); b.Height = Px(32); b.Font = Palette.Small; b.Margin = new Padding(0, 0, Px(6), 0); row.Controls.Add(b); }
             toast.Controls.Add(row); toast.Controls.Add(label);
@@ -263,7 +320,7 @@ namespace SlotsInstaller
             settingsUpdateSkipped = new NoteLabel { Height = 0, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdateSkipped" };
             add(settingsUpdateSkipped);
             add(Rhythm.Gap(Rhythm.Related));
-            add(new NoteLabel { Height = 26, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdatePrivacy", Text = "Checks GitHub (" + LoaderPin.Repo + ") once a day. Nothing installs without your OK." });
+            add(new NoteLabel { Height = 26, ForeColor = Palette.Muted, Font = Palette.Small, Name = "settingsUpdatePrivacy", Text = "Checks GitHub (" + LoaderPin.Repo + ") at start and once a day. Nothing installs without your OK." });
         }
         // 1.0.19: the choice is saved at once and written to the game folder when nothing else is changing it (else at
         // the next refresh, as after a change made while SF6 runs).
