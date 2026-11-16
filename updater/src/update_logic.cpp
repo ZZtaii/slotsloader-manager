@@ -85,6 +85,7 @@ const std::vector<KnownPackage>& known_packages() {
         { "native_core", "SF6 Native Core", "reframework/plugins/sf6core_native.dll" },
         { "recording_manager", "SF6 Recording Manager", "reframework/plugins/SF6_CRSMNative.dll" },
         { "profile_mod", "SF6 Profile Mod", "reframework/plugins/profile_mod.dll" },
+        { "custom_combos", "SF6 Custom Combos", "reframework/plugins/SF6_CustomCombos.dll" },   // 1.37.0: updaters before it skip it
     };
     return k;
 }

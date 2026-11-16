@@ -1,4 +1,4 @@
-"""Build the four Fluffy packages of a release (build.bat first):
+"""Build the Fluffy packages of a release (build.bat first):
 
   SF6_NativeCore_<core version>.zip    reframework/plugins/sf6core_native.dll
   SF6_SlotsLoader_<version>.zip        make_fluffy_package.py (works with or without the core), with report_mod.dll, Report a bug,
@@ -7,8 +7,23 @@
   SF6_CRSM_<recording manager version>.zip  the SF6 Recording Manager: reframework/plugins/SF6_CRSMNative.dll, its locale
                                        table, settings.json (every owner native, standalone auto) and the Community
                                        config.json (needs the core)
+  SF6_ProfileMod_<version>.zip         reframework/plugins/profile_mod.dll (needs the core)
+  SF6_CustomCombos_<version>.zip       reframework/plugins/SF6_CustomCombos.dll and the tables it reads, under
+                                       reframework/data/SF6_CustomTrials_data/ (needs the core 0.9.14: its GUID texts)
 
-The core, Color Mod and Recording Manager versions are read from their sources. No game path is shared by two
+Custom Combos ships the fighters' tables the DLL reads to name and judge the moves, from the tracked
+custom_combos/data/SF6_CustomTrials_data/ (_labels/<Fighter>.json, _actions/<Fighter>.json, _end_delays.json), and the
+trials of that folder (<Fighter>/<name>.json): only imports the GAME validated (its judge passed every step of the trial's
+own example; they are put there by the owner's private tool from the verdicts, never by hand), see cc_trial_check.
+Checked, the build stops: any other file there (a recording, config.json, an editor or lab file), a fighter of cc_trials.hpp's
+kFighters without both tables or a table for no fighter, a table that is no JSON object or names another fighter_id, an
+absolute path, a user folder or an address in one, a key the DLL never reads (CC_KEYS: the game's own move names that
+the label tables carried in "en" / "fr" never ship, a skill keeps "cmd" and "m"); the core of the release older than
+CC_MIN_CORE. The DLL creates the rest
+itself (config.json, _rec_settings.json, the fighters' folders, _trash). The tables are written with LF line ends, as the
+repository stores them, whatever the checkout did to them.
+
+The core, Color Mod, Recording Manager, Profile Mod and Custom Combos versions are read from their sources. No game path is shared by two
 packages: the core is its own package, so every mod that needs it uses the same one.
 
 The Recording Manager's config.json holds the Community Worker's address and its API key. It never goes into git: it
@@ -38,6 +53,10 @@ from make_fluffy_package import CHARACTERS      # the 32 character folders of co
 CRSM = os.path.join(REPO, "crsm")
 CRSM_MIN_CORE = "0.9.5"       # 0.9.5: on_confirm (Confirm on spin rows, the drill details dialog); 0.8.0: the Native Core's training pause-menu service (pm_*), needed by the Recording Manager
 PROFILE_MIN_CORE = "0.8.2"   # ui_clone_control / ui_agents / ui_find_cached, as the Slots Loader's Replays tab
+CC_MIN_CORE = "0.9.14"       # text_new / text_set / obj_set_guid (GUID texts): Custom Combos stays off without them
+CC = os.path.join(REPO, "custom_combos")
+CC_DATA_REL = "custom_combos/data/SF6_CustomTrials_data"
+G_CC_DATA = "reframework/data/SF6_CustomTrials_data"
 CRSM_OWNERS = ("community", "files", "replay", "reversal", "record", "ui")
 CRSM_CONFIG_REL = "crsm/package/config.json"
 G_CRSM_CONFIG = "reframework/data/SF6_Community_data/config.json"
@@ -208,6 +227,175 @@ PROFILE_README = CRLF.join([
     "",
 ])
 
+CC_README = CRLF.join([
+    "SF6 Custom Combos v%s",
+    "=====================",
+    "",
+    "Your own combos as trials, in the game's own Combo Trial screens: Fighting Ground > Practice > Custom Combos, then a",
+    "fighter. A trial has the game's recipe, judge and example (Watch Example), and Reset Battle.",
+    "",
+    "RECORD A COMBO: the first row of every tab is the recording slot, \"[REC] Record a combo\". Play the combo there: it is",
+    "saved as a trial of that tab.",
+    "FROM A REPLAY: in a replay's pause menu, Start Combo Recording. Every finished combo of either player is then kept, over",
+    "several rounds (a combo that ends the round is kept whole), until Save Combo Recording (or Cancel Recording). Each one",
+    "becomes a trial of its fighter, its title crediting the player: \"<Fighter> (Replay, <player's name>)\".",
+    "THE LIST: T (pad Y) on a trial: Rename, Move to another tab, Delete. Names of any length scroll.",
+    "IN A TRIAL: in its pause menu, T (pad Y) turns Auto Reset On Fail on or off (a dropped combo starts again by itself),",
+    "R (pad X) shows Training's Frame Meter. Both are kept in reframework/data/SF6_CustomTrials_data/config.json.",
+    "",
+    "THE COMBOS THAT COME WITH THE MOD: community combos from the SF6CM site, each credited to its author in its file",
+    "(and in its title when the name has Latin letters). Only combos the game itself validated: it replayed each",
+    "trial's example and its own judge passed every step. Your own trials sit beside them: each trial is one .json",
+    "file of reframework/data/SF6_CustomTrials_data/<Fighter>/; a deleted one is kept in _trash/<Fighter>/ there.",
+    "The _labels and _actions tables of that folder name and judge each fighter's moves: they come with the mod.",
+    "The _actions tables are derived from cdjay's SF6_TOOLS_CC (MIT licence, github.com/cdjay/SF6_TOOLS_CC).",
+    "",
+    "REQUIRES the SF6 Native Core package (%s or newer) from the same release. Without it the mod stays off and",
+    "REFramework's log says: custom_combos: off (needs the SF6 Native Core 0.9.14 or newer: its GUID texts)",
+    "",
+    "UPDATES: once per launch the game asks GitHub (github.com) whether a newer SF6 Mod Suite release exists (nothing about",
+    "you is sent) and, if so, offers it at the main menu. \"check_for_updates\": false in",
+    "reframework/data/SF6_Update_data/state.json turns this off.",
+    "",
+    "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
+    "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",
+    "",
+])
+
+def vtuple(v):
+    return tuple(int(x) for x in re.match(r"\d+(?:\.\d+)*", v).group(0).split("."))
+
+def cc_fighters():
+    """{folder: fighter id} of custom_combos/cc_trials.hpp kFighters: the folders the DLL reads."""
+    src = open(os.path.join(CC, "cc_trials.hpp"), encoding="utf-8").read()
+    m = re.search(r"kFighters\[\]\s*=\s*\{(.*?)\};", src, re.S)
+    if not m:
+        sys.exit("Custom Combos: kFighters not found in custom_combos/cc_trials.hpp")
+    f = {d: int(i) for i, d in re.findall(r'\{\s*(\d+)\s*,\s*"([^"]+)"\s*\}', m.group(1))}
+    if len(f) < 30:
+        sys.exit("Custom Combos: kFighters of cc_trials.hpp reads as %d fighters" % len(f))
+    return f
+
+# The keys of the tables: what the DLL reads (cc_labels.hpp load_labels, cc_take.hpp rec_labels, cc_trials.hpp end_delay),
+# with fighter_id (checked here) and _actions' _source (its origin, cdjay's MIT data). A skill of _labels: cmd and m only.
+CC_KEYS = {"_labels": {"fighter_id", "slots", "actions", "modern", "assist", "skills", "chains"},
+           "_actions": {"_source", "fighter_id", "groups"}}
+CC_SKILL_KEYS = {"cmd", "m"}
+
+CC_PRIVATE = re.compile(rb"[A-Za-z]:[\\/]|\\\\\\\\|[\\/]Users[\\/]|://|127\.0\.0\.1|localhost", re.I)
+
+# A shipped trial: an import (source "sf6cm:<id>"), never a recording, with only the keys an import holds.
+CC_TRIAL_KEYS = {"schema", "character", "fighter_id", "control", "gauges", "steps", "start", "demo", "end_delay", "source",
+                 "author", "notes", "title", "level", "order", "dummy_counter", "dummy"}
+
+def cc_trial_check(rel, j, fighters):
+    """the reason a file of <Fighter>/ may not ship, or None"""
+    d = rel.split("/")[0]
+    if j.get("schema") != "sf6.custom-trial.v1":
+        return "is no sf6.custom-trial.v1"
+    if j.get("character") != d or j.get("fighter_id") != fighters[d]:
+        return "names another fighter than its folder"
+    if j.get("recorded") or not re.fullmatch(r"sf6cm:[0-9a-f]{8,64}", str(j.get("source") or "")):
+        return "is no import (a recording or a trial of the owner's does not ship)"
+    extra = set(j) - CC_TRIAL_KEYS
+    if extra:
+        return "holds keys an import does not have: " + ", ".join(sorted(extra)[:6])
+    if not j.get("steps") or not isinstance(j.get("demo"), dict) or not (j["demo"].get("rle") or j["demo"].get("timeline")):
+        return "has no steps or no example"
+    if j.get("level") not in (0, 1, 2) or j.get("control") not in ("classic", "modern"):
+        return "has no level or control type the lists know"
+    return None
+
+def cc_data():
+    """[(path in the zip, bytes)]: the tables of custom_combos/data/SF6_CustomTrials_data and its trials, after their checks
+    (docstring)."""
+    top = os.path.join(REPO, *CC_DATA_REL.split("/"))
+    if not os.path.isdir(top):
+        sys.exit("Custom Combos: missing " + CC_DATA_REL)
+    fighters = cc_fighters()
+    want = {"_end_delays.json": None}
+    for d, i in fighters.items():
+        want["_labels/%s.json" % d] = i
+        want["_actions/%s.json" % d] = i
+    found, trials = {}, {}
+    for root, _, names in os.walk(top):
+        for n in names:
+            rel = os.path.relpath(os.path.join(root, n), top).replace(os.sep, "/")
+            parts = rel.split("/")
+            if len(parts) == 2 and parts[0] in fighters and re.fullmatch(r"[0-9a-f]{8,64}\.json", parts[1]):
+                trials[rel] = os.path.join(root, n)
+                continue
+            if rel not in want:
+                sys.exit("Custom Combos: %s/%s is neither a table the DLL reads nor an import's trial (no recording, "
+                         "config.json, editor or lab file ships)" % (CC_DATA_REL, rel))
+            found[rel] = os.path.join(root, n)
+    missing = sorted(set(want) - set(found))
+    if missing:
+        sys.exit("Custom Combos: missing %s" % ", ".join(missing[:6]))
+    out = []
+    for rel in sorted(found):
+        data = open(found[rel], "rb").read().replace(b"\r\n", b"\n")
+        try:
+            j = json.loads(data.decode("utf-8-sig"))
+        except ValueError as e:
+            sys.exit("Custom Combos: %s: %s" % (rel, e))
+        if not isinstance(j, dict) or not j:
+            sys.exit("Custom Combos: %s is no JSON object" % rel)
+        if want[rel] is not None and j.get("fighter_id") != want[rel]:
+            sys.exit("Custom Combos: %s says fighter_id %r, kFighters %d" % (rel, j.get("fighter_id"), want[rel]))
+        kind = rel.split("/")[0]
+        extra = set(j) - CC_KEYS[kind] if kind in CC_KEYS else set()
+        if kind == "_labels":
+            for s in (j.get("skills") or {}).values():
+                extra |= set(s) - CC_SKILL_KEYS if isinstance(s, dict) else {"a skill that is no object"}
+        elif rel == "_end_delays.json":
+            for f in j.values():
+                extra |= set(f) - {"a", "s"} if isinstance(f, dict) else {"a fighter that is no object"}
+                for m in (f.values() if isinstance(f, dict) else ()):
+                    if not isinstance(m, dict) or not all(isinstance(x, int) for x in m.values()):
+                        extra.add("a delay that is no number")
+        if extra:
+            sys.exit("Custom Combos: %s holds what the DLL never reads: %s" % (rel, ", ".join(sorted(extra)[:6])))
+        m = CC_PRIVATE.search(data)
+        if m:
+            sys.exit("Custom Combos: %s holds a path or an address (%r)" % (rel, m.group(0)))
+        out.append((G_CC_DATA + "/" + rel, data))
+    for rel in sorted(trials):
+        data = open(trials[rel], "rb").read().replace(b"\r\n", b"\n")
+        try:
+            j = json.loads(data.decode("utf-8-sig"))
+        except ValueError as e:
+            sys.exit("Custom Combos: %s: %s" % (rel, e))
+        why = cc_trial_check(rel, j, fighters) if isinstance(j, dict) else "is no JSON object"
+        if why:
+            sys.exit("Custom Combos: %s %s" % (rel, why))
+        m = CC_PRIVATE.search(data)
+        if m:
+            sys.exit("Custom Combos: %s holds a path or an address (%r)" % (rel, m.group(0)))
+        out.append((G_CC_DATA + "/" + rel, data))
+    return out
+
+def cc_package(out_dir, version, core_v, data):
+    print("== SF6 Custom Combos %s" % version)
+    if vtuple(core_v) < vtuple(CC_MIN_CORE):
+        sys.exit("Custom Combos: needs the SF6 Native Core %s, the release's is %s" % (CC_MIN_CORE, core_v))
+    out = os.path.join(out_dir, "SF6_CustomCombos_%s.zip" % version)
+    write_zip(out,
+              "name=SF6 Custom Combos\nversion=%s\ndescription=Your own combos as trials in the game's Combo Trial screens (Fighting Ground > Practice > Custom Combos): record them in the recording slot or from a replay, then rename, move or delete them. Ships no combo list. Requires SF6 Native Core %s or newer.\nauthor=Wael\nNameAsBundle=SF6 Custom Combos\n" % (version, CC_MIN_CORE),
+              CC_README % (version, CC_MIN_CORE),
+              [(os.path.join(REPO, "build", "custom_combos", "SF6_CustomCombos.dll"), "reframework/plugins/SF6_CustomCombos.dll")],
+              texts=data)
+    n_trials = sum(1 for p, _ in data if "/_" not in p[len(G_CC_DATA):])
+    by = {}
+    for p, _ in data:
+        if "/_" not in p[len(G_CC_DATA):]:
+            by[p.split("/")[-2]] = by.get(p.split("/")[-2], 0) + 1
+    print("  %d files under %s/ (%d bytes): _labels and _actions for %d fighters, _end_delays.json; %d trial(s) the game "
+          "validated (%s); no config.json"
+          % (len(data), G_CC_DATA, sum(len(b) for _, b in data), (len(data) - n_trials - 1) // 2, n_trials,
+             ", ".join("%s %d" % kv for kv in sorted(by.items())) or "none"))
+    return out
+
 def write_zip(out, modinfo, readme, files, dirs=(), texts=()):
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("modinfo.ini", modinfo)
@@ -353,6 +541,9 @@ def main():
     check_fresh("Slots Loader (plugin)", "build/SF6_CostumeSlotsNative.dll", [("plugin/src", CODE), ("plugin/include", HEADERS), core_api, updater], sl_v)
     check_fresh("Color Mod", "build/colormod/SF6_ColorModNative.dll", [("colormod/src", CODE), common, core_api, ("costumes/loader", HEADERS)], cm_v)
     check_fresh("Profile Mod", "build/profile_mod/profile_mod.dll", [("profile_mod", CODE), core_api])
+    cc_v = version_in(os.path.join(CC, "custom_combos.cpp"), r'kVersion\s*=\s*"([^"]+)"')
+    check_fresh("Custom Combos", "build/custom_combos/SF6_CustomCombos.dll", [("custom_combos", CODE), core_api, ("plugin/include", HEADERS)], cc_v)
+    cc_tables = cc_data()
     if not a.without_report:
         rm_v = version_in(os.path.join(REPO, "report_mod", "src", "host.cpp"), r'kVersion\s*=\s*"([^"]+)"')
         check_fresh("Report a bug", "build/report_mod/report_mod.dll", [("report_mod/src", CODE), ("crsm/src", CODE), ("plugin/src/scroll_logic.hpp", CODE), core_api], rm_v)
@@ -382,6 +573,8 @@ def main():
               PROFILE_README % (pm_v, PROFILE_MIN_CORE),
               [(os.path.join(REPO, "build", "profile_mod", "profile_mod.dll"), "reframework/plugins/profile_mod.dll")])
 
+    cc_zip = cc_package(a.out, cc_v, core_v, cc_tables)
+
     print("== SF6 Slots Loader %s" % a.version)
     sl_zip = os.path.join(a.out, "SF6_SlotsLoader_v%s.zip" % a.version)
     cmd = [sys.executable, os.path.join(HERE, "make_fluffy_package.py"), "--version", a.version, "--out", sl_zip]
@@ -389,7 +582,7 @@ def main():
     if a.without_report: cmd += ["--without-report"]
     if subprocess.call(cmd) != 0: sys.exit("make_fluffy_package.py failed")
 
-    zips = {"core": core_zip, "colormod": cm_zip, "profile": pm_zip, "slots": sl_zip}
+    zips = {"core": core_zip, "colormod": cm_zip, "profile": pm_zip, "combos": cc_zip, "slots": sl_zip}
     if not a.without_crsm:
         zips["crsm"] = crsm_package(a.out)
     check_private(zips.values(), not a.without_report)

@@ -25,7 +25,8 @@ then the core. A DLL of a release before the updater has no export and never run
 ## The version each package reports
 
 Its main DLL's `sf6suite_package_version()` export: `kVersion` (Color Mod `colormod/src/common.cpp`, Recording Manager
-`crsm/src/common.cpp`, Profile Mod `profile_mod/profile_mod.cpp`), `CORE_VERSION` (core), `kPackageVersion` (`plugin/src/version.hpp`,
+`crsm/src/common.cpp`, Profile Mod `profile_mod/profile_mod.cpp`, Custom Combos `custom_combos/custom_combos.cpp`, a package since
+1.37.0: an updater before it skips that id), `CORE_VERSION` (core), `kPackageVersion` (`plugin/src/version.hpp`,
 the Slots Loader package's version, checked by `make_suite_packages.py` against `--version`). The host asks the DLL loaded in the game,
 from the game folder, never its bytes. A Native Core without the export answers through `sf6core_get_api()->get_version`. A DLL that
 reports nothing (built before the updater) is never offered an update: **the first release with the updater must rebuild every package's

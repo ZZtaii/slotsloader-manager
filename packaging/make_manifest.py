@@ -31,6 +31,7 @@ KNOWN = [
     ("native_core", "reframework/plugins/sf6core_native.dll"),
     ("recording_manager", "reframework/plugins/SF6_CRSMNative.dll"),
     ("profile_mod", "reframework/plugins/profile_mod.dll"),
+    ("custom_combos", "reframework/plugins/SF6_CustomCombos.dll"),   # 1.37.0 on (an older updater skips an id it does not know)
 ]
 ROOT_FILES = {"amd_ags_x64.dll", "amd_ags_x64_real.dll", "sf6_slotsclean.exe"}
 MOD_FOLDERS = {"costume_mods", "costume_mods_nsfw", "color_mods", "stage_mods", "title_mods", "ui_mods"}

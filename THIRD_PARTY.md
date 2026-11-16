@@ -75,3 +75,10 @@ with his permission.
 The loader's proxy forwards every export to `amd_ags_x64_real.dll`, which is the copy of
 [AMD AGS](https://github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK) shipped with the game, MIT licence. No AMD code
 is included in this repository.
+
+## Move groups of Custom Combos — `custom_combos/data/SF6_CustomTrials_data/_actions/`
+
+The `groups` of each fighter's `_actions/<Fighter>.json` (a notation, such as `236+LP`, to the game's action ids it
+names) are derived from [SF6_TOOLS_CC](https://github.com/cdjay/SF6_TOOLS_CC) by **cdjay** and SF6CC contributors
+(its `classic_command.display` files; each table names its source in `_source`), MIT licence. They ship in the
+SF6 Custom Combos package, which reads them to name and judge a fighter's moves.

@@ -118,7 +118,11 @@ static void test_manifest() {
     const std::string good = manifest_json(good_manifest());
     Manifest m;
     std::string why;
-    check(parse_manifest(good, &m, &why) && m.packages.size() == 5 && m.suite == "1.30.1", "a good manifest: " + why);
+    check(parse_manifest(good, &m, &why) && m.packages.size() == 6 && m.suite == "1.30.1", "a good manifest: " + why);
+    {   // Custom Combos (1.37.0): known, by its own DLL (an updater before 1.37.0 skips the id: "an unknown package skipped" below)
+        const KnownPackage* cc = find_known("custom_combos");
+        check(cc && std::string(cc->proof) == "reframework/plugins/SF6_CustomCombos.dll", "custom_combos known, its proof SF6_CustomCombos.dll");
+    }
     // malformed
     check(!parses(""), "empty");
     check(!parses("not json"), "not JSON");
@@ -161,7 +165,7 @@ static void test_manifest() {
     // unknown packages: skipped, the rest kept
     {
         std::string t = replace_once(good, "\"packages\": [", "\"packages\": [{\"id\": \"future_mod\", \"whatever\": [1, 2]},");
-        check(parse_manifest(t, &m, &why) && m.packages.size() == 5 && m.skipped.size() == 1 && m.skipped[0] == "future_mod", "an unknown package skipped: " + why);
+        check(parse_manifest(t, &m, &why) && m.packages.size() == 6 && m.skipped.size() == 1 && m.skipped[0] == "future_mod", "an unknown package skipped: " + why);
         check(!parses(replace_once(good, "\"packages\": [", "\"packages\": [{\"id\": \"../x\"},")), "an unknown id that is not a name");
         check(!parses(replace_once(good, "\"packages\": [", "\"packages\": [7,")), "a package that is not an object");
     }
@@ -182,7 +186,7 @@ static void test_manifest() {
         w.tools.push_back(tool());
         const std::string with = manifest_json(w);
         Manifest r;
-        check(parse_manifest(with, &r, &why) && r.packages.size() == 5 && r.tools.size() == 1 && r.tool_notes.empty(), "a manifest with a tool: " + why);
+        check(parse_manifest(with, &r, &why) && r.packages.size() == 6 && r.tools.size() == 1 && r.tool_notes.empty(), "a manifest with a tool: " + why);
         const ManifestTool* t = find_tool(r, "mod_sorter");
         check(t && t->version == "1.1.0" && t->asset == "SF6_ModSorter_1.1.0.zip" && t->size == 4321 && t->file == "SF6_ModSorter.exe" &&
               t->sha256 == std::string(64, 'b'), "the tool read back");
@@ -196,7 +200,7 @@ static void test_manifest() {
             spoil(b.tools[0]);
             Manifest g;
             const bool ok = parse_manifest(manifest_json(b), &g, &why);
-            check(ok && g.packages.size() == 5 && g.tools.empty() && g.tool_notes.size() == 1, "a tool " + what + ": left out, the manifest kept");
+            check(ok && g.packages.size() == 6 && g.tools.empty() && g.tool_notes.size() == 1, "a tool " + what + ": left out, the manifest kept");
         };
         left_out("whose file is a path", [](ManifestTool& x) { x.file = "..\\SF6_ModSorter.exe"; });
         left_out("whose file is in a folder", [](ManifestTool& x) { x.file = "bin/SF6_ModSorter.exe"; });
@@ -216,9 +220,9 @@ static void test_manifest() {
         }
         Manifest g;
         check(parse_manifest(replace_once(good, "\"packages\": [", "\"tools\": {\"id\": \"mod_sorter\"}, \"packages\": ["), &g, &why) &&
-              g.packages.size() == 5 && g.tools.empty() && g.tool_notes.size() == 1, "tools that is no list: left out");
+              g.packages.size() == 6 && g.tools.empty() && g.tool_notes.size() == 1, "tools that is no list: left out");
         check(parse_manifest(replace_once(good, "\"packages\": [", "\"tools\": [7, \"x\"], \"packages\": ["), &g, &why) &&
-              g.packages.size() == 5 && g.tools.empty() && g.tool_notes.size() == 2, "tools that are no objects: left out");
+              g.packages.size() == 6 && g.tools.empty() && g.tool_notes.size() == 2, "tools that are no objects: left out");
     }
 }
 
@@ -233,7 +237,7 @@ static void test_plan() {
     std::map<std::string, std::string> reports = { { "slots_loader", "1.26.0" }, { "color_mod", "0.26.0" }, { "native_core", "0.9.10" }, { "profile_mod", "1.0.0" } };
     auto reader = [&](const KnownPackage& k) { auto it = reports.find(k.id); return it == reports.end() ? std::string() : it->second; };
     const auto inst = detect_installed(root, reader);
-    check(inst.size() == 5, "five packages looked at");
+    check(inst.size() == 6, "six packages looked at");
     int present = 0;
     for (auto& i : inst) present += i.present;
     check(present == 4, "four present (profile_mod's DLL is not there, whatever it would report)");
