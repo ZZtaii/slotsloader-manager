@@ -30,7 +30,7 @@
     <Reference Include="Microsoft.VisualBasic" />
     <Compile Include="src\*.cs" />
     <EmbeddedResource Include="assets\slotsloader.ico"><LogicalName>SlotsInstaller.AppIcon</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="assets\loader-pin.json"><LogicalName>SlotsInstaller.LoaderPin.json</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\dependencies.json"><LogicalName>SlotsInstaller.Dependencies.json</LogicalName></EmbeddedResource>
     <None Include="assets\slotsloader.png" /><None Include="assets\README.md" />
     <None Include="src\app.config" /><None Include="src\app.manifest" />
   </ItemGroup>

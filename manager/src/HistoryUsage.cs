@@ -254,7 +254,11 @@ namespace SlotsInstaller
         internal static HistoryMod MapOutfit(string entry, DateTime utc, List<HistoryEvent> timeline, List<InstalledOutfit> installed)
         {
             string[] parts = entry.Split('/');
-            var mod = new HistoryMod { Mode = HistoryModes.Extra, Character = parts[0], Slot = entry, Name = parts.Length > 1 ? Path.GetFileNameWithoutExtension(parts[1]) : entry };
+            // The name of an outfit the history cannot match: its folder, or its archive without the extension. A folder
+            // name is never cut at a dot ("C. Viper C5 - Stirrups", "Swimwear C1 v0.8").
+            string shown = parts.Length > 1 ? parts[1] : entry;
+            if (parts.Length > 1 && DropPaths.ArchiveExtensions.Any(x => shown.EndsWith(x, StringComparison.OrdinalIgnoreCase))) shown = shown.Substring(0, shown.LastIndexOf('.'));
+            var mod = new HistoryMod { Mode = HistoryModes.Extra, Character = parts[0], Slot = entry, Name = shown };
             HistoryEvent last = null;
             foreach (HistoryEvent e in timeline)
             {

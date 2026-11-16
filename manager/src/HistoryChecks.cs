@@ -293,6 +293,10 @@ namespace SlotsInstaller
             Require(l1.Mods.Single(m => m.Slot == "Cammy/Boots").Source == History.Normalize(boots) && l1.Mods.Single(m => m.Slot == "Luke/Leon").Source == History.Normalize(leon) && l1.Mods.Single(m => m.Slot == "Juri/Juri Summer.zip").Source == "" && l1.Mods.Single(m => m.Slot == "Juri/Juri Summer.zip").Name == "Juri Summer", "slot → outfit mapping: " + HistoryJson.Write(l1));
             Require(l1.Mods.Any(m => m.Name == "Old Tool" && m.Mode == HistoryModes.Tool) && !l1.Mods.Any(m => m.Name == "Cammy Alt"), "replacements at d1: the old tool (predates the history), not Cammy Alt (installed later)");
             Require(r1.Offset == new FileInfo(log).Length, "offset after two complete runs");
+            // An outfit the history cannot match keeps its folder's whole name (dots are not an extension); an archive loses only its extension.
+            var none = new List<HistoryEvent>();
+            string dotted = LoaderLogBackfill.MapOutfit("C. Viper/C. Viper C5 - Stirrups v0.8", now, none, installed).Name, zipped = LoaderLogBackfill.MapOutfit("Ryu/Sakura as Ryu C1 v1.2.ZIP", now, none, installed).Name;
+            Require(dotted == "C. Viper C5 - Stirrups v0.8" && zipped == "Sakura as Ryu C1 v1.2", "unmatched outfit names: " + dotted + " / " + zipped);
             // Appended: a run that left a slot out, then a half-written one.
             string third = Built(d3, true), fourth = Built(d4, false);
             File.AppendAllText(log, third + fourth.Substring(0, fourth.Length / 2), new UTF8Encoding(false));

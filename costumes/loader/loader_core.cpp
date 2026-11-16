@@ -6,11 +6,18 @@
 #endif
 #include "pak.hpp"
 #include "patch.hpp"
-#include "structural.hpp"
+#include "structural_scene.hpp"
+#include "structural_msg.hpp"
 #include "vanilla_inventory.hpp"
 #include "fighter_names.hpp"
 #include "loader_core.hpp"
 #include "archive.hpp"
+#include "nsfw_keywords.hpp"
+#include "manager_mode.hpp"
+#include "outfit_display.hpp"
+#include "swap_repairs.hpp"
+#include "colour_follow.hpp"
+#include <climits>
 
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +40,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <bcrypt.h>
+#include <tlhelp32.h>
+#include <psapi.h>
 #pragma comment(lib, "bcrypt.lib")
 
 // ============================================================================
@@ -64,6 +73,19 @@ static void logf(const char* fmt, ...) {
         st.wYear,st.wMonth,st.wDay,st.wHour,st.wMinute,st.wSecond);
     if (g_log) { fprintf(g_log, "[%s] %s", ts, buf); fflush(g_log); }
     if (g_is_exe) printf("%s", buf);
+}
+
+// Time since the run started and the process's peak memory, logged at each step of a rebuild
+static std::chrono::high_resolution_clock::time_point g_run_t0;
+static void log_step(const char* what) {
+    const double s = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - g_run_t0).count();
+    PROCESS_MEMORY_COUNTERS pmc{};
+    pmc.cb = sizeof(pmc);
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        logf("  [%6.1f s] %s (peak working set %.0f MB, peak commit %.0f MB)\n", s, what,
+             pmc.PeakWorkingSetSize / 1048576.0, pmc.PeakPagefileUsage / 1048576.0);
+    else
+        logf("  [%6.1f s] %s\n", s, what);
 }
 
 static std::string w2a(const wchar_t* w) {
@@ -106,13 +128,23 @@ static std::string int_to_roman(int n) {
 static const char* OLD_TEX_SUFFIXES[] = { "143230113" }; // known old tex versions
 static const int   N_OLD_TEX = 1;
 
-// Part of the fingerprint: change it whenever the loader starts producing a different pak, so
-// that installing a new loader regenerates the pak once even if no mod changed.
+// Part of the fingerprint: LOADER_PAK_ID changes whenever the loader starts producing a different pak,
+// so that installing a new loader regenerates the pak once even if no mod changed. LOADER_META_ID changes
+// when only what is written beside the pak changes (registry, outfits.json, costume_options.json,
+// variants.json, colour swatches): the next launch writes them again and keeps the pak (3d). The json
+// files name the loader by LOADER_PAK_ID.
 // Outfit names follow each other per character in costume number order (Outfit I, II, III...), while a
-// slot keeps its number for good: saved choices and replays name slots by number. Id of the static
-// table's first name message ("Outfit I"), static_meta.json msg_id_base.
+// slot keeps its number for good: saved choices and replays name slots by number. Those names stay what
+// registry.json, outfits.json and variants.json say; what the game shows for a slot is its mod's label
+// (apply_outfit_labels), "Outfit VII" when it has none. Id of the static table's first name message ("Outfit I"),
+// static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-11-04-1.10.9-slotsloader-fork";
+static const char* LOADER_PAK_ID = "2026-11-10-random-outfit";
+static const char* LOADER_META_ID = "2026-10-20-fastpak";
+// Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
+// ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
+// scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
+static const int MANAGER_CONTRACT = 2;   // 2: Manager mode (common/manager_mode.hpp)
 
 // ============================================================================
 // Utility
@@ -203,6 +235,14 @@ struct VanillaIndex {
     // Every model folder a vanilla file lives in, per fighter. A costume can take parts from a
     // folder that is no costume's main folder (Dhalsim's DriveTech: 005/01): a slot must not get it.
     std::unordered_map<int, std::set<int>> vanilla_folders;
+    // The costumes (fighter, costume number) whose scene and material files load each file: a shared file
+    // (000/) loaded by some outfits only (Mai's Outfit 1 head 000/00/), or by none (props of the option
+    // prefabs every costume scene names: Ingrid's cat and book, 000/30-34)
+    std::unordered_map<uint64_t, std::set<std::pair<int, int>>> users;
+    bool used_by(uint64_t h, int fighter, int cno) const {
+        auto it = users.find(h);
+        return it != users.end() && it->second.count({fighter, cno}) > 0;
+    }
 
     enum Section { SEC_NONE = 0, SEC_SUFFIXES = 1, SEC_COSTUMES = 2, SEC_FILES = 3 };
 
@@ -227,8 +267,8 @@ struct VanillaIndex {
         return true;
     }
 
-    // One row of a section, as the TSV writes it (no line end). The TSV is read through this, and so are
-    // the rows of a costume inventoried from the game's files (vanilla_inventory.cpp): both end up the same.
+    // One row of a section, as the TSV writes it (no line end). The TSV is read through this, and so are the
+    // rows of a costume inventoried from the game's files (vanilla_inventory.cpp): both end up the same.
     void add_row(int section, const char* line) {
         if (section == SEC_SUFFIXES) {
             char ext[64], ver[64];
@@ -267,6 +307,7 @@ struct VanillaIndex {
                 uint64_t h = strtoull(hash_s, nullptr, 16);
                 hash_to_paths[h].push_back(path);
                 all_hashes.insert(h);
+                users[h].insert({fighter, cno});
                 // ".../model/esf/esfNNN/FFF/..." -> folder FFF
                 std::string low = str_lower(path);
                 size_t at = low.find("/model/esf/esf");
@@ -321,56 +362,21 @@ struct VanillaIndex {
 };
 
 // ============================================================================
-// Original assets must keep their existing load priority. The inventory protects
-// original keys even when Fluffy has zeroed their hashes in the game's PAK table.
-// Available base/DLC keys cover additional dependencies not listed in the inventory.
-static std::unordered_set<uint64_t> original_asset_hashes(
-        const VanillaIndex& inv, const PakReader& base,
-        const std::vector<std::unique_ptr<PakReader>>& dlc,
-        const std::vector<std::string>& structural_paths) {
-    std::unordered_set<uint64_t> hashes = inv.all_hashes;
-    hashes.reserve(hashes.size() + base.entry_count());
-    auto add_pak = [&](const PakReader* pak) {
-        for (auto& entry : pak->entries()) if (entry.first) hashes.insert(entry.first);
-    };
-    add_pak(&base);
-    for (auto& p : dlc) add_pak(p.get());
-    for (auto& item : inv.hash_to_paths)
-        for (auto& path : item.second) {
-            std::string p = str_lower(path);
-            if (p.compare(0, strlen(BASE_PFX), BASE_PFX) == 0 && p.find(".tex.") != std::string::npos)
-                hashes.insert(pak_path_hash(std::string(STREAM_PFX) + p.substr(strlen(BASE_PFX))));
-        }
-    // These global tables/scenes intentionally declare extra costume slots. No
-    // arbitrary static_meta destination is exempt from original-asset protection.
-    // ver_02_0500 declares fighter 34 (Arjun) and C. Viper's costume 3: its static
-    // copy keeps those vanilla folders and adds fighter 34's reserved ones.
-    for (const char* path : { ESF_ROOT, COSTUME_TBL, COSTUME_MSG,
-            "natives/stm/product/flow/version_update/ver_02_0300/esf.scn.20",
-            "natives/stm/product/flow/version_update/ver_02_0400/esf.scn.20",
-            "natives/stm/product/flow/version_update/ver_02_0500/esf.scn.20" })
-        hashes.erase(pak_path_hash(std::string_view(path)));
-    // The structural files built from the game (build_game_structural): the same three files and the
-    // version scenes that bring fighters, a later one when a game update adds a fighter in a new scene.
-    // Only those names can come from there; anything else stays protected.
-    for (auto& p : structural_paths)
-        if (is_slot_version_scene(p)) hashes.erase(pak_path_hash(std::string_view(p)));
-    return hashes;
-}
-
-// ============================================================================
 // Registry (JSON parse/write for fixed schema)
 // ============================================================================
 
 struct RegSlot {
     std::string mod_id, fighter_dir, original_folder, new_folder, scene_name;
     int fighter=0, original_costume_no=0, new_costume_no=0;
+    bool nsfw = false;      // an outfit of costume_mods_nsfw ("nsfw": true, written only then)
 };
 
 struct Possession {
     int fighter=0, costume_no=0, record_id=0, manage_id=0;
     std::string fighter_dir, name;
     std::string swatches;   // JSON array, colours 1-10: [c0,c1] or null (swatch::compute)
+    bool nsfw = false;      // the plugin hides it while "Display NSFW Outfits" is off
+    bool random = false;    // the character's Random outfit (costume_loader_run: "Each character's Random outfit"): never worn, the plugin draws in its place
 };
 
 struct Registry {
@@ -448,6 +454,7 @@ static Registry load_registry(const char* path) {
             if (line.find("new_costume_no") != std::string::npos) cur_slot.new_costume_no = json_int(line, "new_costume_no");
             if (line.find("new_folder") != std::string::npos) cur_slot.new_folder = json_str(line, "new_folder");
             if (line.find("scene_name") != std::string::npos) cur_slot.scene_name = json_str(line, "scene_name");
+            if (line.find("\"nsfw\": true") != std::string::npos) cur_slot.nsfw = true;
             if (line.find('}') != std::string::npos)
                 { reg.slots.push_back(cur_slot); state = IN_SLOTS; }
         }
@@ -497,7 +504,7 @@ static void save_registry(const char* path, const Registry& reg) {
         fprintf(f, "      \"original_folder\": \"%s\",\n", s.original_folder.c_str());
         fprintf(f, "      \"new_costume_no\": %d,\n", s.new_costume_no);
         fprintf(f, "      \"new_folder\": \"%s\",\n", s.new_folder.c_str());
-        fprintf(f, "      \"scene_name\": \"%s\"\n", s.scene_name.c_str());
+        fprintf(f, "      \"scene_name\": \"%s\"%s\n", s.scene_name.c_str(), s.nsfw ? ",\n      \"nsfw\": true" : "");
         fprintf(f, "    }%s\n", i+1 < reg.slots.size() ? "," : "");
     }
     fprintf(f, "  ],\n  \"next_ids\": {},\n  \"possession\": [\n");
@@ -509,8 +516,10 @@ static void save_registry(const char* path, const Registry& reg) {
         fprintf(f, "      \"costume_no\": %d,\n", p.costume_no);
         fprintf(f, "      \"record_id\": %d,\n", p.record_id);
         fprintf(f, "      \"manage_id\": %d,\n", p.manage_id);
-        fprintf(f, "      \"name\": \"%s\"%s\n", p.name.c_str(), p.swatches.empty() ? "" : ",");
-        if (!p.swatches.empty()) fprintf(f, "      \"swatches\": %s\n", p.swatches.c_str());
+        fprintf(f, "      \"name\": \"%s\"%s\n", p.name.c_str(), p.swatches.empty() && !p.nsfw && !p.random ? "" : ",");
+        if (!p.swatches.empty()) fprintf(f, "      \"swatches\": %s%s\n", p.swatches.c_str(), p.nsfw || p.random ? "," : "");
+        if (p.nsfw) fprintf(f, "      \"nsfw\": true%s\n", p.random ? "," : "");
+        if (p.random) fprintf(f, "      \"random\": true\n");
         fprintf(f, "    }%s\n", i+1 < reg.possession.size() ? "," : "");
     }
     fprintf(f, "  ]\n}\n");
@@ -706,6 +715,26 @@ static std::vector<uint8_t> read_file_long(const std::string& path) {
     return data;
 }
 
+// A .tex the plugin must never ask the engine for at run time: a width or height that is not a power of two, or a mip
+// table that does not hold together (Cow girl Mai's bikini cowtop_nrrc.tex: 4000x4000, its mip table inconsistent,
+// 09/11). Given to setMaterialTexture in place of another texture it crashed the game; only asked for (create_resource),
+// the engine's loading stopped for the rest of the session. Read from the file's head only (TEX\0, version, u16 width at
+// 8, u16 height at 10, the mip table: texture_mip_check); false when it cannot be read.
+static bool tex_npot_at(const std::string& path) {
+    auto wp = make_wide_path(path);
+    HANDLE h = CreateFileW(wp.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    std::vector<uint8_t> b(4096);
+    DWORD rd = 0;
+    const bool ok = ReadFile(h, b.data(), static_cast<DWORD>(b.size()), &rd, nullptr) && rd >= 12;
+    CloseHandle(h);
+    if (!ok || memcmp(b.data(), "TEX\0", 4) != 0) return false;
+    b.resize(rd);
+    const uint32_t w = b[8] | (b[9] << 8), ht = b[10] | (b[11] << 8);
+    auto pow2 = [](uint32_t v) { return v && (v & (v - 1)) == 0; };
+    return !pow2(w) || !pow2(ht);   // (a mip table the loader could not repair: g_tex_bad_files, checked by the caller)
+}
+
 static bool file_stat_long(const std::string& path, uint64_t& size, uint64_t& mtime) {
     auto wp = make_wide_path(path);
     WIN32_FILE_ATTRIBUTE_DATA fa;
@@ -739,11 +768,13 @@ static std::vector<uint8_t> g_cmd_reference;
 static std::unordered_set<std::string> g_tex_repaired_files, g_tex_bad_files;
 static std::unordered_set<std::string> g_layout_upgraded_files;
 
-// Official base/DLC reader only. It never includes generated/mod patch PAKs or loose files.
+// Character-swap repairs (swap_repairs.hpp, from ZZtaii's Slotsloader fork 1.10.4, MIT): only in Manager mode,
+// while the Manager's setting is on (an empty swap_repairs.txt in SF6_Costumes_Data). Off, every mod file is
+// read exactly as without them. Donors come from the official base / DLC reader only, never from generated or mod
+// patch paks or loose files.
 static PakReader* g_swap_official = nullptr;
 static std::unordered_map<std::string, std::vector<uint8_t>> g_swap_donors;
 static std::unordered_set<std::string> g_swap_reported;
-// 1.10.4: swap repairs run only while the Manager's setting is on (swap_repairs.txt beside variant_choices.json).
 static bool g_swap_repairs = false;
 static std::string swap_sha256(const std::vector<uint8_t>& data) {
     BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_HASH_HANDLE hash = nullptr;
@@ -773,7 +804,7 @@ static std::vector<uint8_t> swap_official(const std::string& path) {
 }
 static size_t repair_mod_swap(std::vector<uint8_t>& data, const std::string& path, const std::string& source, bool* known_user = nullptr) {
     if (known_user) *known_user = false;
-    if (!g_swap_repairs) return 0;
+    if (!g_swap_repairs || path.empty()) return 0;
     SwapRepairResult result = repair_swap_file(data, path, swap_official, swap_sha256);
     if (known_user) *known_user = str_ends_with(path, ".user.2") && (result.state == SwapRepairState::Repaired || result.reason == "documented swap USER already current");
     if (result.state != SwapRepairState::Unchanged && g_swap_reported.insert(source + "\n" + result.reason).second)
@@ -789,18 +820,19 @@ static const char* type_label(uint32_t t) {
     }
 }
 
-// A game colour file: its type signatures, MaterialData's among them; empty when it is not one.
+// A game colour file: its type signatures, MaterialData's among them; empty when it is not one
 static std::unordered_map<uint32_t, uint32_t> cmd_signatures(const std::vector<uint8_t>& data) {
     std::unordered_map<uint32_t, uint32_t> crcs;
     if (!user_type_crcs(data, crcs) || !crcs.count(0x9E32F1F4)) crcs.clear();
     return crcs;
 }
 
-// 1.10.8 (user report): Sakura as Ryu installed by the external mod manager replaces Ryu's Outfit 1
-// colours, which turns this file off in the pak. Nothing was read, so no mod colour file was brought to
-// the current signatures (127 in that game) and Ingrid's extra outfits never finished loading. The
-// turned-off entry still holds the game's file; failing that, another fighter's Outfit 1 colours give
-// the same signatures. That one is not the 2023 layout template: its fur block may be another fighter's.
+// Sakura as Ryu installed by a mod manager's PAK method replaces Ryu's Outfit 1 colours, which turns
+// esf001_001_cmd_000 off in the pak: nothing was read, no mod colour file was brought to the current
+// signatures, and the outfits using them never finished loading (Ingrid's). The turned-off entry still
+// holds the game's file; failing that, another fighter's Outfit 1 colours give the same signatures, but
+// not the 2023 layout template (its fur block may be another fighter's). From ZZtaii's Slotsloader fork
+// (1.10.8), MIT.
 static void load_current_crcs(PakReader& base_pak) {
     g_swap_official = &base_pak; g_swap_donors.clear(); g_swap_reported.clear();
     g_current_crc.clear(); g_crc_upgraded_files.clear(); g_crc_stale_files.clear();
@@ -817,12 +849,14 @@ static void load_current_crcs(PakReader& base_pak) {
     int n = 0;
     for (auto* e : base_pak.turned_off_candidates(ref_hash)) {
         if (e->decompressed_size <= 0 || e->decompressed_size > (1 << 20)) continue;
-        if (!cmd_signatures(base_pak.read(*e)).empty()) { found = e; n++; }
+        try { if (!cmd_signatures(base_pak.read(*e)).empty()) { found = e; n++; } }
+        catch (const std::exception&) {}   // another file's data that does not decompress: not this one
     }
     if (n == 1) {
         g_cmd_reference = base_pak.read(*found);
         g_current_crc = cmd_signatures(g_cmd_reference);
-        printf("  colour files: the game's %s is turned off in the pak (a replacement installed over it): read from its turned-off entry\n", ref);
+        printf("  colour files: the game's %s is turned off in the pak (a replacement installed over it): "
+               "read from its turned-off entry\n", ref);
         return;
     }
     for (int f = 0; f < 100; f++) {
@@ -868,91 +902,159 @@ static size_t upgrade_mod_user(std::vector<uint8_t>& data, const std::string& so
 // Mod file reference (pak or disk)
 // ============================================================================
 
-static std::wstring long_w(std::wstring p);
-static std::wstring a2w_path(const std::string& s);
-
-// A file of the game's own natives tree, by pak path (loose files: Fluffy Mod Manager, without
-// REFramework's loose file loader, takes the files it installs out of re_chunk_000.pak and puts them
-// in the game's natives folder), with current type signatures; empty when there is none. Wide calls
-// with the long-path prefix: the game folder can be deep.
-static std::wstring g_game_dir_w;
-static std::wstring loose_game_path(const std::string& pak_path) {
-    std::wstring p = g_game_dir_w + L"\\" + a2w_path(pak_path);
-    for (auto& c : p) if (c == L'/') c = L'\\';
-    return long_w(p);
-}
-static bool loose_game_stat(const std::string& pak_path, uint64_t& size, uint64_t& mtime) {
-    if (g_game_dir_w.empty()) return false;
-    WIN32_FILE_ATTRIBUTE_DATA fa;
-    if (!GetFileAttributesExW(loose_game_path(pak_path).c_str(), GetFileExInfoStandard, &fa)
-        || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return false;
-    size = (uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow;
-    mtime = (uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime;
-    return true;
-}
-static std::vector<uint8_t> read_loose_game_bytes(const std::string& pak_path) {
-    if (g_game_dir_w.empty()) return {};
-    HANDLE h = CreateFileW(loose_game_path(pak_path).c_str(), GENERIC_READ, FILE_SHARE_READ,
-                           nullptr, OPEN_EXISTING, 0, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return {};
-    LARGE_INTEGER li{};
-    std::vector<uint8_t> data;
-    if (GetFileSizeEx(h, &li) && li.QuadPart > 0 && li.QuadPart < (1LL << 31)) {
-        data.resize((size_t)li.QuadPart);
-        DWORD rd = 0;
-        if (!ReadFile(h, data.data(), (DWORD)data.size(), &rd, nullptr) || rd != data.size()) data.clear();
-    }
-    CloseHandle(h);
-    return data;
+// A file of the game's own natives tree, by pak path (loose files: Fluffy Mod Manager puts the files
+// it installs there), with current type signatures; empty when there is none
+static std::string g_game_dir;
+static void probe_asked_loose(const std::string& pak_path);   // (below, with the probes) Manager mode: every loose path asked for is watched (there or not)
+// The loose copy of a game file in the game folder (natives\...), or empty when there is none
+static std::string loose_game_path(const std::string& pak_path) {
+    if (g_game_dir.empty() || str_lower(pak_path).compare(0, 8, "natives/") != 0) return {};
+    probe_asked_loose(pak_path);
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    uint64_t sz = 0, mt = 0;
+    return file_stat_long(p, sz, mt) ? p : std::string();
 }
 static std::vector<uint8_t> read_loose_game_file(const std::string& pak_path) {
-    auto d = read_loose_game_bytes(pak_path);
-    if (!d.empty()) upgrade_mod_user(d, w2a(loose_game_path(pak_path).c_str()));
+    std::string p = loose_game_path(pak_path);
+    if (p.empty()) return {};
+    auto d = read_file_long(p);
+    upgrade_mod_user(d, p);
     return d;
 }
-
-// Colour files a slot took from the game rather than from its outfit, with their state when the pak
-// was built: "pak" (re_chunk_000.pak has it), "dlc" (only a DLC pak has it), "loose:<size>:<mtime>:
-// <content hash>" (in the game's natives folder only, the slot has those bytes) or "none" (nowhere).
-// Saved next to the registry; the next launch rebuilds the pak when one of them is no longer so: an
-// entry Fluffy zeroed or restored, a loose file that appeared, changed or went away.
-// 1.10.9: also the shared custom paths an outfit depends on (add_unrelocated_dependencies,
-// slotcheck::restore_missing_textures), whose loose game file, when there is one, wins over the outfit's.
-static std::map<std::string, std::string> g_game_colour_probes;
-
-static std::string loose_colour_state(const std::string& pak_path) {
-    uint64_t size = 0, mtime = 0;
-    if (!loose_game_stat(pak_path, size, mtime)) return "none";
-    auto bytes = read_loose_game_bytes(pak_path);
-    // 1.10.9: eight bytes at a time (the probes now include shared meshes and textures, read at every launch)
-    uint64_t h = 14695981039346656037ull;
-    size_t i = 0;
-    for (; i + 8 <= bytes.size(); i += 8) {
-        uint64_t w; memcpy(&w, bytes.data() + i, 8);
-        h ^= w; h *= 1099511628211ull; h ^= h >> 29;
-    }
-    for (; i < bytes.size(); i++) { h ^= bytes[i]; h *= 1099511628211ull; }
-    char buf[96];
-    snprintf(buf, sizeof buf, "loose:%llu:%llu:%016llx", (unsigned long long)size,
-             (unsigned long long)mtime, (unsigned long long)h);
-    return buf;
+// A file the game finds under this path: in its paks (re_chunk_000.pak, DLC paks over it), else as a
+// loose copy in its natives folder, where a mod manager's "PAK method" puts a replacement after zeroing
+// the pak entry (from ZZtaii's Slotsloader fork (1.10.1), MIT)
+static bool game_file_exists(const PakReader& base_pak, const std::string& pak_path) {
+    return base_pak.find(pak_path_hash(std::string_view(pak_path))) || !loose_game_path(pak_path).empty();
 }
 
-static void probe_game_colour(const PakReader& base_pak, const std::string& pak_path) {
-    if (g_game_colour_probes.count(pak_path)) return;
-    uint64_t h = pak_path_hash(std::string_view(pak_path));
-    std::string state;
-    if (base_pak.entries().count(h)) state = "pak";
-    else if (base_pak.find(h)) state = "dlc";
-    else state = loose_colour_state(pak_path);
-    g_game_colour_probes[pak_path] = state;
+// Game files a build depended on outside natives\stm\product\model\esf, with their state then: "none" (no loose
+// file there) or "loose:<size>:<date>". The fingerprint already walks that folder file by file when the game has
+// it (a loose file appearing, changing or going away there rebuilds the pak); these are the paths it does not
+// see. Saved beside the registry (LOOSE_PROBES_FILE), probed again at launch, their digest ends the saved
+// fingerprint: a replacement installed, changed or removed at one of them rebuilds the pak. Probed where ZZtaii's
+// Slotsloader fork (1.10.9, MIT) probes: the mod-only dependencies add_restorations writes or leaves to a loose
+// file, and the paths the slot check finds in no pak. Usually none: then no file, and the fingerprint as before.
+//
+// Manager mode (ZZtaii's Slotsloader fork 1.10.9, MIT: its game_colours.tsv): the state of a loose file also holds a digest of
+// its content, and the paths below model\esf are probed too, with the loose colour files a slot took from the game folder. The
+// Manager can put a replacement's file back with the size and the date it had (a reinstall, a restore from its store): the
+// folder walk does not see that, the digest does. Only the files a build depended on are read at launch, a handful. Installed
+// any other way: the states and the probes of before.
+static bool g_manager_mode = false;   // (common/manager_mode.hpp, docs/MANAGER_CONTRACT.md; set once by costume_loader_run)
+static std::map<std::string, std::string> g_loose_probes;
+static std::string loose_probe_state(const std::string& pak_path) {
+    if (g_game_dir.empty()) return "none";
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(make_wide_path(p).c_str(), GetFileExInfoStandard, &fa)
+        || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return "none";
+    char buf[112];
+    int n = snprintf(buf, sizeof buf, "loose:%llu:%llu",
+             (unsigned long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow),
+             (unsigned long long)((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime));
+    if (g_manager_mode) {   // the content too, eight bytes at a time (the fork's digest)
+        uint64_t h = 14695981039346656037ull;
+        if (FILE* f = _wfopen(make_wide_path(p).c_str(), L"rb")) {
+            std::vector<uint8_t> chunk(1 << 16);
+            size_t got;
+            while ((got = fread(chunk.data(), 1, chunk.size(), f)) > 0) {
+                size_t i = 0;
+                for (; i + 8 <= got; i += 8) { uint64_t w; memcpy(&w, chunk.data() + i, 8); h ^= w; h *= 1099511628211ull; h ^= h >> 29; }
+                for (; i < got; i++) { h ^= chunk[i]; h *= 1099511628211ull; }
+            }
+            fclose(f);
+        }
+        snprintf(buf + n, sizeof buf - n, ":%016llx", (unsigned long long)h);
+    }
+    return buf;
+}
+// Manager mode, a probe of a path the build only looked up (probe_asked_loose: is there a loose file?): "there" or "none",
+// the file not read. A replacement put over that loose file keeps the pak; the file going away, or one appearing where
+// there was none, builds again. A path a build also took content from is probed by content (probe_loose), which wins.
+static const char* const LOOSE_THERE = "there";
+static std::string loose_exists_state(const std::string& pak_path) {
+    if (g_game_dir.empty()) return "none";
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(make_wide_path(p).c_str(), GetFileExInfoStandard, &fa)
+        || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return "none";
+    return LOOSE_THERE;
+}
+static void probe_loose(const std::string& pak_path) {
+    const std::string low = str_lower(pak_path);
+    if (low.compare(0, 8, "natives/") != 0) return;
+    if (!g_manager_mode && low.compare(0, 30, "natives/stm/product/model/esf/") == 0) return;   // the folder walk sees those
+    auto it = g_loose_probes.find(low);
+    if (it == g_loose_probes.end()) g_loose_probes[low] = loose_probe_state(low);
+    else if (it->second == LOOSE_THERE) it->second = loose_probe_state(low);   // looked up first, its content taken since
+}
+static void probe_asked_loose(const std::string& pak_path) {
+    if (!g_manager_mode) return;
+    const std::string low = str_lower(pak_path);
+    if (low.compare(0, 8, "natives/") == 0 && !g_loose_probes.count(low)) g_loose_probes[low] = loose_exists_state(low);
+}
+
+// Manager mode: the pak in place is kept after a replacement is installed over the game, by the rule of ZZtaii's
+// Slotsloader fork (1.9.5 and 1.10.9, MIT). The Manager's "Replace original"
+// turns rows of re_chunk_000.pak off (zeros over the path hash), puts its files in the game's natives folder and writes
+// manager_installs.json again. His fingerprint sees all three (the base pak's date, the walk of natives\...\model\esf,
+// the list's date) and builds again each time. In Manager mode those three leave the fingerprint. What decides in
+// their place is kept by each build in game_lookups.tsv beside the registry and asked again at the next launch, from
+// the base pak's index alone (read for the game-inputs digest anyway):
+//   - strict ("s"): the colour files a slot took from the game (the fork's game_colours.tsv): a hash looked up in the
+//     base pak's table and whether a row had it. A replacement installed over one, or removed, builds again: the slot
+//     holds a copy of that file. The loose colour files it took are watched by content (probe_loose), as the mod-only
+//     dependencies add_restorations leaves to a loose file.
+//   - exists ("e"): a path the slot check or the swatches asked for (slotcheck::GameFiles), kept as "the game has it:
+//     a row of the table or a loose file". A replacement of it keeps the pak; the file gone altogether, or one that
+//     was nowhere appearing, builds again (the slot would be left out, or no longer be).
+//   - every other question to the table ("f": a hash looked up, "o": a hash whose turned-off rows were asked for) is
+//     kept for the log only: the launch says how many are answered differently and keeps the pak, as the fork does.
+// What this rule accepts, as the fork did: a slot holds what it was built with. An outfit made while the game's file was
+// there keeps its copy of it (the material file a mesh-only mod is given, a scene) after a replacement is installed
+// over that file, and one made while the replacement was installed refers to the replacement; the slot check's verdict,
+// its repairs and the swatches are those of the last build. Any rebuild (a mod added, changed or removed in
+// costume_mods, a colour file, a game update) brings everything up to date. A game update is seen by the game-inputs
+// digest (the base pak's size, header and index, its path hashes left out).
+static PakReader::Asked g_asked;
+static PakReader* g_asked_pak = nullptr;                // re_chunk_000.pak while a Manager-mode build notes what it asks
+static std::set<uint64_t> g_asked_strict;               // "strict" above
+static std::map<std::string, bool> g_exists_asked;      // "exists" above: lower-case pak path -> the game had it
+struct AskQuiet { AskQuiet() { ++g_asked.quiet; } ~AskQuiet() { --g_asked.quiet; } };
+static void ask_note(uint64_t hash) { if (g_asked_pak) g_asked.found.emplace(hash, g_asked_pak->has_own(hash)); }   // the table's own answer, as find() notes it
+static void ask_strict(uint64_t hash) { if (g_asked_pak) g_asked_strict.insert(hash); }
+static void ask_exists(const std::string& pak_path, uint64_t hash) {   // found in a pak: noted when it is the base pak's own row
+    if (g_asked_pak && g_asked_pak->has_own(hash)) g_exists_asked[str_lower(pak_path)] = true;
+}
+static void ask_exists_loose(const std::string& pak_path, bool there) {   // in no pak: there as a loose file, or nowhere
+    if (g_asked_pak) g_exists_asked.emplace(str_lower(pak_path), there);
+}
+// A loose file of the game folder, without a probe (the launch's check, and the slot check in Manager mode)
+static std::string loose_file_path(const std::string& pak_path) {
+    if (g_game_dir.empty() || str_lower(pak_path).compare(0, 8, "natives/") != 0) return {};
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    return p;
+}
+static bool loose_file_there(const std::string& pak_path) {
+    const std::string p = loose_file_path(pak_path);
+    uint64_t sz = 0, mt = 0;
+    return !p.empty() && file_stat_long(p, sz, mt);
 }
 
 struct ModFileRef {
     PakReader* pak = nullptr;
     uint64_t hash = 0;
     std::string disk_path;  // non-empty -> disk source
-    std::string pak_path;   // canonical source path: recipes run before private-slot relocation
+    std::string pak_path;   // the file's game path ("natives/stm/..."), for the swap repairs; may be empty
+    // A disk file that can change while keeping its size and date (Manager mode: a loose game file a replacement put
+    // in the game folder, taken as a base copy): its probe's state with the digest of its content, part of the name
+    // that means the same bytes at the next build (lasting_key). Empty for every other file.
+    std::string content_tag;
 
     bool is_disk() const { return !disk_path.empty(); }
 
@@ -981,7 +1083,8 @@ struct ModFileRef {
             return;
         }
         auto* e = pak->find(hash);
-        if (e->decompressed_size <= (1 << 20) || (e->attributes & 0xFF) == 0 || (g_swap_repairs && (str_ends_with(pak_path, ".scn.20") || str_ends_with(pak_path, ".user.2")))) {
+        if (e->decompressed_size <= (1 << 20) || (e->attributes & 0xFF) == 0
+            || (g_swap_repairs && (str_ends_with(pak_path, ".scn.20") || str_ends_with(pak_path, ".user.2")))) {
             auto d = pak->read(*e);
             size_t fixed = repair_mod_swap(d, pak_path, source());
             fixed += upgrade_mod_user(d, source());
@@ -998,6 +1101,67 @@ struct ModFileRef {
         attrib = e->attributes; dsize = e->decompressed_size;
     }
 };
+
+// A file put in the pak exactly as it is read from its source. The same source put again (one mod file
+// copied into several slots, runtime options, streaming twins) shares the data of its first copy without
+// being read again (PakWriter::add_same_source: the pak is the same as if it had been read and compared).
+static std::string source_key(const char* how, const ModFileRef& mf) {
+    if (mf.is_disk()) return std::string(how) + "|" + str_lower(mf.disk_path);
+    char buf[64];
+    snprintf(buf, sizeof buf, "|%p|%016llx", (const void*)mf.pak, (unsigned long long)mf.hash);
+    return how + std::string(buf);
+}
+// The same source named so that the name means the same bytes at the next build (pak_sources.tsv): a
+// file by its path, size and date, a mod pak's entry by the pak's and its hash. Empty when it cannot be.
+static std::unordered_map<const PakReader*, std::string> g_pak_ident;   // mod paks: "<path>|<size>|<date>"
+static void note_pak_ident(const PakReader* r, const std::string& path) {
+    uint64_t sz = 0, mt = 0;
+    if (file_stat_long(path, sz, mt)) g_pak_ident[r] = str_lower(path) + "|" + std::to_string(sz) + "|" + std::to_string(mt);
+}
+static std::string lasting_key(const char* how, const ModFileRef& mf) {
+    if (mf.is_disk()) {
+        uint64_t sz = 0, mt = 0;
+        if (!file_stat_long(mf.disk_path, sz, mt)) return {};
+        return std::string(how) + "|d|" + str_lower(mf.disk_path) + "|" + std::to_string(sz) + "|" + std::to_string(mt)
+             + (mf.content_tag.empty() ? std::string() : "|" + mf.content_tag);
+    }
+    auto it = g_pak_ident.find(mf.pak);
+    if (it == g_pak_ident.end()) return {};
+    char hx[24];
+    snprintf(hx, sizeof hx, "%016llx", (unsigned long long)mf.hash);
+    return std::string(how) + "|p|" + it->second + "|" + hx;
+}
+
+static void put_mod_raw(PakWriter& w, uint64_t h, const ModFileRef& mf) {
+    const std::string key = source_key("raw", mf);
+    if (w.add_same_source(h, key)) return;
+    const std::string lasting = lasting_key("raw", mf);
+    if (!w.add_previous(h, lasting)) {
+        std::vector<uint8_t> raw; int64_t att, ds;
+        mf.read_raw(raw, att, ds);
+        w.add_raw(h, std::move(raw), att, ds);
+    }
+    w.note_source(key, lasting);
+}
+static void put_mod_data(PakWriter& w, uint64_t h, const ModFileRef& mf) {
+    const std::string key = source_key("data", mf);
+    if (w.add_same_source(h, key)) return;
+    const std::string lasting = lasting_key("data", mf);
+    if (!w.add_previous(h, lasting)) w.add_uncompressed(h, mf.read_data());
+    w.note_source(key, lasting);
+}
+// The game's paks are named in the header of pak_sources.tsv: an entry by its pak (base pak, DLC paks
+// in order) and place
+static void put_game_raw(PakWriter& w, uint64_t h, PakReader& pak, const PakEntry& e) {
+    char key[48], lasting[128];
+    snprintf(key, sizeof key, "game|%p", (const void*)&e);
+    if (w.add_same_source(h, key)) return;
+    snprintf(lasting, sizeof lasting, "game|%d|%lld|%lld|%lld|%llx", pak.source_of(e), (long long)e.offset,
+             (long long)e.compressed_size, (long long)e.decompressed_size, (unsigned long long)e.attributes);
+    if (pak.source_of(e) < 0) lasting[0] = 0;
+    if (!w.add_previous(h, lasting)) w.add_raw(h, pak.read_raw(e), e.attributes, e.decompressed_size);
+    w.note_source(key, lasting);
+}
 
 // A file directly in product/model/ (no sub-folder): the game keeps none there, so a mod that ships one
 // (Dance Outfit for Cammy: model/1.tex, named by its materials) adds a file, overrides nothing
@@ -1046,18 +1210,14 @@ static int write_streaming_twin(PakWriter& writer,
     const ModFileRef* twin = nullptr;
     if (own) for (auto* files : *own) { auto it = files->find(s_orig); if (it != files->end()) { twin = &it->second; break; } }
     if (twin) {
-        auto data = twin->read_data();
-        uint64_t h = pak_path_hash(std::string_view(s_new));
-        writer.add_uncompressed(h, std::move(data));
+        put_mod_data(writer, pak_path_hash(std::string_view(s_new)), *twin);
         written.insert(s_new);
         return 1;
     }
     uint64_t sh = pak_path_hash(std::string_view(s_orig));
     auto* se = base_pak.find(sh);
     if (se) {
-        auto raw = base_pak.read_raw(*se);
-        uint64_t h = pak_path_hash(std::string_view(s_new));
-        writer.add_raw(h, std::move(raw), se->attributes, se->decompressed_size);
+        put_game_raw(writer, pak_path_hash(std::string_view(s_new)), base_pak, *se);
         written.insert(s_new);
         return 1;
     }
@@ -1086,64 +1246,38 @@ static bool delete_with_retry(const std::string& path) {
 // rebuild the costumes); only its number is kept, since ours goes above it.
 // Ours is split in real paks and marker-only placeholders (see retire_pak): a placeholder is never
 // the pak that holds the costumes. A stage placeholder is not a stage pak (stage_pak_num ignores it).
+// A pak that cannot be read (locked by another program) is still in the row: it goes in `unreadable`,
+// counted as another mod's (ours goes above it, never takes or deletes it), as the stage loader and
+// SF6_SlotsClean count it. From ZZtaii's Slotsloader fork 1.10.1, MIT.
 static void classify_patch_paks(const std::string& pak_dir,
                                 std::vector<PakInfo>& our_paks,
                                 std::vector<PakInfo>& our_stubs,
                                 std::vector<PakInfo>& mod_paks,
                                 int& stage_pak_num,
-                                int& unreadable_top) {
+                                std::vector<PakInfo>& unreadable) {
     stage_pak_num = 0;
-    unreadable_top = 0;
     WIN32_FIND_DATAA fd;
     std::string pattern = pak_dir + "\\re_chunk_000.pak.patch_*.pak";
     HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;   // not a pak (the stage loader skips it too)
         std::string fn = fd.cFileName;
         // Extract number
         auto ps = fn.find("patch_");
         if (ps == std::string::npos) continue;
         int num = atoi(fn.c_str() + ps + 6);
         std::string full = pak_dir + "\\" + fn;
-        // Ours (costume marker), the stage slots' or a mod's: common/pak.cpp
+        // Ours (costume marker), the stage slots' or a mod's: common/pak.cpp, shared with SF6_SlotsClean
         uint32_t entries = 0;
         PatchPakKind kind = classify_patch_pak(full.c_str(), &entries);
-        // 1.10.1: an unreadable pak (locked, in use) is still in the row: ours never goes below it or deletes
-        // itself under it (that would leave a hole)
-        if (kind == PatchPakKind::Unreadable) { unreadable_top = std::max(unreadable_top, num); continue; }
+        if (kind == PatchPakKind::Unreadable) { unreadable.push_back({num, full}); continue; }
         if (kind == PatchPakKind::Stage) { if (entries != 1) stage_pak_num = std::max(stage_pak_num, num); continue; }
         if (kind == PatchPakKind::Costume) (entries == 1 ? our_stubs : our_paks).push_back({num, full});
         else mod_paks.push_back({num, full});
     } while (FindNextFileA(h, &fd));
     FindClose(h);
     std::sort(mod_paks.begin(), mod_paks.end(), [](auto& a, auto& b){ return a.num < b.num; });
-}
-
-// 1.10.1: a missing number below the highest patch pak (left by another tool, an older loader or a manager)
-// hides every pak above it and can stop the game at a black screen. Each gap gets our marker-only placeholder,
-// which the usual rules then keep (something foreign above) or drop (only ours above: our pak moves down).
-static int fill_patch_gaps(const std::string& pak_dir) {
-    std::set<int> present;
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA((pak_dir + "\\re_chunk_000.pak.patch_*.pak").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return 0;
-    do {
-        std::string fn = fd.cFileName;
-        auto ps = fn.find("patch_");
-        if (ps != std::string::npos) { int num = atoi(fn.c_str() + ps + 6); if (num > 0) present.insert(num); }
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-    if (present.empty()) return 0;
-    int filled = 0;
-    for (int n = 1; n < *present.rbegin(); n++) {
-        if (present.count(n)) continue;
-        char name[64];
-        snprintf(name, sizeof name, "\\re_chunk_000.pak.patch_%03d.pak", n);
-        std::string path = pak_dir + name;
-        if (write_marker_pak(path.c_str(), PatchPakKind::Costume)) { filled++; logf("  filled the missing %s with a placeholder (a gap hides every pak after it)\n", path.c_str()); }
-        else logf("  WARN: %s is missing and could not be filled: the paks after it may not load\n", path.c_str());
-    }
-    return filled;
 }
 
 // Takes one of our paks out of the row of patch paks. The game reads them as an unbroken row from
@@ -1155,7 +1289,6 @@ static bool retire_pak(const PakInfo& op, int top_foreign, bool* kept_as_stub = 
     if (op.num > top_foreign) return delete_with_retry(op.path);
     const std::string tmp = op.path + ".tmp";
     if (!write_marker_pak(tmp.c_str(), PatchPakKind::Costume)) { DeleteFileA(tmp.c_str()); return false; }
-    // Same ~10 s of retries as delete_with_retry: a Street Fighter 6 still closing keeps the pak open
     for (int i = 0; i < 20; i++) {
         if (MoveFileExA(tmp.c_str(), op.path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
             if (kept_as_stub) *kept_as_stub = true;
@@ -1167,13 +1300,63 @@ static bool retire_pak(const PakInfo& op, int top_foreign, bool* kept_as_stub = 
     return false;
 }
 
+// A pak being written is <pak>.tmp until it is complete, its big files wait in <pak>.spill (deleted with
+// the loader's handle): what a crash or a power cut left of them is removed. The stage loader, which runs
+// before, has finished with its own .tmp files by then.
+static void drop_temp_paks(const std::string& pak_dir) {
+    for (const char* ext : {".pak.tmp", ".pak.spill"}) {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((pak_dir + "\\re_chunk_000.pak.patch_*" + ext).c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (!str_ends_with(str_lower(fd.cFileName), ext)) continue;
+            const std::string full = pak_dir + "\\" + fd.cFileName;
+            if (DeleteFileA(full.c_str())) logf("  removed %s (left by a build cut short)\n", full.c_str());
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+}
+
 // Marker-only placeholders with nothing foreign above them any more are not needed: they would
 // otherwise sit where the real pak goes, or above it.
 static void drop_stale_stubs(const std::vector<PakInfo>& stubs, int top_foreign) {
     for (auto& st : stubs) {
         if (st.num <= top_foreign) continue;
         if (delete_with_retry(st.path)) logf("  removed placeholder: %s\n", st.path.c_str());
-        else logf("  WARN: cannot remove placeholder %s (in use?)\n", st.path.c_str());
+    }
+}
+
+// The game stops reading the row at its first missing number: a hole another tool left (a pak removed
+// in the middle of the row) hides every pak above it, ours included. Each missing number below a pak
+// that stays (top_foreign) gets our marker-only placeholder, which both loaders keep while a pak of
+// another mod sits above it and delete once none does (drop_stale_stubs, the stage loader's run). A
+// hole with only our paks above it is left: ours go to top_foreign + 1 and the rest above is removed.
+// The placeholder is renamed from <pak>.tmp, never written over a pak that took the number meanwhile.
+// From ZZtaii's Slotsloader fork 1.10.1, MIT.
+static void fill_patch_row_holes(const std::string& pak_dir, int top_foreign) {
+    if (top_foreign <= 1) return;
+    std::set<int> present;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((pak_dir + "\\re_chunk_000.pak.patch_*.pak").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::string fn = fd.cFileName;
+        auto ps = fn.find("patch_");
+        if (ps != std::string::npos) present.insert(atoi(fn.c_str() + ps + 6));
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    for (int n = 1; n < top_foreign; n++) {
+        if (present.count(n)) continue;
+        char name[64];
+        snprintf(name, sizeof name, "\\re_chunk_000.pak.patch_%03d.pak", n);
+        const std::string path = pak_dir + name, tmp = path + ".tmp";
+        if (write_marker_pak(tmp.c_str(), PatchPakKind::Costume) && MoveFileExA(tmp.c_str(), path.c_str(), 0)) {
+            logf("  filled a hole in the patch pak row: patch_%03d (marker only)\n", n);
+        } else {
+            DeleteFileA(tmp.c_str());
+            logf("  WARN: cannot fill the hole in the patch pak row at patch_%03d: the paks above it may not load\n", n);
+        }
     }
 }
 
@@ -1217,10 +1400,10 @@ static bool is_costume_scene(const std::string& low) {
 }
 
 // Model references (mesh, mdf2) of a scene, in file order, each once, as written ("Product/Model/...");
-// at = byte offset of every occurrence (a scene names each resource twice)
+// at = byte offset of every occurrence (a scene names each resource twice). user_files: the joint and
+// chain files under Product/Model/ instead (jcs, chain, havok .user).
 struct SceneRef { std::string text; std::vector<size_t> at; };
-// physics: the physics USER references of the model folders ("Product/Model/.../x_chain.user") instead
-static std::vector<SceneRef> scene_model_refs(const std::vector<uint8_t>& d, bool physics = false) {
+static std::vector<SceneRef> scene_model_refs(const std::vector<uint8_t>& d, bool user_files = false) {
     std::vector<SceneRef> out;
     std::unordered_map<std::string, size_t> index;
     for (size_t i = 0; i + 1 < d.size(); i += 2) {
@@ -1232,8 +1415,8 @@ static std::vector<SceneRef> scene_model_refs(const std::vector<uint8_t>& d, boo
         if (lead != std::string::npos) {
             std::string t = s.substr(lead), low = str_lower(t);
             if (low.compare(0, 14, "product/model/") == 0
-                && (physics ? str_ends_with(low, ".user")
-                            : (str_ends_with(low, ".mesh") || str_ends_with(low, ".mdf2")))) {
+                && (user_files ? str_ends_with(low, ".user")
+                               : (str_ends_with(low, ".mesh") || str_ends_with(low, ".mdf2")))) {
                 auto it = index.find(low);
                 if (it == index.end()) { it = index.emplace(low, out.size()).first; out.push_back({t, {}}); }
                 out[it->second].at.push_back(i + 2 * lead);
@@ -1242,33 +1425,6 @@ static std::vector<SceneRef> scene_model_refs(const std::vector<uint8_t>& d, boo
         i = j;
     }
     return out;
-}
-
-// 1.10.3: the fighters whose body a costume scene uses: the fighter of its costume prefab
-// ("Product/CharParam/esf/esf016/prefab/esf016v00.pfb") and of its body shape
-// ("Product/Model/esf/esf016/001/esf016_001_shape.user"), as "prefab esf016 shape esf016"
-static std::string scene_body(const std::vector<uint8_t>& d) {
-    std::set<std::string> out;
-    for (size_t i = 0; i + 1 < d.size(); i += 2) {
-        size_t j = i;
-        std::string s;
-        while (j + 1 < d.size() && d[j + 1] == 0 && d[j] >= 0x20 && d[j] < 0x7f) { s += (char)d[j]; j += 2; }
-        i = j;
-        size_t lead = s.find_first_not_of("@ ");
-        if (lead == std::string::npos) continue;
-        std::string low = str_lower(s.substr(lead));
-        static const std::string cp = "product/charparam/esf/esf", md = "product/model/esf/esf";
-        if (low.compare(0, cp.size(), cp) == 0 && str_ends_with(low, ".pfb")
-            && low.find("/prefab/") != std::string::npos) {
-            std::string fn = low.substr(low.rfind('/') + 1);   // "esf016v00.pfb"
-            if (fn.size() == 13 && fn.compare(0, 3, "esf") == 0 && fn[6] == 'v') out.insert("prefab " + fn.substr(0, 6));
-        } else if (low.compare(0, md.size(), md) == 0 && str_ends_with(low, "_shape.user")) {
-            out.insert("shape " + low.substr(md.size() - 3, 6));
-        }
-    }
-    std::string r;
-    for (const auto& b : out) r += (r.empty() ? "" : " ") + b;
-    return r;
 }
 
 // "Product/Model/.../x.mesh" -> "natives/stm/product/model/.../x.mesh.230110883", or empty
@@ -1406,6 +1562,8 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
 // Mod costume detection
 // ============================================================================
 
+struct RtoMod;   // runtime costume options of a modular mod (docs/RUNTIME_OPTIONS.md)
+
 struct ModCostume {
     int fighter;
     std::string fighter_dir;
@@ -1421,6 +1579,9 @@ struct ModCostume {
     // Files of an add-on made for another outfit's folder, moved into this costume (path in the costume ->
     // folder they were written for); their material files still name that folder
     std::unordered_map<std::string, std::string> remapped;
+    // Variant of a modular mod with runtime options: the mod's options, and those this costume is made of
+    std::shared_ptr<const RtoMod> rto;
+    std::vector<size_t> rto_selected;
 };
 
 // allow_partial: a costume that replaces only some parts (a head, an accessory) is kept as long as it
@@ -1593,6 +1754,7 @@ struct SlotInfo {
     int fighter=0, original_costume_no=0, new_costume_no=0;
     int record_id=0, manage_id=0;
     const ModCostume* mod_costume = nullptr;
+    bool nsfw = false;         // from costume_mods_nsfw, or NSFW by keywords (outfit_is_nsfw)
 };
 
 // Mod names by mod_id, for the log (the modinfo name, else the mod's folder or archive)
@@ -1603,10 +1765,184 @@ static std::string mod_label(const std::string& id) {
 }
 // Where each mod comes from, for outfits.json: kind ("fluffy pak", "archive", "folder", "pak") and the
 // file or folder the user installed ("re_chunk_000.pak.patch_002.pak", "Ken/KenSFV.zip", "Ryu/Vagrant")
-struct ModSource { std::string kind, source; };
+// nsfw: read from costume_mods_nsfw, or a mod whose name has an NSFW keyword (its outfits shown in game only while the
+// plugin's "Display NSFW Outfits" is on, its options on other outfits NSFW options); nsfw_dir: read from
+// costume_mods_nsfw (a folder the Slotsloader Manager cannot name)
+struct ModSource { std::string kind, source; bool nsfw = false, nsfw_dir = false; };
 static std::unordered_map<std::string, ModSource> g_mod_source;
+static bool mod_is_nsfw(const std::string& mod_id) {
+    auto it = g_mod_source.find(mod_id);
+    return it != g_mod_source.end() && it->second.nsfw;
+}
+static bool mod_in_nsfw_dir(const std::string& mod_id) {
+    auto it = g_mod_source.find(mod_id);
+    return it != g_mod_source.end() && it->second.nsfw_dir;
+}
+
+// The Color Mod keeps an outfit's colours by its costume number: they go with the outfit to the number this build gives it,
+// before the Color Mod reads anything (colour_follow.hpp). former: registry.json's slots as this launch found them; now:
+// this build's. An outfit's name for an updated mod: its label (outfits.json's), none for a Fluffy pak (its file name).
+static void follow_colours(const std::string& game_dir, const std::string& registry_dir,
+                           const std::vector<RegSlot>& former, const std::vector<RegSlot>& now) {
+    colour_follow::RunInput in;
+    in.game_dir = game_dir;
+    in.registry_dir = registry_dir;
+    for (auto& s : former) in.registry.push_back({ s.fighter, s.new_costume_no, s.mod_id, s.original_costume_no, "" });
+    for (auto& s : now) {
+        auto src = g_mod_source.find(s.mod_id);
+        auto nm = g_mod_names.find(s.mod_id);
+        const bool pak_name = src != g_mod_source.end() && src->second.kind == "fluffy pak";
+        in.now.push_back({ s.fighter, s.new_costume_no, s.mod_id, s.original_costume_no,
+                           pak_name || nm == g_mod_names.end() ? std::string() : nm->second });
+    }
+    in.log = [](const std::string& line) { logf("%s", line.c_str()); };
+    try {
+        colour_follow::run(in);
+    } catch (...) {
+        logf("  WARN: colours: the pass stopped on an error (the next launch finishes it or takes it up again)\n");
+    }
+}
+
+// NSFW keywords (common/nsfw_keywords.hpp; costume_mods\settings.ini NsfwKeywords=, empty: detection off) and the
+// outfits made NSFW by their options (an option whose name has a keyword worn by default, a combination with one)
+static std::vector<std::string> g_nsfw_keywords;
+static std::set<std::string> g_nsfw_ids;
+static size_t g_nsfw_kw_mods = 0, g_nsfw_kw_options = 0;   // counts, for the merge audit
+static bool outfit_is_nsfw(const std::string& mod_id) { return mod_is_nsfw(mod_id) || g_nsfw_ids.count(mod_id) > 0; }
+// Outfits of an existing install numbered again because they became NSFW (or stopped being NSFW): the plugin moves a
+// Battle Settings choice of the old number to the new one (outfits.json "moved")
+struct MovedSlot { int fighter = 0, from = 0, to = 0; std::string label; };
+static std::vector<MovedSlot> g_moved_slots;
 struct LeftOut { int fighter; std::string label, reason; };
 static std::vector<LeftOut> g_left_out;
+
+// ============================================================================
+// Runtime costume options (docs/RUNTIME_OPTIONS.md)
+// ============================================================================
+// Always on (the RuntimeOptions= setting of costume_mods\settings.ini is gone; a leftover line is ignored and logged):
+// one outfit per modular mod (its first combination) and every option of the mod stored in the pak for the
+// in-game menu, listed in SF6_Costumes_Data\costume_options.json. Off / Variants are what 1.13.0 - 1.18 could be
+// set to; nothing selects them any more except Manager mode, which takes Off.
+// Manager mode (common/manager_mode.hpp, docs/MANAGER_CONTRACT.md): the Slotsloader Manager installed this
+// loader, which then makes its outfits as the Manager's own Slotsloader fork did: Off (one outfit per
+// variant), slots from costume_mods only, no NSFW keywords, swap repairs on the Manager's setting.
+enum class RtoLayout { Off, Variants, One };
+// g_manager_mode itself is defined above, beside the loose probes that read it (loose_probe_state).
+// Manager mode only: false when the plugin's settings.json says "menu_outfit_names": false (costume_loader_run). The slots then
+// keep their "Outfit V" names in the game's lists. Always true outside Manager mode.
+static bool g_outfit_labels = true;
+static RtoLayout g_rto_layout = RtoLayout::One;
+static const char* RTO_FORMAT = "sf6-costume-options-1";
+static const char* RTO_FILE = "costume_options.json";
+
+struct RtoOption {
+    std::string id, name, folder;
+    std::string mode;   // "base" (always worn, not a choice), "pick" (one per group), "toggle" (on or off)
+    std::unordered_map<std::string, ModFileRef> files;
+    // An option of a separate add-on put on an outfit it was not made with (attach_addons): stored for a slot only
+    // where it fits what the slot wears (addon_fit)
+    bool addon = false;
+    // An option of a retouch (meshes and textures of an outfit, no material file): a file the outfit does not load is
+    // left out (a texture no material file of the outfit names), not a reason to refuse the option. from: the retouch's
+    // own outfit before (its mod id), from_folder: the folder of the game outfit it modified (its slot migrates there)
+    bool retouch = false;
+    std::string from, from_folder;
+    // Its name or folder has an NSFW keyword (UnitFiles::kw): offered and worn only while the plugin's "Display NSFW
+    // Outfits" is on; never worn by default when its group can do without it (RuntimeOptions=on)
+    bool nsfw = false;
+    // Files moved from another costume folder (a version made for another outfit, a subset of a game outfit):
+    // path in `files` (or a file of the outfit's own it equals, left out) -> its path in the mod. A material file
+    // names the textures by their path in the mod: they are pointed at the outfit's (or the option's) copies.
+    std::unordered_map<std::string, std::string> origin;
+};
+struct RtoGroup {
+    std::string name;
+    std::vector<size_t> options;
+    bool required = false;   // the author asks for exactly one of its options: offered without "None"
+};
+struct RtoMod {
+    std::string name, source, defaults_from;
+    std::string key;   // the manifest's key when it is not "<fighter folder>/<name>" (a game outfit's options)
+    std::vector<RtoGroup> groups;   // in the order their files are laid over each other (later wins)
+    std::vector<RtoOption> options;
+    // Every combination build_modular makes (variant slots): its costume id, label and options worn.
+    // row: the label RuntimeOptions=off gives that outfit, the variant Slotsloader Manager shows and turns
+    // on or off (variants.json); empty for a former outfit only kept for the migration of its slot.
+    // source: the archive or folder of that outfit when it is not the mod's (outfits of other archives merged into
+    // this one); cno: its game outfit when the mod id names several outfits (one mod with a costume per game outfit)
+    struct Variant { std::string mod_id, label; std::vector<size_t> selected; std::string row; std::string source; int cno = -1; };
+    std::vector<Variant> variants;
+};
+// unit: the part unit the file belongs to (its chain's target, else its mesh's): swapped together at runtime;
+// joints: a mesh's joint count, own_joints: that of the slot's own mesh at the target (base mesh of a unit)
+struct RtoFile { std::string kind, target, path, unit; int joints = -1, own_joints = -1; bool no_live = false; };   // no_live: never swapped on a model (tex_npot_at)
+struct RtoSlotOut {
+    std::shared_ptr<const RtoMod> mod;
+    std::vector<size_t> selected;                   // options the slot is made of
+    std::map<size_t, std::vector<RtoFile>> files;   // option -> its files, as this slot loads them
+    std::vector<RtoFile> base;                      // what a target is when no chosen option ships it
+    std::vector<size_t> required;                   // pick groups offered without "None" (a file without base copy)
+};
+static std::map<std::pair<std::string, int>, RtoSlotOut> g_rto_slots;   // (fighter_dir, costume_no)
+// A game outfit given the options of separate add-ons (attach_addons): no slot of ours, its options stored under
+// its own folder (rto/<option id>/), the game's files as the way back
+struct RtoGame {
+    int fighter = 0, costume_no = 0;
+    std::string fighter_dir, folder, name;
+    std::shared_ptr<RtoMod> mod;
+    bool stored = false;
+    RtoSlotOut out;
+};
+static std::vector<RtoGame> g_rto_game;
+static std::string rel_tail(const std::string& rel);
+
+// Whether a game costume loads a file (lowercase pak path): its scene or material files name it, or it is a file of
+// the fighter's 000/ that no costume scene names (a prop of the option prefabs every costume scene names: Ingrid's
+// cat and book, 000/30-34), which every outfit of the fighter loads
+static bool outfit_wears(const VanillaIndex& inv, int fighter, int cno, const std::string& path) {
+    const uint64_t h = pak_path_hash(std::string_view(path));
+    if (inv.used_by(h, fighter, cno)) return true;
+    std::string fd, folder;
+    if (!parse_model_folder(path, fd, folder) || folder != "000") return false;
+    if (auto it = inv.users.find(h); it != inv.users.end())
+        for (auto& u : it->second) if (u.first == fighter) return false;
+    return true;
+}
+// Whether a game costume loads a file: outfit_wears, or a file its physics .user files name (game_physics, read while
+// the mods are scanned: attach_addons reads those of the fighters its add-ons go on before the pak is built)
+static const std::map<std::string, std::string>& game_physics(const VanillaIndex& inv, int fighter, int cno);
+static bool outfit_loads(const VanillaIndex& inv, int fighter, int cno, const std::string& low) {
+    return outfit_wears(inv, fighter, cno, low) || game_physics(inv, fighter, cno).count(low) > 0;
+}
+
+// What the runtime does with a file: swap a mesh, a material, a texture or a chain on the model;
+// "colour" (a colour file, for the Color Mod); "other" only takes effect at the next launch
+static const char* rto_kind(const std::string& low) {
+    if (low.find(".mesh.") != std::string::npos) return "mesh";
+    if (low.find(".mdf2.") != std::string::npos) return "material";
+    if (low.find(".tex.") != std::string::npos) return "texture";
+    if (low.find(".chain.") != std::string::npos) return "chain";
+    if (low.find("_cmd_") != std::string::npos && low.find(".user.") != std::string::npos) return "colour";
+    return "other";
+}
+
+// A pak path as the game names the resource: lowercase, without natives/stm/ and the version
+// ("natives/stm/product/model/esf/esf028/006/01/esf028_006_01.mesh.230110883" ->
+//  "product/model/esf/esf028/006/01/esf028_006_01.mesh")
+static std::string resource_name(const std::string& pak_path) {
+    std::string s = str_lower(pak_path);
+    if (s.compare(0, 12, "natives/stm/") == 0) s.erase(0, 12);
+    if (str_ends_with(s, ".x64")) {                       // Havok cloth: .havokcloth.1.x64
+        s.resize(s.size() - 4);
+        auto d = s.rfind('.');
+        if (d != std::string::npos) s.resize(d);
+        return s;
+    }
+    auto d = s.rfind('.');
+    if (d != std::string::npos && d + 1 < s.size()
+        && std::all_of(s.begin() + d + 1, s.end(), [](char c) { return c >= '0' && c <= '9'; })) s.resize(d);
+    return s;
+}
 
 static std::string json_escape(const std::string& v) {
     std::string o;
@@ -1618,14 +1954,228 @@ static std::string json_escape(const std::string& v) {
     return o;
 }
 
+// outfits.json names our pak, which the audit tells from the mod paks by that name. A launch that
+// rebuilds nothing can still find it under another number (moved by the stage loader or by us).
+static void sync_outfits_pak(const std::string& path, const std::string& pak_name) {
+    FILE* fr = fopen(path.c_str(), "rb");
+    if (!fr) return;
+    std::string js; char buf[65536]; size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), fr)) > 0) js.append(buf, n);
+    fclose(fr);
+    const std::string key = "\"pak\": \"";
+    size_t a = js.find(key);
+    if (a == std::string::npos) return;
+    a += key.size();
+    size_t b = js.find('"', a);
+    if (b == std::string::npos || js.compare(a, b - a, pak_name) == 0) return;
+    js.replace(a, b - a, pak_name);
+    if (FILE* fw = fopen(path.c_str(), "wb")) { fwrite(js.data(), 1, js.size(), fw); fclose(fw); }
+}
+
+// outfits.json: every outfit of the last generation with the mod it comes from, read by the audit script
+static void write_outfits_json(const std::string& path, const std::vector<SlotInfo>& slots,
+                               const std::string& pak_name) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return;
+    char when[32];
+    SYSTEMTIME st; GetLocalTime(&st);
+    sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+    // loose_files_kept (ZZtaii's Slotsloader fork 1.10.9: same key, place and meaning): this pak never covers a loose
+    // game file with an outfit's copy, and a replacement installed or removed at a path it depends on rebuilds it
+    // (add_restorations, probe_loose). The Slotsloader Manager (1.0.18) reads it.
+    fprintf(f, "{\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"loose_files_kept\": true,\n  \"pak\": \"%s\",\n  \"outfits\": [",
+            when, json_escape(LOADER_PAK_ID).c_str(), json_escape(pak_name).c_str());
+    bool first = true;
+    for (auto& sl : slots) {
+        auto src = g_mod_source.count(sl.mod_id) ? g_mod_source[sl.mod_id] : ModSource{"", ""};
+        fprintf(f, "%s\n    {\"fighter\": %d, \"fighter_dir\": \"%s\", \"costume_no\": %d, \"name\": \"%s\", "
+                   "\"based_on\": %d, \"label\": \"%s\", \"kind\": \"%s\", \"source\": \"%s\"%s}",
+                first ? "" : ",", sl.fighter, sl.fighter_dir.c_str(), sl.new_costume_no,
+                json_escape(sl.outfit_name).c_str(), sl.original_costume_no,
+                json_escape(mod_label(sl.mod_id)).c_str(), json_escape(src.kind).c_str(), json_escape(src.source).c_str(),
+                sl.nsfw ? ", \"nsfw\": true" : "");
+        first = false;
+    }
+    fprintf(f, "\n  ],\n  \"left_out\": [");
+    first = true;
+    for (auto& lo : g_left_out) {
+        fprintf(f, "%s\n    {\"fighter\": %d, \"label\": \"%s\", \"reason\": \"%s\"}", first ? "" : ",",
+                lo.fighter, json_escape(lo.label).c_str(), json_escape(lo.reason).c_str());
+        first = false;
+    }
+    fprintf(f, "\n  ]");
+    // Outfits numbered again in this run because they became NSFW or stopped being NSFW: the plugin moves a Battle
+    // Settings choice of the old number to the new one (only when there is one: the file is as before otherwise)
+    if (!g_moved_slots.empty()) {
+        fprintf(f, ",\n  \"moved\": [");
+        first = true;
+        for (auto& mv : g_moved_slots) {
+            fprintf(f, "%s\n    {\"fighter\": %d, \"from\": %d, \"to\": %d, \"label\": \"%s\"}", first ? "" : ",", mv.fighter,
+                    mv.from, mv.to, json_escape(mv.label).c_str());
+            first = false;
+        }
+        fprintf(f, "\n  ]");
+    }
+    fprintf(f, "\n}\n");
+    fclose(f);
+}
+
+// costume_options.json (docs/RUNTIME_OPTIONS.md): the options of every modular mod and, for each of its
+// slots, the files each option swaps on the model (target -> stored copy, as the game names resources)
+static void write_options_json(const std::string& path, const std::vector<SlotInfo>& slots,
+                               const std::string& pak_name, const std::vector<RegSlot>& former_slots) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return;
+    char when[32];
+    SYSTEMTIME st; GetLocalTime(&st);
+    sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+    const char* layout = g_rto_layout == RtoLayout::One ? "one" : "variants";
+    fprintf(f, "{\n  \"format\": \"%s\",\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"pak\": \"%s\",\n"
+               "  \"layout\": \"%s\",\n  \"mods\": [", RTO_FORMAT, when, json_escape(LOADER_PAK_ID).c_str(),
+            json_escape(pak_name).c_str(), layout);
+    // Each mod once, keyed by fighter folder and root name (stable across mod updates); "<fighter folder>/nsfw/<name>"
+    // for a mod of costume_mods_nsfw (its own choices, never those of a mod of the same name in costume_mods; a mod NSFW
+    // by keywords keeps its key: its choices stay)
+    auto key_of = [](const std::string& fd, const RtoMod& rm, bool nsfw) {
+        return !rm.key.empty() ? rm.key : fd + (nsfw ? "/nsfw/" : "/") + str_lower(rm.name);
+    };
+    // (a slot with nothing to swap is left out: an outfit given an add-on that fits none of its files)
+    auto has_out = [](const SlotInfo& sl) {
+        if (!sl.mod_costume || !sl.mod_costume->rto) return false;
+        auto it = g_rto_slots.find({sl.fighter_dir, sl.new_costume_no});
+        return it != g_rto_slots.end() && !(it->second.files.empty() && it->second.base.empty());
+    };
+    // Every slot with options: our slots, then the game outfits given an add-on's options ("game": true)
+    struct Out {
+        int fighter, costume_no;
+        std::string fighter_dir, folder, name, label, key, mod_id;
+        const RtoSlotOut* so;
+        bool game;
+        bool nsfw;
+    };
+    std::vector<Out> outs;
+    for (auto& sl : slots)
+        if (has_out(sl))
+            outs.push_back({sl.fighter, sl.new_costume_no, sl.fighter_dir, sl.new_folder, sl.outfit_name, mod_label(sl.mod_id),
+                            key_of(sl.fighter_dir, *sl.mod_costume->rto, mod_in_nsfw_dir(sl.mod_id)), sl.mod_id,
+                            &g_rto_slots.at({sl.fighter_dir, sl.new_costume_no}), false, sl.nsfw});
+    for (auto& g : g_rto_game)
+        if (g.stored && !g.out.files.empty())
+            outs.push_back({g.fighter, g.costume_no, g.fighter_dir, g.folder, g.name, g.name, key_of(g.fighter_dir, *g.mod, false),
+                            std::string(), &g.out, true, false});
+    struct ModOut { std::string key; const RtoMod* mod; bool nsfw; };
+    std::vector<ModOut> mods;
+    for (auto& o : outs)
+        if (std::none_of(mods.begin(), mods.end(), [&](auto& m) { return m.key == o.key; }))
+            mods.push_back({o.key, o.so->mod.get(), o.nsfw});
+    bool first = true;
+    for (auto& [k, rm, mod_nsfw] : mods) {
+        fprintf(f, "%s\n    {\"key\": \"%s\", \"name\": \"%s\", \"source\": \"%s\", \"defaults_from\": \"%s\",%s \"groups\": [",
+                first ? "" : ",", json_escape(k).c_str(), json_escape(rm->name).c_str(),
+                json_escape(rm->source).c_str(), json_escape(rm->defaults_from).c_str(), mod_nsfw ? " \"nsfw\": true," : "");
+        first = false;
+        bool fg = true;
+        for (auto& g : rm->groups) {
+            fprintf(f, "%s\n      {\"name\": \"%s\", \"options\": [", fg ? "" : ",", json_escape(g.name).c_str());
+            fg = false;
+            bool fo = true;
+            for (auto oi : g.options) {
+                auto& op = rm->options[oi];
+                // live: every file can be swapped on the model; colour: colour files (Color Mod);
+                // relaunch: some file only takes effect at the next launch
+                bool other = false, colour = false;
+                for (auto& [p, mf] : op.files) {
+                    std::string kd = rto_kind(str_lower(p));
+                    if (kd == "other") other = true; else if (kd == "colour") colour = true;
+                }
+                fprintf(f, "%s\n        {\"id\": \"%s\", \"name\": \"%s\", \"folder\": \"%s\", \"mode\": \"%s\", \"apply\": \"%s\"%s}",
+                        fo ? "" : ",", op.id.c_str(), json_escape(op.name).c_str(), json_escape(op.folder).c_str(),
+                        op.mode.c_str(), other ? "relaunch" : colour ? "colour" : "live", op.nsfw ? ", \"nsfw\": true" : "");
+                fo = false;
+            }
+            fprintf(f, "\n      ]}");
+        }
+        // The combinations build_modular makes as variant slots: ready-made sets of options
+        fprintf(f, "\n    ], \"variants\": [");
+        for (size_t v = 0; v < rm->variants.size(); ++v) {
+            fprintf(f, "%s\n      {\"label\": \"%s\", \"options\": [", v ? "," : "",
+                    json_escape(rm->variants[v].label).c_str());
+            for (size_t k = 0; k < rm->variants[v].selected.size(); ++k)
+                fprintf(f, "%s\"%s\"", k ? ", " : "", rm->options[rm->variants[v].selected[k]].id.c_str());
+            fprintf(f, "]}");
+        }
+        fprintf(f, "\n    ]}");
+    }
+    fprintf(f, "\n  ],\n  \"slots\": [");
+    auto put_files = [&](const std::vector<RtoFile>& files, const char* indent) {
+        bool ff = true;
+        for (auto& rf : files) {
+            fprintf(f, "%s\n%s{\"kind\": \"%s\", \"target\": \"%s\", \"path\": \"%s\"", ff ? "" : ",", indent,
+                    rf.kind.c_str(), json_escape(rf.target).c_str(), json_escape(rf.path).c_str());
+            if (!rf.unit.empty()) fprintf(f, ", \"unit\": \"%s\"", json_escape(rf.unit).c_str());
+            if (rf.joints >= 0) fprintf(f, ", \"joints\": %d", rf.joints);
+            if (rf.own_joints >= 0) fprintf(f, ", \"own_joints\": %d", rf.own_joints);
+            if (rf.no_live) fprintf(f, ", \"no_live\": true");
+            fprintf(f, "}");
+            ff = false;
+        }
+    };
+    first = true;
+    for (auto& sl : outs) {
+        const RtoSlotOut& so = *sl.so;
+        fprintf(f, "%s\n    {\"fighter\": %d, \"fighter_dir\": \"%s\", \"costume_no\": %d, \"folder\": \"%s\", "
+                   "\"name\": \"%s\", \"label\": \"%s\", \"mod\": \"%s\",%s\n      \"defaults\": [",
+                first ? "" : ",", sl.fighter, sl.fighter_dir.c_str(), sl.costume_no, sl.folder.c_str(),
+                json_escape(sl.name).c_str(), json_escape(sl.label).c_str(), json_escape(sl.key).c_str(),
+                sl.game ? " \"game\": true," : sl.nsfw ? " \"nsfw\": true," : "");
+        first = false;
+        for (size_t k = 0; k < so.selected.size(); ++k)
+            fprintf(f, "%s\"%s\"", k ? ", " : "", so.mod->options[so.selected[k]].id.c_str());
+        fprintf(f, "],\n      \"options\": {");
+        bool fo = true;
+        for (auto& [oi, files] : so.files) {
+            fprintf(f, "%s\n        \"%s\": [", fo ? "" : ",", so.mod->options[oi].id.c_str());
+            fo = false;
+            put_files(files, "          ");
+            fprintf(f, "]");
+        }
+        fprintf(f, "\n      },\n      \"base\": [");
+        put_files(so.base, "        ");
+        // Pick groups (index in the mod's groups) the menu offers without "None"
+        fprintf(f, "],\n      \"required\": [");
+        for (size_t k = 0; k < so.required.size(); ++k) fprintf(f, "%s%zu", k ? ", " : "", so.required[k]);
+        // Slots of the previous launch that held other combinations of this mod (variant slots before
+        // the one-outfit layout): their saved choices move to this slot with these options
+        fprintf(f, "],\n      \"former\": [");
+        bool fr = true;
+        for (auto& v : so.mod->variants) {
+            if (v.mod_id == sl.mod_id && v.cno < 0) continue;   // a game outfit: the slots of the retouches made from it
+            for (auto& rs : former_slots) {
+                if (rs.mod_id != v.mod_id || rs.fighter_dir != sl.fighter_dir || rs.new_costume_no == sl.costume_no) continue;
+                if (v.cno >= 0 && rs.original_costume_no != v.cno) continue;
+                fprintf(f, "%s\n        {\"costume_no\": %d, \"folder\": \"%s\", \"label\": \"%s\", \"options\": [",
+                        fr ? "" : ",", rs.new_costume_no, rs.new_folder.c_str(), json_escape(v.label).c_str());
+                fr = false;
+                for (size_t k = 0; k < v.selected.size(); ++k)
+                    fprintf(f, "%s\"%s\"", k ? ", " : "", so.mod->options[v.selected[k]].id.c_str());
+                fprintf(f, "]}");
+            }
+        }
+        fprintf(f, "]}");
+    }
+    fprintf(f, "\n  ]\n}\n");
+    fclose(f);
+}
+
 // ============================================================================
-// Variant choices: variant_choices.json (written by SlotsLoader Manager, read here) turns chosen
-// variants of a mod off; variants.json (written here) lists every variant of every mod, on and off.
-// Both name a mod by outfits.json's "source" and a variant by its "label".
+// Slotsloader Manager variant choices (docs/MANAGER_CONTRACT.md). From ZZtaii's Slotsloader fork
+// (1.10.0), MIT: variant_choices.json (written by the Manager, read here) turns chosen variants of a mod
+// off; variants.json (written here) lists every variant of every mod, on and off. Both name a mod by
+// outfits.json's "source" and a variant by its "label".
 // ============================================================================
 
 // A small JSON reader for a file another program writes: objects, arrays, strings (escapes, \u
-// surrogate pairs to UTF-8), numbers, true, false, null.
+// surrogate pairs to UTF-8), numbers, true, false, null. (from ZZtaii's Slotsloader fork (1.10.0), MIT)
 struct JsonReader {
     const std::string& s;
     size_t i = 0;
@@ -1721,6 +2271,81 @@ struct JsonReader {
     }
 };
 
+// A whole JSON document as a tree, for records another program writes (manager_installs.json, the
+// Slotsloader Manager's replace-state.json). Object keys compare case-insensitively ("Mods" / "mods").
+struct JsonValue {
+    enum Kind { Null, Bool, Num, Str, Arr, Obj } kind = Null;
+    bool b = false;
+    double n = 0;
+    std::string s;
+    std::vector<JsonValue> items;
+    std::vector<std::pair<std::string, JsonValue>> members;
+    const JsonValue* get(const char* key) const {
+        if (kind != Obj) return nullptr;
+        for (auto& m : members) if (_stricmp(m.first.c_str(), key) == 0) return &m.second;
+        return nullptr;
+    }
+    std::string str(const char* key) const {
+        const JsonValue* v = get(key);
+        return v && v->kind == Str ? v->s : std::string();
+    }
+    const std::vector<JsonValue>& arr(const char* key) const {
+        static const std::vector<JsonValue> none;
+        const JsonValue* v = get(key);
+        return v && v->kind == Arr ? v->items : none;
+    }
+};
+
+static bool json_parse(JsonReader& j, JsonValue& v, int depth = 0) {
+    if (depth > 64) return false;
+    j.ws();
+    if (j.i >= j.s.size()) return false;
+    const char c = j.s[j.i];
+    if (c == '"') { v.kind = JsonValue::Str; return j.string(v.s); }
+    if (c == '{') {
+        ++j.i;
+        v.kind = JsonValue::Obj;
+        if (j.eat('}')) return true;
+        do {
+            std::string k;
+            if (!j.string(k) || !j.eat(':')) return false;
+            v.members.emplace_back(std::move(k), JsonValue{});
+            if (!json_parse(j, v.members.back().second, depth + 1)) return false;
+        } while (j.eat(','));
+        return j.eat('}');
+    }
+    if (c == '[') {
+        ++j.i;
+        v.kind = JsonValue::Arr;
+        if (j.eat(']')) return true;
+        do {
+            v.items.emplace_back();
+            if (!json_parse(j, v.items.back(), depth + 1)) return false;
+        } while (j.eat(','));
+        return j.eat(']');
+    }
+    if (j.word("true")) { v.kind = JsonValue::Bool; v.b = true; return true; }
+    if (j.word("false")) { v.kind = JsonValue::Bool; return true; }
+    if (j.word("null")) return true;
+    size_t a = j.i;
+    bool digit = false;
+    while (j.i < j.s.size() && (isdigit((unsigned char)j.s[j.i]) || (j.s[j.i] && strchr("+-.eE", j.s[j.i]))))
+        digit |= isdigit((unsigned char)j.s[j.i++]) != 0;
+    if (!digit) return false;
+    v.kind = JsonValue::Num;
+    v.n = strtod(j.s.substr(a, j.i - a).c_str(), nullptr);
+    return true;
+}
+
+// The whole text (a UTF-8 BOM allowed) is one JSON value
+static bool json_parse_text(const std::string& txt, JsonValue& v) {
+    JsonReader j(txt);
+    if (txt.compare(0, 3, "\xEF\xBB\xBF") == 0) j.i = 3;
+    if (!json_parse(j, v)) return false;
+    j.ws();
+    return j.i == txt.size();
+}
+
 // variant_choices.json: { "version": 1, "archives": { "<source>": { "<label>": true|false } } }.
 // Only an explicit false turns a variant off; any other value is ignored.
 using VariantChoices = std::map<std::string, std::map<std::string, bool>>;
@@ -1763,8 +2388,8 @@ static bool parse_variant_choices(const std::string& txt, VariantChoices& out, s
     return true;
 }
 
-// Reads the choices at every launch (before the fingerprint, which includes them). Absent: every
-// variant is on. Malformed: every variant is on, one WARN; the file is never rewritten here.
+// Read at every launch, before the fingerprint (which includes them). Absent: every variant is on.
+// Malformed: every variant is on, one WARN; the file is never rewritten here.
 static void load_variant_choices(const std::string& path) {
     g_variant_choices.clear();
     if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES) return;
@@ -1779,79 +2404,61 @@ static void load_variant_choices(const std::string& path) {
     if (off) logf("  variant choices: %zu variant%s off in variant_choices.json\n", off, off > 1 ? "s" : "");
 }
 
+// The Manager's source key is the path below costume_mods with '/'; it compares case-insensitively
+static std::string choice_source_key(const std::string& s) {
+    std::string k = str_lower(s);
+    for (auto& c : k) if (c == '\\') c = '/';
+    while (!k.empty() && k.back() == '/') k.pop_back();
+    while (!k.empty() && k.front() == '/') k.erase(0, 1);
+    return k;
+}
 static bool variant_chosen_off(const std::string& source, const std::string& label) {
-    auto a = g_variant_choices.find(source);
-    if (a == g_variant_choices.end()) return false;
-    auto b = a->second.find(label);
-    return b != a->second.end() && !b->second;
+    if (g_variant_choices.empty() || source.empty()) return false;
+    const std::string key = choice_source_key(source);
+    for (auto& [src, labels] : g_variant_choices) {
+        if (choice_source_key(src) != key) continue;
+        auto b = labels.find(label);
+        if (b != labels.end() && !b->second) return true;
+    }
+    return false;
+}
+
+// A source the Manager can name: something put in costume_mods (not a Fluffy pak, not Fluffy's own
+// archives, not the game's loose natives files, not costume_mods_nsfw; a mod of costume_mods NSFW by its keywords is
+// one)
+static bool choice_source(const ModSource& ms) {
+    return !ms.source.empty() && !ms.nsfw_dir && ms.kind != "fluffy pak"
+        && ms.source.compare(0, 19, "Fluffy Mod Manager/") != 0
+        && ms.source.compare(0, 7, "natives") != 0;
 }
 
 // Every variant the scan made, per mod (source) in the loader's order, for variants.json
 struct VariantRow { std::string label; bool enabled = true; std::vector<std::string> mod_ids; };
 struct VariantArchive { std::string source, fighter_dir; std::vector<VariantRow> variants; };
 static std::vector<VariantArchive> g_variant_archives;
-
-// outfits.json names our pak, which the audit tells from the mod paks by that name. A launch that
-// rebuilds nothing can still find it under another number (moved by the stage loader or by us).
-static void sync_outfits_pak(const std::string& path, const std::string& pak_name) {
-    FILE* fr = fopen(path.c_str(), "rb");
-    if (!fr) return;
-    std::string js; char buf[65536]; size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), fr)) > 0) js.append(buf, n);
-    fclose(fr);
-    const std::string key = "\"pak\": \"";
-    size_t a = js.find(key);
-    if (a == std::string::npos) return;
-    a += key.size();
-    size_t b = js.find('"', a);
-    if (b == std::string::npos || js.compare(a, b - a, pak_name) == 0) return;
-    js.replace(a, b - a, pak_name);
-    if (FILE* fw = fopen(path.c_str(), "wb")) { fwrite(js.data(), 1, js.size(), fw); fclose(fw); }
-}
-
-// outfits.json: every outfit of the last generation with the mod it comes from, read by the audit script
-static void write_outfits_json(const std::string& path, const std::vector<SlotInfo>& slots,
-                               const std::string& pak_name) {
-    FILE* f = fopen(path.c_str(), "wb");
-    if (!f) return;
-    char when[32];
-    SYSTEMTIME st; GetLocalTime(&st);
-    sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
-    // loose_files_kept (1.10.9): this pak never covers a loose game file with an outfit's copy, and a
-    // replacement installed or removed at a path it depends on rebuilds it (SlotsLoader Manager reads it)
-    fprintf(f, "{\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"loose_files_kept\": true,\n  \"pak\": \"%s\",\n  \"outfits\": [",
-            when, json_escape(LOADER_BUILD_ID).c_str(), json_escape(pak_name).c_str());
-    bool first = true;
-    for (auto& sl : slots) {
-        auto src = g_mod_source.count(sl.mod_id) ? g_mod_source[sl.mod_id] : ModSource{"", ""};
-        fprintf(f, "%s\n    {\"fighter\": %d, \"fighter_dir\": \"%s\", \"costume_no\": %d, \"name\": \"%s\", "
-                   "\"based_on\": %d, \"label\": \"%s\", \"kind\": \"%s\", \"source\": \"%s\"}",
-                first ? "" : ",", sl.fighter, sl.fighter_dir.c_str(), sl.new_costume_no,
-                json_escape(sl.outfit_name).c_str(), sl.original_costume_no,
-                json_escape(mod_label(sl.mod_id)).c_str(), json_escape(src.kind).c_str(), json_escape(src.source).c_str());
-        first = false;
-    }
-    fprintf(f, "\n  ],\n  \"left_out\": [");
-    first = true;
-    for (auto& lo : g_left_out) {
-        fprintf(f, "%s\n    {\"fighter\": %d, \"label\": \"%s\", \"reason\": \"%s\"}", first ? "" : ",",
-                lo.fighter, json_escape(lo.label).c_str(), json_escape(lo.reason).c_str());
-        first = false;
-    }
-    fprintf(f, "\n  ]\n}\n");
-    fclose(f);
+// The mod file paths each variant (mod_id of the scan's output) put into the files of all mods: a
+// variant turned off takes out the ones no variant that stays uses (from ZZtaii's Slotsloader fork
+// (1.10.0), MIT)
+static std::unordered_map<std::string, std::vector<std::string>> g_mod_paths;
+static void note_mod_paths(const std::string& mod_id, const std::unordered_map<std::string, ModFileRef>& files) {
+    auto& v = g_mod_paths[mod_id];
+    for (auto& [p, mf] : files) v.push_back(p);
 }
 
 // variants.json: every variant of every mod this scan found, on and off, in the loader's order, with
 // the outfit it became ("Outfit V") or null. Written whole to a temporary file, then renamed over.
+// RuntimeOptions=on: the variants of a mod made one outfit are the outfits off would make; every one
+// left on has that outfit as its slot (docs/MANAGER_CONTRACT.md).
 static void write_variants_json(const std::string& path, const std::vector<SlotInfo>& slots) {
     std::unordered_map<std::string, std::string> slot_of;   // mod_id -> its first outfit
     for (auto& sl : slots) slot_of.emplace(sl.mod_id, sl.outfit_name);
     char when[32];
     SYSTEMTIME st; GetLocalTime(&st);
     sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+    const char* layout = g_rto_layout == RtoLayout::One ? "on" : g_rto_layout == RtoLayout::Variants ? "variants" : "off";
     std::string js = std::string("{\n  \"generated\": \"") + when + "\",\n  \"loader\": \""
-                   + json_escape(LOADER_BUILD_ID) + "\",\n  \"archives\": [";
+                   + json_escape(LOADER_PAK_ID) + "\",\n  \"contract\": " + std::to_string(MANAGER_CONTRACT)
+                   + ",\n  \"runtime_options\": \"" + layout + "\",\n  \"archives\": [";
     for (size_t a = 0; a < g_variant_archives.size(); ++a) {
         auto& ar = g_variant_archives[a];
         js += std::string(a ? "," : "") + "\n    {\"source\": \"" + json_escape(ar.source) + "\", \"fighter_dir\": \""
@@ -1880,28 +2487,64 @@ static void write_variants_json(const std::string& path, const std::vector<SlotI
     }
 }
 
+// The first NSFW outfit of a fighter is numbered this far after the fighter's other outfits (room for outfits of
+// costume_mods added later: they stay before the NSFW ones in the costume list)
+static const int kNsfwGap = 10;
+
+// random_no: each character's Random outfit number (costume_loader_run: "Each character's Random outfit"), kept out of the mods' numbers
 static std::vector<SlotInfo> assign_slots(
     const std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods,
-    const VanillaIndex& inv, Registry& reg, const StaticMeta& meta) {
+    const VanillaIndex& inv, Registry& reg, const StaticMeta& meta, std::map<int, int>& random_no) {
 
     // Build set of mod_ids that are STILL PRESENT in this run
     std::unordered_set<std::string> present_mod_ids;
     for (auto& [mid, cs] : mods) present_mod_ids.insert(mid);
 
-    // Build existing assignments from registry (only for mods still present)
+    // Build existing assignments from registry (only for mods still present). An outfit that became NSFW (moved into
+    // costume_mods_nsfw, or NSFW by keywords) or stopped being NSFW is numbered again, once (an NSFW outfit comes after
+    // the others, below); its old number stays unused in this run and a Battle Settings choice of it follows it
+    // (g_moved_slots, outfits.json "moved").
     std::unordered_map<std::string, const RegSlot*> existing;
+    std::map<std::string, int> renumbered;   // key -> old number
+    std::unordered_map<int, std::set<int>> reserved;
     for (auto& s : reg.slots) {
         if (!present_mod_ids.count(s.mod_id)) continue; // mod removed -> slot freed
         std::string key = s.mod_id + "\t" + std::to_string(s.fighter) + "\t"
                         + std::to_string(s.original_costume_no);
+        if (s.nsfw != outfit_is_nsfw(s.mod_id)) {
+            const bool dir = mod_in_nsfw_dir(s.mod_id);
+            printf("  %s: %s, numbered again\n", mod_label(s.mod_id).c_str(),
+                   s.nsfw ? (dir ? "moved out of costume_mods_nsfw" : "no longer NSFW")
+                          : (dir ? "moved into costume_mods_nsfw" : "NSFW now (keywords)"));
+            renumbered[key] = s.new_costume_no;
+            reserved[s.fighter].insert(s.new_costume_no);
+            continue;
+        }
         existing[key] = &s;
     }
 
-    // Per-fighter: sets of costume_no and folder values taken by PRESENT mods
-    std::unordered_map<int, std::set<int>> taken_cno, taken_folder;
+    // Per-fighter: sets of costume_no and folder values taken by PRESENT mods (taken_nsfw: those of NSFW outfits)
+    std::unordered_map<int, std::set<int>> taken_cno, taken_folder, taken_nsfw;
     for (auto& [key, rs] : existing) {
         taken_cno[rs->fighter].insert(rs->new_costume_no);
         taken_folder[rs->fighter].insert(atoi(rs->new_folder.c_str()));
+        if (rs->nsfw) taken_nsfw[rs->fighter].insert(rs->new_costume_no);
+    }
+
+    // Each character's Random outfit: the highest number of its range that an outfit installed before does not keep (the
+    // last one, slot_max, unless a mod numbered before this rule has it) nor an outfit numbered again leaves unused; a new
+    // outfit never gets it (reserved, as those)
+    random_no.clear();
+    {
+        std::set<int> fighters;
+        for (auto& r : meta.records) fighters.insert(r.fighter);
+        for (int f : fighters)
+            for (int n = meta.slot_max; n >= meta.slot_min; --n)
+                if (meta.find(f, n) && !taken_cno[f].count(n) && !reserved[f].count(n)) {
+                    random_no[f] = n;
+                    reserved[f].insert(n);
+                    break;
+                }
     }
 
     // Smallest-free-slot: find smallest value in [lo..hi] not in 'taken'
@@ -1919,6 +2562,7 @@ static std::vector<SlotInfo> assign_slots(
         for (auto& mc : costumes) {
             SlotInfo si;
             si.mod_id = mod_id;
+            si.nsfw = outfit_is_nsfw(mod_id);
             si.fighter = mc.fighter;
             si.fighter_dir = mc.fighter_dir;
             si.original_costume_no = mc.original_costume_no;
@@ -1949,13 +2593,39 @@ static std::vector<SlotInfo> assign_slots(
                     si.new_folder = buf;
                 }
             } else {
-                // 1.10.0: a new slot goes after the highest number in use, so a later install is listed
-                // last instead of filling the gap a removed mod left; gaps are filled only once the
-                // fighter's last reserved number is taken.
+                // A new outfit goes after the highest number in use, so a later install is listed last
+                // instead of filling the gap a removed mod left; gaps are filled only once the fighter's
+                // last reserved number is taken. Outfits already installed keep their numbers (above).
+                // (from ZZtaii's Slotsloader fork (1.10.0), MIT)
                 const std::set<int>& t = taken_cno[mc.fighter];
+                const std::set<int>& tn = taken_nsfw[mc.fighter];
                 int cno = t.empty() ? meta.slot_min : std::max(meta.slot_min, *t.rbegin() + 1);
-                if (cno > meta.slot_max || !meta.find(mc.fighter, cno))
-                    cno = smallest_free(t, meta.slot_min, meta.slot_max);
+                if (si.nsfw) {
+                    // NSFW outfits come after the others in the costume list (numbers in order): after every number in
+                    // use, the first one of the fighter kNsfwGap numbers further, so later outfits of costume_mods
+                    // still fit before them
+                    if (tn.empty() && cno + kNsfwGap <= meta.slot_max && meta.find(mc.fighter, cno + kNsfwGap)) cno += kNsfwGap;
+                } else if (!tn.empty()) {
+                    // after the highest number of the fighter's other outfits, before its NSFW ones; else the first
+                    // free number before them; else (no room left there) after them, as before
+                    std::set<int> others;
+                    for (int v : t) if (!tn.count(v)) others.insert(v);
+                    const int lo = *tn.begin();
+                    int c = others.empty() ? meta.slot_min : std::max(meta.slot_min, *others.rbegin() + 1);
+                    if (c >= lo || t.count(c) || !meta.find(mc.fighter, c)) c = lo > meta.slot_min ? smallest_free(t, meta.slot_min, lo - 1) : -1;
+                    if (c >= 0) cno = c;
+                    else printf("  %s: no free number before %s's NSFW outfits, listed after them\n",
+                                mod_label(mod_id).c_str(), mc.fighter_dir.c_str());
+                }
+                // the old number of an outfit numbered again stays unused in this run (a Battle Settings choice of it
+                // moves to the new one)
+                const std::set<int>& rv = reserved[mc.fighter];
+                if (rv.count(cno)) while ((rv.count(cno) || t.count(cno)) && cno <= meta.slot_max) ++cno;
+                if (cno > meta.slot_max || !meta.find(mc.fighter, cno)) {
+                    std::set<int> busy = t;
+                    busy.insert(rv.begin(), rv.end());
+                    cno = smallest_free(busy, meta.slot_min, meta.slot_max);
+                }
                 if (cno < 0) {
                     printf("  WARN: %s has no free outfit slot left (%d to %d all used), %s not installed\n",
                            mc.fighter_dir.c_str(), meta.slot_min, meta.slot_max, mod_label(mod_id).c_str());
@@ -1966,18 +2636,23 @@ static std::vector<SlotInfo> assign_slots(
                 if (fld < 0) continue;
                 si.new_costume_no = cno;
                 taken_cno[mc.fighter].insert(cno);
+                if (si.nsfw) taken_nsfw[mc.fighter].insert(cno);
                 taken_folder[mc.fighter].insert(fld);
                 char buf[32]; sprintf(buf, "%03d", fld);
                 si.new_folder = buf;
                 sprintf(buf, "%sv%02d", mc.fighter_dir.c_str(), cno);
                 si.scene_name = buf;
+                if (auto rn = renumbered.find(key); rn != renumbered.end() && rn->second != cno) {
+                    printf("  nsfw: %s: outfit number %d -> %d (%s)\n", mod_label(mod_id).c_str(), rn->second, cno,
+                           si.nsfw ? "NSFW outfits after the others" : "no longer NSFW");
+                    g_moved_slots.push_back({mc.fighter, rn->second, cno, mod_label(mod_id)});
+                }
             }
             auto* sr = meta.find(mc.fighter, si.new_costume_no);
             if (!sr) {
-                // No record in the slot tables (a fighter the game added, when the structural files could
-                // not be built from the game): the slot would have no table record and no scene folder
-                printf("  WARN: %s has no reserved slot record for costume %d (the slot tables do not know "
-                       "this fighter), %s not installed\n",
+                // No slot record (a fighter in no fighter scene of the game, or one the shipped tables do not know):
+                // the slot would have neither a table record nor a scene folder. From ZZtaii's Slotsloader fork 1.9.7, MIT.
+                printf("  WARN: %s has no reserved slot record for costume %d, %s not installed\n",
                        mc.fighter_dir.c_str(), si.new_costume_no, mod_label(mod_id).c_str());
                 continue;
             }
@@ -1987,7 +2662,7 @@ static std::vector<SlotInfo> assign_slots(
             slots.push_back(si);
             new_reg.push_back({si.mod_id, si.fighter_dir, si.original_folder,
                                si.new_folder, si.scene_name,
-                               si.fighter, si.original_costume_no, si.new_costume_no});
+                               si.fighter, si.original_costume_no, si.new_costume_no, si.nsfw});
         }
     }
     reg.slots = new_reg;
@@ -2003,85 +2678,237 @@ static std::vector<SlotInfo> assign_slots(
 // even when another mod's slot relocates that same folder.
 static std::unordered_set<std::string> g_relocated_mod_paths;
 
+// The instance table of a scene's RSZ block (type id and type signature of each instance), empty
+// when the data is not a scene. SCN header: magic, five counts, five table offsets, the last one
+// being the RSZ block.
+static std::vector<uint64_t> scene_instance_table(const std::vector<uint8_t>& b) {
+    std::vector<uint64_t> out;
+    if (b.size() < 64 || memcmp(b.data(), "SCN\0", 4) != 0) return out;
+    uint64_t R = 0, io = 0;
+    uint32_t ic = 0;
+    memcpy(&R, b.data() + 56, 8);
+    if (R + 48 > b.size() || memcmp(b.data() + R, "RSZ\0", 4) != 0) return out;
+    memcpy(&ic, b.data() + R + 12, 4);
+    memcpy(&io, b.data() + R + 24, 8);
+    if (ic == 0 || R + io + 8ull * ic > b.size()) return out;
+    out.resize(ic);
+    memcpy(out.data(), b.data() + R + io, 8ull * ic);
+    return out;
+}
+
+// Why a mod's scene was not made for this game version, or empty: each instance's type must be one a
+// costume scene of the game uses, with the same type signature (CRC). A scene saved by an older game
+// version keeps the older signature of a type an update changed, and the game cannot read it. The
+// types of every costume scene of the game are read once.
+static std::string scene_version_problem(const std::vector<uint8_t>& mdata, PakReader& base_pak,
+                                         const VanillaIndex& inv) {
+    static std::unordered_map<uint32_t, uint32_t> game_types;   // type id -> type signature
+    static bool read = false;
+    if (!read) {
+        read = true;
+        std::set<std::string> seen;
+        for (auto& ci : inv.costumes) {
+            if (ci.scene.empty() || !seen.insert(ci.scene).second) continue;
+            auto* e = base_pak.find(pak_path_hash(std::string_view(ci.scene)));
+            if (!e) continue;
+            for (uint64_t t : scene_instance_table(base_pak.read(*e)))
+                if (uint32_t(t)) game_types.emplace(uint32_t(t), uint32_t(t >> 32));
+        }
+    }
+    auto mt = scene_instance_table(mdata);
+    if (mt.empty()) return "not a scene";
+    char buf[128];
+    for (uint64_t t : mt) {
+        const uint32_t id = uint32_t(t), crc = uint32_t(t >> 32);
+        if (!id) continue;
+        auto it = game_types.find(id);
+        if (it == game_types.end()) {
+            snprintf(buf, sizeof buf, "type %08x is used by no costume scene of the game", id);
+            return buf;
+        }
+        if (it->second != crc) {
+            snprintf(buf, sizeof buf, "type %08x has signature %08x, the game's is %08x", id, crc, it->second);
+            return buf;
+        }
+    }
+    return {};
+}
+
+// The fighters whose body a costume scene uses: the fighter of its costume prefab
+// ("Product/CharParam/esf/esf016/prefab/esf016v00.pfb") and of its body shape
+// ("Product/Model/esf/esf016/001/esf016_001_shape.user"), as "prefab esf016", "shape esf016".
+// From ZZtaii's Slotsloader fork (1.10.3), MIT.
+static std::set<std::string> scene_body(const std::vector<uint8_t>& d) {
+    std::set<std::string> out;
+    for (size_t i = 0; i + 1 < d.size(); i += 2) {
+        size_t j = i;
+        std::string s;
+        while (j + 1 < d.size() && d[j + 1] == 0 && d[j] >= 0x20 && d[j] < 0x7f) { s += (char)d[j]; j += 2; }
+        i = j;
+        size_t lead = s.find_first_not_of("@ ");
+        if (lead == std::string::npos) continue;
+        std::string low = str_lower(s.substr(lead));
+        static const std::string cp = "product/charparam/esf/esf", md = "product/model/esf/esf";
+        if (low.compare(0, cp.size(), cp) == 0 && str_ends_with(low, ".pfb")
+            && low.find("/prefab/") != std::string::npos) {
+            std::string fn = low.substr(low.rfind('/') + 1);   // "esf016v00.pfb"
+            if (fn.size() == 13 && fn.compare(0, 3, "esf") == 0 && fn[6] == 'v') out.insert("prefab " + fn.substr(0, 6));
+        } else if (low.compare(0, md.size(), md) == 0 && str_ends_with(low, "_shape.user")) {
+            out.insert("shape " + low.substr(md.size() - 3, 6));
+        }
+    }
+    return out;
+}
+
 // A mod that ships the scene of the costume it replaces can point a part at other files than the
 // game's scene does: Mummy Dhalsim keeps its head in 001/0L/ instead of 001/00/, so that the game's
 // head file stays as it is. The slot scene is built from the game's scene (a mod's scene may date from
 // an older game version), so only those model references are taken over from the mod's scene, in
-// place, and only when both scenes list the same number of model references, the file exists (in the
-// mod or in the game) and the path keeps its length. The slot relocation then applies as usual.
-// (1.10.1: a mod scene with another number of model references replaces the game's scene instead;
-// 1.10.3: so does a mod scene that uses another fighter's body, scene_body().)
+// place, when both scenes list the same number of model references, the file exists (in the mod or
+// in the game) and the path keeps its length. The slot relocation then applies as usual.
+// A mod scene that cannot be followed in place because of a path of another length (a part the game's
+// scene leaves empty given a mesh, Sagat's Drive Tech hair part, 04/10) is used whole when it is laid
+// out like the game's scene (same instances, same type signatures, so made for this game version) and
+// every file it names exists: the tool that wrote it laid out its strings.
+// A mod scene that is another layout of the outfit is used whole when it was made for this game version
+// (scene_version_problem: every type signature the game's) and every file it names exists, whatever its
+// instances (from ZZtaii's Slotsloader fork (1.10.1, 1.10.3), MIT; the fork takes it unconditionally):
+// - it lists another number of model parts than the game's scene (SF5 Sakura over Ryu's Outfit 1: 7 parts
+//   against 8, with its own hair chain and havok files): the game's scene cannot take it over part by part;
+// - it puts the outfit on another fighter's body (Sakura as Ryu: Juri's costume prefab, body shape and joint
+//   constraints with Ryu's 8 parts): taken over part by part, the slot kept Ryu's prefab and shape and the
+//   outfit came out on Ryu's skeleton.
 static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8_t>& mdata,
-                            const ModCostume& mc, PakReader& base_pak,
-                            const std::unordered_map<std::string, std::string>& suffixes) {
+                            const ModCostume& mc, PakReader& base_pak, const VanillaIndex& inv) {
+    const auto& suffixes = inv.suffixes;
     auto v = scene_model_refs(vdata), m = scene_model_refs(mdata);
     if (m.empty()) return 0;
-    if (v.size() != m.size()) {
-        printf("      mod scene: %zu model references against %zu in the game's scene, not followed\n",
-               m.size(), v.size());
-        return 0;
-    }
     auto exists = [&](const std::string& p) {
         for (auto* files : {&mc.files_in_folder, &mc.files_shared, &mc.files_other})
             if (files->count(p)) return true;
-        return base_pak.find(pak_path_hash(std::string_view(p))) != nullptr;
+        return game_file_exists(base_pak, p);
     };
-    int n = 0;
-    std::set<std::string> moved_parts;
-    for (size_t k = 0; k < v.size(); k++) {
-        const std::string &vt = v[k].text, &mt = m[k].text;
-        if (str_lower(vt) == str_lower(mt)) continue;
-        std::string target = scene_ref_pak_path(mt, suffixes);
-        if (target.empty() || !exists(target)) {
-            printf("      mod scene: %s -> %s, file not found, not followed\n", vt.c_str(), mt.c_str());
-            continue;
+    // same_layout: the mod's scene must have the game's scene's instances (a path of another length);
+    // else it must have been made for this game version (another layout of the outfit)
+    auto use_whole = [&](const std::string& why, bool same_layout) -> int {
+        auto vt = scene_instance_table(vdata), mt = scene_instance_table(mdata);
+        if (same_layout && (vt.empty() || vt != mt)) {
+            printf("      mod scene: %s, and it is not laid out like the game's scene (made for another "
+                   "game version?): not followed\n", why.c_str());
+            return -1;
         }
-        if (mt.size() != vt.size()) {
-            printf("      WARN mod scene: %s -> %s changes the path length, not followed\n", vt.c_str(), mt.c_str());
-            continue;
+        if (!same_layout)
+            if (std::string vp = scene_version_problem(mdata, base_pak, inv); !vp.empty()) {
+                printf("      mod scene: %s, and it was not made for this game version (%s): not followed\n",
+                       why.c_str(), vp.c_str());
+                return -1;
+            }
+        std::set<std::string> game_refs;
+        for (auto& r : v) game_refs.insert(str_lower(r.text));
+        for (auto& r : scene_model_refs(vdata, true)) game_refs.insert(str_lower(r.text));
+        auto mod_refs = m;
+        for (auto& r : scene_model_refs(mdata, true)) mod_refs.push_back(r);
+        int own = 0;
+        for (auto& r : mod_refs) {
+            if (game_refs.count(str_lower(r.text))) continue;
+            std::string target = scene_ref_pak_path(r.text, suffixes);
+            if (target.empty() || !exists(target)) {
+                // Manager mode: the Manager's Slotsloader fork takes such a scene whatever it names (1.10.3: "the fork takes
+                // it unconditionally"), as its Replace-original install does. A reference its author left to a file the mod
+                // does not ship (Swimsuit Sakura as Ryu C2: sakura_001_01_havok.user) must not send the outfit back to the
+                // game's scene, on the other fighter's skeleton.
+                if (g_manager_mode && !same_layout) {
+                    printf("      mod scene: %s (found nowhere: followed all the same, Manager mode)\n", r.text.c_str());
+                    own++;
+                    continue;
+                }
+                printf("      mod scene: %s, and it names %s, a file found nowhere: not followed\n",
+                       why.c_str(), r.text.c_str());
+                return -1;
+            }
+            printf("      mod scene: %s\n", r.text.c_str());
+            own++;
         }
-        for (size_t at : v[k].at)
-            for (size_t c = 0; c < mt.size(); c++) { vdata[at + 2 * c] = (uint8_t)mt[c]; vdata[at + 2 * c + 1] = 0; }
-        printf("      mod scene: %s -> %s\n", vt.c_str(), mt.c_str());
-        n++;
-        // the part ("000/02") whose model moved: its physics settings may move along (below)
-        std::string lv = str_lower(vt);
-        auto s2 = lv.rfind('/'), s1 = s2 == std::string::npos ? s2 : lv.rfind('/', s2 - 1),
-             s0 = s1 == std::string::npos ? s1 : lv.rfind('/', s1 - 1);
-        if (s0 != std::string::npos) moved_parts.insert(lv.substr(s0 + 1, s2 - s0 - 1));
+        vdata = mdata;
+        printf("      mod scene used whole (%s; %s): %d model references of its own\n", why.c_str(),
+               same_layout ? "laid out like the game's" : "made for this game version", own);
+        return own;
+    };
+    {
+        // Another body: a fighter's prefab or body shape the game's scene does not use
+        const auto gb = scene_body(vdata), mb = scene_body(mdata);
+        std::string other;
+        for (auto& b : mb) if (!gb.count(b)) other += (other.empty() ? "" : ", ") + b;
+        if (!other.empty()) {
+            std::string game;
+            for (auto& b : gb) game += (game.empty() ? "" : ", ") + b;
+            int r = use_whole("it puts the outfit on another body (" + other + "; the game's scene: " + game + ")", false);
+            if (r >= 0) return r;
+        }
     }
-    // Physics settings of a part the mod's scene moved go with it (the Leon/Luke C1 hair add-ons move
-    // the hair from 000/02/ to 001/02/ and its "000/esf002_000_02_chain.user" to the mod's
-    // "001/esf002_001_02_chain.user"): without them the mod's hair got the game's hair chain. Same
-    // rules, and only for a part whose mesh or material file was followed above.
-    auto pv = scene_model_refs(vdata, true), pm = scene_model_refs(mdata, true);
-    if (!moved_parts.empty() && pv.size() == pm.size()) {
-        for (size_t k = 0; k < pv.size(); k++) {
-            const std::string &vt = pv[k].text, &mt = pm[k].text;
-            if (str_lower(vt) == str_lower(mt) || mt.size() != vt.size()) continue;
-            // ".../esf002/000/esf002_000_02_chain.user": folder 000, part 02
-            std::string lv = str_lower(vt);
-            auto sl = lv.rfind('/'), sf = sl == std::string::npos ? sl : lv.rfind('/', sl - 1);
-            if (sf == std::string::npos) continue;
-            const std::string folder = lv.substr(sf + 1, sl - sf - 1), name = lv.substr(sl + 1);
-            auto us = name.find('_' + folder + '_');
-            if (us == std::string::npos || us + folder.size() + 4 > name.size()) continue;
-            const std::string part = name.substr(us + folder.size() + 2, 2);
-            if (!moved_parts.count(folder + "/" + part)) continue;
+    if (v.size() != m.size()) {
+        char why[96];
+        snprintf(why, sizeof(why), "%zu model references against %zu in the game's scene", m.size(), v.size());
+        return std::max(0, use_whole(why, false));
+    }
+    for (size_t k = 0; k < v.size(); k++)
+        if (str_lower(v[k].text) != str_lower(m[k].text) && v[k].text.size() != m[k].text.size()) {
+            int r = use_whole("a path of another length", true);
+            if (r >= 0) return r;
+            break;
+        }
+    auto in_place = [&](const std::vector<SceneRef>& gv, const std::vector<SceneRef>& mv) {
+        int n = 0;
+        for (size_t k = 0; k < gv.size(); k++) {
+            const std::string &vt = gv[k].text, &mt = mv[k].text;
+            if (str_lower(vt) == str_lower(mt)) continue;
             std::string target = scene_ref_pak_path(mt, suffixes);
-            if (target.empty() || !exists(target)) continue;
-            for (size_t at : pv[k].at)
+            if (target.empty() || !exists(target)) {
+                printf("      mod scene: %s -> %s, file not found, not followed\n", vt.c_str(), mt.c_str());
+                continue;
+            }
+            if (mt.size() != vt.size()) {
+                printf("      WARN mod scene: %s -> %s changes the path length, not followed\n", vt.c_str(), mt.c_str());
+                continue;
+            }
+            for (size_t at : gv[k].at)
                 for (size_t c = 0; c < mt.size(); c++) { vdata[at + 2 * c] = (uint8_t)mt[c]; vdata[at + 2 * c + 1] = 0; }
             printf("      mod scene: %s -> %s\n", vt.c_str(), mt.c_str());
             n++;
         }
-    }
+        return n;
+    };
+    int n = in_place(v, m);
+    // The joint and chain files the scene names (jcs, chain, havok .user): a mod that takes a head or
+    // a hair from another outfit points them at that outfit's files too (Ken Outfit 2 shirtless on
+    // Drive Tech: the head's jcs and the hair's chain, 04/10). Same rules, counted on their own so that
+    // the model references are followed as before whatever they do.
+    auto vu = scene_model_refs(vdata, true), mu = scene_model_refs(mdata, true);
+    if (vu.size() == mu.size()) n += in_place(vu, mu);
+    else if (!mu.empty())
+        printf("      mod scene: %zu joint and chain references against %zu in the game's scene, not followed\n",
+               mu.size(), vu.size());
     return n;
 }
 
 namespace slotcheck {
-static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out);
+static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out, std::vector<std::string>* all = nullptr);
+static bool mesh_joint_names(const std::vector<uint8_t>& b, std::set<std::string>& out);
+static bool chain_names_joint(const std::vector<uint8_t>& chain, const std::string& joint);
 static bool mdf2_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out);
+static std::string material_fit(PakWriter& writer, PakReader& base_pak,
+                                const std::unordered_map<std::string, std::string>& suffixes,
+                                const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf,
+                                const std::set<std::string>* later_tex = nullptr);
+static std::string addon_fit(PakWriter& writer, PakReader& base_pak, const std::unordered_map<std::string, std::string>& suffixes,
+                             const std::unordered_map<std::string, ModFileRef>& op_files, const std::string& p,
+                             const std::vector<uint8_t>& data, const std::string& target,
+                             const std::function<std::vector<uint8_t>(const std::string&)>& worn,
+                             const std::set<std::string>& own_tex,
+                             const std::unordered_map<std::string, std::string>* origin = nullptr);
+// The patch paks of other tools the game loads over its own, highest first (set before the slots are
+// built): the runtime options' fit checks look where the slot check looks
+static std::vector<PakReader*> g_game_patch_paks;
 }
 // Meshes taken over by donate_parts(): the slot check does not pair them with a material file (the mod's
 // part may name a material no file defines, on purpose: the game then draws nothing for it)
@@ -2216,6 +3043,13 @@ static void add_slot_files(PakWriter& writer,
         for (auto& [pth, mf] : *files) own_roots.insert(mod_root(mf));
     const ModFileMaps own_files = {&mc->files_in_folder, &mc->files_other, &mc->files_shared};
 
+    // Where the slot put each file it relocated (original -> slot's copy, last write wins), for the
+    // runtime options: an option replaces what the slot's model loads (see the end of this function)
+    std::unordered_map<std::string, std::string> slot_targets;
+    auto note_target = [&](const std::string& orig, const std::string& target) {
+        if (mc->rto && written_paths.count(target)) slot_targets[str_lower(orig)] = target;
+    };
+
     // Dir-only relocation helper (shared across phases)
     auto relocate_dir_only = [&](const std::string& p) -> std::string {
         std::string old_dir = fd + "/" + old_f + "/";
@@ -2226,15 +3060,19 @@ static void add_slot_files(PakWriter& writer,
         return r;
     };
 
-    // Physics references follow the exact paths emitted by this slot. Model chains keep
-    // their filename; external weather chains may rename it. Never infer an unwritten target.
+    // Chain, cloth and physics user files the slot wrote under another path: original -> slot's copy,
+    // as the scene and user files name them (lowercase, no natives/stm/, no version). Only files
+    // the pak holds, under the version the game asks for: a reference never moves to a file that
+    // is not there. private_users: the .user files the slot wrote, repaired once all are known.
     std::unordered_map<std::string, std::string> physics_resources;
     std::unordered_set<std::string> private_users;
-    // Files of the slot that name its resources (scene, model parts, physics USER files): a joint
-    // constraint or physics file of the mod that none of them names is reported below
+    // Files of the slot that name its resources (scene, model parts, physics user files): a joint
+    // constraint or physics file of the mod that none of them names is reported (from ZZtaii's
+    // Slotsloader fork (1.9.8), MIT)
     std::vector<std::string> slot_ref_files;
     std::vector<std::pair<std::string, std::string>> mod_constraint_files;   // mod path, slot path
-    // A donor colour table may also name the host's palettes (DriveTech ships both).
+    // A donor colour table (another fighter's colour list in this costume's folder) may also name the host's
+    // palettes (DriveTech ships both). From ZZtaii's Slotsloader fork (1.10.7), MIT.
     const bool donor_colours = std::any_of(mc->files_in_folder.begin(), mc->files_in_folder.end(), [&](const auto& item) {
         const std::string name = str_lower(item.first.substr(item.first.rfind('/') + 1));
         return name.compare(0, 3, "esf") == 0 && name.compare(0, 6, fd) != 0 && str_ends_with(name, "_ccvd.user.2");
@@ -2244,6 +3082,7 @@ static void add_slot_files(PakWriter& writer,
         std::string src = str_lower(source), dst = str_lower(target);
         if (dst.find(".user.") != std::string::npos) private_users.insert(target);
         const char* ext = nullptr;
+        // .jcns: the joint constraints a _jcs.user names (from ZZtaii's Slotsloader fork (1.9.8), MIT)
         for (const char* candidate : {".chain.", ".havokcloth.", ".jcns."})
             if (src.rfind(candidate) != std::string::npos) { ext = candidate; break; }
         if (!ext && (src.find("_chain.user.") != std::string::npos
@@ -2251,8 +3090,10 @@ static void add_slot_files(PakWriter& writer,
                      || src.find("_shape.user.") != std::string::npos
                      || src.find("_jcs.user.") != std::string::npos
                      || src.find("_aogeo.user.") != std::string::npos)) ext = ".user.";
-        // Cross-fighter scenes can bring their donor's colour and material-setting files into
-        // the host costume folder. Follow only references to emitted donor files.
+        // A cross-fighter scene can bring its donor's colour and material-setting files into the host costume
+        // folder ("Female Ryu C1" as an extra outfit crashed: they named the original folder, where nothing is).
+        // Their references follow the slot's copies, only toward files the slot wrote. From ZZtaii's
+        // Slotsloader fork (1.10.7), MIT.
         const std::string leaf = src.substr(src.rfind('/') + 1);
         const bool donor_user = leaf.size() > 7 && leaf.compare(0, 3, "esf") == 0
             && leaf[6] == '_' && (leaf.compare(0, 6, fd) != 0 || donor_colours)
@@ -2265,12 +3106,12 @@ static void add_slot_files(PakWriter& writer,
                  || dst.compare(0, 12, "natives/stm/") != 0) return;
         auto a = src.rfind(ext), b = dst.rfind(ext);
         if (b == std::string::npos) return;
-        // Strip any version suffix, including Havok's .1.x64, without relying on the index.
+        // the name without its version, whatever its form (Havok cloth: .havokcloth.1.x64)
         src = src.substr(12, a + strlen(ext) - 1 - 12);
         dst = dst.substr(12, b + strlen(ext) - 1 - 12);
-        // An unversioned chain/USER ref must resolve to the game's current suffix,
-        // not merely to some supplied version of the resource. Havok's compound
-        // suffix is absent from some inventories; its full emitted key was checked above.
+        // A chain or user reference is loaded under the game's current version: a mod's chain of
+        // another version stays unused. (The cloth's version is missing from some indexes; the
+        // file itself was checked above.)
         if (strcmp(ext, ".havokcloth.") != 0) {
             const std::string resolved = scene_ref_pak_path(dst, inv.suffixes);
             if (resolved.empty() || !writer.find(pak_path_hash(std::string_view(resolved)))) return;
@@ -2371,17 +3212,13 @@ static void add_slot_files(PakWriter& writer,
             uint64_t h = pak_path_hash(std::string_view(new_path));
             writer.add_uncompressed(h, std::move(vdata));
         } else if (needs_content_patch(path)) {
-            auto data = mf.read_data();
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_uncompressed(h, std::move(data));
+            put_mod_data(writer, pak_path_hash(std::string_view(new_path)), mf);
         } else {
-            std::vector<uint8_t> raw; int64_t att, ds;
-            mf.read_raw(raw, att, ds);
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_raw(h, std::move(raw), att, ds);
+            put_mod_raw(writer, pak_path_hash(std::string_view(new_path)), mf);
         }
         written_paths.insert(new_path);
         record_relocation(path, new_path);
+        note_target(path, new_path);
         g_relocated_mod_paths.insert(path);
         if (!is_streaming && (is_chain_file || fn_low.find(".jcns.") != std::string::npos))
             mod_constraint_files.push_back({path, new_path});
@@ -2447,6 +3284,7 @@ static void add_slot_files(PakWriter& writer,
                         uint64_t nh = pak_path_hash(std::string_view(new_path));
                         writer.add_uncompressed(nh, std::move(mdf_data));
                         written_paths.insert(new_path);
+                        note_target(vp, new_path);
                         relocated_vanilla_mdf2.push_back(vp);
                         count++; patched++;
                     }
@@ -2469,6 +3307,7 @@ static void add_slot_files(PakWriter& writer,
                 patch_material(mdf_data);
                 writer.add_uncompressed(pak_path_hash(std::string_view(new_path)), std::move(mdf_data));
                 written_paths.insert(new_path);
+                note_target(vp, new_path);
                 relocated_vanilla_mdf2.push_back(vp);
                 count++; patched++;
             }
@@ -2517,12 +3356,14 @@ static void add_slot_files(PakWriter& writer,
                 uint64_t th = pak_path_hash(std::string_view(ccvd_target));
                 writer.add_uncompressed(th, std::move(ccvd_data));
                 written_paths.insert(ccvd_target);
+                note_target(ccvd_orig, ccvd_target);
                 count++; patched++;
             }
         }
     }
 
     // 2b. CMD files: discover from CCVD content, relocate dir-only
+    std::vector<std::pair<std::string, std::string>> slot_colour_files;   // original -> slot's copy (runtime options)
     {
         std::set<std::string> cmd_names;
         if (!ccvd_patched.empty()) {
@@ -2573,28 +3414,25 @@ static void add_slot_files(PakWriter& writer,
         for (auto& cn : cmd_names) {
             std::string cmd_orig = base_model + cn;
             std::string cmd_target = relocate_dir_only(cmd_orig);
-            if (written_paths.count(cmd_target)) continue;
+            if (written_paths.count(cmd_target)) {
+                note_target(cmd_orig, cmd_target);
+                slot_colour_files.push_back({cmd_orig, cmd_target});
+                continue;
+            }
             uint64_t th = pak_path_hash(std::string_view(cmd_target));
             auto mfit = mc->files_in_folder.find(cmd_orig);
             if (mfit != mc->files_in_folder.end()) {
-                std::vector<uint8_t> raw; int64_t att, ds;
-                mfit->second.read_raw(raw, att, ds);
-                writer.add_raw(th, std::move(raw), att, ds);
+                put_mod_raw(writer, th, mfit->second);
                 written_paths.insert(cmd_target); count++;
             } else if (from_own_mod(cmd_orig)) {
-                std::vector<uint8_t> raw; int64_t att, ds;
-                amf.at(cmd_orig).read_raw(raw, att, ds);
-                writer.add_raw(th, std::move(raw), att, ds);
+                put_mod_raw(writer, th, amf.at(cmd_orig));
                 written_paths.insert(cmd_target); count++;
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(cmd_orig));
                 auto* oe = base_pak.find(oh);
-                // The colour list names it and the outfit does not have it: the slot takes it from
-                // the game, so the pak is rebuilt when that changes (see g_game_colour_probes)
-                if (named_by_list) probe_game_colour(base_pak, cmd_orig);
+                ask_strict(oh);   // Manager mode: a replacement installed over this colour file, or removed, builds again
                 if (oe) {
-                    auto raw = base_pak.read_raw(*oe);
-                    writer.add_raw(th, std::move(raw), oe->attributes, oe->decompressed_size);
+                    put_game_raw(writer, th, base_pak, *oe);
                     written_paths.insert(cmd_target); count++;
                 } else if (named_by_list) {
                     // The colour list names a colour file the game's paks do not have. Fluffy Mod
@@ -2604,35 +3442,27 @@ static void add_slot_files(PakWriter& writer,
                     // not name a file that exists nowhere (the game waits for it for ever on the
                     // select screen): without that copy, another colour of the outfit stands in, the
                     // first numbered one. Not cmd_000: it is laid out differently and a slot given it
-                    // shows white. The copy goes to the slot's own path only: nothing is written over
-                    // the original path (the exclusions of original_asset_hashes still apply).
+                    // shows white.
+                    if (g_manager_mode) probe_loose(cmd_orig);   // its content is watched: a change of the loose colour file rebuilds
                     std::vector<uint8_t> data = read_loose_game_file(cmd_orig);
-                    std::string how = "taken from the game folder (a loose file, as an external mod manager installs them): "
-                                      + w2a(loose_game_path(cmd_orig).c_str());
+                    std::string how = "taken from the game folder (a loose file, as Fluffy Mod Manager installs them)";
                     if (data.empty()) {
-                        std::string loose_from;
                         auto read_colour = [&](const std::string& p) -> std::vector<uint8_t> {
                             if (auto f = mc->files_in_folder.find(p); f != mc->files_in_folder.end()) return f->second.read_data();
                             if (from_own_mod(p)) return amf.at(p).read_data();
-                            probe_game_colour(base_pak, p);
-                            if (auto* fe = base_pak.find(pak_path_hash(std::string_view(p)))) return base_pak.read(*fe);
-                            auto d = read_loose_game_file(p);
-                            if (!d.empty()) loose_from = w2a(loose_game_path(p).c_str());
-                            return d;
+                            const uint64_t ph = pak_path_hash(std::string_view(p));
+                            ask_strict(ph);   // the colour standing in is one the slot takes too
+                            if (auto* fe = base_pak.find(ph)) return base_pak.read(*fe);
+                            if (g_manager_mode) probe_loose(p);
+                            return read_loose_game_file(p);
                         };
                         std::vector<std::string> order;
                         for (auto& other : cmd_names)
                             if (other != cn && other.find("_cmd_000.") == std::string::npos) order.push_back(other);
                         order.push_back(fd + "_" + old_f + "_cmd_000.user.2");
                         for (auto& other : order) {
-                            loose_from.clear();
                             data = read_colour(base_model + other);
-                            if (!data.empty()) {
-                                how = other + " stands in for it";
-                                if (!loose_from.empty())
-                                    how += ", taken from the game folder (a loose file, as an external mod manager installs them): " + loose_from;
-                                break;
-                            }
+                            if (!data.empty()) { how = other + " stands in for it"; break; }
                         }
                     }
                     if (!data.empty()) {
@@ -2644,10 +3474,12 @@ static void add_slot_files(PakWriter& writer,
                                                            : "nothing to put in its place, the slot may never finish loading");
                 }
             }
+            note_target(cmd_orig, cmd_target);
+            if (written_paths.count(cmd_target)) slot_colour_files.push_back({cmd_orig, cmd_target});
         }
     }
 
-    // 2c. chain.52: from mod or vanilla (directory only; keep semantic filename)
+    // 2c. chain.52: from mod or vanilla (dir only, the file keeps its name)
     {
         std::string chain_orig = base_model + fd + "_" + old_f + "_01_chain.chain.52";
         // Dir-only relocation for chain.chain (keep filename prefix)
@@ -2659,20 +3491,19 @@ static void add_slot_files(PakWriter& writer,
             uint64_t th = pak_path_hash(std::string_view(chain_target));
             auto mfit = mc->files_in_folder.find(chain_orig);
             if (mfit != mc->files_in_folder.end()) {
-                auto data2 = mfit->second.read_data();
-                writer.add_uncompressed(th, std::move(data2));
+                put_mod_data(writer, th, mfit->second);
                 written_paths.insert(chain_target); count++;
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(chain_orig));
                 auto* oe = base_pak.find(oh);
                 if (oe) {
-                    auto raw = base_pak.read_raw(*oe);
-                    writer.add_raw(th, std::move(raw), oe->attributes, oe->decompressed_size);
+                    put_game_raw(writer, th, base_pak, *oe);
                     written_paths.insert(chain_target); count++;
                 }
             }
         }
         record_relocation(chain_orig, chain_target);
+        note_target(chain_orig, chain_target);
     }
 
     // 2d. chain.user: for parts with mod chain.chain, relocate vanilla chain.user
@@ -2718,6 +3549,8 @@ static void add_slot_files(PakWriter& writer,
                 if (oe) cu_data = base_pak.read(*oe);
             }
             if (cu_data.empty()) continue;
+            // Point the copy at the chain files the slot relocated (dir only, chain files keep their
+            // name), in the part folder or next to it, and only where the relocated file exists
             patch_resource_references(cu_data, physics_resources);
             uint64_t th = pak_path_hash(std::string_view(cu_target));
             writer.add_uncompressed(th, std::move(cu_data));
@@ -2792,17 +3625,13 @@ static void add_slot_files(PakWriter& writer,
             uint64_t h = pak_path_hash(std::string_view(new_path));
             writer.add_uncompressed(h, std::move(vdata));
         } else if (needs_content_patch(path)) {
-            auto data = mf.read_data();
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_uncompressed(h, std::move(data));
+            put_mod_data(writer, pak_path_hash(std::string_view(new_path)), mf);
         } else {
-            std::vector<uint8_t> raw; int64_t att, ds;
-            mf.read_raw(raw, att, ds);
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_raw(h, std::move(raw), att, ds);
+            put_mod_raw(writer, pak_path_hash(std::string_view(new_path)), mf);
         }
         written_paths.insert(new_path);
         record_relocation(path, new_path);
+        note_target(path, new_path);
         count++;
     }
     if (!shared_parts.empty()) {
@@ -2842,6 +3671,7 @@ static void add_slot_files(PakWriter& writer,
                 if (patch_material(md) == 0) continue;
                 writer.add_uncompressed(pak_path_hash(std::string_view(new_path)), std::move(md));
                 written_paths.insert(new_path);
+                note_target(vp, new_path);
                 if (folder == old_f) relocated_vanilla_mdf2.push_back(vp);
                 else shared_material_given = true;
                 printf("      material %s names textures of the mod: the slot gets its own copy\n", vp.c_str());
@@ -2866,12 +3696,10 @@ static void add_slot_files(PakWriter& writer,
             std::string new_path = (sl != std::string::npos)
                                  ? path.substr(0, sl+1) + new_fn : new_fn;
             if (written_paths.count(new_path)) continue;
-            std::vector<uint8_t> raw; int64_t att, ds;
-            mf.read_raw(raw, att, ds);
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_raw(h, std::move(raw), att, ds);
+            put_mod_raw(writer, pak_path_hash(std::string_view(new_path)), mf);
             written_paths.insert(new_path);
             record_relocation(path, new_path);
+            note_target(path, new_path);
             count++; ext_count++;
         }
         if (ext_count)
@@ -2879,38 +3707,40 @@ static void add_slot_files(PakWriter& writer,
     }
 
     // ---- Phase 3a: joint constraints (.jcns) the mod ships ----
-    // The scene does not name the .jcns files: <fd>_<old>_<part>_jcs.user does (A.K.I.: 002/
-    // esf013_002_01_jcs.user names 002/esf013_002_01_drv_RPY.jcns). Fluffy replaces the game's .jcns
-    // in place, so the outfit uses the mod's. Here the mod's .jcns moved into the slot folder above;
-    // a jcs.user of the outfit that names it gets a copy in the slot folder pointing at it (the
-    // mod's own jcs.user, copied in phase 1, is repaired with the other USER files below), and the
-    // scene follows that copy. Left alone, the slot drove the mod's mesh with the game's constraints
-    // and shipped the mod's file unused.
+    // From ZZtaii's Slotsloader fork (1.9.8), MIT. The scene does not name the .jcns files:
+    // <fd>_<old>_<part>_jcs.user does (A.K.I.: 002/esf013_002_01_jcs.user names 002/esf013_002_01_drv_RPY.jcns).
+    // A replacement install puts the mod's .jcns in place of the game's, so the outfit uses it. Here the mod's
+    // .jcns moved into the slot folder above; a jcs.user of the outfit that names it gets a copy in the slot
+    // folder pointing at it (the mod's own jcs.user, relocated above, is repaired with the other user files
+    // below), and the scene follows that copy. Left alone, the slot drove the mod's mesh with the game's
+    // constraints and shipped the mod's file unused. The jcs.user files are those the game's scene names, and
+    // the mod's own scene (the slot may be built from it).
     {
         bool mod_jcns = false;
         for (auto& [mp, sp] : mod_constraint_files)
             if (str_lower(mp).find(".jcns.") != std::string::npos) { mod_jcns = true; break; }
         auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
-        const PakEntry* se0 = (mod_jcns && oc && !oc->scene.empty())
-            ? base_pak.find(pak_path_hash(std::string_view(oc->scene))) : nullptr;
-        if (se0) {
-            auto sd = base_pak.read(*se0);
+        if (mod_jcns && oc && !oc->scene.empty()) {
+            std::vector<std::vector<uint8_t>> scenes;
+            if (auto* se0 = base_pak.find(pak_path_hash(std::string_view(oc->scene)))) scenes.push_back(base_pak.read(*se0));
+            for (auto& [sp, smf] : mc->files_scene) scenes.push_back(smf.read_data());
             std::string user_ver = "2";
             { auto it = inv.suffixes.find("user"); if (it != inv.suffixes.end()) user_ver = it->second; }
             const std::string folder_dir = "/" + fd + "/" + old_f + "/";
             std::set<std::string> jcs_refs;
-            for (size_t i = 0; i + 1 < sd.size(); ) {
-                std::string ref;
-                while (i + 1 < sd.size() && sd[i + 1] == 0 && sd[i] >= 0x20 && sd[i] < 0x7f) {
-                    ref += (char)tolower(sd[i]); i += 2;
+            for (auto& sd : scenes)
+                for (size_t i = 0; i + 1 < sd.size(); ) {
+                    std::string ref;
+                    while (i + 1 < sd.size() && sd[i + 1] == 0 && sd[i] >= 0x20 && sd[i] < 0x7f) {
+                        ref += (char)tolower(sd[i]); i += 2;
+                    }
+                    i += 2;
+                    auto p0 = ref.find_first_not_of("@ ");
+                    if (p0 == std::string::npos) continue;
+                    ref = ref.substr(p0);
+                    if (ref.find(folder_dir) != std::string::npos && str_ends_with(ref, "_jcs.user"))
+                        jcs_refs.insert(ref);
                 }
-                i += 2;
-                auto p0 = ref.find_first_not_of("@ ");
-                if (p0 == std::string::npos) continue;
-                ref = ref.substr(p0);
-                if (ref.find(folder_dir) != std::string::npos && str_ends_with(ref, "_jcs.user"))
-                    jcs_refs.insert(ref);
-            }
             for (auto& ref : jcs_refs) {
                 std::string ju_orig = "natives/stm/" + ref + "." + user_ver;
                 std::string ju_target = relocate_dir_only(ju_orig);
@@ -2918,8 +3748,7 @@ static void add_slot_files(PakWriter& writer,
                 if (mc->files_in_folder.count(ju_orig)) continue;
                 auto* je = base_pak.find(pak_path_hash(std::string_view(ju_orig)));
                 if (!je) continue;
-                auto jd = base_pak.read(*je);
-                std::vector<uint8_t> ju_data(jd.begin(), jd.end());
+                auto ju_data = base_pak.read(*je);
                 size_t n = patch_resource_references(ju_data, physics_resources);
                 if (!n) continue;   // it names no .jcns of the mod: the game's file stays in use
                 writer.add_uncompressed(pak_path_hash(std::string_view(ju_target)), std::move(ju_data));
@@ -3006,7 +3835,7 @@ static void add_slot_files(PakWriter& writer,
                 size_t n = patch_mdf2_minimal(vd, fd, old_f, new_f, part_keys(old_f, mc->files_in_folder, true));
                 if (!shared_parts.empty())
                     n += patch_mdf2_minimal(vd, fd, "000", new_f, part_keys("000", mc->files_shared, false));
-                n += patch_resource_references(vd, physics_resources);
+                n += patch_resource_references(vd, physics_resources);   // and the chain files it names
                 if (n > 0 && new_f.size() == 3) {
                     std::string dst_rel = mp_rel;
                     auto bpos = dst_rel.find("/battle_ud/");
@@ -3024,8 +3853,162 @@ static void add_slot_files(PakWriter& writer,
         }
     }
 
-    // Supplied USER files were copied in phase 1 before all targets existed. Repair them
-    // now, including nested physics relays, so unordered mod iteration cannot affect refs.
+    // ---- Phase 3c: select/continue screen prefabs ----
+    // The costume scene names option and continue prefabs (esf032_Option_01.pfb,
+    // esf032_Continue_00.pfb...) that reference shared-part meshes and materials.
+    // When the slot relocated 000/ shared files, any prefab naming those files gets
+    // a per-slot copy with repointed paths, and the scene is redirected to it.
+    // Naming: option/prefab/ (6 chars) -> option/pfb<NNN>/ (6 chars), same length.
+    std::unordered_set<std::string> copied_pfb_names; // lowercase filenames of copied prefabs
+    if (!shared_parts.empty()) {
+        auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
+        const PakEntry* se0 = (oc && !oc->scene.empty())
+            ? base_pak.find(pak_path_hash(std::string_view(oc->scene))) : nullptr;
+        if (se0) {
+            auto sd = base_pak.read(*se0);
+            std::string pfb_ver = "17";
+            { auto it = inv.suffixes.find("pfb"); if (it != inv.suffixes.end()) pfb_ver = it->second; }
+
+            // Scan the scene for unique .pfb references under option/prefab/
+            std::vector<std::string> pfb_refs;   // lowercase relative paths (no @)
+            std::unordered_set<std::string> pfb_seen;
+            for (size_t pi = 0; pi + 1 < sd.size(); pi += 2) {
+                size_t pj = pi;
+                std::string ps;
+                while (pj + 1 < sd.size() && sd[pj + 1] == 0 && sd[pj] >= 0x20 && sd[pj] < 0x7f) {
+                    ps += (char)sd[pj]; pj += 2;
+                }
+                if (ps.empty()) continue;
+                size_t lead = ps.find_first_not_of("@ ");
+                if (lead == std::string::npos) { pi = pj; continue; }
+                std::string low = str_lower(ps.substr(lead));
+                if (str_ends_with(low, ".pfb") && low.find("/prefab/") != std::string::npos) {
+                    if (pfb_seen.insert(low).second) pfb_refs.push_back(low);
+                }
+                pi = pj;
+            }
+
+            // Process each prefab: read it, check for references to relocated shared parts,
+            // repoint them, and write a per-slot copy
+            std::string od_s = fd + "/000/";
+            std::string nd_s = fd + "/" + new_f + "/";
+            std::string op_s = fd + "_000_";
+            std::string np_s = fd + "_" + new_f + "_";
+            std::vector<uint8_t> od16, nd16, op16, np16;
+            for (char c : od_s) { od16.push_back((uint8_t)c); od16.push_back(0); }
+            for (char c : nd_s) { nd16.push_back((uint8_t)c); nd16.push_back(0); }
+            for (char c : op_s) { op16.push_back((uint8_t)c); op16.push_back(0); }
+            for (char c : np_s) { np16.push_back((uint8_t)c); np16.push_back(0); }
+
+            for (auto& pfb_rel : pfb_refs) {
+                std::string pfb_pak = "natives/stm/" + pfb_rel + "." + pfb_ver;
+                auto* pe = base_pak.find(pak_path_hash(std::string_view(pfb_pak)));
+                if (!pe) continue;
+                auto praw = base_pak.read(*pe);
+                auto pdata = std::vector<uint8_t>(praw.begin(), praw.end());
+
+                // Scan for fd/000/<part>/ references where <part> is in shared_parts,
+                // and the relocated file exists in written_paths
+                size_t n_refs = 0;
+                for (size_t qi = 0; qi + od16.size() <= pdata.size(); ) {
+                    if (memcmp(pdata.data() + qi, od16.data(), od16.size()) != 0) {
+                        qi += 2; continue;
+                    }
+                    // Read part number after "000/"
+                    size_t qafter = qi + od16.size();
+                    std::string qpart;
+                    while (qafter + 1 < pdata.size() && pdata[qafter + 1] == 0
+                           && pdata[qafter] >= '0' && pdata[qafter] <= '9') {
+                        qpart += (char)pdata[qafter]; qafter += 2;
+                    }
+                    if (qpart.empty() || !shared_parts.count(qpart)
+                        || qafter + 1 >= pdata.size()
+                        || pdata[qafter] != '/' || pdata[qafter + 1] != 0) {
+                        qi += od16.size(); continue;
+                    }
+
+                    // Read the full enclosing UTF-16LE string
+                    size_t qs = qi;
+                    while (qs >= 2 && !(pdata[qs - 2] == 0 && pdata[qs - 1] == 0)) qs -= 2;
+                    size_t qe = qafter;
+                    while (qe + 1 < pdata.size() && !(pdata[qe] == 0 && pdata[qe + 1] == 0))
+                        qe += 2;
+                    std::string qfull;
+                    for (size_t qk = qs; qk + 1 < pdata.size() && qk < qe; qk += 2) {
+                        uint16_t qc = pdata[qk] | (uint16_t(pdata[qk + 1]) << 8);
+                        if (qc == 0) break;
+                        qfull += (char)tolower(qc & 0xFF);
+                    }
+                    // Strip leading @ and spaces
+                    while (!qfull.empty() && (qfull[0] == '@' || qfull[0] == ' '))
+                        qfull.erase(0, 1);
+
+                    // Build the relocated version
+                    std::string qrel = qfull;
+                    { auto p = qrel.find(str_lower(od_s));
+                      if (p != std::string::npos) qrel.replace(p, od_s.size(), nd_s); }
+                    { auto sl = qrel.rfind('/');
+                      size_t from = (sl != std::string::npos) ? sl : 0;
+                      auto fp = qrel.find(str_lower(op_s), from);
+                      if (fp != std::string::npos) qrel.replace(fp, op_s.size(), np_s); }
+
+                    // Check existence as a pak path
+                    auto qdot = qrel.rfind('.');
+                    auto qsit = (qdot == std::string::npos) ? inv.suffixes.end()
+                              : inv.suffixes.find(qrel.substr(qdot + 1));
+                    bool qexists = false;
+                    if (qsit != inv.suffixes.end()) {
+                        std::string qpak = "natives/stm/" + qrel + "." + qsit->second;
+                        qexists = written_paths.count(qpak) > 0;
+                    }
+                    if (!qexists) { qi += od16.size(); continue; }
+
+                    // Do the in-place replacement
+                    memcpy(pdata.data() + qi, nd16.data(), od16.size());
+                    // Filename prefix: search forward for fd_000_
+                    for (size_t qj = qi + od16.size();
+                         qj + op16.size() <= qe + 80 && qj + op16.size() <= pdata.size();
+                         qj += 2) {
+                        if (memcmp(pdata.data() + qj, op16.data(), op16.size()) == 0) {
+                            memcpy(pdata.data() + qj, np16.data(), np16.size());
+                            break;
+                        }
+                    }
+                    n_refs++;
+                    qi += od16.size();
+                }
+
+                if (n_refs == 0) continue;
+
+                // Write per-slot copy: replace "prefab" with "pfb<NNN>" in the path
+                std::string new_pfb_rel = pfb_rel;
+                auto ppos = new_pfb_rel.find("/prefab/");
+                if (ppos == std::string::npos) continue;
+                new_pfb_rel.replace(ppos + 1, 6, "pfb" + new_f);
+                std::string new_pfb_pak = "natives/stm/" + new_pfb_rel + "." + pfb_ver;
+                writer.add_uncompressed(pak_path_hash(std::string_view(new_pfb_pak)),
+                                        std::move(pdata));
+                written_paths.insert(new_pfb_pak);
+                count++; patched++;
+
+                // Track for scene patching
+                auto fsl = pfb_rel.rfind('/');
+                std::string pfb_fn = (fsl != std::string::npos)
+                                   ? pfb_rel.substr(fsl + 1) : pfb_rel;
+                copied_pfb_names.insert(pfb_fn);
+                printf("      select prefab: %s -> %s (%zu references)\n",
+                       pfb_fn.c_str(),
+                       ("pfb" + new_f + "/" + pfb_fn).c_str(),
+                       n_refs);
+            }
+        }
+    }
+
+    // The slot's user files, the mod's own included: phase 1 copied those as they are, before the
+    // chain and cloth files they name had been written, and 2d then left them alone. They kept
+    // naming the original folder's files (a slot in folder 006 loaded the chain of folder 003). Every
+    // reference to a file the slot has under another path now points at it, user files that name
+    // other user files too (shape, jcs).
     size_t physics_repointed = 0;
     for (const auto& path : private_users) {
         slot_ref_files.push_back(path);
@@ -3039,7 +4022,7 @@ static void add_slot_files(PakWriter& writer,
         }
     }
     if (physics_repointed)
-        printf("      physics USER files: %zu references repointed to private resources\n", physics_repointed);
+        printf("      physics user files: %zu references repointed to the slot's chain and cloth files\n", physics_repointed);
 
     // Costume scene: targeted patching
     auto* orig_costume = inv.get_costume(slot.fighter, slot.original_costume_no);
@@ -3048,10 +4031,11 @@ static void add_slot_files(PakWriter& writer,
         auto* se = base_pak.find(sh);
         std::vector<uint8_t> vdata;
         if (!se && mc->files_scene.empty()) {
-            // 1.10.6: a replacement installed over the pak turned the game's scene off (Ingrid C1 with its
-            // own scene as a replacement, a no-SCN Ingrid C1 as an extra: the slot was left out). The
-            // entry keeps its data and its row of the table sorted by hash: the one turned-off row there
-            // that is a scene of this costume's model folder is the game's scene.
+            // A replacement installed over the pak turned the game's scene off (Ingrid C1 with its own scene as a
+            // replacement, a no-scene Ingrid C1 as an extra outfit: the slot had no scene and was left out). The
+            // entry keeps its data and its row of the table sorted by hash: the one turned-off row there that is
+            // a scene of this costume's model folder is the game's scene. Two such rows, or a table not sorted:
+            // left out as before. From ZZtaii's Slotsloader fork (1.10.6), MIT.
             // "natives/stm/product/model/esf/esf032/001" in the index, "Product/Model/..." in the scene
             std::string want = str_lower(orig_costume->model_dir) + "/";
             if (want.compare(0, 12, "natives/stm/") == 0) want.erase(0, 12);
@@ -3060,8 +4044,10 @@ static void add_slot_files(PakWriter& writer,
             for (auto* e : base_pak.turned_off_candidates(sh)) {
                 if (e->decompressed_size <= 0 || e->decompressed_size > (8 << 20)) continue;
                 bool own = false;
-                for (auto& r : scene_model_refs(base_pak.read(*e)))
-                    if (str_lower(r.text).compare(0, want.size(), want) == 0) { own = true; break; }
+                try {
+                    for (auto& r : scene_model_refs(base_pak.read(*e)))
+                        if (str_lower(r.text).compare(0, want.size(), want) == 0) { own = true; break; }
+                } catch (const std::exception&) {}   // another file's data that does not decompress: not this one
                 if (own) { found = e; n++; }
             }
             if (n == 1) {
@@ -3073,42 +4059,24 @@ static void add_slot_files(PakWriter& writer,
         if (se) {
             auto scene_data = base_pak.read(*se);
             vdata.assign(scene_data.begin(), scene_data.end());
-            for (auto& [sp, smf] : mc->files_scene) {
-                auto mdata = smf.read_data();
-                // 1.10.1: a mod scene that lists another number of model parts than the game's is a
-                // different layout of the outfit (Sakura over Ryu's Outfit 1: 7 parts against 8, with
-                // its own hair chain and havok files), not a few moved parts: the game's scene cannot
-                // take it over part by part, so the slot is built from the mod's own scene, as when
-                // the game's scene cannot be read.
-                const size_t game_parts = scene_model_refs(vdata).size(), mod_parts = scene_model_refs(mdata).size();
-                if (mod_parts && mod_parts != game_parts) {
-                    printf("      scene: the mod's scene lists %zu model parts against %zu in the game's %s: "
-                           "the slot uses the mod's own scene\n", mod_parts, game_parts, orig_costume->scene.c_str());
-                    vdata = std::move(mdata);
-                    break;
-                }
-                // 1.10.3: a mod scene that puts the outfit on another fighter's body (Sakura as Ryu:
-                // Juri's costume prefab, body shape, CCVD and joint constraints, with Ryu's 8 parts)
-                // cannot be taken over part by part either: the slot kept Ryu's prefab and shape and
-                // the outfit came out on Ryu's skeleton. The slot uses the mod's own scene, as the
-                // replacement of the outfit does.
-                const std::string game_body = scene_body(vdata), mod_body = scene_body(mdata);
-                if (!mod_body.empty() && mod_body != game_body) {
-                    printf("      scene: the mod's scene puts the outfit on another body (%s, the game's: %s): "
-                           "the slot uses the mod's own scene\n", mod_body.c_str(), game_body.c_str());
-                    vdata = std::move(mdata);
-                    break;
-                }
-                patched += follow_mod_scene(vdata, mdata, *mc, base_pak, inv.suffixes);
-            }
+            for (auto& [sp, smf] : mc->files_scene)
+                patched += follow_mod_scene(vdata, smf.read_data(), *mc, base_pak, inv);
         } else if (!mc->files_scene.empty()) {
-            // The game's scene cannot be read: its pak entry is turned off, which a mod manager does
-            // when it installs a replacement over the pak (Fluffy: the four Leon/Luke mods ship the
-            // Outfit 1 scene, and their replacement turned the game's entry off). The mod's own scene
-            // of that outfit is the one the game shows for it then: the slot is built from it.
-            vdata = mc->files_scene.begin()->second.read_data();
-            printf("      scene: the game's %s cannot be read (its pak entry is turned off, a replacement "
-                   "installed over the pak?): the slot uses the mod's own scene\n", orig_costume->scene.c_str());
+            // The game's scene cannot be read: its pak entry is turned off, which a mod manager's "PAK method"
+            // does when it installs a replacement that ships that scene. The mod's own scene of that outfit is
+            // then what the game shows for it: the slot is built from it, when it was made for this game
+            // version (from ZZtaii's Slotsloader fork (1.9.9), MIT; the fork takes it unconditionally).
+            auto md = mc->files_scene.begin()->second.read_data();
+            std::string vp = scene_version_problem(md, base_pak, inv);
+            if (vp.empty()) {
+                vdata = std::move(md);
+                printf("      scene: the game's %s cannot be read (its pak entry is turned off, a replacement "
+                       "installed over the pak?): the slot uses the mod's own scene\n", orig_costume->scene.c_str());
+            } else {
+                printf("      WARN: the game's %s cannot be read (its pak entry is turned off?) and the mod's scene "
+                       "was not made for this game version (%s): the slot has no scene\n",
+                       orig_costume->scene.c_str(), vp.c_str());
+            }
         } else {
             printf("      WARN: the game's %s cannot be read (its pak entry is turned off?): the slot has no scene\n",
                    orig_costume->scene.c_str());
@@ -3121,9 +4089,9 @@ static void add_slot_files(PakWriter& writer,
             if (!shared_parts.empty() || shared_material_given)
                 patch_scene_minimal(vdata, fd, "000", new_f,
                                     &written_paths, &inv.suffixes);
-            // Third pass: weather/havok chain filename-prefix rename. Also, whatever its kind, a
-            // reference to a file the slot has under the renamed stem (phase 3: C. Viper Concept
-            // Outfit's weather/wind/.../esf030_001_01_chain_BattleSetting.chain) follows it.
+            // Third pass: filename-prefix rename. Whatever its kind, a reference to a file the slot
+            // has under the renamed stem (phase 3: C. Viper Concept Outfit's
+            // weather/wind/.../esf030_001_01_chain_BattleSetting.chain) follows it.
             {
                 std::string old_wpfx = fd + "_" + old_f + "_";
                 std::string new_wpfx = fd + "_" + new_f + "_";
@@ -3144,6 +4112,10 @@ static void add_slot_files(PakWriter& writer,
                         if (wc == 0) break;
                         ws += (char)tolower(wc & 0xFF);
                     }
+                    // Only toward a file the slot has. The wind and pose chains the scene names
+                    // (weather/wind/mode/<NNN>/<fd>_<old>_01_chain.chain, Dev_Pose/..._NextChallenger_chain.chain)
+                    // have a copy under the slot's stem only when the mod ships one: renamed anyway, they
+                    // named a file that exists nowhere, which the slot check then filled with the original's
                     bool slot_has = false;
                     {
                         size_t s0 = wi;
@@ -3153,10 +4125,11 @@ static void add_slot_files(PakWriter& writer,
                         while (!head.empty() && (head[0] == '@' || head[0] == ' ')) head.erase(0, 1);
                         std::string target = scene_ref_pak_path(head + new_wpfx + ws.substr(old_wpfx.size()), inv.suffixes);
                         slot_has = !target.empty() && written_paths.count(target);
-                        // A reference that already names a file of the slot stays: the CCVD (moved, not
-                        // renamed, by patch_scene_minimal) went to the mod's list copied under the slot's
-                        // name, which still listed the original folder's colours (M. Bison C2 Cammy
-                        // Officer: Bison's colours on the mod's materials, 1.10.3-1.10.5)
+                        // A reference that already names a file of the slot stays: the colour list (moved, not
+                        // renamed, by patch_scene_minimal) went to the mod's list copied under the slot's name in
+                        // phase 1, which still lists the original folder's colours (an extra outfit whose mod
+                        // ships its own colour list showed the original outfit's colours). From ZZtaii's
+                        // Slotsloader fork (1.10.6), MIT.
                         const std::string current = scene_ref_pak_path(head + ws, inv.suffixes);
                         if (!current.empty() && written_paths.count(current)) slot_has = false;
                     }
@@ -3167,7 +4140,8 @@ static void add_slot_files(PakWriter& writer,
                     wi += ow16.size();
                 }
             }
-            // Direct chain/cloth references use the same exact mapping as USER files.
+            // The chain and cloth files the scene names directly, and its physics user files: the
+            // slot's copy, every occurrence, as in the user files above
             if (patch_resource_references(vdata, physics_resources)) patched++;
             // Fourth pass: point the scene at the slot's model_parts copy, every occurrence. Unlike
             // CCVD, the first one too: it sits in the scene's userdata table, which the game loads
@@ -3190,6 +4164,38 @@ static void add_slot_files(PakWriter& writer,
                 }
                 printf("      model parts: scene redirected (%d of %d references)\n", done, occ);
             }
+            // Fifth pass: redirect the scene's prefab paths for copied select/continue
+            // prefabs. Each copied prefab lives under option/pfb<NNN>/ instead of
+            // option/prefab/; both are 6 characters, so the string is patched in place.
+            if (!copied_pfb_names.empty()) {
+                std::string pold = "/prefab/";
+                std::string pnew = "/pfb" + new_f + "/";
+                std::vector<uint8_t> po16, pn16;
+                for (char c : pold) { po16.push_back((uint8_t)c); po16.push_back(0); }
+                for (char c : pnew) { pn16.push_back((uint8_t)c); pn16.push_back(0); }
+                int pfb_done = 0;
+                for (size_t wi = 0; wi + po16.size() <= vdata.size(); wi += 2) {
+                    bool eq = true;
+                    for (size_t k = 0; k < po16.size(); k += 2)
+                        if (tolower(vdata[wi + k]) != po16[k] || vdata[wi + k + 1] != 0)
+                            { eq = false; break; }
+                    if (!eq) continue;
+                    // Read filename after "/prefab/"
+                    size_t fa = wi + po16.size();
+                    std::string fn;
+                    while (fa + 1 < vdata.size() && vdata[fa + 1] == 0
+                           && vdata[fa] >= 0x20 && vdata[fa] < 0x7f) {
+                        fn += (char)tolower(vdata[fa]); fa += 2;
+                    }
+                    if (copied_pfb_names.count(fn)) {
+                        memcpy(vdata.data() + wi, pn16.data(), pn16.size());
+                        pfb_done++; patched++;
+                    }
+                    wi += po16.size() - 2;
+                }
+                if (pfb_done)
+                    printf("      select prefabs: scene redirected (%d references)\n", pfb_done);
+            }
             std::string new_scene = "natives/stm/product/charparam/esf/"
                                   + fd + "/" + slot.scene_name + ".scn.20";
             uint64_t nh = pak_path_hash(std::string_view(new_scene));
@@ -3200,8 +4206,9 @@ static void add_slot_files(PakWriter& writer,
         }
     }
 
-    // A joint constraint or physics file of the mod that nothing the slot loads names: the slot is
-    // kept, but it does not use that file (Fluffy would, in place of the game's)
+    // A joint constraint or physics file of the mod that nothing the slot loads names: the slot is kept,
+    // but it does not use that file (a replacement install would, in place of the game's). From ZZtaii's
+    // Slotsloader fork (1.9.8), MIT.
     if (!mod_constraint_files.empty()) {
         auto ref_stem = [](const std::string& p) {
             std::string s = str_lower(p);
@@ -3230,10 +4237,711 @@ static void add_slot_files(PakWriter& writer,
         }
         for (auto& [mp, sp] : mod_constraint_files) {
             if (named.count(ref_stem(sp))) continue;
-            printf("  WARN: slot %s/v%02d (%s, from %s): the mod's %s is referenced by none of the slot's scene, model parts or physics files (kept, unused)\n",
-                   fd.c_str(), slot.new_costume_no, slot.outfit_name.c_str(),
-                   mod_label(slot.mod_id).c_str(), mp.c_str());
+            printf("  WARN: slot %s/v%02d (%s): the mod's %s is referenced by none of the slot's scene, model "
+                   "parts or physics files (kept, unused)\n",
+                   fd.c_str(), slot.new_costume_no, slot.outfit_name.c_str(), mp.c_str());
         }
+    }
+
+    // ---- Runtime options (docs/RUNTIME_OPTIONS.md) ----
+    // Every option of the slot's modular mod is stored in the slot's folder, under rto/<option id>/, as
+    // this slot would use it: materials point at the slot's textures and at the option's own copies. For
+    // the files of the options the slot is made of, a "base" copy keeps what they replace (the mod's base
+    // files, else the game's). Nothing the slot itself loads changes.
+    if (mc->rto && g_rto_layout != RtoLayout::Off) {
+        const RtoMod& rm = *mc->rto;
+        RtoSlotOut out;
+        out.mod = mc->rto;
+        out.selected = mc->rto_selected;
+        const std::string fighter_root = std::string(BASE_PFX) + "model/esf/" + fd + "/";
+        const std::string slot_root = fighter_root + new_f + "/";
+        // What the slot's scene loads for each model part: a part the slot does not have in its own folder
+        // stays the game's (Leon as Luke wears the game's hair, 000/02/; its hair add-ons ship 001/02/ and a
+        // scene pointing there, which only a slot made with them follows)
+        std::map<std::string, std::vector<std::string>> scene_part;   // "02" -> the scene's files of part 02
+        {
+            const std::string sp = "natives/stm/product/charparam/esf/" + fd + "/" + slot.scene_name + ".scn.20";
+            const uint64_t sh = pak_path_hash(std::string_view(sp));
+            const std::string rp = "product/model/esf/" + fd + "/";
+            if (writer.find(sh))
+                for (auto& r : scene_model_refs(writer.get(sh))) {
+                    const std::string low = str_lower(r.text);
+                    if (low.compare(0, rp.size(), rp) != 0) continue;
+                    const size_t a = low.find('/', rp.size());
+                    if (a == std::string::npos || low.size() < a + 4 || low[a + 3] != '/') continue;
+                    scene_part[low.substr(a + 1, 2)].push_back(low);
+                }
+        }
+        // The file the slot's model loads in place of an original one
+        auto target_of = [&](const std::string& p) {
+            const std::string low = str_lower(p);
+            auto it = slot_targets.find(low);
+            if (it != slot_targets.end()) return it->second;
+            // An option's mesh, material or chain of a part the slot does not have in its folder: what the slot's
+            // model loads for that part (the option replaces it there)
+            const std::string pre = fighter_root + old_f + "/";
+            const bool mesh = low.find(".mesh.") != std::string::npos, mdf = low.find(".mdf2.") != std::string::npos;
+            const bool chain = low.find("_chain.chain.") != std::string::npos;
+            if (low.compare(0, pre.size(), pre) != 0 || low.size() < pre.size() + 3 || low[pre.size() + 2] != '/'
+                || !(mesh || mdf || chain)) return low;
+            const std::string nn = low.substr(pre.size(), 2);
+            auto sc = scene_part.find(nn);
+            if (sc == scene_part.end()) return low;
+            std::string x;   // the folder the scene takes the part from
+            const std::string rp = "product/model/esf/" + fd + "/";
+            for (auto& r : sc->second)
+                if (str_ends_with(r, ".mesh")) x = r.substr(rp.size(), r.find('/', rp.size()) - rp.size());
+            if (x.empty() || x == new_f || x == old_f) return low;
+            for (auto& r : sc->second)
+                if ((mesh && str_ends_with(r, ".mesh")) || (mdf && str_ends_with(r, ".mdf2"))) {
+                    std::string t = scene_ref_pak_path(r, inv.suffixes);
+                    if (!t.empty()) return t;
+                }
+            if (!chain) return low;
+            // "<old>/02/esf002_<old>_02_chain.chain.*" -> "<x>/02/esf002_<x>_02_chain.chain.*"
+            std::string name = low.substr(pre.size() + 3);
+            const std::string stem = fd + "_" + old_f + "_" + nn;
+            if (name.compare(0, stem.size(), stem) == 0) name = fd + "_" + x + "_" + nn + name.substr(stem.size());
+            return fighter_root + x + "/" + nn + "/" + name;
+        };
+        // rto/<id>/<path in the slot folder>, or rto/<id>/_/<path in the fighter folder> (000/, mini/...)
+        auto stored_of = [&](const std::string& id, const std::string& target) {
+            std::string tail = target.compare(0, slot_root.size(), slot_root) == 0
+                ? target.substr(slot_root.size()) : "_/" + target.substr(fighter_root.size());
+            return slot_root + "rto/" + id + "/" + tail;
+        };
+        // Files of this costume: its folder, 000/ and the fighter's named folders (streaming twins
+        // follow their texture, other costume folders belong to other slots)
+        auto belongs = [&](const std::string& p) {
+            std::string low = str_lower(p), pfd, folder;
+            if (low.compare(0, fighter_root.size(), fighter_root) != 0) return false;
+            if (parse_model_folder(low, pfd, folder)) return folder == old_f || folder == "000";
+            return true;
+        };
+        size_t stored_new = 0;
+        // Textures the mods ship in a named folder of the fighter ("esf028/cow/01/"): no slot moves them, add_restorations
+        // writes them where they are once every slot is made. An add-on's material file naming one fits here.
+        std::set<std::string> named_tex;
+        for (auto& [p, mf] : all_mod) {
+            std::string pfd, folder;
+            if (p.compare(0, fighter_root.size(), fighter_root) == 0 && p.find(".tex.") != std::string::npos
+                && !parse_model_folder(p, pfd, folder))
+                named_tex.insert(resource_name(p));
+        }
+        // The file this slot's model loads at a path (empty: none): its own copy in its folder, else the game's file
+        // when the outfit it is made from loads it (a separate add-on's option is checked against it)
+        auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
+            std::string low = str_lower(path);
+            // a file the slot relocated: its copy (C.Viper lace lingerie: its material file of Outfit 2's head, whose
+            // mesh stays the game's)
+            if (auto it = slot_targets.find(low); it != slot_targets.end()) low = str_lower(it->second);
+            const uint64_t h = pak_path_hash(std::string_view(low));
+            if (low.compare(0, slot_root.size(), slot_root) == 0) return writer.find(h) ? writer.get(h) : std::vector<uint8_t>{};
+            if (!outfit_loads(inv, slot.fighter, slot.original_costume_no, low)) return {};
+            if (writer.find(h)) return writer.get(h);
+            for (auto* pk : slotcheck::g_game_patch_paks) if (auto* e = pk->find(h)) return pk->read(*e);
+            if (auto* e = base_pak.find(h)) return base_pak.read(*e);
+            return {};
+        };
+        // A material file as this slot stores it: the mod's (mf) or the game's, pointing at the slot's textures
+        auto material_data = [&](const std::string& orig, const ModFileRef* mf) {
+            const PakEntry* ve = base_pak.find(pak_path_hash(std::string_view(orig)));   // the game's file
+            std::vector<uint8_t> d = mf ? mf->read_data() : base_pak.read(*ve);
+            patch_material(d);
+            if (mf && ve) {
+                std::vector<uint8_t> rebuilt; int rb = 0;
+                if (modernize_mdf2(d, base_pak.read(*ve), rebuilt, &rb)) d = std::move(rebuilt);
+            }
+            return d;
+        };
+        auto store = [&](const std::string& id, const std::string& orig, const ModFileRef* mf,
+                         const std::unordered_map<std::string, std::string>& rebind,
+                         const ModFileMaps* twins) -> RtoFile {
+            const std::string low = str_lower(orig), target = target_of(orig), path = stored_of(id, target);
+            const uint64_t h = pak_path_hash(std::string_view(path));
+            if (!writer.find(h)) {
+                const PakEntry* ve = base_pak.find(pak_path_hash(std::string_view(orig)));   // the game's file
+                if (str_ends_with(low, ".mdf2.31")) {
+                    std::vector<uint8_t> d = material_data(orig, mf);
+                    if (!rebind.empty()) mdf2_rebind_textures(d, rebind);
+                    writer.add_uncompressed(h, std::move(d));
+                } else if (mf && needs_content_patch(low)) {
+                    put_mod_data(writer, h, *mf);
+                } else if (mf) {
+                    put_mod_raw(writer, h, *mf);
+                } else {
+                    put_game_raw(writer, h, base_pak, *ve);
+                }
+                stored_new++;
+                if (low.find(".tex.") != std::string::npos)
+                    write_streaming_twin(writer, written_paths, orig, path, all_mod, base_pak, twins);
+            }
+            RtoFile rf{rto_kind(low), resource_name(target), resource_name(path)};
+            if (rf.kind == "texture" && mf && ((mf->is_disk() && tex_npot_at(mf->disk_path)) || g_tex_bad_files.count(mf->source()))) {
+                rf.no_live = true;
+                printf("      runtime options: %s: not a power-of-two size or an inconsistent mip table: never asked for at run time\n",
+                       resource_name(orig).c_str());
+            }
+            return rf;
+        };
+        for (size_t oi = 0; oi < rm.options.size(); ++oi) {
+            const RtoOption& op = rm.options[oi];
+            if (op.mode == "base") continue;
+            std::vector<std::string> paths;
+            for (auto& [p, mf] : op.files) if (belongs(p)) paths.push_back(p);
+            if (paths.empty()) continue;
+            std::sort(paths.begin(), paths.end());
+            if (op.retouch) {   // a file this outfit does not load (a texture no material file of it names): left out
+                const size_t before = paths.size();
+                paths.erase(std::remove_if(paths.begin(), paths.end(), [&](const std::string& p) {
+                    return worn(target_of(p)).empty();
+                }), paths.end());
+                if (paths.size() != before)
+                    printf("      runtime options: %s: %zu of its files are not loaded by this outfit: left out\n",
+                           op.name.c_str(), before - paths.size());
+                if (paths.empty()) continue;
+            }
+            // The textures the option ships, as its materials name them -> the option's copies
+            std::unordered_map<std::string, std::string> rebind;
+            for (auto& p : paths) {
+                if (str_lower(p).find(".tex.") == std::string::npos) continue;
+                const std::string stored = resource_name(stored_of(op.id, target_of(p)));
+                rebind[resource_name(p)] = stored;
+                rebind[resource_name(target_of(p))] = stored;
+            }
+            std::set<std::string> own_tex;   // the option's own copies
+            for (auto& [k, v] : rebind) own_tex.insert(v);
+            // Textures its material files name by their path in the mod (files moved from another costume folder):
+            // the option's copy when it ships the file here, else what this outfit loads at the new path
+            for (auto& [np, orig] : op.origin) {
+                if (str_lower(np).find(".tex.") == std::string::npos) continue;
+                const bool own = std::find(paths.begin(), paths.end(), np) != paths.end();
+                rebind[resource_name(orig)] = resource_name(own ? stored_of(op.id, target_of(np)) : target_of(np));
+            }
+            // A separate add-on's option (attach_addons): only where it fits what this slot wears
+            if (op.addon) {
+                std::string why, which;
+                std::set<std::string> fit_tex = own_tex;
+                fit_tex.insert(named_tex.begin(), named_tex.end());
+                for (auto& p : paths) {
+                    const std::string kd = rto_kind(str_lower(p));
+                    if (kd != "mesh" && kd != "material" && kd != "texture" && kd != "chain") continue;
+                    std::vector<uint8_t> d;
+                    if (kd == "material") {
+                        d = material_data(p, &op.files.at(p));
+                        if (!rebind.empty()) mdf2_rebind_textures(d, rebind);
+                    } else d = op.files.at(p).read_data();
+                    why = slotcheck::addon_fit(writer, base_pak, inv.suffixes, op.files, p, d, target_of(p), worn, fit_tex, &op.origin);
+                    if (!why.empty()) { which = p; break; }
+                }
+                if (!why.empty()) {
+                    printf("      runtime options: %s does not fit this outfit (%s: %s): not offered here\n",
+                           op.name.c_str(), rel_tail(which).c_str(), why.c_str());
+                    continue;
+                }
+            }
+            const ModFileMaps twins = {&op.files};
+            auto& files = out.files[oi];
+            for (auto& p : paths) files.push_back(store(op.id, p, &op.files.at(p), rebind, &twins));
+            // Joint constraints (.jcns and the _jcs.user naming them) are not swapped on a live model: such an
+            // option is applied at the next launch, when the slot is built with it ("other" files)
+            for (auto& p : paths) {
+                const std::string low = str_lower(p);
+                if (low.find(".jcns.") != std::string::npos || low.find("_jcs.user.") != std::string::npos)
+                    printf("      runtime options: %s ships joint constraints (%s): applied at the next launch\n",
+                           op.name.c_str(), p.c_str());
+            }
+        }
+        // Colour entries of the options' materials (RuntimeOptions=on; docs/RUNTIME_OPTIONS.md, Colour entries): colour
+        // files are not swapped live, so the slot's own ones colour every option. A material an option brings that
+        // no material file of the slot has (Aloha Ryu C2 carries Outfit 2's head: esf_Eyebrow, esf_Beard) gets its
+        // entries in each of the slot's colour files, from the option's colour file of the same number, else its
+        // cmd_000, else the game outfit's it was made for (same number, then cmd_000). Existing entries stay as they
+        // are; a material the slot itself has is never added (the slot looks as before).
+        if (g_rto_layout == RtoLayout::One && !slot_colour_files.empty()) {
+            auto read_any = [&](const std::string& low) -> std::vector<uint8_t> {
+                const uint64_t h = pak_path_hash(std::string_view(low));
+                if (writer.find(h)) return writer.get(h);
+                for (auto* pk : slotcheck::g_game_patch_paks) if (auto* e = pk->find(h)) return pk->read(*e);
+                if (auto* e = base_pak.find(h)) return base_pak.read(*e);
+                return {};
+            };
+            std::set<std::string> slot_mats;   // materials of every material file the slot's scene loads
+            for (auto& [nn, refs] : scene_part)
+                for (auto& r : refs) {
+                    if (!str_ends_with(r, ".mdf2")) continue;
+                    std::vector<std::string> names;
+                    if (slotcheck::mdf2_materials(read_any(scene_ref_pak_path(r, inv.suffixes)), names)) slot_mats.insert(names.begin(), names.end());
+                }
+            if (slot_mats.empty())
+                printf("      runtime options: %s/v%02d: the slot's material files are not read: colour files left as they are\n",
+                       fd.c_str(), slot.new_costume_no);
+            auto number_of = [](const std::string& low) {   // "..._cmd_003.user.2" -> "003", else empty
+                const size_t a = low.rfind("_cmd_"), b = low.find(".user.", a == std::string::npos ? 0 : a);
+                if (a == std::string::npos || b != a + 8) return std::string();
+                const std::string n = low.substr(a + 5, 3);
+                return std::all_of(n.begin(), n.end(), [](char c) { return isdigit((unsigned char)c) != 0; }) ? n : std::string();
+            };
+            for (size_t oi = 0; oi < rm.options.size() && !slot_mats.empty(); ++oi) {
+                if (!out.files.count(oi) || out.files.at(oi).empty()) continue;   // not stored for this slot
+                const RtoOption& op = rm.options[oi];
+                std::vector<std::string> want;   // its materials the slot has not
+                for (auto& [p, mf] : op.files) {
+                    if (str_lower(p).find(".mdf2.") == std::string::npos || !belongs(p)) continue;
+                    std::vector<std::string> names;
+                    if (!slotcheck::mdf2_materials(mf.read_data(), names)) continue;
+                    for (auto& n : names)
+                        if (!slot_mats.count(n) && std::find(want.begin(), want.end(), n) == want.end()) want.push_back(n);
+                }
+                if (want.empty()) continue;
+                // The game outfit the option was made for: the costume folder its moved files come from
+                std::string gfolder;
+                for (auto& [np, orig] : op.origin) {
+                    std::string pfd, folder;
+                    if (parse_model_folder(orig, pfd, folder) && pfd == fd && folder != "000" && folder != old_f) { gfolder = folder; break; }
+                }
+                auto own_colour = [&](const std::string& n) -> std::vector<uint8_t> {
+                    const std::string low = base_model + fd + "_" + old_f + "_cmd_" + n + ".user.2";
+                    for (auto& [p, mf] : op.files) if (str_lower(p) == low) return mf.read_data();
+                    return {};
+                };
+                auto game_colour = [&](const std::string& n) -> std::vector<uint8_t> {
+                    if (gfolder.empty()) return {};
+                    return read_any(fighter_root + gfolder + "/" + fd + "_" + gfolder + "_cmd_" + n + ".user.2");
+                };
+                const std::vector<uint8_t> own0 = own_colour("000"), game0 = game_colour("000");
+                size_t entries = 0, nfiles = 0;
+                std::vector<std::string> names;
+                for (auto& [orig, target] : slot_colour_files) {
+                    const std::string n = number_of(str_lower(orig));
+                    if (n.empty()) continue;
+                    const uint64_t h = pak_path_hash(std::string_view(target));
+                    std::vector<uint8_t> d = writer.get(h);
+                    const std::vector<uint8_t> ownn = n == "000" ? std::vector<uint8_t>{} : own_colour(n);
+                    const std::vector<uint8_t> gamen = n == "000" ? std::vector<uint8_t>{} : game_colour(n);
+                    std::vector<std::string> added;
+                    std::string why;
+                    // a colour file (not the default cmd_000): each added slot as the game shows it, enabled (SetColor
+                    // is all a material swapped in at runtime gets: Aloha C2's eyebrows stayed the material's light
+                    // grey with the default file's #0C0C0C left disabled)
+                    const std::vector<const std::vector<uint8_t>*> bases{&own0, &own0, &game0, &game0};
+                    if (!cmd_add_missing_clusters(d, {&ownn, &own0, &gamen, &game0}, want, added, &why,
+                                                  n == "000" ? nullptr : &bases)) {
+                        printf("      runtime options: %s/v%02d: colour file %s left as it is (%s)\n", fd.c_str(),
+                               slot.new_costume_no, rel_tail(target).c_str(), why.c_str());
+                        continue;
+                    }
+                    if (added.empty()) continue;
+                    // read back from the pak with the loader's parser: the entries it had plus the ones added
+                    std::vector<CmdCluster> was, now;
+                    cmd_tints(writer.get(h), was);
+                    writer.replace(h, std::move(d));
+                    if (!cmd_tints(writer.get(h), now) || now.size() != was.size() + added.size())
+                        printf("      WARN: runtime options: %s/v%02d: colour file %s does not read back (%zu entries, %zu expected)\n",
+                               fd.c_str(), slot.new_costume_no, rel_tail(target).c_str(), now.size(), was.size() + added.size());
+                    entries += added.size();
+                    nfiles++;
+                    for (auto& a : added) if (std::find(names.begin(), names.end(), a) == names.end()) names.push_back(a);
+                }
+                std::set<std::string> named;   // what the slot's colour files name now
+                for (auto& [orig, target] : slot_colour_files) {
+                    std::vector<CmdCluster> cl;
+                    cmd_tints(writer.get(pak_path_hash(std::string_view(target))), cl);
+                    for (auto& c : cl) named.insert(c.name);
+                }
+                std::string missing;   // materials no source names (left without colour entries)
+                for (auto& w : want) if (!named.count(w)) missing += (missing.empty() ? "" : ", ") + w;
+                std::string list;
+                for (auto& a : names) list += (list.empty() ? "" : ", ") + a;
+                if (entries)
+                    printf("      runtime options: %s/v%02d: colour files: +%zu entries (%s) from %s, in %zu files\n", fd.c_str(),
+                           slot.new_costume_no, entries, list.c_str(), op.name.c_str(), nfiles);
+                if (!missing.empty())
+                    printf("      runtime options: %s/v%02d: %s brings materials no colour file names here (%s): their default colours\n",
+                           fd.c_str(), slot.new_costume_no, op.name.c_str(), missing.c_str());
+            }
+        }
+        std::set<std::string> chosen;   // files of the options the slot is made of
+        for (auto oi : out.selected)
+            if (rm.options[oi].mode != "base")
+                for (auto& [p, mf] : rm.options[oi].files) if (belongs(p)) chosen.insert(p);
+        // The base option a file comes from (base options in layering order: the last one wins)
+        auto base_src = [&](const std::string& p) {
+            const RtoOption* src = nullptr;
+            for (auto& g : rm.groups)
+                for (auto oi : g.options)
+                    if (rm.options[oi].mode == "base" && rm.options[oi].files.count(p)) src = &rm.options[oi];
+            return src;
+        };
+        // The option the slot's own file comes from (the last one wins)
+        auto own_of = [&](const std::string& p) {
+            const RtoOption* own = nullptr;
+            for (auto& g : rm.groups)
+                for (auto oi : g.options)
+                    if (rm.options[oi].mode != "base" && rm.options[oi].files.count(p)
+                        && std::find(out.selected.begin(), out.selected.end(), oi) != out.selected.end()) own = &rm.options[oi];
+            return own;
+        };
+        // Manager mode only: a game file whose row a replacement turned off in the base pak (the Slotsloader Manager's
+        // "Replace original" zeroes the row and puts its file in the game's natives folder) is that loose file: it is what
+        // the game shows at that path, so it is what a base copy holds there. Without it an option worn over such a path had
+        // no base copy and could not be turned off. The loose file is watched by content (probe_loose): the replacement
+        // changed or removed rebuilds the pak. A path with neither a row nor a loose file still has nothing under it.
+        // Outside Manager mode: never looked for, the game's file is a row of its paks or nothing, as before.
+        std::map<std::string, ModFileRef> loose_under;   // lowercase pak path -> the loose file (no disk path: none)
+        auto loose_of = [&](const std::string& p) -> const ModFileRef* {
+            if (!g_manager_mode) return nullptr;
+            const std::string low = str_lower(p);
+            auto it = loose_under.find(low);
+            if (it == loose_under.end()) {
+                ModFileRef mf;
+                if (!base_pak.find(pak_path_hash(std::string_view(low))) && loose_file_there(low)) {
+                    probe_loose(low);
+                    mf.disk_path = loose_file_path(low);
+                    mf.pak_path = low;
+                    mf.content_tag = g_loose_probes[low];   // not taken from the previous pak once its content changed
+                    printf("      runtime options: %s: its row of the game's pak is turned off, the loose file in the game folder "
+                           "is the game's file there\n", low.c_str());
+                }
+                it = loose_under.emplace(low, std::move(mf)).first;
+            }
+            return it->second.is_disk() ? &it->second : nullptr;
+        };
+        auto game_has = [&](const std::string& p) {
+            return base_pak.find(pak_path_hash(std::string_view(p))) != nullptr || loose_of(p) != nullptr;
+        };
+        auto game_file = [&](const std::string& p) {
+            const PakEntry* e = base_pak.find(pak_path_hash(std::string_view(p)));
+            if (e) return base_pak.read(*e);
+            if (const ModFileRef* lf = loose_of(p)) return lf->read_data();
+            return std::vector<uint8_t>{};
+        };
+        // Manager mode only: a texture the mods ship in a folder of the fighter that is no costume folder (named_tex) is
+        // written once every slot is made (add_restorations), so it is not in the pak yet when a base copy's material file is
+        // checked here: the outfit's own material file naming one was refused ("texture missing"), and an option worn over it
+        // could not be turned off (Goth Juri C1: its materials name esf016/goth/...). Such a texture counts as there, as it
+        // does for an add-on's own files (addon_fit). Outside Manager mode: the check of before.
+        const std::set<std::string>* later_tex = g_manager_mode ? &named_tex : nullptr;
+        // A base copy that does not fit is not made: the group then always keeps one of its options (no "None")
+        auto no_base = [&](const std::string& p, const RtoOption* src, const std::string& why) {
+            printf("      runtime options: no base copy of %s (%s, %s)\n",
+                   p.c_str(), src ? "the mod's base files" : "the game's file", why.c_str());
+        };
+        // A model part's file without its extension and material variant: ".../001/01/esf028_001_01" for the
+        // mesh esf028_001_01.mesh.* and the material file esf028_001_01_v00.mdf2.*
+        auto part_stem = [](const std::string& low) {
+            std::string s = low.substr(0, std::min(low.find(".mesh."), low.find(".mdf2.")));
+            if (low.find(".mdf2.") != std::string::npos)
+                if (auto v = s.rfind("_v"); v != std::string::npos && v > s.rfind('/')) s.resize(v);
+            return s;
+        };
+        // A model part every option ships whole (its mesh, its material files and, in the same folder, its chain):
+        // its base copy is the part as ONE unit, every file from one source (the mod's base files or the game's),
+        // all or nothing, and the manifest says so ("unit"): the runtime swaps them together, the chain stopped
+        // (docs/RUNTIME_OPTIONS.md, Part units). Ken SFV Hair V2 ships the hair's mesh, material file and chain:
+        // the per-file checks below refuse the game's hair mesh (it lacks the 22 joints of the add-on's chain,
+        // which the game's own chain does not move) and the game's material file (the mod ships its own mesh),
+        // so "Off" changed nothing. Ingrid's Fly In A Bucket props (cat, book: mesh + material of 000/30-34).
+        // Joints: see below (never a chain bound to a joint that disappears with a mesh).
+        std::map<std::string, std::string> unit_of;   // lowercase pak path -> its unit (the chain's target, else the mesh's)
+        std::map<std::string, int> unit_joints;       // resource name (target or stored copy) -> joints of that mesh
+        for (auto& pm : chosen) {
+            const std::string lm = str_lower(pm);
+            if (lm.find(".mesh.") == std::string::npos) continue;
+            const std::string stem = part_stem(lm), dir = lm.substr(0, lm.rfind('/') + 1);
+            // a part's file: its mesh / material files (same stem), a chain in its folder when it is the only mesh there
+            size_t meshes_in_dir = 0;
+            for (auto& q : chosen) {
+                const std::string ql = str_lower(q);
+                if (ql.compare(0, dir.size(), dir) == 0 && ql.find('/', dir.size()) == std::string::npos
+                    && ql.find(".mesh.") != std::string::npos) ++meshes_in_dir;
+            }
+            auto of_part = [&](const std::string& ql) {
+                if (ql.find(".mesh.") != std::string::npos || str_ends_with(ql, ".mdf2.31")) return part_stem(ql) == stem;
+                return meshes_in_dir == 1 && ql.find("_chain.chain.") != std::string::npos
+                    && ql.compare(0, dir.size(), dir) == 0 && ql.find('/', dir.size()) == std::string::npos;
+            };
+            std::set<std::string> part;   // lowercase
+            std::map<std::string, std::string> spelled;   // lowercase -> the option's spelling (map keys)
+            for (auto& q : chosen) if (of_part(str_lower(q))) { part.insert(str_lower(q)); spelled[str_lower(q)] = q; }
+            std::string chain;
+            for (auto& q : part) if (q.find("_chain.chain.") != std::string::npos) chain = q;
+            if (part.size() < 2) continue;   // a mesh alone: the per-file checks (its material file is not the options')
+            std::string why;
+            // every option that ships a file of the part ships all of it (no mix of two sources on the model)
+            std::vector<const RtoOption*> shippers;
+            for (auto& op : rm.options) {
+                if (op.mode == "base") continue;
+                std::set<std::string> t;
+                for (auto& [q, mf] : op.files) if (of_part(str_lower(q))) t.insert(str_lower(q));
+                if (t.empty()) continue;
+                if (t != part && why.empty()) why = op.name + " ships " + std::to_string(t.size()) + " of its " + std::to_string(part.size()) + " files";
+                shippers.push_back(&op);
+            }
+            // one source for the whole part
+            const RtoOption* src = base_src(spelled[lm]);
+            for (auto& q : part) {
+                if (!why.empty()) break;
+                if (base_src(spelled[q]) != src) why = "its files come from several sources";
+                else if (!src && !game_has(spelled[q])) why = "the game has no " + q;
+            }
+            std::vector<uint8_t> mesh_data;
+            std::set<std::string> jb;
+            if (why.empty()) {
+                mesh_data = src ? src->files.at(spelled[lm]).read_data() : game_file(spelled[lm]);
+                if (!slotcheck::mesh_joint_names(mesh_data, jb)) why = "its mesh is not readable";
+            }
+            // its material files fit its mesh (materials defined, textures present)
+            for (auto& q : part) {
+                if (!why.empty() || !str_ends_with(q, ".mdf2.31")) continue;
+                const std::vector<uint8_t> d = material_data(spelled[q], src ? &src->files.at(spelled[q]) : loose_of(spelled[q]));
+                why = slotcheck::material_fit(writer, base_pak, inv.suffixes, mesh_data, d, later_tex);
+            }
+            // Joints. Without a chain in the part: the base mesh has every joint of the slot's (the model's chain
+            // there, the slot's own, stays bound to them). With one, the runtime goes from one (mesh, chain) of
+            // the part to another by setting the new chain first, on the mesh still worn, then the new mesh: a
+            // chain set on a mesh that lacks some of its joints leaves them out (the game itself sets Mai's
+            // esf028_001_30_Chain on four prop meshes that each lack most of its joints), so the joints that
+            // disappear with the old mesh must not be named by the new chain (its "_end" joints and collision
+            // joints, by UTF-16 name or name hash). Checked for every pair of what the model may wear there.
+            struct Wear { std::string who; std::set<std::string> joints; std::vector<uint8_t> chain; };
+            std::vector<Wear> wears;
+            if (why.empty()) {
+                wears.push_back({"the base", jb, {}});
+                if (!chain.empty()) wears.back().chain = src ? src->files.at(spelled[chain]).read_data() : game_file(spelled[chain]);
+            }
+            std::map<std::string, int> joints;
+            const std::string mt = resource_name(target_of(pm));
+            const RtoOption* own = own_of(pm);
+            for (auto* op : shippers) {
+                if (!why.empty()) break;
+                Wear w{op->name, {}, {}};
+                if (!slotcheck::mesh_joint_names(op->files.at(spelled[lm]).read_data(), w.joints)) { why = "the mesh of " + op->name + " is not readable"; break; }
+                if (!chain.empty()) w.chain = op->files.at(spelled[chain]).read_data();
+                size_t miss = 0;
+                for (auto& n : w.joints) if (!jb.count(n)) ++miss;
+                if (chain.empty() && op == own && miss) why = std::to_string(miss) + " joints of the slot's mesh missing";
+                joints[resource_name(stored_of(op->id, target_of(pm)))] = int(w.joints.size());
+                if (op == own) joints[mt] = int(w.joints.size());
+                wears.push_back(std::move(w));
+            }
+            // the scan must at least find a joint of each chain's own mesh (else the chain is not read this way)
+            for (auto& w : wears) {
+                if (!why.empty() || chain.empty()) break;
+                bool any = false;
+                for (auto& n : w.joints) if (!any && slotcheck::chain_names_joint(w.chain, n)) any = true;
+                if (!any) why = "the chain of " + w.who + " names no joint of its mesh";
+            }
+            for (size_t a = 0; a < wears.size() && why.empty() && !chain.empty(); ++a)
+                for (size_t b = 0; b < wears.size() && why.empty(); ++b) {
+                    if (a == b) continue;
+                    for (auto& n : wears[a].joints)
+                        if (!wears[b].joints.count(n) && slotcheck::chain_names_joint(wears[b].chain, n)) {
+                            why = "the chain of " + wears[b].who + " names " + n + ", a joint of " + wears[a].who + "'s mesh only";
+                            break;
+                        }
+                }
+            if (!why.empty()) {
+                if (!chain.empty())
+                    printf("      runtime options: part %s is not one unit (%s): its files are checked one by one\n", dir.c_str(), why.c_str());
+                continue;
+            }
+            joints[resource_name(stored_of("base", target_of(pm)))] = int(jb.size());
+            const std::string key = resource_name(target_of(chain.empty() ? pm : spelled[chain]));
+            for (auto& q : part) unit_of[q] = key;
+            for (auto& [r, n] : joints) unit_joints[r] = n;
+            printf("      runtime options: part %s as one unit (%zu files%s) from %s, %zu joints\n", dir.c_str(), part.size(),
+                   chain.empty() ? "" : ", its chain", src ? "the mod's base files" : "the game's files", jb.size());
+        }
+        std::set<std::string> base_mesh;   // meshes given a base copy, lowercase: the model may wear them
+        std::vector<std::string> order;    // meshes first: a material file is checked against them
+        for (auto& p : chosen) if (str_lower(p).find(".mesh.") != std::string::npos) order.push_back(p);
+        for (auto& p : chosen) if (str_lower(p).find(".mesh.") == std::string::npos) order.push_back(p);
+        for (auto& p : order) {
+            const std::string low = str_lower(p);
+            const RtoOption* src = base_src(p);
+            if (!src && !game_has(p)) continue;   // nothing under it
+            // What the copy is read from when it is no row of the game's paks: the mod's base files, or (Manager mode,
+            // loose_of) the loose file that is the game's file there, a texture with its loose streaming twin if it has one
+            const ModFileRef* under = src ? &src->files.at(p) : loose_of(p);
+            std::unordered_map<std::string, ModFileRef> loose_twin;
+            if (!src && under && low.find(".tex.") != std::string::npos && p.compare(0, strlen(BASE_PFX), BASE_PFX) == 0) {
+                const std::string st = std::string(STREAM_PFX) + p.substr(strlen(BASE_PFX));
+                if (const ModFileRef* t = loose_of(st)) loose_twin[st] = *t;
+            }
+            const ModFileMaps twins = {src ? &src->files : under ? &loose_twin : &mc->files_in_folder};
+            const ModFileMaps* twins_of = under ? &twins : nullptr;
+            if (auto u = unit_of.find(low); u != unit_of.end()) {   // a part unit: checked as a whole above
+                RtoFile rf = store("base", p, under, {}, twins_of);
+                rf.unit = u->second;
+                if (auto j = unit_joints.find(rf.path); j != unit_joints.end()) rf.joints = j->second;
+                out.base.push_back(std::move(rf));
+                if (low.find(".mesh.") != std::string::npos) base_mesh.insert(low);
+                continue;
+            }
+            // A mesh is swapped on a model that keeps its chains and its other parts: the copy must have every
+            // joint of the slot's mesh, which they move. The game's Outfit 1 body as the base copy of Swimsuit
+            // C. Viper (no body in its main files), without the 18 joints the swimsuit's chain moves, stopped the
+            // game in a chain job half a second after the swap (19/10). Without a copy, the slot's own mesh stays.
+            if (low.find(".mesh.") != std::string::npos) {
+                const RtoOption* own = own_of(p);
+                const std::vector<uint8_t> data = src ? src->files.at(p).read_data() : game_file(p);
+                std::set<std::string> need, have;
+                std::vector<std::string> mm;
+                std::string why;
+                if (!own || !slotcheck::mesh_joint_names(own->files.at(p).read_data(), need)) why = "the slot's mesh is not readable";
+                else if (!slotcheck::mesh_joint_names(data, have) || !slotcheck::mesh_materials(data, mm))
+                    why = "it is not readable";
+                else {
+                    std::vector<std::string> miss;
+                    for (auto& n : need) if (!have.count(n)) miss.push_back(n);
+                    if (!miss.empty()) why = std::to_string(miss.size()) + " joints of the slot's mesh missing, " + miss[0] + "...";
+                }
+                // It is drawn with the part's material files: each one an option ships must define its materials.
+                // The game's mesh only where the mod keeps the game's material file: the mod's materials name the
+                // mod's textures, laid out for the mod's mesh (C. Viper lace lingerie: Outfit 2's body, 20/10).
+                for (auto& op : rm.options)
+                    for (auto& [q, mf] : op.files) {
+                        const std::string ql = str_lower(q);
+                        if (!why.empty() || !str_ends_with(ql, ".mdf2.31") || part_stem(ql) != part_stem(low)) continue;
+                        std::vector<std::string> dm;
+                        if (!src) why = "the mod ships its own material file for this part (" + op.name + ")";
+                        else if (!slotcheck::mdf2_materials(mf.read_data(), dm)) why = "the material file of " + op.name + " is not readable";
+                        else
+                            for (auto& m : mm)
+                                if (why.empty() && std::find(dm.begin(), dm.end(), m) == dm.end())
+                                    why = "material " + m + " not in the material file of " + op.name;
+                    }
+                if (!why.empty()) { no_base(p, src, why); continue; }
+                base_mesh.insert(low);
+            } else if (str_ends_with(low, ".mdf2.31")) {
+                // A material file is worn with its part's mesh: it must define every material of each mesh the
+                // model may wear there, and the textures it names must exist. The game's Outfit 1 material file
+                // as the base copy of Mai's mini dress skin (the mod ships the body's materials in its skin options
+                // only) lacked 11 of the 14 materials of the dress's body: "None" drew the body black (20/10).
+                // The game's material file only where the mod keeps the game's mesh: with the same material names
+                // (C. Viper swimsuit), it still lays the game's textures on the mod's mesh (34 of the 83 textures
+                // of the swimsuit's skin materials are the mod's).
+                const std::string mesh_pfx = part_stem(low) + ".mesh.";
+                std::vector<const ModFileRef*> mod_meshes;   // the part's meshes the mod ships
+                bool in_base = false;
+                for (auto& op : rm.options)
+                    for (auto& [q, mf] : op.files)
+                        if (str_lower(q).compare(0, mesh_pfx.size(), mesh_pfx) == 0) {
+                            mod_meshes.push_back(&mf);
+                            if (op.mode == "base") in_base = true;
+                        }
+                std::string why;
+                if (!src && !mod_meshes.empty()) why = "the mod ships its own mesh for this part";
+                else {
+                    std::vector<std::vector<uint8_t>> meshes;
+                    for (auto* mf : mod_meshes) meshes.push_back(mf->read_data());
+                    if (!in_base) {   // without an option's mesh the model wears the game's: none ships one, or it has a base copy
+                        std::string game_mesh;
+                        for (auto& m : base_mesh) if (m.compare(0, mesh_pfx.size(), mesh_pfx) == 0) game_mesh = m;
+                        if (game_mesh.empty() && mod_meshes.empty())
+                            if (auto sx = inv.suffixes.find("mesh"); sx != inv.suffixes.end()) game_mesh = mesh_pfx + sx->second;
+                        if (!game_mesh.empty())
+                            if (auto gm = game_file(game_mesh); !gm.empty()) meshes.push_back(std::move(gm));
+                    }
+                    const std::vector<uint8_t> d = material_data(p, under);
+                    if (meshes.empty()) why = slotcheck::material_fit(writer, base_pak, inv.suffixes, {}, d, later_tex);
+                    for (auto& m : meshes)
+                        if (why.empty()) why = slotcheck::material_fit(writer, base_pak, inv.suffixes, m, d, later_tex);
+                }
+                if (!why.empty()) { no_base(p, src, why); continue; }
+            } else if (low.find("_chain.chain.") != std::string::npos) {
+                // A chain moves the joints of its part's mesh: when that mesh has no base copy (the slot's own
+                // stays), the slot's own chain stays with it (Ken SFV Hair V2: the game's hair chain would have
+                // been put back under the mod's hair mesh)
+                const std::string dir = low.substr(0, low.rfind('/') + 1);
+                std::string why;
+                for (auto& q : chosen) {
+                    const std::string ql = str_lower(q);
+                    if (why.empty() && ql.compare(0, dir.size(), dir) == 0 && ql.find('/', dir.size()) == std::string::npos
+                        && ql.find(".mesh.") != std::string::npos && !base_mesh.count(ql))
+                        why = "its part's mesh has no base copy";
+                }
+                if (!why.empty()) { no_base(p, src, why); continue; }
+            } else if (low.find(".tex.") != std::string::npos && !src) {
+                // The game's texture under an option's: only with the proportions of the slot's own (another
+                // layout would be mapped wrong on the mod's mesh)
+                auto dims = [](const std::vector<uint8_t>& b, uint32_t& w, uint32_t& h) {
+                    if (b.size() < 12 || memcmp(b.data(), "TEX\0", 4) != 0) return false;
+                    w = uint32_t(b[8] | (b[9] << 8)); h = uint32_t(b[10] | (b[11] << 8));
+                    return w && h;
+                };
+                const RtoOption* own = own_of(p);
+                uint32_t w0 = 0, h0 = 0, w1 = 0, h1 = 0;
+                std::string why;
+                if (!own || !dims(own->files.at(p).read_data(), w0, h0)) why = "the slot's texture is not readable";
+                else if (!dims(game_file(p), w1, h1)) why = "it is not readable";
+                else if (uint64_t(w0) * h1 != uint64_t(w1) * h0)
+                    why = std::to_string(w1) + "x" + std::to_string(h1) + " against the slot's " + std::to_string(w0) + "x" + std::to_string(h0);
+                if (!why.empty()) { no_base(p, src, why); continue; }
+            }
+            out.base.push_back(store("base", p, under, {}, twins_of));
+        }
+        // The options' files of a part unit say so too, their meshes with their joints (the runtime's order)
+        if (!unit_of.empty()) {
+            std::map<std::string, std::string> unit_target;   // target -> unit
+            for (auto& b : out.base) if (!b.unit.empty()) unit_target[b.target] = b.unit;
+            for (auto& [oi, files] : out.files)
+                for (auto& rf : files) {
+                    if (auto u = unit_target.find(rf.target); u != unit_target.end()) rf.unit = u->second;
+                    if (auto j = unit_joints.find(rf.path); j != unit_joints.end()) rf.joints = j->second;
+                }
+            for (auto& b : out.base)
+                if (b.kind == "mesh" && !b.unit.empty())
+                    if (auto j = unit_joints.find(b.target); j != unit_joints.end()) b.own_joints = j->second;
+        }
+        // Pick groups the menu offers without "None": a file the slot wears from one of their options has no base
+        // copy, and no pick of another group ships it (a "None" would leave the option's file on the model)
+        {
+            std::vector<size_t> group_of(rm.options.size(), SIZE_MAX);
+            for (size_t gi = 0; gi < rm.groups.size(); ++gi) for (auto oi : rm.groups[gi].options) group_of[oi] = gi;
+            auto live = [](const std::string& k) { return k == "mesh" || k == "material" || k == "texture" || k == "chain"; };
+            std::set<std::string> backed, worn;
+            for (auto& b : out.base) backed.insert(b.target);
+            for (auto oi : out.selected)
+                if (auto it = out.files.find(oi); it != out.files.end()) for (auto& f : it->second) worn.insert(f.target);
+            for (size_t gi = 0; gi < rm.groups.size(); ++gi) {
+                std::string first;   // the first such file, for the log
+                for (auto oi : rm.groups[gi].options) {
+                    auto it = out.files.find(oi);
+                    if (rm.options[oi].mode != "pick" || it == out.files.end()) continue;
+                    for (auto& f : it->second) {
+                        if (!first.empty() || !live(f.kind) || backed.count(f.target) || !worn.count(f.target)) continue;
+                        bool elsewhere = false;
+                        for (auto& [oj, fj] : out.files)
+                            if (rm.options[oj].mode == "pick" && group_of[oj] != gi)
+                                for (auto& x : fj) if (x.target == f.target) elsewhere = true;
+                        if (!elsewhere) first = f.target;
+                    }
+                }
+                if (first.empty()) continue;
+                out.required.push_back(gi);
+                printf("      runtime options: group \"%s\" offered without None (no base copy of %s)\n",
+                       rm.groups[gi].name.c_str(), first.c_str());
+            }
+            // Groups whose author asks for exactly one option ("2! Skin", "Select only one"), when the slot offers one
+            for (size_t gi = 0; gi < rm.groups.size(); ++gi) {
+                if (!rm.groups[gi].required || std::find(out.required.begin(), out.required.end(), gi) != out.required.end())
+                    continue;
+                bool offered = false;
+                for (auto oi : rm.groups[gi].options) if (rm.options[oi].mode == "pick" && out.files.count(oi)) offered = true;
+                if (!offered) continue;
+                out.required.push_back(gi);
+                printf("      runtime options: group \"%s\" offered without None (its author asks for exactly one)\n",
+                       rm.groups[gi].name.c_str());
+            }
+            std::sort(out.required.begin(), out.required.end());
+        }
+        size_t listed = out.base.size();
+        for (auto& [oi, f] : out.files) listed += f.size();
+        printf("      runtime options: %zu options, %zu files (%zu base copies), %zu new pak entries\n",
+               out.files.size(), listed, out.base.size(), stored_new);
+        g_rto_slots[{fd, slot.new_costume_no}] = std::move(out);
     }
 
     if (streaming_count)
@@ -3243,30 +4951,137 @@ static void add_slot_files(PakWriter& writer,
            slot.outfit_name.c_str(), count, patched);
 }
 
-// ============================================================================
-// Dependencies not relocated into a slot
-// ============================================================================
-
-// 1.10.9: a mod-only dependency the game folder already has as a loose file (a replacement a mod
-// manager installed there: SlotsLoader Manager in either method, Fluffy) is left to that file. The
-// game reads the loose copy for that path when no PAK has it, and the extra outfit referencing the
-// path reads it too; writing the outfit's copy here covered the replacement for as long as the
-// outfit was installed, and the Manager refused to change the replacement (04/11: Sakura as Ryu's
-// DriveTech mesh esf001/005/00, installed both ways). Every such path is probed (state saved with
-// the game colour files): a replacement installed, changed or removed there rebuilds the pak.
-static bool left_to_loose_file(const PakReader& base_pak, const std::string& pak_path) {
-    probe_game_colour(base_pak, pak_path);
-    uint64_t size = 0, mtime = 0;
-    return loose_game_stat(pak_path, size, mtime);
+// Runtime options of the game's outfits (attach_addons): each option that fits the outfit is stored under the
+// outfit's own folder, as for a slot (rto/<option id>/<path in the folder>, rto/<option id>/_/<path in the fighter
+// folder>). Its targets are the game's paths and the game's files are the way back: no base copy, no default.
+static void add_game_options(PakWriter& writer, std::unordered_set<std::string>& written_paths, const VanillaIndex& inv,
+                             PakReader& base_pak, const std::unordered_map<std::string, ModFileRef>& all_mod) {
+    for (auto& g : g_rto_game) {
+        const RtoMod& rm = *g.mod;
+        const std::string fighter_root = std::string(BASE_PFX) + "model/esf/" + g.fighter_dir + "/";
+        const std::string root = fighter_root + g.folder + "/";
+        printf("\n  game outfit %s %s (costume %d, folder %s): options of separate add-ons\n", g.fighter_dir.c_str(),
+               g.name.c_str(), g.costume_no, g.folder.c_str());
+        auto stored_of = [&](const std::string& id, const std::string& target) {
+            const std::string low = str_lower(target);
+            const std::string tail = low.compare(0, root.size(), root) == 0 ? low.substr(root.size())
+                                                                           : "_/" + low.substr(fighter_root.size());
+            return root + "rto/" + id + "/" + tail;
+        };
+        auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
+            const std::string low = str_lower(path);
+            if (!outfit_loads(inv, g.fighter, g.costume_no, low)) return {};
+            const uint64_t h = pak_path_hash(std::string_view(low));
+            for (auto* pk : slotcheck::g_game_patch_paks) if (auto* e = pk->find(h)) return pk->read(*e);
+            if (auto* e = base_pak.find(h)) return base_pak.read(*e);
+            return {};
+        };
+        auto belongs = [&](const std::string& p) {
+            std::string pfd, folder;
+            return parse_model_folder(p, pfd, folder) && pfd == g.fighter_dir && (folder == g.folder || folder == "000");
+        };
+        size_t stored_new = 0;
+        for (size_t oi = 0; oi < rm.options.size(); ++oi) {
+            const RtoOption& op = rm.options[oi];
+            if (op.mode == "base") continue;
+            std::vector<std::string> paths;
+            for (auto& [p, mf] : op.files) if (belongs(p)) paths.push_back(p);
+            if (paths.empty()) continue;
+            std::sort(paths.begin(), paths.end());
+            if (op.retouch) {   // a file this outfit does not load (a texture no material file of it names): left out
+                const size_t before = paths.size();
+                paths.erase(std::remove_if(paths.begin(), paths.end(), [&](const std::string& p) { return worn(p).empty(); }),
+                            paths.end());
+                if (paths.size() != before)
+                    printf("      runtime options: %s: %zu of its files are not loaded by this outfit: left out\n",
+                           op.name.c_str(), before - paths.size());
+                if (paths.empty()) continue;
+            }
+            // The textures the option ships, as its materials name them -> the option's copies
+            std::unordered_map<std::string, std::string> rebind;
+            std::set<std::string> own_tex;
+            for (auto& p : paths) {
+                if (str_lower(p).find(".tex.") == std::string::npos) continue;
+                const std::string stored = resource_name(stored_of(op.id, p));
+                rebind[resource_name(p)] = stored;
+                own_tex.insert(stored);
+            }
+            for (auto& [np, orig] : op.origin) {   // named by their path in the mod (moved from another folder)
+                if (str_lower(np).find(".tex.") == std::string::npos) continue;
+                const bool own = std::find(paths.begin(), paths.end(), np) != paths.end();
+                rebind[resource_name(orig)] = resource_name(own ? stored_of(op.id, np) : np);
+            }
+            // The option's files as they are stored: a material file rebuilt on the game's layout and pointed at the
+            // option's textures, the others the mod's bytes
+            std::map<std::string, std::vector<uint8_t>> data;
+            std::string why, which;
+            for (auto& p : paths) {
+                const std::string low = str_lower(p);
+                if (str_ends_with(low, ".mdf2.31")) {
+                    std::vector<uint8_t> d = op.files.at(p).read_data();
+                    if (const PakEntry* ve = base_pak.find(pak_path_hash(std::string_view(p)))) {
+                        std::vector<uint8_t> rebuilt; int rb = 0;
+                        if (modernize_mdf2(d, base_pak.read(*ve), rebuilt, &rb)) d = std::move(rebuilt);
+                    }
+                    if (!rebind.empty()) mdf2_rebind_textures(d, rebind);
+                    data[p] = std::move(d);
+                }
+                const std::string kd = rto_kind(low);
+                if (!why.empty() || (kd != "mesh" && kd != "material" && kd != "texture" && kd != "chain")) continue;
+                why = slotcheck::addon_fit(writer, base_pak, inv.suffixes, op.files, p,
+                                           data.count(p) ? data[p] : op.files.at(p).read_data(), p, worn, own_tex, &op.origin);
+                if (!why.empty()) which = p;
+            }
+            if (!why.empty()) {
+                printf("      runtime options: %s does not fit this outfit (%s: %s): not offered here\n", op.name.c_str(),
+                       rel_tail(which).c_str(), why.c_str());
+                continue;
+            }
+            const ModFileMaps twins = {&op.files};
+            auto& files = g.out.files[oi];
+            for (auto& p : paths) {
+                const std::string low = str_lower(p), path = stored_of(op.id, p);
+                const uint64_t h = pak_path_hash(std::string_view(path));
+                if (!writer.find(h)) {
+                    const ModFileRef& mf = op.files.at(p);
+                    if (data.count(p)) writer.add_uncompressed(h, std::move(data[p]));
+                    else if (needs_content_patch(low)) put_mod_data(writer, h, mf);
+                    else put_mod_raw(writer, h, mf);
+                    stored_new++;
+                    if (low.find(".tex.") != std::string::npos)
+                        write_streaming_twin(writer, written_paths, p, path, all_mod, base_pak, &twins);
+                }
+                RtoFile rf{rto_kind(low), resource_name(p), resource_name(path)};
+                if (rf.kind == "texture" && ((op.files.at(p).is_disk() && tex_npot_at(op.files.at(p).disk_path))
+                                             || g_tex_bad_files.count(op.files.at(p).source()))) rf.no_live = true;   // (tex_npot_at)
+                files.push_back(std::move(rf));
+            }
+        }
+        g.out.mod = g.mod;
+        g.stored = true;
+        size_t listed = 0;
+        for (auto& [oi, f] : g.out.files) listed += f.size();
+        printf("      runtime options: %zu options, %zu files, %zu new pak entries\n", g.out.files.size(), listed, stored_new);
+    }
 }
 
-static void add_unrelocated_dependencies(PakWriter& writer,
+// ============================================================================
+// Restorations
+// ============================================================================
+
+static void add_restorations(PakWriter& writer,
                              std::unordered_set<std::string>& written_paths,
-                             const std::unordered_map<std::string, ModFileRef>& all_mod,
-                             const PakReader& base_pak) {
-    int added = 0, left = 0;
+                             const std::vector<SlotInfo>& slots,
+                             const VanillaIndex& inv,
+                             PakReader& base_pak,
+                             const std::unordered_map<std::string, ModFileRef>& all_mod) {
+    std::unordered_set<std::string> relocated_prefixes;
+    for (auto& sl : slots)
+        relocated_prefixes.insert(inv.model_prefix(sl.fighter_dir, sl.original_folder));
+
+    int restored = 0, added = 0, streaming_restored = 0, left = 0, kept_out = 0;
     size_t bp = strlen(BASE_PFX);
-    // Per shared folder: files left to loose game files, files written from the outfit (a mesh from the
+    // Mod-only dependencies per shared folder: left to loose game files, written from the outfit (a mesh of the
     // replacement with the outfit's material file may not load together: logged below)
     std::map<std::string, std::pair<int, int>> folders;
     auto folder_of = [](const std::string& p) { auto s = p.rfind('/'); return s == std::string::npos ? p : p.substr(0, s); };
@@ -3274,35 +5089,72 @@ static void add_unrelocated_dependencies(PakWriter& writer,
         if (written_paths.count(pak_path)) continue;
         // Skip streaming/ paths (handled as twins below)
         if (pak_path.compare(0, strlen(STREAM_PFX), STREAM_PFX) == 0) continue;
+        bool in_relocated = false;
+        for (auto& pfx : relocated_prefixes)
+            if (pak_path.size() >= pfx.size() && pak_path.compare(0, pfx.size(), pfx) == 0)
+                { in_relocated = true; break; }
         uint64_t h = pak_path_hash(std::string_view(pak_path));
-        // Manual sources were never installed over the originals. Restoring originals here
-        // would mask loose Fluffy mods. The inventory also protects entries Fluffy zeroed in
-        // the base PAK, which must not be mistaken for new custom dependencies.
-        if (writer.is_excluded(h)) continue;
+        const PakEntry* be;
+        { AskQuiet quiet; be = base_pak.find(h); }
+        // Manager mode, the lookups kept for the next launch (g_asked): this one decides something only for a path that
+        // is not of the game's own index and could be written below (a mod-only dependency of the model folders). For
+        // every other path the file is left to the game whether its row is on or off, and nothing is written elsewhere.
         if ((pak_path.find("/model/esf/") != std::string::npos || is_model_root_file(pak_path))
-                   && !g_relocated_mod_paths.count(pak_path)) {
-            // A genuinely new dependency may still be referenced at its supplied path,
-            // unless a loose file of the game folder already supplies it (1.10.9).
-            bool tex = str_lower(pak_path).find(".tex.") != std::string::npos
-                       && pak_path.compare(0, bp, BASE_PFX) == 0;
-            if (left_to_loose_file(base_pak, pak_path)) {
-                logf("  mod-only dependency left to the game folder's loose file: %s\n", pak_path.c_str());
-                left++; folders[folder_of(pak_path)].first++;
-                continue;   // its twin too: the base decides the pair (half the replacement, half the outfit is neither)
-            }
-            auto data = mf.read_data();
-            writer.add_uncompressed(h, std::move(data));
+            && !g_relocated_mod_paths.count(pak_path) && !inv.all_hashes.count(h)) ask_note(h);
+        // Manager mode (ZZtaii's Slotsloader fork 1.9.4, MIT): nothing of the game is written back at its own path. Its outfits
+        // come from costume_mods alone and replace no original, so there is nothing to restore, and the pak then has no entry a
+        // replacement installed later (a loose file, or a pak of its own below this one) would be covered by.
+        if (be && g_manager_mode) { ++kept_out; continue; }
+        if (be) {
+            put_game_raw(writer, h, base_pak, *be);
             written_paths.insert(pak_path);
-            added++; folders[folder_of(pak_path)].second++;
-            // ...with its high-resolution twin when the mod ships one. The base decides the pair: a loose twin
-            // without its loose base is no use (a twin must match its base's mips), so it goes with the base.
-            if (tex) {
+            restored++;
+            // Also restore streaming twin
+            if (str_lower(pak_path).find(".tex.") != std::string::npos
+                && pak_path.compare(0, bp, BASE_PFX) == 0) {
+                std::string sp = std::string(STREAM_PFX) + pak_path.substr(bp);
+                if (!written_paths.count(sp)) {
+                    uint64_t sh = pak_path_hash(std::string_view(sp));
+                    auto* se = base_pak.find(sh);
+                    if (se) {
+                        put_game_raw(writer, sh, base_pak, *se);
+                        written_paths.insert(sp);
+                        streaming_restored++;
+                    }
+                }
+            }
+        } else if ((pak_path.find("/model/esf/") != std::string::npos || is_model_root_file(pak_path))
+                   && !g_relocated_mod_paths.count(pak_path)) {
+            // Not in the game and not relocated by any slot: another slot may still reference it
+            // at this path (in_relocated alone dropped files a slot of another mod needed).
+            (void)in_relocated;
+            // ...unless a loose file of the game folder already supplies it: a replacement a mod manager installed
+            // there (the Slotsloader Manager either way, Fluffy). The game reads that file when no pak has the
+            // path, the outfit naming the path too; our copy covered the replacement for as long as the outfit was
+            // installed (Sakura as Ryu's DriveTech mesh, esf001/005/00). Its twin goes with it (the base decides the
+            // pair). A loose file appearing, changing or going away there rebuilds the pak (the fingerprint walks
+            // model/esf; probe_loose for the rest). From ZZtaii's Slotsloader fork (1.10.9), MIT.
+            probe_loose(pak_path);
+            // Manager mode: a path of the game's own index that the base pak no longer has (a replacement turned its row
+            // off) is the replacement's, with or without a loose file there yet: never the outfit's copy (fork 1.9.4)
+            if (g_manager_mode && inv.all_hashes.count(h)) { ++kept_out; continue; }
+            if (!loose_game_path(pak_path).empty()) {
+                printf("  mod-only dependency left to the game folder's loose file: %s\n", pak_path.c_str());
+                left++;
+                folders[folder_of(pak_path)].first++;
+                continue;
+            }
+            put_mod_data(writer, h, mf);
+            written_paths.insert(pak_path);
+            added++;
+            folders[folder_of(pak_path)].second++;
+            // ...with its high-resolution twin when the mod ships one
+            if (str_lower(pak_path).find(".tex.") != std::string::npos
+                && pak_path.compare(0, bp, BASE_PFX) == 0) {
                 std::string sp = std::string(STREAM_PFX) + pak_path.substr(bp);
                 auto tw = all_mod.find(sp);
-                if (tw != all_mod.end() && !written_paths.count(sp)
-                    && !writer.is_excluded(pak_path_hash(std::string_view(sp)))) {
-                    auto sd = tw->second.read_data();
-                    writer.add_uncompressed(pak_path_hash(std::string_view(sp)), std::move(sd));
+                if (tw != all_mod.end() && !written_paths.count(sp)) {
+                    put_mod_data(writer, pak_path_hash(std::string_view(sp)), tw->second);
                     written_paths.insert(sp);
                 }
             }
@@ -3310,11 +5162,14 @@ static void add_unrelocated_dependencies(PakWriter& writer,
     }
     for (auto& [folder, n] : folders)
         if (n.first && n.second)
-            logf("  WARN: %s: %d files left to the game folder's loose files, %d from the outfit: a replacement that "
-                 "ships only part of this folder can leave parts that do not load together\n",
-                 folder.c_str(), n.first, n.second);
-    printf("  added %d mod-only dependencies, %d left to loose game files; original asset paths left unchanged\n",
-           added, left);
+            printf("  WARN: %s: %d files left to the game folder's loose files, %d from the outfit: a replacement that "
+                   "ships only part of this folder can leave parts that do not load together\n",
+                   folder.c_str(), n.first, n.second);
+    printf("  restored %d vanilla files, added %d mod-only files", restored, added);
+    if (left) printf(", %d left to loose game files", left);
+    if (streaming_restored) printf(", %d streaming", streaming_restored);
+    if (kept_out) printf(" (Manager mode: %d original paths left to the game)", kept_out);
+    printf("\n");
 }
 
 // ============================================================================
@@ -3346,8 +5201,8 @@ static std::vector<std::string> utf16_strings(const std::vector<uint8_t>& d, siz
     return out;
 }
 
-// Materials a mesh uses (SF6 mesh header: name table + material index table)
-static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out) {
+// Materials a mesh uses (SF6 mesh header: name table + material index table); all: the whole name table
+static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out, std::vector<std::string>* all) {
     if (b.size() < 152 || memcmp(b.data(), "MESH", 4) != 0) return false;
     auto r16 = [&](size_t o) { int16_t v; memcpy(&v, b.data() + o, 2); return v; };
     auto r64 = [&](size_t o) { int64_t v; memcpy(&v, b.data() + o, 8); return v; };
@@ -3370,7 +5225,44 @@ static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::strin
         if (idx < 0 || idx >= name_count) return false;
         out.push_back(names[idx]);
     }
+    if (all) *all = std::move(names);
     return true;
+}
+
+// The names of a mesh's name table that are not materials: its joints (and blend shapes). Read the same
+// way for the game's meshes and for meshes exported by the modding tools (their headers differ elsewhere).
+static bool mesh_joint_names(const std::vector<uint8_t>& b, std::set<std::string>& out) {
+    std::vector<std::string> mats, names;
+    if (!mesh_materials(b, mats, &names)) return false;
+    const std::set<std::string> m(mats.begin(), mats.end());
+    for (auto& n : names) if (!m.count(n)) out.insert(n);
+    return true;
+}
+
+// A chain file names a joint by its UTF-16 name (the "_end" joint of each chain) or by its name hash (murmur3,
+// seed 0xFFFFFFFF, over the UTF-16LE name: collision joints...). Conservative: a match by chance only refuses.
+static bool chain_names_joint(const std::vector<uint8_t>& chain, const std::string& joint) {
+    std::vector<uint8_t> w;
+    for (char c : joint) { w.push_back(uint8_t(c)); w.push_back(0); }
+    if (w.empty()) return false;
+    if (std::search(chain.begin(), chain.end(), w.begin(), w.end()) != chain.end()) return true;
+    auto rotl = [](uint32_t x, int r) { return (x << r) | (x >> (32 - r)); };
+    uint32_t h = 0xFFFFFFFFu;
+    const size_t n = w.size() / 4;
+    for (size_t i = 0; i < n; ++i) {
+        uint32_t k; memcpy(&k, w.data() + 4 * i, 4);
+        k *= 0xcc9e2d51u; k = rotl(k, 15); k *= 0x1b873593u;
+        h ^= k; h = rotl(h, 13); h = h * 5 + 0xe6546b64u;
+    }
+    uint32_t k = 0;
+    const size_t t = w.size() & 3;
+    if (t >= 3) k ^= uint32_t(w[4 * n + 2]) << 16;
+    if (t >= 2) k ^= uint32_t(w[4 * n + 1]) << 8;
+    if (t >= 1) { k ^= w[4 * n]; k *= 0xcc9e2d51u; k = rotl(k, 15); k *= 0x1b873593u; h ^= k; }
+    h ^= uint32_t(w.size());
+    h ^= h >> 16; h *= 0x85ebca6bu; h ^= h >> 13; h *= 0xc2b2ae35u; h ^= h >> 16;
+    uint8_t hb[4]; memcpy(hb, &h, 4);
+    return std::search(chain.begin(), chain.end(), hb, hb + 4) != chain.end();
 }
 
 // Materials a material file defines (.mdf2.31: 100-byte material headers, name offset first)
@@ -3393,13 +5285,11 @@ static bool mdf2_materials(const std::vector<uint8_t>& b, std::vector<std::strin
     return true;
 }
 
-// Textures a material file binds (.mdf2.31, the game's: 100-byte material headers as mdf2_materials()
-// reads them, the texture table offset at +60, then per texture a 32-byte entry with the path offset at
-// +16; the version word of the header is not the file version). Only these are loaded: a material
-// file can keep strings no material uses in its string pool (the four Leon/Luke mods keep 30 paths of
-// a "LeonPort" folder they never shipped, left over from an earlier export; RE Mesh Editor's parser and
-// this one both find every material bound to the textures the mods ship). False when the file cannot
-// be read this way.
+// Textures a material file binds (.mdf2.31: 100-byte material headers as mdf2_materials() reads them,
+// the texture count at +20 and the texture table offset at +60, then per texture a 32-byte entry with the
+// path offset at +16). Only these are loaded: a material file can keep strings no material uses in its
+// string pool (the "Leon Requiem On Luke" mods keep paths of a "LeonPort" folder they never shipped).
+// From ZZtaii's Slotsloader fork (1.9.9), MIT. False when the file cannot be read this way.
 static bool mdf2_texture_paths(const std::vector<uint8_t>& b, std::vector<std::string>& out) {
     if (b.size() < 16 || memcmp(b.data(), "MDF\0", 4) != 0) return false;
     int16_t count;
@@ -3408,7 +5298,7 @@ static bool mdf2_texture_paths(const std::vector<uint8_t>& b, std::vector<std::s
     if (count < 0 || 16 + H * size_t(count) > b.size()) return false;
     auto u64 = [&](size_t o) { uint64_t v; memcpy(&v, b.data() + o, 8); return v; };
     std::vector<std::string> found;
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < size_t(count); i++) {
         const size_t mh = 16 + H * i;
         int32_t tc; memcpy(&tc, b.data() + mh + 20, 4);
         const uint64_t th = u64(mh + tex_at);
@@ -3432,7 +5322,7 @@ static bool mdf2_texture_paths(const std::vector<uint8_t>& b, std::vector<std::s
 }
 
 // Texture references of a material file, as the game loads them: the bound ones when the file can be
-// read, else (an unknown layout) every ".tex" string, as before 1.9.9
+// read, else (an unknown layout) every ".tex" string, as before
 static std::vector<std::string> material_textures(const std::vector<uint8_t>& mdf) {
     std::vector<std::string> out;
     if (!mdf2_texture_paths(mdf, out)) {
@@ -3445,47 +5335,37 @@ static std::vector<std::string> material_textures(const std::vector<uint8_t>& md
     return uniq;
 }
 
-// What the game will find at a path: our pak first, then the game's paks by priority
+// What the game will find at a path: our pak first, then the game's paks by priority, then the loose
+// copy in the game folder. A file whose pak entry a replacement switched off (a mod manager's "PAK
+// method": its loose copy in natives\ is what the game loads) is there and nowhere in the paks; without
+// it every slot using such a shared texture was left out as "texture missing" (from ZZtaii's Slotsloader
+// fork (1.10.1), MIT).
+// A path found in no pak is probed (probe_loose: a replacement installed or removed there later rebuilds the pak;
+// ZZtaii's Slotsloader fork 1.10.9, MIT). loose_game_path: wide calls with the long-path prefix.
 struct GameFiles {
     PakWriter* writer = nullptr;
     std::vector<PakReader*> paks;
-    // 1.10.1: the game folder. A file whose pak entry a replacement switched off (PAK method: its loose copy
-    // in natives\ is what the game loads) is there and nowhere in the paks; without this every slot using
-    // such a shared texture was left out as "texture missing".
-    std::string game_dir;
-    // 1.10.9: a shared custom path the check resolves from a loose file, or finds nowhere, is probed with the
-    // game colour files, so a replacement installed or removed there rebuilds the pak (a loose texture an
-    // outfit relied on was never probed, PR #26 review). Vanilla paths (excluded) and paths a PAK holds are
-    // not: the base PAK and the patch PAKs have their own fingerprints. Null in the swatch test.
-    const PakReader* base = nullptr;
-    void probe(uint64_t h, const std::string& p) const {
-        if (base && p.compare(0, 8, "natives/") == 0 && !writer->is_excluded(h)) probe_game_colour(*base, p);
-    }
-    // 1.10.9: through loose_game_stat / read_loose_game_bytes (wide calls, long-path prefix), as the colour
-    // probes and add_unrelocated_dependencies: past MAX_PATH the narrow calls missed the loose file, and the
-    // check restored the outfit's copy over a replacement that add_unrelocated_dependencies had left alone.
-    bool has_loose(const std::string& p, uint64_t* size = nullptr) const {
-        if (game_dir.empty() || p.compare(0, 8, "natives/") != 0) return false;
-        uint64_t s = 0, mtime = 0;
-        if (!loose_game_stat(p, s, mtime)) return false;
-        if (size) *size = s;
-        return true;
-    }
+    // Manager mode (g_asked, "exists"): what is asked is "the game has it", in a pak's table or as a loose file
     bool exists(const std::string& p) const {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return true;
-        for (auto* pk : paks) if (pk->find(h)) return true;
-        probe(h, p);
-        return has_loose(p);
+        { AskQuiet quiet; for (auto* pk : paks) if (pk->find(h)) { ask_exists(p, h); return true; } }
+        if (g_asked_pak) { const bool there = loose_file_there(p); ask_exists_loose(p, there); return there; }
+        probe_loose(p);
+        return !loose_game_path(p).empty();
     }
     std::vector<uint8_t> load(const std::string& p) const {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return writer->get(h);
-        for (auto* pk : paks) if (auto* e = pk->find(h)) return pk->read(*e);
-        probe(h, p);
-        uint64_t size = 0;
-        if (!has_loose(p, &size) || size == 0 || size >= (256ull << 20)) return {};
-        return read_loose_game_bytes(p);
+        { AskQuiet quiet; for (auto* pk : paks) if (auto* e = pk->find(h)) { ask_exists(p, h); return pk->read(*e); } }
+        if (g_asked_pak) {
+            const bool there = loose_file_there(p);
+            ask_exists_loose(p, there);
+            return there ? read_file_long(loose_file_path(p)) : std::vector<uint8_t>{};
+        }
+        probe_loose(p);
+        std::string full = loose_game_path(p);
+        return full.empty() ? std::vector<uint8_t>{} : read_file_long(full);
     }
 };
 
@@ -3506,7 +5386,27 @@ struct Ctx {
     GameFiles gf;
     const std::unordered_map<std::string, std::string>* suffixes = nullptr;
     const std::unordered_map<std::string, ModFileRef>* all_mod = nullptr;
+    // Manager mode only (null otherwise): the game's own paths (the vanilla index). A repair never writes at one of them:
+    // an original a replacement turned off in the base pak stays the replacement's (ZZtaii's Slotsloader fork 1.9.4, MIT)
+    const std::unordered_set<uint64_t>* originals = nullptr;
+    // Runtime options in Manager mode only (null otherwise; material_fit): textures, by resource name, that are written
+    // to the pak later than this check (the mods' own, in a fighter folder that is no costume folder): they count as there
+    const std::set<std::string>* later_tex = nullptr;
 };
+
+// A texture a material file names that the game will not find, or one with a broken mip table
+static std::string texture_problem(const Ctx& c, const std::vector<uint8_t>& mdf) {
+    for (auto& s : material_textures(mdf)) {
+        std::string p = resource_path(s, *c.suffixes);
+        if (!p.empty() && c.later_tex && c.later_tex->count(resource_name(p))) continue;
+        if (!p.empty() && !c.gf.exists(p)) return "texture missing: " + s;
+        if (!p.empty())
+            if (std::vector<uint8_t> head; c.gf.writer->head(pak_path_hash(std::string_view(p)), 4096, head)) {
+                if (texture_mip_check(head, false, nullptr)) return "texture with an inconsistent mip table: " + s;
+            }
+    }
+    return {};
+}
 
 // Why a mesh and its material file cannot be loaded together, or empty
 static std::string pair_problem(const Ctx& c, const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf) {
@@ -3521,17 +5421,27 @@ static std::string pair_problem(const Ctx& c, const std::vector<uint8_t>& mesh, 
     for (auto& m : mm)
         if (!have.count(m)) { if (n_missing++ < 3) missing += (missing.empty() ? "" : ", ") + m; }
     if (n_missing) return std::to_string(n_missing) + " materials of the mesh not in its material file (" + missing + ")";
-    for (auto& s : material_textures(mdf)) {
-        if (!str_ends_with(str_lower(s), ".tex")) continue;
-        std::string p = resource_path(s, *c.suffixes);
-        if (!p.empty() && !c.gf.exists(p)) return "texture missing: " + s;
-        if (!p.empty())
-            if (auto* t = c.gf.writer->peek(pak_path_hash(std::string_view(p)))) {
-                std::vector<uint8_t> head(t->begin(), t->begin() + std::min<size_t>(t->size(), 4096));
-                if (texture_mip_check(head, false, nullptr)) return "texture with an inconsistent mip table: " + s;
-            }
+    return texture_problem(c, mdf);
+}
+
+// Runtime options: why a material file cannot be worn with this mesh (empty mesh: its textures only), or empty
+// later_tex (Manager mode, the base copies: Ctx::later_tex): textures that are not in the pak yet and will be
+static std::string material_fit(PakWriter& writer, PakReader& base_pak,
+                                const std::unordered_map<std::string, std::string>& suffixes,
+                                const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf,
+                                const std::set<std::string>* later_tex) {
+    Ctx c;   // the slot check's lookup: our pak, other tools' patch paks, the game's paks (DLC too), loose copies
+    c.gf.writer = &writer;
+    c.gf.paks = g_game_patch_paks;
+    c.gf.paks.push_back(&base_pak);
+    c.suffixes = &suffixes;
+    c.later_tex = later_tex;
+    if (mesh.empty()) {
+        std::vector<std::string> dm;
+        if (!mdf2_materials(mdf, dm)) return "material file not readable";
+        return texture_problem(c, mdf);
     }
-    return {};
+    return pair_problem(c, mesh, mdf);
 }
 
 // Missing textures of a material file: taken from the mod when it ships them (a file of the mod the
@@ -3543,12 +5453,9 @@ static int restore_missing_textures(Ctx& c, const std::vector<uint8_t>& mdf, con
     const std::string ss = slot.fighter_dir + "_" + slot.new_folder + "_";
     const std::string os = slot.fighter_dir + "_" + slot.original_folder + "_";
     for (auto& s : material_textures(mdf)) {
-        if (!str_ends_with(str_lower(s), ".tex")) continue;
         std::string p = resource_path(s, *c.suffixes);
-        if (p.empty() || c.gf.exists(p)) continue;   // 1.10.9: exists() probes a shared path (GameFiles::probe)
-        // Repair only private/custom paths. An unavailable original texture must
-        // not be republished over a Fluffy replacement under its original hash.
-        if (c.gf.writer->is_excluded(pak_path_hash(std::string_view(p)))) continue;
+        if (p.empty() || c.gf.exists(p)) continue;
+        if (c.originals && c.originals->count(pak_path_hash(std::string_view(p)))) continue;   // Manager mode: one of the game's own paths
         std::vector<uint8_t> data;
         auto it = c.all_mod->find(p);
         if (it != c.all_mod->end()) data = it->second.read_data();
@@ -3584,6 +5491,92 @@ static const ModFileRef* mod_file(const std::unordered_map<std::string, ModFileR
     if (it != files.end()) return &it->second;
     for (auto& [p, mf] : files) if (str_lower(p) == low_path) return &mf;
     return nullptr;
+}
+
+// Runtime options: why a file of a separate add-on's option does not fit what an outfit wears, or empty
+// (docs/RUNTIME_OPTIONS.md, Add-ons on other outfits). p: the option's file (its original path), data: that file as
+// it would be stored (a material file pointed at the outfit's and the option's textures), target: the path the
+// outfit loads in its place, worn(x): the file the outfit loads at path x (empty: none), own_tex: resource names of
+// the option's own texture copies. The model keeps its chains and other parts while a mesh is swapped: the add-on's
+// mesh must have every joint of the outfit's, and each mesh / material file pair the model may then wear must match.
+static std::string addon_fit(PakWriter& writer, PakReader& base_pak, const std::unordered_map<std::string, std::string>& suffixes,
+                             const std::unordered_map<std::string, ModFileRef>& op_files, const std::string& p,
+                             const std::vector<uint8_t>& data, const std::string& target,
+                             const std::function<std::vector<uint8_t>(const std::string&)>& worn,
+                             const std::set<std::string>& own_tex,
+                             const std::unordered_map<std::string, std::string>* origin) {
+    const std::string low = str_lower(p), tlow = str_lower(target);
+    auto stem = [](const std::string& l) {   // ".../00/esf028_002_00" for its mesh and its _v00 material file
+        std::string s = l.substr(0, std::min(l.find(".mesh."), l.find(".mdf2.")));
+        if (l.find(".mdf2.") != std::string::npos)
+            if (auto v = s.rfind("_v"); v != std::string::npos && v > s.rfind('/')) s.resize(v);
+        return s;
+    };
+    auto sx = [&](const char* ext) { auto it = suffixes.find(ext); return it == suffixes.end() ? std::string() : it->second; };
+    const std::string mesh_ext = ".mesh." + sx("mesh"), mdf_ext = "_v00.mdf2." + sx("mdf2");
+    auto own = [&](const std::string& path) {   // the option's own file at an original path, else empty
+        const ModFileRef* mf = mod_file(op_files, path);
+        return mf ? mf->read_data() : std::vector<uint8_t>{};
+    };
+    auto materials_in = [](const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf, std::string& missing) {
+        std::vector<std::string> mm, dm;
+        if (!mesh_materials(mesh, mm) || !mdf2_materials(mdf, dm)) { missing = "(not readable)"; return false; }
+        for (auto& m : mm) if (std::find(dm.begin(), dm.end(), m) == dm.end()) { missing = m; return false; }
+        return true;
+    };
+    if (low.find(".mesh.") != std::string::npos) {
+        const std::vector<uint8_t> w = worn(tlow);
+        if (w.empty()) return "the outfit wears no mesh there";
+        std::set<std::string> need, have;
+        if (!mesh_joint_names(w, need) || !mesh_joint_names(data, have)) return "a mesh is not readable";
+        // (blend shapes, "BS_<mesh>.<joint>_...", are in the name table too: no chain moves them. C. Viper Barefoot C1
+        // and coat no mesh: Outfit 1's 681 joints, none of its 832 blend shapes)
+        size_t miss = 0; std::string first;
+        for (auto& n : need) if (n.compare(0, 3, "BS_") != 0 && !have.count(n) && miss++ == 0) first = n;
+        if (miss) return std::to_string(miss) + " joints of the outfit's mesh missing (" + first + "...)";
+        std::vector<uint8_t> mdf = own(stem(low) + mdf_ext);
+        if (mdf.empty()) mdf = worn(stem(tlow) + mdf_ext);
+        if (mdf.empty()) return "no material file for this part";
+        std::string m;
+        if (!materials_in(data, mdf, m)) return "material " + m + " not in the part's material file";
+    } else if (str_ends_with(low, (".mdf2." + sx("mdf2")).c_str())) {
+        std::vector<uint8_t> mesh = own(stem(low) + mesh_ext);
+        if (mesh.empty()) mesh = worn(stem(tlow) + mesh_ext);
+        if (mesh.empty()) return "the outfit wears no mesh for this material file";
+        std::string m;
+        if (!materials_in(mesh, data, m)) return "material " + m + " of the part's mesh not in it";
+        GameFiles gf;
+        gf.writer = &writer;
+        gf.paks = g_game_patch_paks;
+        gf.paks.push_back(&base_pak);
+        for (auto& s : material_textures(data)) {
+            const std::string rp = resource_path(s, suffixes);
+            if (!rp.empty() && !gf.exists(rp) && !own_tex.count(resource_name(rp))) return "texture missing: " + s;
+        }
+    } else if (low.find(".tex.") != std::string::npos) {
+        // Made for the file it replaces: any size (Mai's "remove wrinkles" is an 8x8 blank over a 512x256 mask); a
+        // texture of its own a material file of the option names (Ingrid's book cover) adds a file
+        if (data.size() < 12 || memcmp(data.data(), "TEX\0", 4) != 0) return "the texture is not readable";
+        if (worn(tlow).empty()) {
+            bool named = false;
+            const std::string me = resource_name(low);
+            // (a file moved from another costume folder: its material files name it by its path in the mod)
+            std::string was;
+            if (origin)
+                if (auto it = origin->find(low); it != origin->end()) was = resource_name(it->second);
+            for (auto& [q, mf] : op_files) {
+                if (named || str_lower(q).find(".mdf2.") == std::string::npos) continue;
+                for (auto& t : material_textures(mf.read_data())) {
+                    const std::string n = resource_name(resource_path(t, suffixes));
+                    if (n == me || (!was.empty() && n == was)) { named = true; break; }
+                }
+            }
+            if (!named) return "the outfit loads no texture there";
+        }
+    } else if (low.find("_chain.chain.") != std::string::npos) {
+        if (worn(tlow).empty()) return "the outfit has no chain there";
+    }
+    return {};
 }
 
 // Checks one slot, repairing what can be repaired. Returns an empty string when the slot is loadable.
@@ -3961,6 +5954,19 @@ static void mdf2_masks(const std::vector<uint8_t>& b, std::vector<MatMasks>& out
     }
 }
 
+// Channel means of a colour mask (texture_channel_means). A texture of the pak being built is read in
+// part, its header and its small level: most are many MB, and they wait in the writer's spill file.
+static bool mask_means(slotcheck::GameFiles& gf, const std::string& p, float mean[4]) {
+    const uint64_t h = pak_path_hash(std::string_view(p));
+    uint64_t size = 0, off = 0, len = 0;
+    std::vector<uint8_t> head, level;
+    if (gf.writer->find(h) && gf.writer->range(h, 0, 0, head, &size)) {
+        return gf.writer->head(h, TEXTURE_HEAD_MAX, head) && texture_small_level(head, size, off, len)
+            && gf.writer->range(h, off, size_t(len), level) && texture_level_means(head, size, level, mean);
+    }
+    return texture_channel_means(gf.load(p), mean);
+}
+
 // "[[c0,c1],...]" for colours 1 to 10 (null where the colour file is missing), each square an RGBA
 // value as via.Color stores it (R in the low byte)
 // folder: where the colour files are; name_folder: the folder their names carry (a slot keeps the
@@ -3983,7 +5989,7 @@ static std::string compute(slotcheck::GameFiles& gf, const std::string& scene_p,
             for (int j = 0; j < 2; j++) {
                 const std::string& ref = j ? m.mask2 : m.mask1;
                 float mean[4];
-                if (!ref.empty() && texture_channel_means(gf.load(scene_ref_pak_path(ref, suffixes)), mean))
+                if (!ref.empty() && mask_means(gf, scene_ref_pak_path(ref, suffixes), mean))
                     for (int k = 0; k < 4; k++) v[j * 4 + k] = mean[k];
             }
             cov[m.name] = v;
@@ -4048,14 +6054,14 @@ static const char* CHARACTER_NAMES[] = {
     "Akuma", "Sagat", "M. Bison", "Terry", "Mai", "Elena", "C. Viper",
     "Alex", "Ingrid", "Yasmine", "Arjun",
 };
-static const int N_CHARACTERS = int(sizeof(CHARACTER_NAMES) / sizeof(CHARACTER_NAMES[0]));
+static const int N_CHARACTERS = 32;
 
-// Folders of fighters the game has and the list above does not (a fighter added by a game update), named
-// from the game's own English name, set once the game's costume table is known (note_new_fighter_folders).
+// Folders of fighters the game has and the list above does not (a fighter added by a game update), set once
+// the game's costume table is known (note_new_fighter_folders).
 static std::vector<std::string> g_extra_character_dirs;
 
-static void ensure_costume_mods_dirs(const std::string& game_dir) {
-    std::string base = game_dir + "\\reframework\\costume_mods";
+// A mods root (costume_mods, costume_mods_nsfw) and a folder per fighter in it
+static void ensure_mod_dirs(const std::string& base) {
     // Use wide API for directory creation (names with dots/spaces)
     auto mkdirW = [](const std::string& p) {
         std::wstring wp;
@@ -4068,37 +6074,11 @@ static void ensure_costume_mods_dirs(const std::string& game_dir) {
     }
     for (auto& d : g_extra_character_dirs) mkdirW(base + "\\" + d);
 }
-
-// A folder per fighter of the game's costume table that the list above has none for. The list follows
-// the fighters' slot blocks (CHARACTER_NAMES[costume_slot_index(f)]), so a fighter is matched by its id,
-// never by how the game spells its name ("Edmond Honda" is the "E. Honda" folder). Existing folders are
-// never touched: this only adds names to what ensure_costume_mods_dirs creates. The folder name is
-// cosmetic: a mod is placed on a fighter by its files, whatever folder holds it.
-static void note_new_fighter_folders(PakReader& game, const std::vector<int>& fighters) {
-    g_extra_character_dirs.clear();
-    std::vector<int> unknown;
-    for (int f : fighters)
-        if (costume_slot_index(f) >= N_CHARACTERS) unknown.push_back(f);
-    if (unknown.empty()) return;
-    const auto names = game_fighter_names(game);
-    std::string added;
-    for (int f : unknown) {
-        auto it = names.find(f);
-        std::string folder = it == names.end() ? std::string() : fighter_folder_name(it->second);
-        if (folder.empty()) {
-            char b[16];
-            snprintf(b, sizeof b, "esf%03d", f);   // no usable name in the game: the fighter's file prefix
-            folder = b;
-        }
-        bool taken = false;
-        for (int i = 0; i < N_CHARACTERS; i++) if (_stricmp(folder.c_str(), CHARACTER_NAMES[i]) == 0) taken = true;
-        for (auto& d : g_extra_character_dirs) if (_stricmp(folder.c_str(), d.c_str()) == 0) taken = true;
-        if (taken) continue;
-        g_extra_character_dirs.push_back(folder);
-        added += (added.empty() ? "" : ", ") + folder + " (fighter " + std::to_string(f) + ")";
-    }
-    if (!added.empty())
-        logf("  costume_mods folders for fighters of the game not in the shipped list: %s\n", added.c_str());
+// costume_mods and costume_mods_nsfw, made at install like costume_mods (empty, costume_mods_nsfw changes nothing).
+// Manager mode: costume_mods only (the Slotsloader Manager installs there; costume_mods_nsfw is neither read nor made)
+static void ensure_costume_mods_dirs(const std::string& game_dir) {
+    ensure_mod_dirs(game_dir + "\\reframework\\costume_mods");
+    if (!g_manager_mode) ensure_mod_dirs(game_dir + "\\reframework\\costume_mods_nsfw");
 }
 
 struct FolderModInfo {
@@ -4439,8 +6419,8 @@ static std::string ensure_archive_extracted(const std::string& archive_path) {
     HANDLE hm = CreateFileW(long_w(tmp_w + L"\\.complete").c_str(), GENERIC_WRITE, 0, nullptr,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hm != INVALID_HANDLE_VALUE) CloseHandle(hm);
-    // 1.10.4: a virus scanner reading the files just extracted briefly blocks the folder's rename
-    // (error 5/32); the outfit used to be skipped. Try again for up to about 2 s.
+    // A virus scanner reading the files just extracted briefly blocks the folder's rename (error 5 / 32);
+    // the outfit used to be skipped. Try again for about 2 s (from ZZtaii's Slotsloader fork (1.10.4), MIT).
     BOOL moved = FALSE; DWORD move_error = 0;
     for (int attempt = 0; attempt < 20; attempt++) {
         moved = MoveFileExW(long_w(tmp_w).c_str(), long_w(fin_w).c_str(), 0);
@@ -4491,7 +6471,12 @@ struct ModUnit {
     std::string dir;   // folder holding the natives tree, or the .pak
     std::string pak;   // .pak file name, empty for a natives tree
     std::string rel;   // path shown in the log
-    bool menu = false; // a modinfo.ini without natives or .pak: a Fluffy menu (dummy) entry, no files
+    bool game_install = false;   // the game's own natives tree (mods Fluffy copied there)
+    bool menu = false;           // a modinfo.ini without natives or .pak: a Fluffy menu (dummy) entry, no files
+    bool nsfw = false;           // found in costume_mods_nsfw, or its mod's name has an NSFW keyword: read with the
+                                 // other mods as one folder; an outfit it is the base of is NSFW, an option it gives
+                                 // another outfit an NSFW option (docs/RUNTIME_OPTIONS.md, NSFW outfits)
+    bool nsfw_dir = false;       // found in costume_mods_nsfw (its sub-folders are not those of costume_mods)
 };
 
 struct ScanOutputs {
@@ -4504,10 +6489,11 @@ struct ScanOutputs {
 };
 
 // Finds every costume under `dir`. Archives met on the way are extracted and searched too, with
-// two levels of nesting at most; folders are searched four levels deep. Wide API, long_w prefix:
-// the options of an archive unpacked under a deep game folder pass MAX_PATH (the whole
-// archive was skipped as "no natives folder"). A folder holding only a modinfo.ini is kept as a
-// menu entry: the Fluffy groups (DummyMod) that options of a modular mod hang from.
+// two levels of nesting at most; folders are searched four levels deep. Wide API with the long_w
+// prefix (from ZZtaii's Slotsloader fork (1.9.7), MIT): the options of an archive unpacked under a
+// deep game folder pass MAX_PATH, and the whole archive was skipped as "no natives folder".
+// A folder holding only a modinfo.ini is kept as a menu entry: the Fluffy groups (DummyMod) that
+// options of a modular mod hang from (from ZZtaii's Slotsloader fork (1.9.7-custom), MIT).
 static void collect_mod_units(const std::string& dir, const std::string& rel,
                               int depth, int nest, std::vector<ModUnit>& out) {
     WIN32_FIND_DATAW fd;
@@ -4535,7 +6521,7 @@ static void collect_mod_units(const std::string& dir, const std::string& rel,
     std::sort(archives.begin(), archives.end());
 
     if (has_natives) out.push_back({dir, "", rel});
-    if (has_modinfo && !has_natives && paks.empty()) out.push_back({dir, "", rel, true});
+    if (has_modinfo && !has_natives && paks.empty()) out.push_back({dir, "", rel, false, true});
     for (auto& p : paks) out.push_back({dir, p, rel + "/" + p});
     if (nest < 2) {
         for (auto& a : archives) {
@@ -4548,6 +6534,10 @@ static void collect_mod_units(const std::string& dir, const std::string& rel,
             collect_mod_units(dir + "\\" + sd, rel + "/" + sd, depth + 1, nest, out);
 }
 
+static void mark_nsfw(std::vector<ModUnit>& units, bool nsfw) {
+    for (auto& u : units) u.nsfw = u.nsfw_dir = nsfw;
+}
+
 // ============================================================================
 // Units are loaded first, then combined: add-on options (Fluffy "addonfor", or parts of the same
 // bundle) are merged onto the option they complete, the way Fluffy would install them together.
@@ -4556,24 +6546,25 @@ static void collect_mod_units(const std::string& dir, const std::string& rel,
 struct UnitFiles {
     ModUnit u;
     int source = 0;                      // units coming from the same folder or archive share it
+    int joined_from = 0;                 // its own source, when its archive is an add-on of another mod's tree (join_addon_archives)
     std::string name, addonfor, bundle;  // from modinfo.ini (Fluffy), may be empty
+    std::string description;             // modinfo.ini, may be empty
     std::string mod_id, info_path;
     std::unordered_map<std::string, ModFileRef> files;
     std::vector<ModCostume> costumes;    // empty: partial option, candidate add-on
     std::set<std::string> targets;       // costume folders touched, e.g. "esf001/001"
+    // A unit made by the loader from another one's files moved to another costume folder (RtoOption::origin)
+    std::unordered_map<std::string, std::string> origin;
+    // An option of its mod whose own name, folder or menu group has an NSFW keyword (the mod's name has none):
+    // "<where>: \"<keyword>\"", empty otherwise (nsfw_detect)
+    std::string kw;
 };
 static std::vector<UnitFiles> g_units;
 static int g_unit_source = 0;
-// The mod file paths each variant (mod_id of the scan's output) put into the files of all mods: a
-// variant turned off takes out the ones no variant that stays uses
-static std::unordered_map<std::string, std::vector<std::string>> g_mod_paths;
-static void note_mod_paths(const std::string& mod_id, const std::unordered_map<std::string, ModFileRef>& files) {
-    auto& v = g_mod_paths[mod_id];
-    for (auto& [p, mf] : files) v.push_back(p);
-}
 
 // A Fluffy menu entry of a modular mod (a folder with a modinfo.ini only, usually DummyMod=True):
 // the mod's root ("00 Menu"), a group ("03 Outfit") or a sub-group ("Lower Neckline")
+// (from ZZtaii's Slotsloader fork (1.9.7-custom), MIT)
 struct MenuNode {
     int source = 0;
     std::string name, addonfor, description, rel;
@@ -4599,9 +6590,10 @@ static uint64_t fnv1a64(const std::string& s) {
 
 struct ModInfoFields { std::string name, addonfor, bundle, description; };
 
+// modinfo.ini's fields (descriptions: from ZZtaii's Slotsloader fork (1.9.7-custom), MIT)
 static ModInfoFields read_modinfo_fields(const std::string& dir) {
     ModInfoFields mi;
-    FILE* f = _wfopen(long_w(a2w_path(dir + "\\modinfo.ini")).c_str(), L"rb");
+    FILE* f = _wfopen(long_w(a2w_path(dir + "\\modinfo.ini")).c_str(), L"rb");   // long path: ZZtaii fork 1.9.7
     if (!f) return mi;
     char line[2048];
     while (fgets(line, sizeof(line), f)) {
@@ -4626,6 +6618,7 @@ static void read_modinfo(const std::string& dir, UnitFiles& uf) {
     uf.name = mi.name;
     uf.addonfor = mi.addonfor;
     uf.bundle = mi.bundle;
+    uf.description = mi.description;
 }
 
 static void print_costumes(const std::vector<ModCostume>& costumes) {
@@ -4639,6 +6632,50 @@ static void print_costumes(const std::vector<ModCostume>& costumes) {
 static std::string rel_tail(const std::string& rel) {
     auto sl = rel.find_last_of('/');
     return sl == std::string::npos ? rel : rel.substr(sl + 1);
+}
+
+// Mods Fluffy Mod Manager installed (see find_fluffy)
+struct FluffyMod {
+    std::string key, name;               // installed.ini section, ModName
+    std::set<std::string> files;         // as listed there, lower case ("natives/stm/...")
+};
+struct FluffyPick {
+    std::string path, name;              // archive (or folder) in Games\SF6\Mods
+    bool is_dir = false;
+    std::set<std::string> roots;         // its installed options, lower case, '/' separators
+};
+struct FluffyState {
+    std::string ini;                     // Fluffy's installed.ini, empty when Fluffy is not found
+    std::vector<FluffyPick> picks;       // archives holding installed costume mods
+    std::set<std::string> claimed;       // files of the mods found in their archives
+};
+static FluffyState g_fluffy;
+
+static const std::set<std::string>& fluffy_claimed(const VanillaIndex& inv);
+static const std::map<std::string, std::string>& manager_claimed(const VanillaIndex& inv);
+
+// A mod's .user.2 saved before a game update that changed one of its types' layout (a chain, ccvd or shape user file of
+// May 2024: the backup "RYU C3 original files" installed as an outfit, report 08/11): the game cannot read it and the outfit
+// never finishes loading (an invisible fighter, "preview stuck"). The colour files' upgrade (read_data) has run first; a
+// type whose signature still differs from the game's file at the same path: the mod's file is dropped, the slot keeps the
+// game's. Files the game does not have at that path, or with no type in common, are kept as they are.
+static void drop_stale_user_files(std::unordered_map<std::string, ModFileRef>& files) {
+    for (auto it = files.begin(); it != files.end();) {
+        const std::string low = str_lower(it->first);
+        if (!str_ends_with(low, ".user.2")) { ++it; continue; }
+        std::unordered_map<uint32_t, uint32_t> game, mod;
+        try {
+            const std::vector<uint8_t> g = swap_official(low);
+            if (g.empty() || !user_type_crcs(g, game) || !user_type_crcs(it->second.read_data(), mod)) { ++it; continue; }
+        } catch (const std::exception&) { ++it; continue; }
+        uint32_t type = 0;
+        for (auto& [ty, crc] : mod)
+            if (auto f = game.find(ty); f != game.end() && f->second != crc) { type = ty; break; }
+        if (!type) { ++it; continue; }
+        printf("    %s: made before a game update (type %08X: %08X, the game's %08X): the game's file is used\n",
+               it->first.c_str(), type, mod[type], game[type]);
+        it = files.erase(it);
+    }
 }
 
 static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
@@ -4656,6 +6693,7 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
             printf("    WARN: cannot open %s, skipping\n", u.pak.c_str());
             return false;
         }
+        note_pak_ident(reader.get(), pak_path);
         printf("    %zu entries\n", reader->entry_count());
         uf.mod_id = identify_mod_pak(pak_path.c_str());
         std::vector<uint64_t> unknown;
@@ -4668,7 +6706,32 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     } else {
         int ignored = 0, upgraded = 0;
         uf.files = scan_folder_mod(u.dir, inv, ignored, upgraded);
-
+        if (u.game_install) {
+            // Mods the Slotsloader Manager installed over the game's outfits (Replace original): no outfit
+            const auto& claimed = manager_claimed(inv);
+            std::map<std::string, size_t> by_mod;
+            for (auto it = uf.files.begin(); it != uf.files.end();) {
+                auto c = claimed.find(it->first);
+                if (c == claimed.end()) { ++it; continue; }
+                by_mod[c->second]++;
+                it = uf.files.erase(it);
+            }
+            for (auto& [mod, n] : by_mod)
+                printf("    %s: installed by the Slotsloader Manager (Replace original): no outfit (%zu files)\n",
+                       mod.c_str(), n);
+            if (!by_mod.empty() && uf.files.empty()) return false;
+        }
+        if (u.game_install && !g_fluffy.claimed.empty()) {
+            const auto& claimed = fluffy_claimed(inv);
+            size_t before = uf.files.size();
+            for (auto it = uf.files.begin(); it != uf.files.end();)
+                it = claimed.count(it->first) ? uf.files.erase(it) : std::next(it);
+            if (before != uf.files.size()) {
+                printf("    %zu files belong to mods Fluffy Mod Manager installed, read from their archives\n",
+                       before - uf.files.size());
+                if (uf.files.empty()) return false;
+            }
+        }
         if (ignored)
             printf("    %d non-costume files ignored "
                    "(folder mods cannot provide global files)\n", ignored);
@@ -4680,6 +6743,7 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
         uf.mod_id = identify_folder_mod(uf.files);
         uf.info_path = u.dir;
     }
+    drop_stale_user_files(uf.files);
     printf("    mod_id: %s\n", uf.mod_id.c_str());
     g_mod_names[uf.mod_id] = uf.name.empty() ? rel_tail(u.rel) : uf.name;
     if (!uf.name.empty()) {
@@ -4696,6 +6760,98 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     return true;
 }
 
+// NSFW keywords (docs/RUNTIME_OPTIONS.md, NSFW outfits): a mod whose NAME has a keyword is NSFW as a whole, exactly as
+// if it were in costume_mods_nsfw (ModUnit::nsfw); else each option whose own name, folders or menu groups have one is an
+// NSFW option (UnitFiles::kw). The mod's name: its archive, folder or pak in the character folder (or in the root), the
+// folders around all its options, its Fluffy root menu entry ("(mini dress Mai C1 Swap)"), and every name of a mod made
+// of one option. An option's: its modinfo name, its folders below those, the Fluffy menu groups it hangs from ("4! NSFW
+// style options c1"). Matching: common/nsfw_keywords.hpp (ZZtaii's Slotsloader Manager 1.0.8 rule). Mods of
+// costume_mods_nsfw are NSFW already; the game's own natives files have no name.
+static void nsfw_detect(int source, const std::string& rel_path) {
+    if (g_nsfw_keywords.empty()) return;
+    std::vector<size_t> us;
+    for (size_t i = 0; i < g_units.size(); ++i) if (g_units[i].source == source) us.push_back(i);
+    if (us.empty() || g_units[us[0]].u.game_install || g_units[us[0]].u.nsfw) return;
+    auto split = [](const std::string& rel) {
+        std::vector<std::string> parts;
+        size_t a = 0;
+        while (a <= rel.size()) {
+            size_t b = rel.find('/', a);
+            if (b == std::string::npos) b = rel.size();
+            if (b > a) parts.push_back(rel.substr(a, b - a));
+            a = b + 1;
+        }
+        return parts;
+    };
+    auto hit = [](const std::string& text) { return nsfw::match(g_nsfw_keywords, text); };
+    const std::vector<std::string> base = split(rel_path);
+    // the folders every option of the mod is in (below the mod's own entry)
+    std::vector<std::string> common;
+    for (size_t k = 0; k < us.size(); ++k) {
+        auto p = split(g_units[us[k]].u.rel);
+        p.erase(p.begin(), p.begin() + std::min(p.size(), base.size()));
+        if (us.size() > 1 && !p.empty() && k == 0) common = p;
+        else if (us.size() > 1) {
+            size_t n = 0;
+            while (n < common.size() && n < p.size() && common[n] == p[n]) ++n;
+            common.resize(n);
+        } else common = p;
+    }
+    std::vector<int> menus;
+    for (int k = 0; k < (int)g_menus.size(); ++k) if (g_menus[k].source == source) menus.push_back(k);
+
+    // ---- the mod's name ----
+    std::vector<std::pair<std::string, std::string>> names;   // (where, text)
+    if (!base.empty() && (base.size() >= 2 || is_archive_name(base[0]))) {
+        const std::string low = str_lower(base.back());
+        names.push_back({is_archive_name(low) ? "archive name" : str_ends_with(low, ".pak") ? "pak name" : "folder name", base.back()});
+    }
+    for (auto& f : common) names.push_back({"folder name", f});
+    for (auto k : menus) if (trim_ws(g_menus[k].addonfor).empty()) names.push_back({"modinfo name", g_menus[k].name});
+    if (us.size() == 1) names.push_back({"modinfo name", g_units[us[0]].name});
+    for (auto& [where, text] : names) {
+        const std::string kw = hit(text);
+        if (kw.empty()) continue;
+        printf("  nsfw: %s (%s \"%s\": \"%s\"): an NSFW mod, as if in costume_mods_nsfw\n", rel_path.c_str(), where.c_str(),
+               trim_ws(text).c_str(), kw.c_str());
+        for (auto i : us) g_units[i].u.nsfw = true;
+        ++g_nsfw_kw_mods;
+        return;
+    }
+    if (us.size() == 1) return;
+
+    // ---- its options ----
+    for (auto i : us) {
+        UnitFiles& u = g_units[i];
+        std::vector<std::pair<std::string, std::string>> texts{{"option name", u.name}};
+        auto p = split(u.u.rel);
+        p.erase(p.begin(), p.begin() + std::min(p.size(), base.size() + common.size()));
+        std::string folders;
+        for (auto& f : p) folders += (folders.empty() ? "" : "/") + f;
+        texts.push_back({"option folder", folders});
+        // the menu groups it hangs from (not the mod's root entry: the mod's name)
+        std::string cur = trim_ws(u.addonfor);
+        std::vector<int> seen;
+        while (!cur.empty()) {
+            int m = -1;
+            for (auto k : menus) if (eq_ci(g_menus[k].name, cur)) { m = k; break; }
+            if (m < 0 || std::find(seen.begin(), seen.end(), m) != seen.end() || trim_ws(g_menus[m].addonfor).empty()) break;
+            seen.push_back(m);
+            texts.push_back({"menu group", g_menus[m].name});
+            cur = trim_ws(g_menus[m].addonfor);
+        }
+        for (auto& [where, text] : texts) {
+            const std::string kw = hit(text);
+            if (kw.empty()) continue;
+            u.kw = where + " \"" + trim_ws(text) + "\": \"" + kw + "\"";
+            printf("  nsfw: %s / %s (%s): an NSFW option\n", rel_path.c_str(), trim_ws(u.name.empty() ? folders : u.name).c_str(),
+                   u.kw.c_str());
+            ++g_nsfw_kw_options;
+            break;
+        }
+    }
+}
+
 static bool process_units(const std::vector<ModUnit>& all_units, const std::string& rel_path,
                           ScanOutputs& o) {
     std::vector<ModUnit> units, menus;
@@ -4706,7 +6862,7 @@ static bool process_units(const std::vector<ModUnit>& all_units, const std::stri
     }
     if (units.size() > 1) printf("    %zu options in this mod\n", units.size());
     int source = ++g_unit_source;
-    for (auto& m : menus) {
+    for (auto& m : menus) {   // the mod's Fluffy menu entries (ZZtaii fork 1.9.7-custom)
         auto mi = read_modinfo_fields(m.dir);
         if (mi.name.empty()) continue;
         g_menus.push_back({source, mi.name, mi.addonfor, mi.description, m.rel});
@@ -4716,13 +6872,15 @@ static bool process_units(const std::vector<ModUnit>& all_units, const std::stri
         if (units.size() > 1 || u.rel != rel_path) printf("  option: %s\n", u.rel.c_str());
         if (load_unit(u, source, o)) any = true;
     }
+    if (any) nsfw_detect(source, rel_path);
     return any;
 }
 
 static bool scan_one_mod_folder(const std::string& mod_dir, const std::string& rel_path,
-                                ScanOutputs& o) {
+                                ScanOutputs& o, bool nsfw = false) {
     std::vector<ModUnit> units;
     collect_mod_units(mod_dir, rel_path, 0, 0, units);
+    mark_nsfw(units, nsfw);
     return process_units(units, rel_path, o);
 }
 
@@ -4766,11 +6924,43 @@ static bool user_grouped(const UnitFiles& a, const UnitFiles& b) {
         while (x <= rel.size()) { size_t y = rel.find('/', x); if (y == std::string::npos) y = rel.size(); parts.push_back(rel.substr(x, y - x)); x = y + 1; }
         return parts;
     };
+    if (a.u.nsfw_dir != b.u.nsfw_dir) return false;   // a sub-folder of costume_mods_nsfw is not one of costume_mods
     auto pa = split(a.u.rel), pb = split(b.u.rel);
     if (pa.size() < 3 || pb.size() < 3) return false;
     if (str_lower(pa[0]) != str_lower(pb[0]) || str_lower(pa[1]) != str_lower(pb[1])) return false;
     if (is_archive_name(pa[1]) || str_ends_with(str_lower(pa[1]), ".pak")) return false;
     return str_lower(pa[2]) != str_lower(pb[2]);
+}
+
+// A mod alone in its own sub-folder of a character folder ("<Char>/<Sub-folder>/<that one mod>", the sub-folder being
+// neither an archive nor a pak; all the options of an archive or folder count as one mod) is always its own outfit with
+// RuntimeOptions=on (docs/RUNTIME_OPTIONS.md, "A mod alone in its sub-folder"): kept out of the retouch, subset, merge and
+// add-on placement rules, on both sides. Key: "<char>/<sub-folder>" lowercase (= the mod's source; "nsfw:" before it for
+// costume_mods_nsfw: a sub-folder of that root is another folder), empty when not alone.
+static std::set<std::string> g_lone_sources;
+static std::string lone_key_of(const UnitFiles& u) {
+    std::vector<std::string> parts; size_t x = 0;
+    const std::string& rel = u.u.rel;
+    while (x <= rel.size()) { size_t y = rel.find('/', x); if (y == std::string::npos) y = rel.size(); parts.push_back(rel.substr(x, y - x)); x = y + 1; }
+    if (parts.size() < 3 || is_archive_name(parts[1]) || str_ends_with(str_lower(parts[1]), ".pak")) return std::string();
+    return (u.u.nsfw_dir ? "nsfw:" : "") + str_lower(parts[0]) + "/" + str_lower(parts[1]);
+}
+static std::string lone_key_of(const ModSource& ms) { return (ms.nsfw_dir ? "nsfw:" : "") + str_lower(ms.source); }
+static bool is_lone_unit(const UnitFiles& u) {
+    if (g_lone_sources.empty()) return false;
+    const std::string k = lone_key_of(u);
+    return !k.empty() && g_lone_sources.count(k) != 0;
+}
+
+// Several mods the user put in one sub-folder of a character folder, one of them at least an outfit (a body mesh): handled
+// together with RuntimeOptions=on (docs/RUNTIME_OPTIONS.md, "Several mods in one sub-folder"). The add-on rules decide, not
+// the retouch rule: an outfit of the group's own, the others its options, nothing of the group on a game outfit or on another
+// mod's outfit. Key: as g_lone_sources.
+static std::set<std::string> g_group_sources;
+static bool is_group_unit(const UnitFiles& u) {
+    if (g_group_sources.empty()) return false;
+    const std::string k = lone_key_of(u);
+    return !k.empty() && g_group_sources.count(k) != 0;
 }
 
 static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
@@ -4780,36 +6970,387 @@ static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
 
 static std::string unit_label(const UnitFiles& u) { return trim_ws(u.name.empty() ? u.u.rel : u.name); }
 
-// Pushes one costume made of several options, files merged in the given order (later ones win).
-// The id is made from the options' ids in `id_order` when given (else the merge order).
-static void push_combined(const std::vector<size_t>& parts, const std::string& label, ScanOutputs& o,
-                          const std::string& info_rel, const std::string& info_path,
-                          const std::vector<size_t>* id_order = nullptr) {
-    std::unordered_map<std::string, ModFileRef> merged;
+// Id of a costume made of several options: from their ids, in order
+// An option that makes the outfit wearing it NSFW: its name has an NSFW keyword (UnitFiles::kw), or it comes from an
+// NSFW mod (costume_mods_nsfw, a keyword in the mod's name) and the outfit's base does not (an NSFW base: NSFW already)
+static bool nsfw_part(const UnitFiles& u, const UnitFiles& base) { return !u.kw.empty() || (u.u.nsfw && !base.u.nsfw); }
+static std::string nsfw_why(const UnitFiles& u) {
+    return !u.kw.empty() ? u.kw : u.u.nsfw_dir ? std::string("from costume_mods_nsfw") : std::string("an NSFW mod (keywords)");
+}
+// The first option of an outfit made of `parts` (merge order: a later part's file wins; parts[0] its base) that is
+// NSFW (nsfw_part) and is worn: one of its files is not replaced by a later part. nullptr when none.
+static const UnitFiles* worn_kw(const std::vector<size_t>& parts) {
+    for (size_t k = 0; k < parts.size(); ++k) {
+        const UnitFiles& u = g_units[parts[k]];
+        if (!nsfw_part(u, g_units[parts[0]])) continue;
+        for (auto& [p, mf] : u.files) {
+            bool replaced = false;
+            for (size_t j = k + 1; j < parts.size() && !replaced; ++j) replaced = g_units[parts[j]].files.count(p) > 0;
+            if (!replaced) return &u;
+        }
+    }
+    return nullptr;
+}
+
+static std::string combined_mod_id(const std::vector<size_t>& parts) {
     std::string id_src;
-    for (auto i : parts)
-        for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
-    for (auto i : id_order ? *id_order : parts)
-        id_src += (id_src.empty() ? "" : "+") + g_units[i].mod_id;
+    for (auto i : parts) id_src += (id_src.empty() ? "" : "+") + g_units[i].mod_id;
     char idb[24];
     snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id_src));
+    return idb;
+}
+
+// Pushes one costume made of several options, files merged in the given order (later ones win). Its id
+// comes from the options' ids in `id_order` when given, else in the merge order; `id` when given (the
+// one outfit of RuntimeOptions=on wearing another set of options keeps its slot).
+static void push_combined(const std::vector<size_t>& parts, const std::string& label, ScanOutputs& o,
+                          const std::string& info_rel, const std::string& info_path,
+                          const std::shared_ptr<const RtoMod>& rto = nullptr,
+                          const std::vector<size_t>& rto_selected = {},
+                          const std::vector<size_t>& id_order = {},
+                          const std::string& id_given = {}) {
+    std::unordered_map<std::string, ModFileRef> merged;
+    for (auto i : parts)
+        for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
+    const std::string id = !id_given.empty() ? id_given : combined_mod_id(id_order.empty() ? parts : id_order);
+    const char* idb = id.c_str();
     printf("\n  variant: %s\n", label.c_str());
     auto costumes = detect_mod_costumes(merged, o.inv, false, true);
     print_costumes(costumes);
     if (costumes.empty()) return;
+    for (auto& mc : costumes) { mc.rto = rto; mc.rto_selected = rto_selected; }
     printf("    mod_id: %s\n", idb);
     g_mod_names[idb] = label;
     if (!parts.empty()) g_mod_source[idb] = g_mod_source[g_units[parts[0]].mod_id];
+    if (const UnitFiles* kw = worn_kw(parts)) {   // wears an NSFW option (keywords, NSFW mod): an NSFW outfit
+        g_nsfw_ids.insert(idb);
+        printf("    nsfw: wears %s (%s): an NSFW outfit\n", unit_label(*kw).c_str(), nsfw_why(*kw).c_str());
+    }
     o.mods_out.push_back({idb, std::move(costumes)});
     for (auto i : parts) o.all_mod_out.insert(g_units[i].files.begin(), g_units[i].files.end());
     for (auto i : parts) note_mod_paths(idb, g_units[i].files);
     o.infos_out.push_back({info_rel, info_path});
 }
 
+// A group of options as the runtime options see it (docs/RUNTIME_OPTIONS.md)
+struct RtoGroupIn {
+    std::string key;            // identity: the option ids are made from it and the option's folder
+    std::string name;           // shown in the menu
+    bool root = false;          // the mod's root: its first plain option is the main files ("base")
+    bool outfit = false;        // root of an outfit with add-ons: its one member is the base, whatever its name
+    bool choice = false;        // one option at a time ("pick"); else each option on or off ("toggle")
+    bool required = false;      // the author asks for exactly one: offered without "None"
+    std::vector<size_t> members;
+};
+
+// A separate add-on that makes no outfit of its own (a modular mod none of whose options is a complete outfit:
+// "Mai face accessories"; a lone add-on nothing of its mod completes): with RuntimeOptions, its groups become
+// options of the outfits whose files they replace (attach_addons)
+// retouch: a retouch's groups (see unit_retouch), placed on the outfits that wear its files; src: its folder or archive
+struct PendingAddon { std::string name, source; std::vector<RtoGroupIn> groups; bool retouch = false; int src = 0; };
+static std::vector<PendingAddon> g_pending_addons;
+
+// Retouches (docs/RUNTIME_OPTIONS.md): the folders or archives (UnitFiles::source) whose every option is one
+static std::set<int> g_retouch_sources;
+// The game's paks while the mods are read (retouch_game_fit)
+static PakReader* g_scan_base_pak = nullptr;
+
+// A retouch: an option made of meshes and textures of costumes only (streaming twins included), no material file,
+// no chain, colour or other file: it keeps the look of the outfit it retouches (C. Viper Barefoot C1: Outfit 1's body
+// mesh and textures). Not a mod Fluffy Mod Manager installed (read from its archive, or its copy in the game's own
+// natives folder): the game outfit already wears it there, its files are not the game's.
+static bool unit_retouch(const UnitFiles& u) {
+    if (u.u.game_install || u.files.empty() || u.u.rel.compare(0, 19, "Fluffy Mod Manager/") == 0) return false;
+    bool model = false;
+    for (auto& [p, mf] : u.files) {
+        const std::string low = str_lower(p), k = rto_kind(low);
+        if (k != "mesh" && k != "texture") return false;
+        std::string fd, folder;
+        if (parse_model_folder(low, fd, folder)) model = true;
+        else if (low.compare(0, strlen(STREAM_PFX), STREAM_PFX) != 0) return false;
+    }
+    return model;
+}
+
+// The game's outfits of a fighter, one per model folder (A.K.I's Outfit 1 and 4 share one)
+static std::string costume_folder(const CostumeInfo& c) { return c.model_dir.substr(c.model_dir.rfind('/') + 1); }
+static std::vector<const CostumeInfo*> game_outfits_of(const VanillaIndex& inv, int fighter) {
+    std::vector<const CostumeInfo*> games;
+    for (auto& c : inv.costumes) {
+        if (c.fighter != fighter || c.costume_no >= 100 || c.model_dir.empty()) continue;
+        if (std::none_of(games.begin(), games.end(), [&](const CostumeInfo* x) { return costume_folder(*x) == costume_folder(c); }))
+            games.push_back(&c);
+    }
+    return games;
+}
+static std::string game_outfit_name(int costume_no) {
+    return costume_no == 4 ? "Drive Tech" : "Outfit " + std::to_string(costume_no + 1);
+}
+
+// Whether an outfit made from a game costume (its number and folder) loads a model file of its fighter at that path
+// (lowercase): a file of its folder, or a 000/ file it loads
+static bool costume_touches(const VanillaIndex& inv, int fighter, int cno, const std::string& folder_of_costume,
+                            const std::string& low) {
+    std::string fd, folder;
+    if (!parse_model_folder(low, fd, folder) || atoi(fd.c_str() + 3) != fighter) return false;
+    return folder == "000" ? outfit_loads(inv, fighter, cno, low) : folder == folder_of_costume;
+}
+
+// Why a retouch does not fit the game outfit it modifies (the one its outfit was made from; any game outfit when that
+// is not known), or empty: each file it ships that the outfit loads passes addon_fit against the game's files (a file
+// the outfit does not load is left out, as in the stored option; at least one must be left). Read while the mods are
+// read: the game's paks only.
+static std::string retouch_game_fit(const VanillaIndex& inv, const UnitFiles& u) {
+    if (!g_scan_base_pak) return "the game's files are not read";
+    PakReader& base = *g_scan_base_pak;
+    PakWriter none;   // addon_fit also looks in our pak: nothing there yet
+    int fighter = -1;
+    for (auto& [p, mf] : u.files) {
+        std::string fd, folder;
+        if (parse_model_folder(str_lower(p), fd, folder)) { fighter = atoi(fd.c_str() + 3); break; }
+    }
+    std::set<std::string> made;   // the folders of the game outfits its outfit was made from
+    for (auto& mc : u.costumes.empty() ? detect_mod_costumes(u.files, inv, true) : u.costumes) made.insert(mc.original_folder);
+    std::string why = "it changes no file of a game outfit";
+    for (auto* c : game_outfits_of(inv, fighter)) {
+        if (!made.empty() && !made.count(costume_folder(*c))) continue;
+        auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
+            const std::string low = str_lower(path);
+            if (!outfit_loads(inv, c->fighter, c->costume_no, low)) return {};
+            const PakEntry* e = base.find(pak_path_hash(std::string_view(low)));
+            return e ? base.read(*e) : std::vector<uint8_t>{};
+        };
+        size_t n = 0;
+        std::string w;
+        for (auto& [p, mf] : u.files) {
+            const std::string low = str_lower(p);
+            if (!costume_touches(inv, fighter, c->costume_no, costume_folder(*c), low) || worn(low).empty()) continue;
+            n++;
+            w = slotcheck::addon_fit(none, base, inv.suffixes, u.files, p, mf.read_data(), p, worn, {});
+            if (!w.empty()) { w = rel_tail(p) + ": " + w; break; }
+        }
+        if (n && w.empty()) return {};
+        if (n) why = game_outfit_name(c->costume_no) + ", " + w;
+    }
+    return why;
+}
+
+// An option id: stable across mod updates (archive names carry versions), from the group's key and the
+// option's folder; `ids` keeps them unique within the mod
+static std::string rto_option_id(const std::string& key, const std::string& folder, std::set<std::string>& ids) {
+    char idb[16];
+    uint32_t h = fnv1a32(str_lower(key + "/" + folder));
+    do { snprintf(idb, sizeof idb, "%08x", h++); } while (!ids.insert(idb).second);
+    return idb;
+}
+
+static std::string shared_word(const std::vector<std::string>& names);
+
+// The model part a file of a costume folder belongs to, as a menu names it ("Head": part 00, "Body": part 01, else
+// "Part NN"), or empty (a file of the folder itself, not of a part)
+static std::string model_part_name(const std::string& low) {
+    std::string fd, folder;
+    if (!parse_model_folder(low, fd, folder)) return {};
+    const size_t a = low.find("/" + folder + "/") + folder.size() + 2;
+    if (low.size() < a + 3 || low[a + 2] != '/' || !isdigit((unsigned char)low[a]) || !isdigit((unsigned char)low[a + 1]))
+        return {};
+    const std::string pp = low.substr(a, 2);
+    return pp == "00" ? "Head" : pp == "01" ? "Body" : "Part " + pp;
+}
+
+// A name for a choice made of options that replace a same file (low: that file): the word their names share
+// ("Optional - Leon Hair" / "Optional - Trimmed Hair": "Hair"), else the file's part ("Body") for a mesh or material
+// file, else the texture's name without the fighter prefix and the map suffix ("jewels_atos.tex": "Jewels")
+static std::string shared_file_name(const std::vector<std::string>& names, const std::string& low) {
+    std::string w = shared_word(names);
+    if (w.empty() && !low.empty()) {
+        if (low.find(".mesh.") != std::string::npos || low.find(".mdf2.") != std::string::npos) w = model_part_name(low);
+        else if (low.find(".tex.") != std::string::npos) {
+            std::string n = low.substr(low.rfind('/') + 1);
+            n.resize(n.find(".tex."));
+            // "esf030_014_01_" and the like: the fighter / folder / part prefix
+            size_t k = 0;
+            while (k < n.size()) {
+                size_t u = n.find('_', k);
+                if (u == std::string::npos) break;
+                const std::string t = n.substr(k, u - k);
+                if (!(t.size() == 6 && t.compare(0, 3, "esf") == 0) && !std::all_of(t.begin(), t.end(), ::isdigit)) break;
+                k = u + 1;
+            }
+            n = n.substr(k);
+            static const char* maps[] = {"_albd", "_atos", "_nrrc", "_cmask", "_alba", "_alb", "_nrm", "_dmask", "_msk"};
+            for (const char* sx : maps)
+                if (auto p = n.rfind(sx); p != std::string::npos && p > 0) { n.resize(p); break; }
+            w = n;
+        }
+    }
+    if (!w.empty()) w[0] = char(toupper((unsigned char)w[0]));
+    return w;
+}
+
+// On / Off options that replace a same file cannot both be on: the later one's file hides the earlier one's, whose
+// other files stay (Swimsuit Viper C1: "hide accessories (bracelets and leg chain)" and "hide leg chain" both ship
+// the jewels' texture; both on, the bracelets came back). Such toggles, in one group or in several, become one choice
+// (None / A / B...), placed where the latest of them was in the layering; their ids do not change.
+static void rto_one_of_shared(RtoMod& m) {
+    std::vector<size_t> group_of(m.options.size(), SIZE_MAX);
+    for (size_t gi = 0; gi < m.groups.size(); ++gi) for (auto oi : m.groups[gi].options) group_of[oi] = gi;
+    std::vector<size_t> tog;
+    for (size_t oi = 0; oi < m.options.size(); ++oi)
+        if (m.options[oi].mode == "toggle" && group_of[oi] != SIZE_MAX) tog.push_back(oi);
+    if (tog.size() < 2) return;
+    std::vector<std::set<std::string>> paths(tog.size());
+    for (size_t x = 0; x < tog.size(); ++x)
+        for (auto& [p, mf] : m.options[tog[x]].files) paths[x].insert(str_lower(p));
+    std::vector<size_t> cl(tog.size());
+    for (size_t x = 0; x < tog.size(); ++x) cl[x] = x;
+    auto find = [&](size_t x) { while (cl[x] != x) x = cl[x] = cl[cl[x]]; return x; };
+    for (size_t x = 0; x < tog.size(); ++x)
+        for (size_t y = x + 1; y < tog.size(); ++y)
+            if (std::any_of(paths[x].begin(), paths[x].end(), [&](const std::string& p) { return paths[y].count(p) > 0; }))
+                cl[find(y)] = find(x);
+    std::map<size_t, std::vector<size_t>> clusters;   // root -> positions in tog
+    for (size_t x = 0; x < tog.size(); ++x) clusters[find(x)].push_back(x);
+    std::map<size_t, std::vector<RtoGroup>> after;   // group -> the choices that go right after it
+    std::set<size_t> moved;
+    for (auto& [r, v] : clusters) {
+        if (v.size() < 2) continue;
+        std::vector<std::string> names;
+        std::string file;   // a file every option of the choice ships, if any
+        for (auto& p : paths[v[0]])
+            if (file.empty() && std::all_of(v.begin(), v.end(), [&](size_t x) { return paths[x].count(p) > 0; })) file = p;
+        size_t at = 0;
+        RtoGroup ng;
+        for (auto x : v) {
+            names.push_back(m.options[tog[x]].name);
+            at = std::max(at, group_of[tog[x]]);
+            ng.options.push_back(tog[x]);
+            moved.insert(tog[x]);
+        }
+        std::string stem = shared_file_name(names, file);
+        if (stem.empty()) stem = trim_ws(m.groups[at].name) + " - choice";
+        ng.name = stem;
+        auto taken = [&](const std::string& n) {
+            if (std::any_of(m.groups.begin(), m.groups.end(), [&](const RtoGroup& g) { return g.name == n; })) return true;
+            for (auto& [k, gs] : after) for (auto& g : gs) if (g.name == n) return true;
+            return false;
+        };
+        for (int n = 2; taken(ng.name); ++n) ng.name = stem + " (" + std::to_string(n) + ")";
+        std::string list;
+        for (auto x : v) {
+            m.options[tog[x]].mode = "pick";
+            list += (list.empty() ? "" : " / ") + m.options[tog[x]].name;
+        }
+        printf("\n  runtime options of %s: %s replace a same file (%s): one choice \"%s\", never two of them on\n",
+               m.name.c_str(), list.c_str(), file.empty() ? "through another one" : rel_tail(file).c_str(), ng.name.c_str());
+        after[at].push_back(std::move(ng));
+    }
+    if (moved.empty()) return;
+    std::vector<RtoGroup> groups;
+    for (size_t gi = 0; gi < m.groups.size(); ++gi) {
+        RtoGroup g = m.groups[gi];
+        g.options.erase(std::remove_if(g.options.begin(), g.options.end(), [&](size_t oi) { return moved.count(oi) > 0; }),
+                        g.options.end());
+        if (!g.options.empty()) groups.push_back(std::move(g));
+        if (auto it = after.find(gi); it != after.end()) for (auto& ng : it->second) groups.push_back(std::move(ng));
+    }
+    m.groups = std::move(groups);
+}
+
+// Folder order of the options of a modular mod: by path, the options of its add-on archives (join_addon_archives) after
+// its own (the main files and the first option of a group stay the mod's own)
+static bool folder_order(size_t a, size_t b) {
+    if ((g_units[a].joined_from != 0) != (g_units[b].joined_from != 0)) return g_units[a].joined_from == 0;
+    return g_units[a].u.rel < g_units[b].u.rel;
+}
+
+// Runtime options of a mod: every option of every group, with the files it ships. Groups in the order
+// their files are laid over each other (later wins). In a root group the first plain option (the main
+// files) is "base", the others are toggles (hide ponytail); an optional option is a toggle; in a choice
+// group the options are "pick" (one at a time; a lone option a toggle unless the group is required);
+// in another group each option is a toggle. unit_option: unit index -> option index.
+// outfit_nsfw: the outfit is NSFW (its base is an NSFW mod's): options of NSFW mods are not NSFW options there
+static std::shared_ptr<RtoMod> rto_from_groups(const std::vector<RtoGroupIn>& groups, const std::string& name,
+                                               const std::set<size_t>& optional_units,
+                                               std::unordered_map<size_t, size_t>& unit_option, bool outfit_nsfw) {
+    auto m = std::make_shared<RtoMod>();
+    m->name = name;
+    std::set<std::string> ids;
+    std::vector<bool> is_root;   // per group of m
+    for (auto& gi : groups) {
+        std::vector<size_t> mem, plain;
+        for (auto i : gi.members) if (!g_units[i].files.empty()) mem.push_back(i);
+        if (mem.empty()) continue;
+        std::sort(mem.begin(), mem.end(), folder_order);
+        for (auto i : mem) if (!optional_units.count(i)) plain.push_back(i);
+        // The main files: the root's first plain option that does not call itself an add-on ("3) addon -
+        // remove wrinkles" hangs from the root of Mai's face accessories, beside no main files)
+        size_t base = SIZE_MAX;
+        for (auto i : plain)
+            if (base == SIZE_MAX && (gi.outfit || (!contains_ci(g_units[i].name, "addon") && !contains_ci(g_units[i].name, "add-on"))))
+                base = i;
+        RtoGroup g;
+        g.name = gi.name;
+        for (auto i : mem) {
+            RtoOption op;
+            op.name = unit_label(g_units[i]);
+            op.folder = rel_tail(g_units[i].u.rel);
+            const bool is_plain = std::find(plain.begin(), plain.end(), i) != plain.end();
+            if (!is_plain) op.mode = "toggle";
+            else if (gi.root) op.mode = (i == base) ? "base" : "toggle";
+            else if (gi.choice) op.mode = (plain.size() == 1 && !gi.required) ? "toggle" : "pick";
+            else op.mode = "toggle";
+            if (op.mode == "pick" && gi.required) g.required = true;
+            op.id = rto_option_id(gi.key, op.folder, ids);
+            op.files = g_units[i].files;
+            op.origin = g_units[i].origin;
+            // an NSFW option: its name has a keyword, or it comes from an NSFW mod and the outfit is not NSFW
+            op.nsfw = !g_units[i].kw.empty() || (g_units[i].u.nsfw && !outfit_nsfw);
+            unit_option[i] = m->options.size();
+            g.options.push_back(m->options.size());
+            m->options.push_back(std::move(op));
+        }
+        m->groups.push_back(std::move(g));
+        is_root.push_back(gi.root);
+    }
+    // A group whose options share a file with options of another group is not required: picking there turns
+    // its option off (a later one would hide it), and the menu would put it back over the new choice (Mai
+    // mini dress: "4! NSFW", "4! SFW" and "4! Skimpy" all ship the body mesh, "3! Dress" and "4! SFW" the
+    // dress texture; one choice across several groups is not expressed)
+    for (size_t a = 0; a < m->groups.size(); ++a) {
+        RtoGroup& g = m->groups[a];
+        std::string other;
+        for (size_t b = 0; b < m->groups.size() && g.required && other.empty(); ++b) {
+            if (b == a) continue;
+            for (auto oa : g.options)
+                for (auto ob : m->groups[b].options) {
+                    if (!other.empty() || m->options[oa].mode != "pick" || m->options[ob].mode == "base") continue;
+                    for (auto& [p, mf] : m->options[oa].files)
+                        if (m->options[ob].files.count(p)) { other = m->groups[b].name; break; }
+                }
+        }
+        if (!other.empty()) {
+            g.required = false;
+            printf("    runtime options: group %s: one option asked, but it shares files with group %s: None kept\n",
+                   g.name.c_str(), other.c_str());
+        }
+    }
+    for (size_t a = 0; a < m->groups.size(); ++a) {
+        const RtoGroup& g = m->groups[a];
+        if (is_root[a]) continue;
+        bool pick = false;
+        for (auto oi : g.options) if (m->options[oi].mode == "pick") pick = true;
+        printf("    runtime options: group %s: %s\n", g.name.c_str(),
+               g.required ? "pick exactly one (no None)" : pick ? "pick one or none" : "each option on or off");
+    }
+    return m;
+}
+
 // Where an option of a modular mod sits in the mod's Fluffy menu: its "addonfor" is followed up
 // through the menu entries of the same mod (folders with a modinfo.ini only) to the group right
 // under the mod's root. Fluffy shows "03 Outfit" > "Lower Neckline" > "Shoes": the option "Shoes"
 // belongs to the top-level group "03 Outfit", where one option is picked among all its sub-groups.
+// (from ZZtaii's Slotsloader fork (1.9.7-custom), MIT)
 struct MenuPlace {
     std::vector<int> chain;   // menu entries from the option's own up to its top-level group
     bool from_root = false;   // the option hangs from the mod's root entry itself (main files)
@@ -4835,6 +7376,53 @@ static MenuPlace menu_place(const std::string& addonfor, const std::vector<int>&
     return p;
 }
 
+// The author asks for exactly one option of a group: its description says select / choose / pick (only)
+// one ("Select only one", "choose 1"), or its name is numbered with "!" ("2! Skin type options"). The rule
+// of ZZtaii's Slotsloader Manager (the idea, not its code).
+static bool says_pick_one(const std::string& text) {
+    const std::string t = str_lower(text);
+    for (const char* verb : {"select", "choose", "pick"}) {
+        for (size_t p = t.find(verb); p != std::string::npos; p = t.find(verb, p + 1)) {
+            size_t q = p + strlen(verb);
+            while (q < t.size() && isalpha((unsigned char)t[q])) q++;      // "selects", "chosen"
+            auto word = [&](const char* w) {
+                size_t r = q, n = strlen(w);
+                while (r < t.size() && t[r] == ' ') r++;
+                if (t.compare(r, n, w) != 0 || (r + n < t.size() && isalnum((unsigned char)t[r + n]))) return false;
+                q = r + n;
+                return true;
+            };
+            word("only");
+            if (word("one") || word("1")) return true;
+        }
+    }
+    return false;
+}
+
+static bool bang_numbered(const std::string& name) {
+    const std::string n = trim_ws(name);
+    size_t i = 0;
+    while (i < n.size() && isdigit((unsigned char)n[i])) i++;
+    return i > 0 && i < n.size() && n[i] == '!';
+}
+
+// The step an option's name is numbered with, the way a modder orders a flat Fluffy menu: "2) Oily skin" -> "2",
+// "3a) Bikini Edits" and "3b) Regular - Monokini" -> "3", "2! Skin" -> "2" (bang: numbered with "!"). Empty when the
+// name starts with no step ("1.5 body", "Default"). rest: the name after the step.
+static std::string name_step(const std::string& name, bool* bang = nullptr, std::string* rest = nullptr) {
+    const std::string n = trim_ws(name);
+    size_t i = 0;
+    while (i < n.size() && i < 3 && isdigit((unsigned char)n[i])) i++;
+    if (i == 0 || i > 2) return {};
+    size_t j = i;
+    if (j < n.size() && n[j] >= 'a' && n[j] <= 'z') j++;            // "3a)"
+    if (j >= n.size() || !strchr(")!.]", n[j])) return {};
+    if (j + 1 < n.size() && n[j + 1] != ' ') return {};             // "1.5": no step
+    if (bang) *bang = n[j] == '!';
+    if (rest) *rest = trim_ws(n.substr(j + 1));
+    return std::to_string(atoi(n.substr(0, i).c_str()));
+}
+
 // A modular mod made for Fluffy Mod Manager: options point ("addonfor") at groups, not at other
 // options. "1) Main files" hangs from the root, then "2) skin" and "3) outfit" groups where one
 // option is picked, and optional extras. As Fluffy installs by default: each costume is the main
@@ -4845,13 +7433,24 @@ static MenuPlace menu_place(const std::string& addonfor, const std::vector<int>&
 // Groups are the options' "addonfor" names, unless options hang from sub-groups of the menu
 // ("03 Outfit" > "Lower Neckline" > option): then each top-level group is one choice, the main
 // files come first and the groups follow in their folder order (later ones win), a group whose
-// name or description says "optional" is left out, and costumes are named after the mod.
-// A mod with a single menu level keeps the grouping, names and ids of 1.9.7; only its main files
-// are merged first when the menu shows which option hangs from the root.
+// name or description says "optional" is left out, and costumes are named after the mod. In every
+// case the main files (the options that hang from the mod's root) are merged first, so a group's
+// option replaces them. (Nested menus, merge order and the 50-combination cap: from ZZtaii's
+// Slotsloader fork (1.9.7-custom), MIT.)
+// A flat menu (every option hangs from the root, no menu group: "Cow girl Mai C1") is ordered by the steps the names are
+// numbered with: a step of two options or more that ship a same file (alternatives, two of them on would hide each
+// other) or numbered with "!" is a choice of its own ("2) Oily skin" / "2) No sweat/oil" / "2) Sweat on"); the main
+// files and the other options stay in the root group. The step of the main files is never taken out.
+// kids: add-ons of the tree's options (unit -> the option or add-on its "addonfor" names: Fluffy lists it under that
+// option and installs it with it, "3b) Regular - Monokini" under "3a) Monokini Edits"). Each is that option worn with
+// it: a unit made here carries the option's files (its own win) and takes the option's place, the option is offered
+// through its add-ons only. The add-ons of the main files (always worn) are a group of their own and carry nothing.
+// made: the units made here.
 // Combinations one modular mod may make: a character has 100 extra slots, one mod takes half at most
 static const size_t MODULAR_MAX_COMBINATIONS = 50;
 
-static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
+static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o,
+                          const std::map<size_t, size_t>& kids = {}, std::vector<size_t>* made = nullptr) {
     std::vector<int> menus;
     for (int k = 0; k < (int)g_menus.size(); ++k)
         if (g_menus[k].source == g_units[tree[0]].source) menus.push_back(k);
@@ -4865,10 +7464,13 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     }
 
     struct Group {
-        std::string key, order;   // key: identity; order: sort text (folder name of a menu group)
+        std::string key, order;   // key: identity (option ids); order: sort text (folder name of a menu group)
         bool root = false;        // the main files
         int top = -1;             // menu entry of the group, -1 for a name the menu does not have
         std::vector<size_t> members;
+        std::string step;         // a step of a flat menu taken out of the root group ("2"), its name made below
+        std::string label;        // its name when not the usual one
+        bool told = false;        // that step is numbered with "!": its author asks for one
     };
     std::vector<Group> groups;
     for (auto i : tree) {
@@ -4882,18 +7484,169 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
                 || (pl.chain.empty() && !mod_name.empty() && eq_ci(g_units[i].addonfor, mod_name))) {
                 g.key = "(root)"; g.order.clear(); g.root = true;
             } else if (g.top >= 0) {
-                g.key = "menu:" + std::to_string(g.top);
+                // by the top-level group's NAME, not its place in the menu: saved choices keep their ids
+                g.key = "menu:" + str_lower(trim_ws(g_menus[g.top].name));
                 g.order = str_lower(rel_tail(g_menus[g.top].rel));
             }
         } else {
-            g.root = pl.from_root;
+            g.root = pl.from_root || (!g.key.empty() && g.key[0] == '(');
         }
         auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& x) { return x.key == g.key; });
         if (it == groups.end()) { groups.push_back(g); it = groups.end() - 1; }
         it->members.push_back(i);
     }
-    // Iteration (and id) order: by "addonfor" as in 1.9.7 ("(root)" < "2) " < "3) "); nested:
-    // main files, then the top-level groups in folder order
+    auto optional_option = [&](size_t i, const Group& g) {
+        std::string key = str_lower(trim_ws(g_units[i].addonfor));
+        if (contains_ci(key, "optional") || contains_ci(g_units[i].name, "optional")) return true;
+        for (auto k : place[i].chain) if (contains_ci(g_menus[k].name, "optional")) return true;
+        return g.top >= 0 && contains_ci(g_menus[g.top].description, "optional");
+    };
+    // The main files of a root group, as rto_from_groups takes them: its first plain option (folder order) whose name
+    // does not call it an add-on
+    auto main_files = [&](const Group& g) -> size_t {
+        if (!g.root) return SIZE_MAX;
+        std::vector<size_t> plain;
+        for (auto i : g.members) if (!g_units[i].files.empty() && !optional_option(i, g)) plain.push_back(i);
+        std::sort(plain.begin(), plain.end(), folder_order);
+        for (auto i : plain)
+            if (!contains_ci(g_units[i].name, "addon") && !contains_ci(g_units[i].name, "add-on")) return i;
+        return SIZE_MAX;
+    };
+    std::vector<std::string> notes;   // logged with the mod's summary
+    std::map<size_t, std::vector<size_t>> kids_of;   // an option -> its add-ons (kids), in folder order
+    for (auto& [k, p] : kids) kids_of[p].push_back(k);
+    for (auto& [p, v] : kids_of)
+        std::sort(v.begin(), v.end(), folder_order);
+    // The paths an option ships, with those of its add-ons (worn with it)
+    std::function<void(size_t, std::set<std::string>&)> worn_paths = [&](size_t i, std::set<std::string>& out) {
+        for (auto& [p, mf] : g_units[i].files) out.insert(p);
+        if (auto it = kids_of.find(i); it != kids_of.end()) for (auto k : it->second) worn_paths(k, out);
+    };
+    // Steps of a flat menu (above): out of a root group whose options are numbered with two steps or more
+    if (!nested) {
+        std::vector<Group> taken;
+        for (auto& g : groups) {
+            if (!g.root) continue;
+            const size_t base = main_files(g);
+            std::map<int, std::vector<size_t>> step;   // step -> its plain options
+            std::set<int> numbered, bang;
+            for (auto i : g.members) {
+                bool b = false;
+                const std::string s = name_step(g_units[i].name, &b);
+                if (s.empty()) continue;
+                numbered.insert(atoi(s.c_str()));
+                if (g_units[i].files.empty() || optional_option(i, g)) continue;
+                step[atoi(s.c_str())].push_back(i);
+                if (b) bang.insert(atoi(s.c_str()));
+            }
+            if (numbered.size() < 2) continue;
+            for (auto& [s, v] : step) {
+                if (v.size() < 2 || std::find(v.begin(), v.end(), base) != v.end()) continue;
+                std::set<std::string> common;
+                worn_paths(v[0], common);
+                for (size_t k = 1; k < v.size() && !common.empty(); ++k) {
+                    std::set<std::string> w, both;
+                    worn_paths(v[k], w);
+                    for (auto& p : common) if (w.count(p)) both.insert(p);
+                    common = std::move(both);
+                }
+                if (common.empty() && !bang.count(s)) continue;
+                Group ng;
+                char kb[16];
+                snprintf(kb, sizeof kb, "/%02d", s);
+                ng.key = g.key + kb;
+                ng.order = g.order;
+                ng.top = g.top;
+                ng.step = std::to_string(s);
+                ng.told = bang.count(s) > 0;
+                ng.members = v;
+                g.members.erase(std::remove_if(g.members.begin(), g.members.end(), [&](size_t i) {
+                    return std::find(v.begin(), v.end(), i) != v.end(); }), g.members.end());
+                notes.push_back("step " + ng.step + " of the flat menu (" + std::to_string(v.size()) + " options, "
+                                + (common.empty() ? std::string("numbered with \"!\"") : "they replace " + rel_tail(*common.begin()))
+                                + "): a choice of its own");
+                taken.push_back(std::move(ng));
+            }
+        }
+        groups.insert(groups.end(), taken.begin(), taken.end());
+    }
+    // Add-ons of the options (kids, above). (Units are made here: no reference into g_units is held across this.)
+    if (!kids_of.empty()) {
+        std::map<size_t, std::string> worn_with;   // unit made here -> the option it is worn with (labels)
+        auto synth = [&](size_t k, size_t with) {   // the add-on k worn with the unit `with`
+            UnitFiles s = g_units[k];
+            s.files = g_units[with].files;
+            for (auto& [p, mf] : g_units[k].files) s.files[p] = mf;   // its own files win
+            s.origin = g_units[with].origin;
+            for (auto& [np, op] : g_units[k].origin) s.origin[np] = op;
+            s.targets.insert(g_units[with].targets.begin(), g_units[with].targets.end());
+            s.addonfor = g_units[with].addonfor;   // its option's place in the menu
+            s.costumes.clear();                    // an option of the modular mod, no outfit of its own
+            if (s.kw.empty()) s.kw = g_units[with].kw;
+            s.u.nsfw = s.u.nsfw || g_units[with].u.nsfw;
+            g_units.push_back(std::move(s));
+            const size_t u = g_units.size() - 1;
+            if (made) made->push_back(u);
+            worn_with[u] = unit_label(g_units[kids.at(k)]);
+            place[u] = menu_place(g_units[u].addonfor, menus);
+            return u;
+        };
+        // the add-ons under k (k itself when it has none), each worn with `with` (SIZE_MAX: nothing) and with k
+        std::function<void(size_t, size_t, std::vector<size_t>&)> leaves = [&](size_t k, size_t with, std::vector<size_t>& out) {
+            const size_t u = with == SIZE_MAX ? k : synth(k, with);
+            auto it = kids_of.find(k);
+            if (it == kids_of.end()) { out.push_back(u); return; }
+            for (auto c : it->second) leaves(c, u, out);
+        };
+        std::vector<Group> extra;
+        for (auto& g : groups) {
+            const size_t base = main_files(g);
+            std::vector<size_t> mem;
+            for (auto i : g.members) {
+                auto it = kids_of.find(i);
+                if (it == kids_of.end()) { mem.push_back(i); continue; }
+                std::vector<size_t> out;
+                if (i == base) {   // the main files stay; their add-ons: a group of their own
+                    mem.push_back(i);
+                    for (auto k : it->second) leaves(k, SIZE_MAX, out);
+                    Group ng;
+                    ng.key = ng.order = str_lower(unit_label(g_units[i]));
+                    ng.members = out;
+                    extra.push_back(std::move(ng));
+                } else {
+                    for (auto k : it->second) leaves(k, i, out);
+                    mem.insert(mem.end(), out.begin(), out.end());
+                }
+                notes.push_back(unit_label(g_units[i]) + ": " + std::to_string(it->second.size()) + " add-on"
+                                + (it->second.size() == 1 ? "" : "s") + " name it (AddonFor): "
+                                + (i == base ? "a group of their own (the main files are always worn)"
+                                             : "offered through them, each worn with it"));
+            }
+            g.members = std::move(mem);
+        }
+        groups.insert(groups.end(), extra.begin(), extra.end());
+        // two add-ons of one name worn with different options: named after their option too
+        for (auto& g : groups) {
+            std::map<std::string, int> n;
+            for (auto i : g.members) n[str_lower(unit_label(g_units[i]))]++;
+            for (auto i : g.members)
+                if (n[str_lower(unit_label(g_units[i]))] > 1 && worn_with.count(i))
+                    g_units[i].name = worn_with[i] + " - " + unit_label(g_units[i]);
+        }
+    }
+    // A step's name: the word its options' names share, else "Step N"
+    for (auto& g : groups) {
+        if (g.step.empty()) continue;
+        std::vector<std::string> names;
+        for (auto i : g.members) {
+            std::string rest;
+            names.push_back(name_step(g_units[i].name, nullptr, &rest).empty() ? unit_label(g_units[i]) : rest);
+        }
+        g.label = shared_word(names);
+        if (g.label.empty()) g.label = "Step " + g.step;
+    }
+    // Id order: by "addonfor" ("(root)" < "2) " < "3) "), so a mod keeps its slots; nested: main files,
+    // then the top-level groups in folder order. Merge order: the main files first, then the same order.
     std::sort(groups.begin(), groups.end(), [&](const Group& a, const Group& b) {
         if (nested && a.root != b.root) return a.root;
         if (nested && a.order != b.order) return a.order < b.order;
@@ -4901,41 +7654,94 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     });
     std::vector<int> merge_rank(groups.size());
     for (size_t gi = 0; gi < groups.size(); ++gi) merge_rank[gi] = int(gi) + (groups[gi].root ? 0 : int(groups.size()));
-
-    auto optional_option = [&](size_t i, const Group& g) {
-        std::string key = str_lower(trim_ws(g_units[i].addonfor));
-        if (contains_ci(key, "optional") || contains_ci(g_units[i].name, "optional")) return true;
-        for (auto k : place[i].chain) if (contains_ci(g_menus[k].name, "optional")) return true;
-        return g.top >= 0 && contains_ci(g_menus[g.top].description, "optional");
+    auto group_name = [&](const Group& g) {
+        if (!g.label.empty()) return g.label;
+        return nested && g.root ? mod_name : g.top >= 0 && nested ? trim_ws(g_menus[g.top].name)
+                                                                  : trim_ws(g_units[g.members[0]].addonfor);
     };
+    auto group_desc = [&](const Group& g) { return g.top >= 0 ? g_menus[g.top].description : std::string(); };
+
+    std::set<size_t> optional_units;
     std::vector<std::pair<size_t, size_t>> fixed;             // (group, option) in every costume
     std::vector<std::pair<size_t, std::vector<size_t>>> axes; // groups giving one costume per option
-    std::vector<std::string> role(groups.size());
     int optional_left = 0, skins_left = 0;
     std::string root;
+    // One log line per group that does not vary: "<group> -> <kept option>; left out: <options>"
+    struct Frozen { std::string group, why; size_t kept; std::vector<size_t> left; };
+    std::vector<Frozen> frozen;
+    std::vector<std::string> optional_names;
+    std::vector<std::string> role(groups.size());
     for (size_t gi = 0; gi < groups.size(); ++gi) {
         const auto& g = groups[gi];
         std::vector<size_t> m;
         int optional_here = 0;
         for (auto i : g.members) {
-            if (optional_option(i, g)) { optional_left++; optional_here++; continue; }
+            if (optional_option(i, g)) {
+                optional_units.insert(i);
+                optional_left++; optional_here++;
+                if (!g_units[i].files.empty()) optional_names.push_back(unit_label(g_units[i]));
+                continue;
+            }
             if (!g_units[i].files.empty()) m.push_back(i);
         }
         if (m.empty()) { role[gi] = optional_here ? "optional, left out" : "no files"; continue; }
-        std::sort(m.begin(), m.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
-        if (!nested && root.empty() && !g.key.empty() && g.key[0] == '(') root = trim_ws(g_units[m[0]].addonfor);
+        std::sort(m.begin(), m.end(), folder_order);
+        if (!nested && g.root && root.empty() && !g.key.empty() && g.key[0] == '(') root = trim_ws(g_units[m[0]].addonfor);
         if (m.size() == 1) { fixed.push_back({gi, m[0]}); role[gi] = "always installed"; continue; }
         bool shape = false;
         for (auto i : m) if (unit_has_mesh(g_units[i])) shape = true;
         if (shape) { axes.push_back({gi, m}); role[gi] = std::to_string(m.size()) + " options, one costume each"; }
         else {
             fixed.push_back({gi, m[0]}); skins_left += int(m.size()) - 1;
+            frozen.push_back({group_name(g), "texture group", m[0], std::vector<size_t>(m.begin() + 1, m.end())});
             role[gi] = std::to_string(m.size()) + " texture options, the first one kept";
         }
     }
-    if (nested && !mod_name.empty()) root = mod_name;
+    // Manager mode: a mod with one menu level keeps the name the Manager's Slotsloader fork gave it (its path below costume_mods,
+    // the fallback below), not the menu's: the Manager's variant_choices.json names a variant by that label, and a variant
+    // turned off must stay off across the change of loader. Nested menus are named after the mod in both.
+    if (root.empty() && !mod_name.empty() && (nested || !g_manager_mode)) root = mod_name;
     if (root.size() > 2 && root.front() == '(' && root.back() == ')') root = trim_ws(root.substr(1, root.size() - 2));
     if (root.empty()) root = g_units[tree[0]].u.rel;
+    std::shared_ptr<RtoMod> rto;
+    std::unordered_map<size_t, size_t> unit_option;
+    std::vector<RtoGroupIn> rto_in;   // the groups as read: an add-on mod's go on other outfits (attach_addons)
+    if (g_rto_layout != RtoLayout::Off) {
+        // In merge order (the plugin lays a later group's files over an earlier one's)
+        std::vector<size_t> by_merge(groups.size());
+        for (size_t gi = 0; gi < groups.size(); ++gi) by_merge[gi] = gi;
+        std::stable_sort(by_merge.begin(), by_merge.end(), [&](size_t a, size_t b) { return merge_rank[a] < merge_rank[b]; });
+        std::vector<RtoGroupIn> in;
+        for (auto gi : by_merge) {
+            const auto& g = groups[gi];
+            RtoGroupIn r;
+            r.key = g.key;
+            r.name = group_name(g);
+            r.root = g.root;
+            r.members = g.members;
+            // A choice when the author says so, or when every option ships one same file (two of them on
+            // would hide each other); required unless the group says "optional"
+            const std::string desc = group_desc(g);
+            const bool told = says_pick_one(desc) || bang_numbered(r.name) || g.told;
+            std::vector<size_t> plain;
+            for (auto i : g.members) if (!optional_units.count(i) && !g_units[i].files.empty()) plain.push_back(i);
+            bool shared = plain.size() >= 2;
+            if (shared)
+                for (auto& [p, mf] : g_units[plain[0]].files) {
+                    shared = true;
+                    for (size_t k = 1; k < plain.size() && shared; ++k) shared = g_units[plain[k]].files.count(p) > 0;
+                    if (shared) break;
+                }
+            r.choice = told || shared;
+            r.required = told && !contains_ci(r.name, "optional") && !contains_ci(desc, "optional");
+            in.push_back(std::move(r));
+        }
+        rto = rto_from_groups(in, root, optional_units, unit_option, g_units[tree[0]].u.nsfw);
+        rto_in = in;
+        rto->defaults_from = "loader";
+        auto src = g_mod_source.find(g_units[tree[0]].mod_id);
+        if (src != g_mod_source.end()) rto->source = src->second.source;
+    }
     // Several shape groups multiply; past MODULAR_MAX_COMBINATIONS costumes only the largest one varies
     size_t total = 1;
     for (auto& a : axes) total *= a.second.size();
@@ -4943,6 +7749,9 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
         std::sort(axes.begin(), axes.end(), [](auto& a, auto& b) { return a.second.size() > b.second.size(); });
         for (size_t k = 1; k < axes.size(); ++k) {
             fixed.push_back({axes[k].first, axes[k].second[0]});
+            frozen.push_back({group_name(groups[axes[k].first]),
+                              "past the " + std::to_string(MODULAR_MAX_COMBINATIONS) + "-costume cap", axes[k].second[0],
+                              std::vector<size_t>(axes[k].second.begin() + 1, axes[k].second.end())});
             role[axes[k].first] = std::to_string(axes[k].second.size()) + " options, the first one kept (over "
                                 + std::to_string(MODULAR_MAX_COMBINATIONS) + " combinations)";
         }
@@ -4953,12 +7762,42 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     if (skins_left) printf(", first option of each texture group (%d others left out)", skins_left);
     if (optional_left) printf(", %d optional part%s left out", optional_left, optional_left > 1 ? "s" : "");
     printf("\n");
-    if (nested) {
-        for (size_t gi = 0; gi < groups.size(); ++gi) {
-            const auto& g = groups[gi];
-            std::string nm = g.root ? std::string("main files") : g.top >= 0 ? trim_ws(g_menus[g.top].name)
-                                                                         : trim_ws(g_units[g.members[0]].addonfor);
-            printf("    group %s: %s\n", nm.c_str(), role[gi].c_str());
+    for (auto& n : notes) printf("    %s\n", n.c_str());
+    if (nested || !notes.empty())
+        for (size_t gi = 0; gi < groups.size(); ++gi)
+            printf("    group %s: %s\n", groups[gi].root ? "main files" : group_name(groups[gi]).c_str(), role[gi].c_str());
+    if (axes.size() == 1)
+        printf("    varies: %s (%zu options)\n", group_name(groups[axes[0].first]).c_str(), axes[0].second.size());
+    {   // which later group's files replace a frozen option's files (same path: the last group merged wins)
+        std::vector<std::pair<size_t, size_t>> first = fixed;
+        for (auto& a : axes) first.push_back({a.first, a.second[0]});
+        std::stable_sort(first.begin(), first.end(), [&](auto& x, auto& y) { return merge_rank[x.first] < merge_rank[y.first]; });
+        for (auto& f : frozen) {
+            std::string names;
+            for (size_t k = 0; k < f.left.size(); ++k) names += (k ? ", " : "") + unit_label(g_units[f.left[k]]);
+            printf("    frozen (%s): %s -> %s; left out: %s\n", f.why.c_str(), f.group.c_str(),
+                   unit_label(g_units[f.kept]).c_str(), names.c_str());
+            size_t lost = 0;
+            std::string by;
+            for (auto& [pth, mf] : g_units[f.kept].files) {
+                bool hit = false, after = false;
+                for (auto& q : first) {
+                    if (q.second == f.kept) { after = true; continue; }
+                    if (after && g_units[q.second].files.count(pth)) {
+                        hit = true;
+                        if (by.empty()) by = group_name(groups[q.first]);
+                    }
+                }
+                if (hit) lost++;
+            }
+            if (lost)
+                printf("      note: %zu of %zu files of that option are replaced by files of group %s\n",
+                       lost, g_units[f.kept].files.size(), by.c_str());
+        }
+        if (!optional_names.empty()) {
+            std::string names;
+            for (size_t k = 0; k < optional_names.size(); ++k) names += (k ? ", " : "") + optional_names[k];
+            printf("    optional, left out: %s\n", names.c_str());
         }
     }
     // Name of an option inside its top-level group: its sub-groups, then its own name
@@ -4970,28 +7809,2316 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
         }
         return s + unit_label(g_units[i]);
     };
+    // Every combination: its files (unit indices, in merge order), id order, label and options worn
+    struct Combo { std::vector<size_t> idx, id_order; std::string label; std::vector<size_t> selected; };
+    std::vector<Combo> combos;
     std::vector<size_t> pick(axes.size(), 0);
     for (size_t n = 0; n < total; ++n) {
         std::vector<std::pair<size_t, size_t>> parts = fixed;
-        std::string label = root;
+        Combo c;
+        c.label = root;
         for (size_t a = 0; a < axes.size(); ++a) {
             size_t i = axes[a].second[pick[a]];
             parts.push_back({axes[a].first, i});
-            label += " - " + option_label(i);
+            c.label += " - " + option_label(i);
         }
         std::stable_sort(parts.begin(), parts.end(), [](auto& x, auto& y) { return x.first < y.first; });
-        std::vector<size_t> id_order;
-        for (auto& p : parts) id_order.push_back(p.second);
-        std::stable_sort(parts.begin(), parts.end(), [&](auto& x, auto& y) {
-            return merge_rank[x.first] < merge_rank[y.first];
-        });
-        std::vector<size_t> idx;
-        for (auto& p : parts) idx.push_back(p.second);
-        push_combined(idx, label, o, g_units[tree[0]].u.rel, g_units[tree[0]].info_path, &id_order);
+        // (the first combination's id leaves out the options of the mod's add-on archives: the outfit keeps the id, hence
+        // the slot, it had without them; the other combinations' ids name every option, so they stay apart)
+        for (auto& p : parts)
+            if (n > 0 || g_units[p.second].joined_from == 0) c.id_order.push_back(p.second);
+        std::stable_sort(parts.begin(), parts.end(), [&](auto& x, auto& y) { return merge_rank[x.first] < merge_rank[y.first]; });
+        for (auto& p : parts) c.idx.push_back(p.second);
+        for (auto i : c.idx) if (unit_option.count(i)) c.selected.push_back(unit_option[i]);
+        if (rto) {   // an option whose every file a later one replaces is not worn: not a default
+            std::set<std::string> covered;
+            std::vector<size_t> kept;
+            for (auto it = c.selected.rbegin(); it != c.selected.rend(); ++it) {
+                const RtoOption& op = rto->options[*it];
+                bool shadowed = op.mode != "base" && !op.files.empty();
+                for (auto& [p, mf] : op.files) if (!covered.count(p)) shadowed = false;
+                for (auto& [p, mf] : op.files) covered.insert(p);
+                if (!shadowed) kept.insert(kept.begin(), *it);
+            }
+            c.selected = std::move(kept);
+            rto->variants.push_back({combined_mod_id(c.id_order), c.label, c.selected, c.label});
+        }
+        combos.push_back(std::move(c));
         for (size_t a = 0; a < axes.size(); ++a) {           // next combination
             if (++pick[a] < axes[a].second.size()) break;
             pick[a] = 0;
         }
+    }
+    if (rto) {
+        size_t n_opt = 0;
+        for (auto& op : rto->options) if (op.mode != "base") n_opt++;
+        printf("    runtime options: %zu groups, %zu options stored for the in-game menu\n", rto->groups.size(), n_opt);
+    }
+    // A retouch (every option meshes and textures only, no material file): no outfit, its groups go on the outfits
+    // that wear its files (attach_addons)
+    if (rto && g_retouch_sources.count(g_units[tree[0]].source)) {
+        printf("    a retouch (meshes and textures only, no material file): no outfit of its own, its options go on the "
+               "outfits that wear its files\n");
+        g_pending_addons.push_back({root, rto->source, rto_in, true, g_units[tree[0]].source});
+        return;
+    }
+    // One outfit per modular mod: its first combination (same id, so the same slot as before), every
+    // other one chosen in game
+    if (g_rto_layout == RtoLayout::One && combos.size() > 1) {
+        printf("    one outfit (RuntimeOptions=on): the first combination, the %zu others are options chosen in game\n",
+               combos.size() - 1);
+        // Slotsloader Manager's variant choices: the outfit wears the first combination left on, under
+        // the first combination's id (its slot stays); every one off: apply_variant_choices drops it
+        auto src = g_mod_source.find(g_units[tree[0]].mod_id);
+        const std::string source = src == g_mod_source.end() ? std::string() : src->second.source;
+        size_t k = 0;
+        while (k < combos.size() && variant_chosen_off(source, combos[k].label)) ++k;
+        if (k > 0 && k < combos.size())
+            printf("    worn by default: %s (variant_choices.json turns the first %zu off)\n", combos[k].label.c_str(), k);
+        // NSFW options (keywords) are not worn by default: the first combination left on without one
+        auto has_kw = [&](const Combo& c) { return worn_kw(c.idx) != nullptr; };
+        if (k < combos.size() && has_kw(combos[k])) {
+            size_t q = k;
+            while (q < combos.size() && (variant_chosen_off(source, combos[q].label) || has_kw(combos[q]))) ++q;
+            if (q < combos.size()) {
+                printf("    nsfw: worn by default: %s (the first combination without an NSFW option)\n", combos[q].label.c_str());
+                k = q;
+            }
+        }
+        if (k > 0 && k < combos.size()) {
+            combos[0].idx = combos[k].idx;
+            combos[0].selected = combos[k].selected;
+        }
+        combos.resize(1);
+        combos[0].label = root;
+    }
+    // An NSFW option (keywords) the one outfit would still wear (a group every combination takes it from): left out of
+    // what it wears by default when its group can do without it, else replaced by the first other option of its group
+    // (a group that asks for one); the main files, or a group of NSFW options only, make the outfit NSFW (push_combined).
+    // Kept as it was when the outfit would not be complete without it.
+    if (g_rto_layout == RtoLayout::One && rto && combos.size() == 1) {
+        Combo& c = combos[0];
+        const Combo before_kw = c;
+        std::unordered_map<size_t, size_t> unit_of;   // option -> unit
+        for (auto& [u, oi] : unit_option) unit_of[oi] = u;
+        bool changed = false;
+        for (size_t x = 0; x < c.idx.size();) {
+            const size_t i = c.idx[x];
+            auto uo = unit_option.find(i);
+            const std::vector<size_t> from(c.idx.begin() + std::ptrdiff_t(x), c.idx.end());
+            if (g_units[i].kw.empty() || uo == unit_option.end() || worn_kw(from) != &g_units[i]) { ++x; continue; }   // not worn
+            const size_t oi = uo->second;
+            const RtoOption& op = rto->options[oi];
+            const RtoGroup* g = nullptr;
+            for (auto& rg : rto->groups) if (std::find(rg.options.begin(), rg.options.end(), oi) != rg.options.end()) g = &rg;
+            if (op.mode == "base") {
+                printf("    nsfw: %s is the main files: the outfit is NSFW\n", op.name.c_str());
+                ++x;
+                continue;
+            }
+            if (op.mode == "pick" && g && g->required) {
+                size_t alt = SIZE_MAX;
+                for (auto a : g->options)
+                    if (a != oi && rto->options[a].mode == "pick" && !rto->options[a].nsfw && unit_of.count(a)) { alt = a; break; }
+                if (alt == SIZE_MAX) {
+                    printf("    nsfw: group %s has NSFW options only: the outfit is NSFW\n", g->name.c_str());
+                    ++x;
+                    continue;
+                }
+                printf("    nsfw: worn by default: %s instead of %s (NSFW)\n", rto->options[alt].name.c_str(), op.name.c_str());
+                c.idx[x] = unit_of[alt];
+                std::replace(c.selected.begin(), c.selected.end(), oi, alt);
+                changed = true;
+                ++x;
+                continue;
+            }
+            printf("    nsfw: %s not worn by default (NSFW: chosen in game)\n", op.name.c_str());
+            c.selected.erase(std::remove(c.selected.begin(), c.selected.end(), oi), c.selected.end());
+            c.idx.erase(c.idx.begin() + std::ptrdiff_t(x));
+            changed = true;
+        }
+        if (changed) {
+            std::unordered_map<std::string, ModFileRef> merged;
+            for (auto i : c.idx) for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
+            if (detect_mod_costumes(merged, o.inv, false, true).empty()) {
+                printf("    nsfw: without its NSFW options the outfit is not complete: worn as it was, the outfit is NSFW\n");
+                c = before_kw;
+            }
+        }
+    }
+    const size_t before = o.mods_out.size();
+    for (auto& c : combos)
+        push_combined(c.idx, c.label, o, g_units[tree[0]].u.rel, g_units[tree[0]].info_path, rto, c.selected, c.id_order);
+    // An add-on mod (no option has a body mesh: "Mai face accessories" replaces the shared head 000/00/ or
+    // Outfit 2's head) makes nothing; with RuntimeOptions its groups become options of the outfits whose files they
+    // replace (attach_addons)
+    if (o.mods_out.size() == before) {
+        if (g_rto_layout != RtoLayout::Off && !g_manager_mode && !rto_in.empty()) {   // Manager mode: on no other mod's outfit
+            printf("    modular mod %s gives no costume (no combination of its options is a complete outfit): an add-on, "
+                   "its options go on the outfits whose files they replace\n", root.c_str());
+            g_pending_addons.push_back({root, rto ? rto->source : std::string(), rto_in});
+        } else
+            printf("    WARN: modular mod %s gave no costume (no combination of its options is a complete outfit: an add-on "
+                   "mod, not used)\n", root.c_str());
+    }
+}
+
+// The last word every name shares, for a choice made of add-ons ("Optional - Leon Hair", "Optional -
+// Trimmed Hair" -> "Hair"); empty when there is none
+static std::string shared_word(const std::vector<std::string>& names) {
+    auto words = [](const std::string& s) {
+        std::vector<std::string> w; std::string cur;
+        for (char c : s + " ") {
+            if (isalnum((unsigned char)c)) cur += c;
+            else if (!cur.empty()) { w.push_back(cur); cur.clear(); }
+        }
+        return w;
+    };
+    static const std::set<std::string> skip = {"optional", "addon", "add", "on", "for", "the", "and", "with", "only",
+                                               "hide", "hidden", "remove", "removed", "without", "use", "no"};
+    if (names.empty()) return {};
+    auto first = words(names[0]);
+    for (size_t k = first.size(); k-- > 0;) {
+        const std::string low = str_lower(first[k]);
+        if (low.size() < 3 || skip.count(low)) continue;
+        bool all = true;
+        for (size_t n = 1; n < names.size() && all; ++n) {
+            bool found = false;
+            for (auto& w : words(names[n])) if (str_lower(w) == low) found = true;
+            all = found;
+        }
+        if (all) return first[k];
+    }
+    return {};
+}
+
+// ============================================================================
+// Added parts of the Slotsloader Manager as in-game options (docs/MANAGER_CONTRACT.md, "added parts as in-game options")
+// ============================================================================
+// Manager mode with "menu_outfit_options": true only (costume_loader_run reads the file under that condition and nowhere
+// else: without it nothing below runs and the file is never opened). The Manager's "Add to outfit" copies the files of
+// other mods ("parts") into an outfit's own folder, so the folder alone no longer says which file came from where.
+// manager_parts.json, beside the registry, written by the Manager and never by the loader, lists for each such outfit its
+// parts, on or off, each with a folder holding its files, and a folder with the outfit's own files that the parts which
+// are on replaced. The outfit stays what its folder makes it (same id, number, label and files); each listed part
+// becomes an option of it for the in-game menu (added_parts_units, build_addon_options).
+static const char* MANAGER_PARTS_FILE = "manager_parts.json";
+static const char* MANAGER_PARTS_FORMAT = "sf6-manager-parts-1";
+struct ManagerPart { std::string id, name, dir; bool on = false; };
+struct ManagerPartsOutfit {
+    std::string source, base;       // base: empty when the list gives none (null or no key)
+    std::vector<ManagerPart> parts;   // in the order the Manager laid them over the outfit (a later one wins a path)
+    std::string bad;                // what is wrong with this entry, when something is (its outfit is left alone)
+};
+static std::vector<ManagerPartsOutfit> g_manager_parts;   // empty when the file is not read, not there or not readable
+static std::string g_manager_parts_dir;                   // SF6_Costumes_Data: the folders of the list are given from there
+static std::string g_manager_parts_fp;                    // its part of the fingerprint; empty when not read or not there
+
+// A text of the Manager's JSON (UTF-8) as the loader names files (the system's code page); as it is when it is no UTF-8
+static std::string utf8_to_acp(const std::string& s) {
+    if (std::all_of(s.begin(), s.end(), [](char c) { return (unsigned char)c < 0x80; })) return s;
+    const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.c_str(), -1, nullptr, 0);
+    if (n <= 1) return s;
+    std::wstring w(size_t(n - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.c_str(), -1, &w[0], n);
+    return w2a(w.c_str());
+}
+
+// A folder of the list as a path on disk: given relative to SF6_Costumes_Data with '/', below manager_parts/. Empty
+// when it is anything else (a drive, a root, "..", another folder): such a folder is never read.
+static std::string manager_parts_path(const std::string& rel_in) {
+    std::string rel = rel_in;
+    for (auto& c : rel) if (c == '\\') c = '/';
+    while (!rel.empty() && rel.back() == '/') rel.pop_back();
+    static const std::string root = "manager_parts/";
+    if (rel.size() <= root.size() || str_lower(rel).compare(0, root.size(), root) != 0 || rel.find(':') != std::string::npos)
+        return {};
+    for (size_t a = 0; a <= rel.size();) {
+        size_t b = rel.find('/', a);
+        if (b == std::string::npos) b = rel.size();
+        const std::string step = rel.substr(a, b - a);
+        if (step.empty() || step == "." || step == "..") return {};
+        a = b + 1;
+    }
+    for (auto& c : rel) if (c == '/') c = '\\';
+    return g_manager_parts_dir + "\\" + rel;
+}
+
+// Read at every launch of Manager mode with the options on, before the fingerprint, which holds what the list says and
+// the files (path, size, date) under the folders it names: a part added, removed, turned on or off, or a file changed
+// there rebuilds the pak once; the list written again with the same content rebuilds nothing. Not there: nothing, and
+// the fingerprint is the one of a loader without it. Not readable (no JSON, another format): one WARN, no part is an
+// option, and its bytes are in the fingerprint (the list put right rebuilds).
+static void load_manager_parts(const std::string& registry_dir) {
+    g_manager_parts.clear();
+    g_manager_parts_fp.clear();
+    g_manager_parts_dir = registry_dir;
+    const std::string path = registry_dir + "\\" + MANAGER_PARTS_FILE;
+    if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    const std::string txt = read_file_text(path.c_str());
+    JsonValue v;
+    std::string why;
+    if (txt.empty()) why = "empty, or it cannot be opened";
+    else if (!json_parse_text(txt, v) || v.kind != JsonValue::Obj) why = "not a JSON object";
+    else if (v.str("format") != MANAGER_PARTS_FORMAT) why = "its format \"" + v.str("format") + "\" is not " + MANAGER_PARTS_FORMAT;
+    else if (const JsonValue* os = v.get("outfits"); !os || os->kind != JsonValue::Arr) why = "no \"outfits\" list";
+    char buf[96];
+    if (!why.empty()) {
+        logf("  WARN: %s cannot be read (%s): the added parts stay as their outfits' folders have them, none is an option\n",
+             MANAGER_PARTS_FILE, why.c_str());
+        snprintf(buf, sizeof buf, ";parts=unread:%016llx", (unsigned long long)fnv1a64(txt));
+        g_manager_parts_fp = buf;
+        return;
+    }
+    std::string said;   // what the list says, for the fingerprint
+    std::set<std::string> folders;
+    size_t n_parts = 0;
+    for (auto& jo : v.arr("outfits")) {
+        ManagerPartsOutfit mo;
+        mo.source = utf8_to_acp(jo.str("source"));
+        if (jo.kind != JsonValue::Obj || mo.source.empty()) mo.bad = "an entry without \"source\"";
+        if (const JsonValue* jb = jo.get("base"); jb && jb->kind != JsonValue::Null) {
+            mo.base = jb->kind == JsonValue::Str ? utf8_to_acp(jb->s) : std::string();
+            if (mo.base.empty() && mo.bad.empty()) mo.bad = "its \"base\" is neither a folder nor null";
+        }
+        said += "o\t" + mo.source + "\t" + mo.base + "\n";
+        if (!mo.base.empty()) folders.insert(mo.base);
+        const JsonValue* jps = jo.get("parts");
+        if ((!jps || jps->kind != JsonValue::Arr) && mo.bad.empty()) mo.bad = "no \"parts\" list";
+        for (auto& jp : jo.arr("parts")) {
+            ManagerPart p;
+            p.id = jp.str("id");
+            p.name = jp.str("name");
+            p.dir = utf8_to_acp(jp.str("dir"));
+            const JsonValue* on = jp.get("on");
+            p.on = on && on->kind == JsonValue::Bool && on->b;
+            const std::string label = p.name.empty() ? "a part" : "part \"" + p.name + "\"";
+            if (mo.bad.empty() && (!on || on->kind != JsonValue::Bool)) mo.bad = label + " does not say \"on\": true or false";
+            if (mo.bad.empty() && p.dir.empty()) mo.bad = label + " names no folder (\"dir\")";
+            said += "p\t" + p.id + "\t" + p.name + "\t" + (p.on ? "1" : "0") + "\t" + p.dir + "\n";
+            if (!p.dir.empty()) folders.insert(p.dir);
+            mo.parts.push_back(std::move(p));
+            ++n_parts;
+        }
+        g_manager_parts.push_back(std::move(mo));
+    }
+    // The files under the listed folders: path below SF6_Costumes_Data, size, date
+    std::string files;
+    size_t n_files = 0;
+    std::function<void(const std::wstring&, const std::string&)> walk = [&](const std::wstring& dir, const std::string& rel) {
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW(long_w(dir + L"\\*").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) return;
+        std::vector<std::pair<std::string, WIN32_FIND_DATAW>> entries;
+        do {
+            const std::wstring name(fd.cFileName);
+            if (name == L"." || name == L"..") continue;
+            entries.push_back({w2a(fd.cFileName), fd});
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (auto& [name, e] : entries) {
+            if (e.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;   // a junction or link: not the Manager's, not followed
+            if (e.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { walk(dir + L"\\" + e.cFileName, rel + "/" + name); continue; }
+            const uint64_t sz = (uint64_t(e.nFileSizeHigh) << 32) | e.nFileSizeLow;
+            const uint64_t mt = (uint64_t(e.ftLastWriteTime.dwHighDateTime) << 32) | e.ftLastWriteTime.dwLowDateTime;
+            files += rel + "/" + name + ":" + std::to_string(sz) + ":" + std::to_string(mt) + "\n";
+            ++n_files;
+        }
+    };
+    for (auto& f : folders) {
+        const std::string abs = manager_parts_path(f);
+        if (!abs.empty()) walk(a2w_path(abs), str_lower(f));
+    }
+    snprintf(buf, sizeof buf, ";parts=%zu:%016llx:%zu:%016llx", n_parts, (unsigned long long)fnv1a64(said), n_files,
+             (unsigned long long)fnv1a64(files));
+    g_manager_parts_fp = buf;
+    logf("  added parts: %s lists %zu part%s of %zu outfit%s (options of those outfits in game)\n", MANAGER_PARTS_FILE, n_parts,
+         n_parts == 1 ? "" : "s", g_manager_parts.size(), g_manager_parts.size() == 1 ? "" : "s");
+}
+
+// An outfit with added parts, as units: `base` its own files without the parts (what the folder holds, the files of
+// the parts that are on taken out, the outfit's own files they replaced put back), `all` one unit per listed part in
+// the listed order, `on` those the outfit wears (the Manager's "on"), in that order
+struct AddedParts { size_t base = 0; std::vector<size_t> all, on; };
+
+// An outfit and the add-ons made for it (the options of its mod that name it or complete it) as
+// runtime options (docs/RUNTIME_OPTIONS.md): the outfit is the base, each add-on a toggle, add-ons that
+// replace a same file one choice ("Leon Hair" / "Trimmed Hair"). RuntimeOptions=on: the outfit alone (its
+// own id: its slot as before), every add-on chosen in game, any number of them; "variants": the outfits
+// RuntimeOptions=off makes as well. False (nothing done) when an add-on brings files for another outfit
+// folder (the runtime swaps files of the slot's own folders only) or the outfit was not made.
+// sets: the add-ons of each outfit RuntimeOptions=off makes with it. worn: add-ons the user put with the
+// outfit in one sub-folder (off makes the outfit with them, never alone): the one outfit wears them by
+// default and keeps the id of that combination (its slot as before).
+// menu_of (Manager mode with the options chosen in game): the menu entry an add-on hangs from, by unit; a choice made of
+// the options of one entry is named after it, one of several entries after the words their names start with.
+// parts (the same mode, an outfit with added parts of the Slotsloader Manager: added_parts_units): the outfit's folder
+// holds its own files with the parts that are on laid over them. Every outfit made here stays as it is, made from the
+// folder (unit j: same id, same files); only the options differ: the base option is the outfit's own files without the
+// parts (parts->base), each part is one more add-on (On / Off, one choice with those that replace a same file), and
+// the parts that are on are among the options every outfit wears.
+static bool build_addon_options(size_t j, const std::vector<size_t>& own_adds,
+                                const std::vector<std::vector<size_t>>& sets, const std::vector<size_t>& worn,
+                                ScanOutputs& o, const std::map<size_t, std::string>* menu_of = nullptr,
+                                const AddedParts* parts = nullptr) {
+    const auto& b = g_units[j];
+    for (auto a : own_adds) if (!g_units[a].targets.empty() && !shares_target(g_units[a], b)) return false;
+    auto e = std::find_if(o.mods_out.begin(), o.mods_out.end(), [&](const auto& m) { return m.first == b.mod_id; });
+    if (e == o.mods_out.end()) return false;
+    std::vector<size_t> adds = own_adds;   // the outfit's add-ons, then its added parts in the order they were laid
+    if (parts) adds.insert(adds.end(), parts->all.begin(), parts->all.end());
+    const size_t jb = parts ? parts->base : j;   // the unit holding the outfit's own files
+    // Add-ons that replace a same file (directly or through another one): one choice
+    std::vector<size_t> cl(adds.size());
+    for (size_t x = 0; x < adds.size(); ++x) cl[x] = x;
+    auto find = [&](size_t x) { while (cl[x] != x) x = cl[x] = cl[cl[x]]; return x; };
+    for (size_t x = 0; x < adds.size(); ++x)
+        for (size_t y = x + 1; y < adds.size(); ++y)
+            if (units_overlap(g_units[adds[x]], g_units[adds[y]])) cl[find(y)] = find(x);
+    std::vector<RtoGroupIn> in(2);
+    in[0].key = "addon"; in[0].name = unit_label(b); in[0].root = in[0].outfit = true; in[0].members = {jb};
+    in[1].key = "addon"; in[1].name = "Add-ons";              // add-ons on their own: each on or off
+    std::map<size_t, size_t> group_of;                         // cluster -> its group in `in`
+    std::map<size_t, size_t> choice_of_unit;                   // an add-on of a choice -> its cluster
+    for (size_t x = 0; x < adds.size(); ++x) {
+        size_t r = find(x), n = 0;
+        for (size_t y = 0; y < adds.size(); ++y) if (find(y) == r) n++;
+        if (n == 1) { in[1].members.push_back(adds[x]); continue; }
+        choice_of_unit[adds[x]] = r;
+        auto it = group_of.find(r);
+        if (it == group_of.end()) {
+            it = group_of.emplace(r, in.size()).first;
+            in.emplace_back();
+            in.back().key = "addon";
+            in.back().choice = true;
+        }
+        in[it->second].members.push_back(adds[x]);
+    }
+    for (auto& [r, gi] : group_of) {
+        std::vector<std::string> names;
+        for (auto a : in[gi].members) names.push_back(unit_label(g_units[a]));
+        std::string w = shared_word(names);
+        if (menu_of) {
+            std::vector<std::string> entries;
+            for (auto a : in[gi].members)
+                if (auto m = menu_of->find(a); m != menu_of->end() && !m->second.empty()
+                    && std::find(entries.begin(), entries.end(), m->second) == entries.end()) entries.push_back(m->second);
+            std::string lead = entries.empty() ? std::string() : entries[0];
+            for (size_t n = 1; n < entries.size(); ++n) {   // the words every entry's name starts with
+                const std::string& e = entries[n];
+                size_t cut = 0;
+                while (cut < lead.size() && cut < e.size()
+                       && std::tolower((unsigned char)lead[cut]) == std::tolower((unsigned char)e[cut])) ++cut;
+                auto edge = [](const std::string& s, size_t k) { return k == s.size() || s[k] == ' '; };
+                while (cut > 0 && !(edge(lead, cut) && edge(e, cut))) --cut;   // back to the end of a word of both
+                lead.resize(cut);
+            }
+            for (bool again = true; again;) {   // "Marisa - Artwork for" -> "Marisa - Artwork"
+                again = false;
+                lead = trim_ws(lead);
+                for (const char* tail : {" for", " of", " -", " :", " the"}) {
+                    const size_t n = strlen(tail);
+                    if (lead.size() > n && eq_ci(lead.substr(lead.size() - n), tail)) { lead.resize(lead.size() - n); again = true; }
+                }
+            }
+            if (!lead.empty()) w = lead;
+        }
+        in[gi].name = w.empty() ? unit_label(b) + " - choice " + std::to_string(gi - 1) : w;
+    }
+    std::unordered_map<size_t, size_t> unit_option;
+    std::shared_ptr<RtoMod> rto = rto_from_groups(in, unit_label(b), {}, unit_option, b.u.nsfw);
+    rto->defaults_from = "loader";
+    if (auto src = g_mod_source.find(b.mod_id); src != g_mod_source.end()) rto->source = src->second.source;
+    // The options an outfit made with the add-ons `with` wears before them: its own files and, with added parts, the
+    // parts that are on. One per choice (the plugin keeps one pick of a group, and reads a second default as a file
+    // to take off): of several parts that are on and replace a same file the one laid last, and none when an add-on of
+    // `with`, laid over the folder, is of that choice. A part left out this way is still worn where nothing replaced
+    // its files (the folder holds them): it is an option that is not the default of its choice.
+    auto sel_of = [&](const std::vector<size_t>& with) {
+        std::vector<size_t> sel{unit_option[jb]};
+        if (!parts) return sel;
+        for (size_t k = 0; k < parts->on.size(); ++k) {
+            bool later = false;
+            if (auto c = choice_of_unit.find(parts->on[k]); c != choice_of_unit.end()) {
+                auto same = [&](size_t a) { auto x = choice_of_unit.find(a); return x != choice_of_unit.end() && x->second == c->second; };
+                for (size_t n = k + 1; n < parts->on.size() && !later; ++n) later = same(parts->on[n]);
+                for (auto a : with) later = later || same(a);
+            }
+            if (!later) sel.push_back(unit_option[parts->on[k]]);
+        }
+        return sel;
+    };
+    const std::vector<size_t> base_sel = sel_of({});
+    // The outfits RuntimeOptions=off makes (`sets`): ready-made sets, and the slots they had move here
+    struct Var { std::vector<size_t> parts; std::string label; std::vector<size_t> sel; };
+    auto var_of = [&](const std::vector<size_t>& v) {
+        Var x{{j}, unit_label(b), sel_of(v)};
+        for (auto a : v) { x.parts.push_back(a); x.label += " + " + unit_label(g_units[a]); x.sel.push_back(unit_option[a]); }
+        return x;
+    };
+    std::vector<Var> vars;
+    for (auto& v : sets) vars.push_back(var_of(v));
+    // The one outfit: the outfit alone, or with the add-ons of its sub-folder (that combination's id)
+    const Var main = worn.empty() ? Var{{j}, unit_label(b), base_sel} : var_of(worn);
+    const std::string main_id = worn.empty() ? b.mod_id : combined_mod_id(main.parts);
+    // row: the outfit as RuntimeOptions=off names it (the outfit alone: its own name)
+    rto->variants.push_back({main_id, main.label, main.sel, worn.empty() ? mod_label(b.mod_id) : main.label});
+    std::vector<const Var*> rows{&main};   // the outfits off makes, the one outfit's first
+    for (auto& x : vars) {
+        const std::string id = combined_mod_id(x.parts);
+        if (id != main_id) { rto->variants.push_back({id, x.label, x.sel, x.label}); rows.push_back(&x); }
+    }
+    // The outfit alone had a slot before it was put with its add-ons: that slot moves here too
+    if (!worn.empty()) rto->variants.push_back({b.mod_id, unit_label(b), base_sel});
+    // A complete add-on was an outfit of its own before (its id): its slot moves to the outfit with it
+    for (auto a : adds)
+        if (!g_units[a].costumes.empty())
+            rto->variants.push_back({g_units[a].mod_id, unit_label(g_units[a]), {base_sel[0], unit_option[a]}});
+    if (worn.empty())
+        for (auto& mc : e->second) { mc.rto = rto; mc.rto_selected = base_sel; }
+    else   // off never makes it alone
+        o.mods_out.erase(e);
+    std::string names;
+    for (auto a : own_adds) names += (names.empty() ? "" : ", ") + unit_label(g_units[a]);
+    if (!own_adds.empty())
+        printf("\n  %s: %zu add-on%s as runtime options (%s)\n", unit_label(b).c_str(), own_adds.size(),
+               own_adds.size() > 1 ? "s" : "", names.c_str());
+    if (parts) {
+        names.clear();
+        for (auto a : parts->all) {
+            const bool on = std::find(parts->on.begin(), parts->on.end(), a) != parts->on.end();
+            const bool worn_by_default = std::find(base_sel.begin(), base_sel.end(), unit_option[a]) != base_sel.end();
+            names += (names.empty() ? "" : ", ") + unit_label(g_units[a])
+                   + (!on ? " (off)" : worn_by_default ? " (on)" : " (on, under a later part of its choice: not the default there)");
+        }
+        printf("\n  %s: %zu added part%s of the Slotsloader Manager as runtime options (%s)\n", unit_label(b).c_str(),
+               parts->all.size(), parts->all.size() > 1 ? "s" : "", names.c_str());
+    }
+    size_t n_opt = 0;
+    for (auto& op : rto->options) if (op.mode != "base") n_opt++;
+    printf("    runtime options: %zu groups, %zu options stored for the in-game menu\n", rto->groups.size(), n_opt);
+    if (g_rto_layout == RtoLayout::One) {
+        // Slotsloader Manager's variant choices: the outfit wears the first outfit off makes that is left
+        // on, under the one outfit's id (its slot stays); every one off: apply_variant_choices drops it
+        size_t k = 0;
+        while (k < rows.size() && variant_chosen_off(rto->source, rto->variants[k].row)) ++k;
+        const Var& wear = k < rows.size() ? *rows[k] : main;
+        if (&wear != &main)
+            printf("    worn by default: %s (variant_choices.json turns the first %zu off)\n", wear.label.c_str(), k);
+        if (worn.empty()) {
+            printf("    one outfit (RuntimeOptions=on): %s, its add-ons chosen in game\n", unit_label(b).c_str());
+            if (&wear != &main) {   // the outfit alone made in finalize_units is made with those add-ons instead
+                auto e2 = std::find_if(o.mods_out.begin(), o.mods_out.end(),
+                                       [&](const auto& m) { return m.first == b.mod_id; });
+                if (e2 != o.mods_out.end()) o.mods_out.erase(e2);
+                push_combined(wear.parts, mod_label(b.mod_id), o, b.u.rel + " (with add-ons)", b.info_path, rto,
+                              wear.sel, {}, b.mod_id);
+            }
+        } else {
+            printf("    one outfit (RuntimeOptions=on): %s, put with its add-ons in one sub-folder: worn by default, "
+                   "chosen in game\n", main.label.c_str());
+            // Named after the outfit alone: its add-ons are options now ("Fly In A Bucket - Drive Tech", not
+            // "... + Book + Cat"); the variants keep the names off gives them (Slotsloader Manager rows)
+            push_combined(wear.parts, mod_label(b.mod_id), o, b.u.rel + " (with add-ons)", b.info_path, rto, wear.sel,
+                          main.parts);
+        }
+    } else
+        for (auto& x : vars) push_combined(x.parts, x.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, x.sel);
+    return true;
+}
+
+// The groups of the separate add-ons that make no outfit of their own (g_pending_addons) become options of the
+// outfits whose files they replace (docs/RUNTIME_OPTIONS.md, Add-ons on other outfits). Per group of an add-on (a
+// series: "!C2 Mai face accessories"):
+// - made only of shared files (files of 000/ that every game costume of the fighter loads, or none does: Mai's facial
+//   wrinkle textures, the props of Ingrid's option prefabs): an option of every outfit of the fighter, ours and the
+//   game's;
+// - else, a mesh or material file a mod's outfit ships too (the "C1 swap" series replaces the head "Mini Dress Mai C1
+//   Swap" ships): an option of those outfits;
+// - else, the game outfits that load them (the "C2" series: Outfit 2's head, 002/00/): their options, the game's own
+//   files are the way back (no slot of ours, no copy of the outfit).
+// A slot stores an option only where it fits what the slot wears (addon_fit); none is worn by default. A series with
+// a "main files" option (the textures its other options are made for): each other option carries those files, one
+// choice with None; else the options that replace a same file are one choice, the others each on or off.
+// Retouches (pa.retouch: meshes and textures only, no material file) go on every outfit that wears the files they
+// replace: the game outfits that load them and the mods' outfits made from those costumes that do not ship them; the
+// retouches of a fighter are one series (options of different mods that replace a same file: one choice).
+static void merge_note(const std::string& fd, const std::string& text);   // the merge audit (below)
+static void attach_addons(ScanOutputs& o) {
+    if (g_pending_addons.empty()) return;
+    const VanillaIndex& inv = o.inv;
+    {   // the retouches of a fighter (not a modular one: its own groups) as one series
+        std::vector<PendingAddon> merged;
+        std::map<std::string, size_t> series;   // fighter folder -> its series in `merged`
+        for (auto& pa : g_pending_addons) {
+            std::string fd;
+            const bool plain = pa.retouch && std::all_of(pa.groups.begin(), pa.groups.end(),
+                                                         [](const RtoGroupIn& g) { return g.key == "retouch"; });
+            if (plain)
+                for (auto& g : pa.groups)
+                    for (auto i : g.members)
+                        for (auto& [p, mf] : g_units[i].files) {
+                            std::string f, folder;
+                            if (fd.empty() && parse_model_folder(str_lower(p), f, folder)) fd = f;
+                        }
+            if (fd.empty()) { merged.push_back(std::move(pa)); continue; }
+            auto it = series.find(fd);
+            if (it == series.end()) {
+                series[fd] = merged.size();
+                merged.push_back(std::move(pa));
+                auto& m = merged.back();
+                for (size_t k = 1; k < m.groups.size(); ++k)
+                    m.groups[0].members.insert(m.groups[0].members.end(), m.groups[k].members.begin(), m.groups[k].members.end());
+                m.groups.resize(1);
+                m.groups[0].name = fd;
+                m.name = "retouches";
+                continue;
+            }
+            for (auto& g : pa.groups) {
+                auto& to = merged[it->second].groups[0].members;
+                to.insert(to.end(), g.members.begin(), g.members.end());
+            }
+        }
+        g_pending_addons = std::move(merged);
+    }
+    {   // What the game outfits of their fighters load through their physics .user files (outfit_loads): read while the
+        // game's pak is open, the options are stored later
+        std::set<int> fighters;
+        for (auto& pa : g_pending_addons)
+            for (auto& g : pa.groups)
+                for (auto i : g.members)
+                    for (auto& [p, mf] : g_units[i].files) {
+                        std::string pfd, folder;
+                        if (parse_model_folder(str_lower(p), pfd, folder)) fighters.insert(atoi(pfd.c_str() + 3));
+                    }
+        for (auto& c : inv.costumes)
+            if (fighters.count(c.fighter)) game_physics(inv, c.fighter, c.costume_no);
+    }
+    struct Group { std::string key, name; std::vector<RtoOption> options; };   // ids made per outfit from the key
+    std::set<std::pair<const RtoMod*, std::string>> done;                     // a group goes once on a mod
+    // Two options of the same files (paths and sizes): the outfit already has that add-on (a copy of it was put with
+    // the outfit in its sub-folder: the folder wins, the outfit keeps its own option)
+    auto size_of = [](const ModFileRef& f) -> uint64_t {
+        uint64_t sz = 0, mt = 0;
+        if (f.is_disk()) return file_stat_long(f.disk_path, sz, mt) ? sz : 0;
+        const PakEntry* e = f.pak ? f.pak->find(f.hash) : nullptr;
+        return e ? uint64_t(e->decompressed_size) : 0;
+    };
+    auto same_files = [&](const RtoOption& a, const RtoOption& b) {
+        if (a.files.size() != b.files.size()) return false;
+        for (auto& [p, mf] : a.files) {
+            const ModFileRef* o = slotcheck::mod_file(b.files, str_lower(p));
+            // (same size is not enough: skin options are material files of one layout, other values)
+            if (!o || size_of(*o) != size_of(mf) || o->read_data() != mf.read_data()) return false;
+        }
+        return true;
+    };
+    auto add_to = [&](RtoMod& m, const std::vector<Group>& gs) {
+        for (auto& g : gs) {
+            if (!done.insert({&m, g.key + "\t" + g.name + "\t" + (g.options.empty() ? "" : g.options[0].folder)}).second) continue;
+            std::set<std::string> ids;
+            for (auto& op : m.options) ids.insert(op.id);
+            RtoGroup rg;
+            rg.name = g.name;
+            for (auto& op : g.options) {
+                if (std::any_of(m.options.begin(), m.options.end(), [&](const RtoOption& x) { return same_files(x, op); })) {
+                    printf("    runtime options: %s already has %s (same files): not twice\n", m.name.c_str(), op.name.c_str());
+                    continue;
+                }
+                RtoOption x = op;
+                x.id = rto_option_id(g.key, x.folder, ids);
+                rg.options.push_back(m.options.size());
+                m.options.push_back(std::move(x));
+            }
+            if (!rg.options.empty()) m.groups.push_back(std::move(rg));
+        }
+    };
+    auto folder_of = [](const CostumeInfo& c) { return costume_folder(c); };
+    // A game outfit's options, made on first use (manifest key "<fighter folder>/game outfit 2")
+    auto game_mod = [&](const CostumeInfo& ci, const std::string& source) -> RtoMod& {
+        for (auto& g : g_rto_game)
+            if (g.fighter_dir == ci.fighter_dir && g.costume_no == ci.costume_no) return *g.mod;
+        RtoGame g;
+        g.fighter = ci.fighter;
+        g.costume_no = ci.costume_no;
+        g.fighter_dir = ci.fighter_dir;
+        g.folder = folder_of(ci);
+        g.name = game_outfit_name(ci.costume_no);
+        g.mod = std::make_shared<RtoMod>();
+        g.mod->name = g.name;
+        g.mod->key = ci.fighter_dir + "/game " + str_lower(g.name);
+        g.mod->source = source;
+        g.mod->defaults_from = "game";
+        g_rto_game.push_back(std::move(g));
+        return *g_rto_game.back().mod;
+    };
+    // A mod's outfit without options so far: the outfit alone is its base, and the one variant off makes (its
+    // Slotsloader Manager row, unchanged)
+    auto mod_rto = [&](std::pair<std::string, std::vector<ModCostume>>& e) -> RtoMod& {
+        for (auto& mc : e.second)
+            if (mc.rto) return const_cast<RtoMod&>(*mc.rto);
+        auto m = std::make_shared<RtoMod>();
+        m->name = mod_label(e.first);
+        m->defaults_from = "loader";
+        if (auto s = g_mod_source.find(e.first); s != g_mod_source.end()) m->source = s->second.source;
+        RtoOption base;
+        base.name = m->name;
+        base.folder = rel_tail(m->source.empty() ? m->name : m->source);
+        base.mode = "base";
+        std::set<std::string> ids;
+        base.id = rto_option_id("outfit", base.folder, ids);
+        m->options.push_back(std::move(base));
+        RtoGroup root;
+        root.name = m->name;
+        root.options = {0};
+        m->groups.push_back(std::move(root));
+        m->variants.push_back({e.first, m->name, {0}, mod_label(e.first)});
+        for (auto& mc : e.second) { mc.rto = m; mc.rto_selected = {0}; }
+        return *m;
+    };
+    auto live = [](const std::unordered_map<std::string, ModFileRef>& files) {
+        for (auto& [p, mf] : files) {
+            const std::string k = rto_kind(str_lower(p));
+            if (k == "mesh" || k == "material" || k == "texture" || k == "chain") return true;
+        }
+        return false;
+    };
+    for (auto& pa : g_pending_addons) {
+        // An add-on of an NSFW mod (costume_mods_nsfw, a keyword in its name) goes where any add-on goes (the two roots
+        // are one folder): its options are NSFW options (offered and worn only while the plugin's "Display NSFW
+        // Outfits" is on; on an NSFW outfit, hidden with it anyway, the mark changes nothing)
+        bool pa_nsfw = false, pa_dir = false;
+        for (auto& gi : pa.groups)
+            for (auto i : gi.members) { pa_nsfw = pa_nsfw || g_units[i].u.nsfw; pa_dir = pa_dir || g_units[i].u.nsfw_dir; }
+        for (auto& gi : pa.groups) {
+            std::vector<size_t> mem;
+            for (auto i : gi.members) {
+                if (g_units[i].files.empty()) continue;
+                if (live(g_units[i].files)) mem.push_back(i);
+                else printf("    runtime options: %s changes nothing a model can swap (colour or other files only): "
+                            "not an option\n", unit_label(g_units[i]).c_str());
+            }
+            if (mem.empty()) continue;
+            std::sort(mem.begin(), mem.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
+            // (a retouch series: ids from the option's folder alone, whichever mods are in the series)
+            const std::string key = pa.retouch && gi.key == "retouch" ? std::string("retouch")
+                                                                      : "addon:" + str_lower(pa.name) + "/" + gi.key;
+            auto opt = [&](size_t i, const char* mode) {
+                RtoOption x;
+                x.name = unit_label(g_units[i]);
+                x.folder = rel_tail(g_units[i].u.rel);
+                x.mode = mode;
+                x.files = g_units[i].files;
+                x.origin = g_units[i].origin;
+                x.nsfw = !g_units[i].kw.empty() || g_units[i].u.nsfw;
+                x.addon = true;
+                if (pa.retouch) {   // the outfit it made before: from the game outfit it modifies (its slot moves there)
+                    x.retouch = true;
+                    const auto& u = g_units[i];
+                    if (gi.key == "retouch") {   // named as its outfit was (without an archive's extension)
+                        x.name = trim_ws(mod_label(u.mod_id));
+                        for (const char* ext : {".pak", ".zip", ".rar", ".7z"})
+                            if (x.name.size() > strlen(ext) && str_ends_with(str_lower(x.name), ext)) x.name.resize(x.name.size() - strlen(ext));
+                    }
+                    const auto made = u.costumes.empty() ? detect_mod_costumes(u.files, inv, true) : u.costumes;
+                    if (!made.empty()) { x.from = u.mod_id; x.from_folder = made[0].original_folder; }
+                }
+                return x;
+            };
+            // A retouch choice is named after the model part its options replace ("Body": part 01, "Head": part 00)
+            auto part_name = [&](const std::vector<size_t>& v) {
+                std::string part;
+                for (auto& [p, mf] : g_units[v[0]].files) {
+                    const std::string low = str_lower(p);
+                    std::string pfd, folder;
+                    if (!parse_model_folder(low, pfd, folder)) continue;
+                    if (std::any_of(v.begin() + 1, v.end(), [&](size_t i) { return !slotcheck::mod_file(g_units[i].files, low); }))
+                        continue;
+                    const size_t a = low.find("/" + folder + "/") + folder.size() + 2;
+                    if (low.size() < a + 3 || low[a + 2] != '/') continue;
+                    const std::string pp = low.substr(a, 2);
+                    if (part.empty() || low.find(".mesh.") != std::string::npos)
+                        part = pp == "00" ? "Head" : pp == "01" ? "Body" : "Part " + pp;
+                }
+                return part;
+            };
+            std::vector<Group> gs;
+            size_t main = SIZE_MAX;
+            if (mem.size() >= 2)
+                for (auto i : mem) if (main == SIZE_MAX && contains_ci(unit_label(g_units[i]), "main file")) main = i;
+            if (main != SIZE_MAX) {
+                // the main files alone are not offered: the mod always pairs them with one of its other options
+                Group g{key, trim_ws(gi.name), {}};
+                for (auto i : mem) {
+                    if (i == main) continue;
+                    RtoOption x = opt(i, "pick");
+                    for (auto& [p, mf] : g_units[main].files) x.files.emplace(p, mf);   // the option's own files win
+                    x.nsfw = x.nsfw || !g_units[main].kw.empty() || g_units[main].u.nsfw;
+                    g.options.push_back(std::move(x));
+                }
+                printf("    runtime options: group %s: \"%s\" goes with each of its other options: one choice\n",
+                       g.name.c_str(), unit_label(g_units[main]).c_str());
+                gs.push_back(std::move(g));
+            } else if (gi.choice) {
+                Group g{key, trim_ws(gi.name), {}};
+                for (auto i : mem) g.options.push_back(opt(i, mem.size() > 1 ? "pick" : "toggle"));
+                gs.push_back(std::move(g));
+            } else {
+                // options that replace a same file (directly or through another one): one choice
+                std::vector<size_t> cl(mem.size());
+                for (size_t x = 0; x < mem.size(); ++x) cl[x] = x;
+                auto find = [&](size_t x) { while (cl[x] != x) x = cl[x] = cl[cl[x]]; return x; };
+                for (size_t x = 0; x < mem.size(); ++x)
+                    for (size_t y = x + 1; y < mem.size(); ++y)
+                        if (units_overlap(g_units[mem[x]], g_units[mem[y]])) cl[find(y)] = find(x);
+                Group singles{key, trim_ws(gi.name), {}};
+                std::map<size_t, std::vector<size_t>> clusters;
+                for (size_t x = 0; x < mem.size(); ++x) clusters[find(x)].push_back(mem[x]);
+                for (auto& [r, v] : clusters) {
+                    if (v.size() == 1 && pa.retouch) {   // a retouch alone on its files: its own row, its own name
+                        RtoOption x = opt(v[0], "toggle");
+                        gs.push_back(Group{key, x.name, {std::move(x)}});
+                        continue;
+                    }
+                    if (v.size() == 1) { singles.options.push_back(opt(v[0], "toggle")); continue; }
+                    std::vector<std::string> names;
+                    for (auto i : v) names.push_back(unit_label(g_units[i]));
+                    const std::string w = shared_word(names);
+                    std::string gname = clusters.size() == 1 ? trim_ws(gi.name) : w.empty() ? trim_ws(gi.name) + " - choice" : w;
+                    if (pa.retouch && gi.key == "retouch") {
+                        const std::string pn = part_name(v), stem = !pn.empty() ? pn : !w.empty() ? w : std::string("Retouch");
+                        gname = stem;
+                        for (int n = 2; std::any_of(gs.begin(), gs.end(), [&](const Group& x) { return x.name == gname; }); ++n)
+                            gname = stem + " (" + std::to_string(n) + ")";
+                    }
+                    Group g{key, gname, {}};
+                    for (auto i : v) g.options.push_back(opt(i, "pick"));
+                    gs.push_back(std::move(g));
+                }
+                if (!singles.options.empty()) gs.insert(gs.begin(), std::move(singles));
+            }
+            // Where its files land
+            std::set<std::string> paths;   // lowercase, the model files of its fighter
+            std::string fd;
+            for (auto& g : gs)
+                for (auto& op : g.options)
+                    for (auto& [p, mf] : op.files) {
+                        std::string pfd, folder;
+                        if (!parse_model_folder(p, pfd, folder)) continue;
+                        if (fd.empty()) fd = pfd;
+                        if (pfd == fd) paths.insert(str_lower(p));
+                    }
+            if (fd.empty()) {
+                printf("\n  add-on %s, %s: no model file, not an option\n", pa.name.c_str(), gi.name.c_str());
+                continue;
+            }
+            const int fighter = atoi(fd.c_str() + 3);
+            const std::vector<const CostumeInfo*> games = game_outfits_of(inv, fighter);   // one per model folder
+            // a game outfit names a 000/ file: its scene or material files, or its physics .user files (game_physics)
+            auto game_names = [&](int cno, const std::string& lp) {
+                return inv.used_by(pak_path_hash(std::string_view(lp)), fighter, cno) || game_physics(inv, fighter, cno).count(lp) > 0;
+            };
+            auto shared = [&](const std::string& lp) {
+                std::string pfd, folder;
+                if (!parse_model_folder(lp, pfd, folder) || folder != "000") return false;
+                size_t n = 0;
+                for (auto* c : games) if (game_names(c->costume_no, lp)) ++n;
+                return n == 0 || n == games.size();
+            };
+            auto ships = [&](const std::pair<std::string, std::vector<ModCostume>>& e, const std::string& lp) {
+                for (auto& mc : e.second)
+                    if (mc.fighter_dir == fd && (slotcheck::mod_file(mc.files_in_folder, lp) || slotcheck::mod_file(mc.files_shared, lp)))
+                        return true;
+                return false;
+            };
+            const bool all_shared = std::all_of(paths.begin(), paths.end(), shared);
+            std::vector<size_t> mods_hit;
+            std::vector<const CostumeInfo*> games_hit;
+            auto touches = [&](int cno, const std::string& folder) {
+                return std::any_of(paths.begin(), paths.end(),
+                                   [&](const std::string& lp) { return costume_touches(inv, fighter, cno, folder, lp); });
+            };
+            if (pa.retouch) {
+                // every outfit that wears the files: the game outfits that load them, the mods' outfits made from those
+                // costumes (an option whose files a mod's outfit ships itself is left out there, below)
+                for (auto* c : games) if (touches(c->costume_no, folder_of(*c))) games_hit.push_back(c);
+                for (size_t k = 0; k < o.mods_out.size(); ++k) {
+                    for (auto& mc : o.mods_out[k].second)
+                        if (mc.fighter_dir == fd && touches(mc.original_costume_no, mc.original_folder)) { mods_hit.push_back(k); break; }
+                }
+            } else if (all_shared) {
+                for (size_t k = 0; k < o.mods_out.size(); ++k) {
+                    for (auto& mc : o.mods_out[k].second)
+                        if (mc.fighter_dir == fd) { mods_hit.push_back(k); break; }
+                }
+                games_hit = games;
+            } else {
+                // Every outfit that wears a file it replaces, as a retouch (20/10: the C1 swap glasses replace Mai's
+                // head 000/00, which the mini dress ships and Outfit 1 / 3 / DriveTech load: all of them); where each
+                // option fits is decided when it is stored (slotcheck::addon_fit, logged per outfit). A mod's outfit
+                // wears it when it ships the same mesh or material file (the shape it is made for) or, shipping none of
+                // the series' files, is made from a game outfit that loads it. One that ships only the series'
+                // textures is a re-skin of its own (Cammy C4 pale skin, beside outfits made for Cammy's Outfit 4 slot
+                // that ship their own textures there): left out.
+                for (size_t k = 0; k < o.mods_out.size(); ++k) {
+                    const auto& e = o.mods_out[k];
+                    bool shape = false, any = false;
+                    for (auto& lp : paths) {
+                        if (!ships(e, lp)) continue;
+                        any = true;
+                        if ((lp.find(".mesh.") != std::string::npos || lp.find(".mdf2.") != std::string::npos) && !shared(lp)) shape = true;
+                    }
+                    bool worn = false;   // (a file every game outfit loads, or none, tells nothing: as for the game's)
+                    if (!any)
+                        for (auto& mc : e.second)
+                            if (mc.fighter_dir == fd && std::any_of(paths.begin(), paths.end(), [&](const std::string& lp) {
+                                    return !shared(lp) && costume_touches(inv, fighter, mc.original_costume_no, mc.original_folder, lp);
+                                })) { worn = true; break; }
+                    if (shape || worn) mods_hit.push_back(k);
+                    else if (any)
+                        printf("    runtime options: %s ships the textures of %s, %s itself: not an option there\n",
+                               mod_label(e.first).c_str(), pa.name.c_str(), trim_ws(gi.name).c_str());
+                }
+                for (auto* c : games)
+                    for (auto& lp : paths) {
+                        std::string pfd, folder;
+                        if (shared(lp) || !parse_model_folder(lp, pfd, folder)) continue;
+                        if (folder == "000" ? game_names(c->costume_no, lp) : folder == folder_of(*c)) { games_hit.push_back(c); break; }
+                    }
+            }
+            // An outfit alone in its sub-folder is its own: no other mod's add-on or retouch goes on it
+            if (g_rto_layout == RtoLayout::One && !g_lone_sources.empty())
+                mods_hit.erase(std::remove_if(mods_hit.begin(), mods_hit.end(), [&](size_t k) {
+                    auto ms = g_mod_source.find(o.mods_out[k].first);
+                    return ms != g_mod_source.end() && (ms->second.source != pa.source || ms->second.nsfw_dir != pa_dir)
+                           && g_lone_sources.count(lone_key_of(ms->second)) != 0;
+                }), mods_hit.end());
+            // An add-on of a sub-folder handled together goes on that sub-folder's outfits only
+            if (g_group_sources.count((pa_dir ? "nsfw:" : "") + str_lower(pa.source))) {
+                games_hit.clear();
+                mods_hit.erase(std::remove_if(mods_hit.begin(), mods_hit.end(), [&](size_t k) {
+                    auto ms = g_mod_source.find(o.mods_out[k].first);
+                    return ms == g_mod_source.end() || ms->second.source != pa.source || ms->second.nsfw_dir != pa_dir;
+                }), mods_hit.end());
+            }
+            std::string names;
+            // A retouch's options on one outfit: those that touch it (a file of its costume folder, a 000/ file it
+            // loads), not where the outfit (a mod's: e) ships one of their files itself (it replaces the game's files)
+            auto retouch_here = [&](int cno, const std::string& folder, const std::pair<std::string, std::vector<ModCostume>>* e) {
+                std::vector<Group> here = gs;
+                for (auto& g : here) {
+                    auto& v = g.options;
+                    v.erase(std::remove_if(v.begin(), v.end(), [&](const RtoOption& op) {
+                        bool touch = false;
+                        for (auto& [p, mf] : op.files) touch = touch || costume_touches(inv, fighter, cno, folder, str_lower(p));
+                        if (!touch) return true;
+                        if (e)
+                            for (auto& [p, mf] : op.files)
+                                if (ships(*e, str_lower(p))) {
+                                    printf("    runtime options: %s ships %s itself: %s is not an option there\n",
+                                           mod_label(e->first).c_str(), rel_tail(p).c_str(), op.name.c_str());
+                                    return true;
+                                }
+                        return false;
+                    }), v.end());
+                }
+                here.erase(std::remove_if(here.begin(), here.end(), [](const Group& g) { return g.options.empty(); }), here.end());
+                return here;
+            };
+            auto listed = [](const std::vector<Group>& here) {
+                std::string l;
+                for (auto& g : here) for (auto& op : g.options) l += (l.empty() ? "" : " / ") + op.name;
+                return " (" + l + ")";
+            };
+            for (auto k : mods_hit) {
+                std::vector<Group> here = gs;
+                if (pa.retouch)
+                    for (auto& mc : o.mods_out[k].second)
+                        if (mc.fighter_dir == fd) { here = retouch_here(mc.original_costume_no, mc.original_folder, &o.mods_out[k]); break; }
+                if (here.empty()) continue;
+                add_to(mod_rto(o.mods_out[k]), here);
+                names += (names.empty() ? "" : ", ") + mod_label(o.mods_out[k].first) + (pa.retouch ? listed(here) : "");
+            }
+            for (auto* c : games_hit) {
+                const std::vector<Group> here = pa.retouch ? retouch_here(c->costume_no, folder_of(*c), nullptr) : gs;
+                if (here.empty()) continue;
+                RtoMod& m = game_mod(*c, pa.source);
+                add_to(m, here);
+                names += (names.empty() ? "" : ", ") + fd + " " + m.name + " (game)" + (pa.retouch ? listed(here) : "");
+                // A retouch's own outfit before (made from this game outfit): its slot moves here, the option chosen
+                for (size_t oi = 0; oi < m.options.size(); ++oi) {
+                    const RtoOption& op = m.options[oi];
+                    if (op.from.empty() || op.from_folder != folder_of(*c)
+                        || std::any_of(m.variants.begin(), m.variants.end(), [&](const RtoMod::Variant& v) { return v.mod_id == op.from; }))
+                        continue;
+                    m.variants.push_back({op.from, op.name, {oi}, std::string()});
+                }
+            }
+            size_t n = 0;
+            for (auto& g : gs) n += g.options.size();
+            printf("\n  add-on %s, %s: %zu option%s (%s%s), for %s\n", pa.name.c_str(), trim_ws(gi.name).c_str(), n,
+                   n > 1 ? "s" : "", pa.retouch ? "a retouch: the outfits that wear its files"
+                                    : all_shared ? "files every outfit of the fighter loads"
+                                    : "the outfits that wear the files it replaces",
+                   pa_nsfw ? "; NSFW options" : "",
+                   names.empty() ? "no outfit: not used" : names.c_str());
+            if (pa_nsfw && !names.empty() && g_rto_layout == RtoLayout::One) {   // the merge audit: where NSFW options went
+                size_t nn = 0;
+                for (auto& g : gs) for (auto& op : g.options) nn += op.nsfw ? 1 : 0;
+                merge_note(fd, (pa.retouch && gi.key == "retouch" ? std::string("retouches")
+                                                                  : "add-on " + pa.name + ", " + trim_ws(gi.name))
+                               + ": " + std::to_string(nn) + " NSFW option" + (nn == 1 ? "" : "s")
+                               + " (hidden while Display NSFW Outfits is off), for " + names);
+            }
+        }
+    }
+    g_pending_addons.clear();
+}
+
+// ============================================================================
+// Outfits merged into one (RuntimeOptions=on; docs/RUNTIME_OPTIONS.md, Versions and Subsets). Decided from the files
+// only: their bytes, the meshes' name tables and faces, the costume folders; names only label the options.
+// ============================================================================
+
+// The merge audit: per fighter, outfits that look related (one archive, identical meshes, a mesh made from a game
+// outfit's), merged or not and why. Printed once, at the end of the scan.
+struct MergeNote { std::string fd, text; };
+static std::vector<MergeNote> g_merge_audit;
+static void merge_note(const std::string& fd, const std::string& text) { g_merge_audit.push_back({fd, text}); }
+
+static uint64_t mod_file_size(const ModFileRef& f) {
+    uint64_t sz = 0, mt = 0;
+    if (f.is_disk()) return file_stat_long(f.disk_path, sz, mt) ? sz : 0;
+    const PakEntry* e = f.pak ? f.pak->find(f.hash) : nullptr;
+    return e ? uint64_t(e->decompressed_size) : 0;
+}
+// The game's file at a pak path (lowercase), read while the mods are scanned; empty when the game has none
+static const PakEntry* scan_game_entry(const std::string& low) {
+    return g_scan_base_pak ? g_scan_base_pak->find(pak_path_hash(std::string_view(low))) : nullptr;
+}
+static std::vector<uint8_t> scan_game_file(const std::string& low) {
+    const PakEntry* e = scan_game_entry(low);
+    return e ? g_scan_base_pak->read(*e) : std::vector<uint8_t>{};
+}
+// Same bytes: a mod's file and another one, or the game's file at a path
+static bool same_bytes(const ModFileRef& a, const ModFileRef& b) {
+    return mod_file_size(a) == mod_file_size(b) && a.read_data() == b.read_data();
+}
+static bool same_as_game(const ModFileRef& a, const std::string& low) {
+    const PakEntry* e = scan_game_entry(low);
+    return e && uint64_t(e->decompressed_size) == mod_file_size(a) && g_scan_base_pak->read(*e) == a.read_data();
+}
+
+// A model file's path without the streaming prefix (a texture's streaming twin -> the texture)
+static std::string model_path(const std::string& low) {
+    const size_t sl = strlen(STREAM_PFX);
+    return low.compare(0, sl, STREAM_PFX) == 0 ? std::string(BASE_PFX) + low.substr(sl) : low;
+}
+// The model part of a costume file: "01" for ".../esf001/001/01/x.mesh...", empty for a file of the folder itself
+static std::string part_number(const std::string& low_in) {
+    const std::string low = model_path(low_in);
+    std::string fd, folder;
+    if (!parse_model_folder(low, fd, folder)) return {};
+    const size_t a = low.find("/" + fd + "/" + folder + "/") + fd.size() + folder.size() + 3;
+    if (low.size() < a + 3 || low[a + 2] != '/' || !isdigit((unsigned char)low[a]) || !isdigit((unsigned char)low[a + 1]))
+        return {};
+    return low.substr(a, 2);
+}
+
+// The files of a game costume per model part (lowercase pak paths, from the vanilla index): its mesh and its
+// material file, wherever the costume takes the part from (Ryu's Outfit 2 head: 000/00/)
+struct GamePart { std::string mesh, mdf; };
+static std::map<std::pair<int, int>, std::map<std::string, GamePart>> g_game_parts;
+static bool g_game_parts_read = false;
+static const std::map<std::string, GamePart>& game_parts(const VanillaIndex& inv, int fighter, int cno) {
+    if (!g_game_parts_read) {   // every costume's parts, in one pass over the index
+        g_game_parts_read = true;
+        for (auto& [h, us] : inv.users) {
+            auto hp = inv.hash_to_paths.find(h);
+            if (hp == inv.hash_to_paths.end()) continue;
+            for (auto& path : hp->second) {
+                const std::string low = str_lower(path);
+                const bool mesh = low.find(".mesh.") != std::string::npos, mdf = low.find("_v00.mdf2.") != std::string::npos;
+                if (!mesh && !mdf) continue;
+                std::string fd, folder;
+                if (!parse_model_folder(low, fd, folder)) continue;
+                const std::string nn = part_number(low);
+                if (nn.empty()) continue;
+                const std::string name = low.substr(low.rfind('/') + 1), stem = fd + "_" + folder + "_" + nn;
+                if (name.compare(0, stem.size(), stem) != 0) continue;   // the part's own mesh / material file
+                const bool is_mesh = name.compare(stem.size(), 6, ".mesh.") == 0;
+                if (!is_mesh && name.compare(stem.size(), 10, "_v00.mdf2.") != 0) continue;
+                for (auto& fc : us) (is_mesh ? g_game_parts[fc][nn].mesh : g_game_parts[fc][nn].mdf) = low;
+            }
+        }
+    }
+    return g_game_parts[{fighter, cno}];
+}
+
+// A mesh as the subset test reads it: its materials, its joints (blend shapes aside) and their order and, in its first
+// level of detail, per material the triangles and how many of them are folded to nothing (two corners on one vertex)
+struct MeshShape {
+    bool ok = false;
+    std::set<std::string> mats, joints;
+    std::vector<std::string> joint_order;   // the joints by bone index (Havok cloth and chains address bones by index)
+    std::map<std::string, std::pair<uint32_t, uint32_t>> faces;   // material -> (triangles, folded)
+};
+// A mesh's materials, joints and joint order from its name tables (b: the whole file, or its start)
+static bool mesh_tables(const std::vector<uint8_t>& b, MeshShape& s, std::vector<std::string>* mats_out = nullptr) {
+    std::vector<std::string> mats, names;
+    if (!slotcheck::mesh_materials(b, mats, &names)) return false;
+    s.mats.insert(mats.begin(), mats.end());
+    for (auto& n : names)
+        if (!s.mats.count(n) && !(n.compare(0, 2, "BS") == 0 && n.find('.') != std::string::npos)) s.joints.insert(n);
+    // (SF6 mesh: the name index of each bone at +120, after the materials' at +112; the name table's order when
+    // that table does not name exactly these joints)
+    int64_t bo = 0;
+    if (b.size() >= 128) memcpy(&bo, b.data() + 120, 8);
+    if (bo > 0 && size_t(bo) + 2 * s.joints.size() <= b.size()) {
+        for (size_t k = 0; k < s.joints.size(); ++k) {
+            uint16_t ix = 0;
+            memcpy(&ix, b.data() + size_t(bo) + 2 * k, 2);
+            if (ix >= names.size() || !s.joints.count(names[ix])) break;
+            s.joint_order.push_back(names[ix]);
+        }
+        if (std::set<std::string>(s.joint_order.begin(), s.joint_order.end()) != s.joints) s.joint_order.clear();
+    }
+    if (s.joint_order.empty())
+        for (auto& n : names) if (s.joints.count(n)) s.joint_order.push_back(n);
+    if (mats_out) *mats_out = std::move(mats);
+    return true;
+}
+static MeshShape mesh_shape(const std::vector<uint8_t>& b) {
+    MeshShape s;
+    std::vector<std::string> mats;
+    if (!mesh_tables(b, s, &mats)) return s;
+    auto r64 = [&](size_t o, int64_t& v) { if (o + 8 > b.size()) return false; memcpy(&v, b.data() + o, 8); return true; };
+    auto r32 = [&](size_t o, int32_t& v) { if (o + 4 > b.size()) return false; memcpy(&v, b.data() + o, 4); return true; };
+    // (SF6 mesh: buffer header at +72, levels of detail at +32; per LOD the mesh groups, per group its submeshes:
+    // material index, index count, first index; indices 16 or 32 bits after the vertex buffer)
+    int64_t mo = 0, vbo = 0, lods = 0, los = 0, l0 = 0, ho = 0;
+    int32_t vbs = 0;
+    if (!r64(72, mo) || mo <= 0 || !r64(size_t(mo) + 8, vbo) || !r32(size_t(mo) + 28, vbs) || vbo <= 0 || vbs < 0) return s;
+    const uint64_t fbo = uint64_t(vbo) + uint32_t(vbs);
+    if (!r64(32, lods) || lods <= 0 || size_t(lods) + 64 > b.size()) return s;
+    const size_t isz = b[size_t(lods) + 6] ? 4 : 2;
+    if (!r64(size_t(lods) + 56, los) || los <= 0 || !r64(size_t(los), l0) || l0 <= 0 || size_t(l0) + 16 > b.size()) return s;
+    const uint8_t groups = b[size_t(l0)];
+    if (!r64(size_t(l0) + 8, ho) || ho <= 0) return s;
+    for (uint8_t k = 0; k < groups; ++k) {
+        int64_t go = 0;
+        if (!r64(size_t(ho) + 8ull * k, go) || go <= 0 || size_t(go) + 16 > b.size()) return s;
+        const uint8_t sc = b[size_t(go) + 1];
+        for (uint8_t n = 0; n < sc; ++n) {
+            const size_t so = size_t(go) + 16 + 24ull * n;
+            int32_t ic = 0, fio = 0;
+            if (so + 24 > b.size() || !r32(so + 4, ic) || !r32(so + 8, fio) || ic < 0 || fio < 0) return s;
+            const uint8_t mi = b[so];
+            if (mi >= mats.size()) return s;
+            const uint64_t at = fbo + uint64_t(fio) * isz;
+            if (at + uint64_t(ic) * isz > b.size()) return s;   // faces elsewhere (a streaming buffer): not read
+            auto idx = [&](size_t q) {
+                uint32_t v = 0;
+                memcpy(&v, b.data() + at + q * isz, isz);
+                return v;
+            };
+            auto& f = s.faces[mats[mi]];
+            for (size_t t = 0; t + 2 < size_t(ic); t += 3) {
+                f.first++;
+                const uint32_t a = idx(t), c = idx(t + 1), d = idx(t + 2);
+                if (a == c || c == d || a == d) f.second++;
+            }
+        }
+    }
+    s.ok = true;
+    return s;
+}
+
+// A game mesh as the subset test compares it, read once per scan
+struct GameMesh { std::string md5; MeshShape shape; };
+static std::map<std::string, GameMesh> g_game_meshes;
+static const GameMesh& game_mesh(const std::string& low) {
+    auto it = g_game_meshes.find(low);
+    if (it == g_game_meshes.end()) {
+        const std::vector<uint8_t> d = scan_game_file(low);
+        it = g_game_meshes.emplace(low, GameMesh{md5_hex(d.data(), d.size()), mesh_shape(d)}).first;
+    }
+    return it->second;
+}
+
+// The materials a game material file defines (read once per scan; empty when there is none)
+static std::map<std::string, std::set<std::string>> g_game_mdf_mats;
+static const std::set<std::string>& game_mdf_materials(const std::string& low) {
+    auto it = g_game_mdf_mats.find(low);
+    if (it == g_game_mdf_mats.end()) {
+        std::vector<std::string> m;
+        if (!low.empty()) slotcheck::mdf2_materials(scan_game_file(low), m);
+        it = g_game_mdf_mats.emplace(low, std::set<std::string>(m.begin(), m.end())).first;
+    }
+    return it->second;
+}
+
+// A physics file: a chain (the model's, the wind's), joint constraints, Havok cloth, and the .user files that name them
+// or set the model's ambient occlusion and shape (not the colour files: _ccvd, _cmd_)
+static bool is_physics_file(const std::string& low) {
+    for (const char* x : {".chain.", ".jcns.", ".havokcloth.", "_chain.user.", "_jcs.user.", "_havok.user.", "_aogeo.user.",
+                          "_shape.user."})
+        if (low.find(x) != std::string::npos) return true;
+    return false;
+}
+
+// The physics files a game costume loads (lowercase pak path -> md5 of its bytes): the ones its scene names (vanilla
+// index: its .user files, its wind chain) and the files those .user files name, one level (_chain.user -> .chain,
+// _jcs.user -> .jcns, _havok.user -> .havokcloth: Ryu's Outfit 1 body chain is named by esf001_001_01_chain.user, not
+// by the scene). Read once per costume while the mods are scanned.
+static std::map<std::pair<int, int>, std::map<std::string, std::string>> g_game_physics;
+static const std::map<std::string, std::string>& game_physics(const VanillaIndex& inv, int fighter, int cno) {
+    if (!g_scan_base_pak) {   // the pak is built: what was read while the mods were scanned
+        static const std::map<std::string, std::string> none;
+        const auto f = g_game_physics.find({fighter, cno});
+        return f == g_game_physics.end() ? none : f->second;
+    }
+    auto [it, fresh] = g_game_physics.try_emplace({fighter, cno});
+    auto& out = it->second;
+    if (!fresh) return out;
+    std::vector<std::vector<uint8_t>> users;
+    auto add = [&](const std::string& low) {
+        if (out.count(low)) return;
+        std::vector<uint8_t> d = scan_game_file(low);
+        if (d.empty()) return;
+        out[low] = md5_hex(d.data(), d.size());
+        if (low.find(".user.") != std::string::npos) users.push_back(std::move(d));
+    };
+    for (auto& [h, us] : inv.users) {
+        if (!us.count({fighter, cno})) continue;
+        if (auto hp = inv.hash_to_paths.find(h); hp != inv.hash_to_paths.end())
+            for (auto& path : hp->second)
+                if (const std::string low = str_lower(path); is_physics_file(low)) add(low);
+    }
+    for (auto& d : users)
+        for (auto& s : slotcheck::utf16_strings(d)) {
+            std::string ref = str_lower(s);
+            while (!ref.empty() && (ref[0] == '@' || ref[0] == '/')) ref.erase(0, 1);
+            if (str_ends_with(ref, ".havokcloth")) add("natives/stm/" + ref + ".1.x64");
+            else if (str_ends_with(ref, ".chain") || str_ends_with(ref, ".jcns"))
+                if (const std::string p = slotcheck::resource_path(ref, inv.suffixes); !p.empty()) add(p);
+        }
+    return out;
+}
+// The md5s of the physics files a game costume loads
+static std::set<std::string> game_physics_md5(const VanillaIndex& inv, int fighter, int cno) {
+    std::set<std::string> out;
+    for (auto& [p, md5] : game_physics(inv, fighter, cno)) out.insert(md5);
+    return out;
+}
+
+// The physics files of a costume of a unit (lowercase paths): in its folder and 000/, and the wind chain named after
+// its folder (natives/stm/product/weather/wind/mode/001/esf001_005_01_chain.chain.52)
+static std::map<std::string, ModFileRef> costume_physics(const UnitFiles& u, const ModCostume& mc) {
+    std::map<std::string, ModFileRef> out;
+    const std::string stem = mc.fighter_dir + "_" + mc.original_folder + "_";
+    for (auto& [p, mf] : u.files) {
+        const std::string low = str_lower(p);
+        if (!is_physics_file(low)) continue;
+        std::string pfd, folder;
+        if (parse_model_folder(low, pfd, folder)) {
+            if (pfd == mc.fighter_dir && (folder == mc.original_folder || folder == "000")) out[low] = mf;
+        } else if (rel_tail(low).compare(0, stem.size(), stem) == 0) out[low] = mf;
+    }
+    return out;
+}
+// The first of `files` (its file name) whose bytes are none of `loaded` (md5s), or empty: physics files must be the
+// same bytes as physics files the outfit they go on loads, whatever their names (an option wears that outfit's)
+static std::string physics_differ(const std::map<std::string, ModFileRef>& files, const std::set<std::string>& loaded) {
+    for (auto& [p, mf] : files) {
+        const std::vector<uint8_t> d = mf.read_data();
+        if (!loaded.count(md5_hex(d.data(), d.size()))) return rel_tail(p);
+    }
+    return {};
+}
+
+// The words that tell outfits apart: each name without the words all of them start and end with ("Aloha Ryu C1" /
+// "Aloha Ryu C2": "C1" / "C2"; versions ("v2.0") dropped). group: the first word they all end with ("Sagat_TigerTee_
+// DriveTech_v3.0" / "Sagat_TigerPhotoTee_DriveTech_v2.0": "Tee"). Empty when two of them come out alike.
+static std::vector<std::string> distinct_labels(const std::vector<std::string>& names, std::string* group, std::string* common) {
+    auto words = [](const std::string& s) {
+        std::vector<std::string> w;
+        std::string cur;
+        auto flush = [&] { if (!cur.empty()) w.push_back(cur); cur.clear(); };
+        for (size_t i = 0; i < s.size(); ++i) {
+            const unsigned char c = (unsigned char)s[i];
+            if (!isalnum(c)) { flush(); continue; }
+            if (!cur.empty() && isupper(c) && islower((unsigned char)cur.back())) flush();   // camel case
+            cur += char(c);
+        }
+        flush();
+        std::vector<std::string> out;
+        for (size_t i = 0; i < w.size(); ++i) {
+            const std::string l = str_lower(w[i]);
+            if (l.size() >= 2 && l[0] == 'v' && std::all_of(l.begin() + 1, l.end(), ::isdigit)) {   // "v2" (+ ".0")
+                while (i + 1 < w.size() && std::all_of(w[i + 1].begin(), w[i + 1].end(), ::isdigit)) ++i;
+                continue;
+            }
+            out.push_back(w[i]);
+        }
+        return out;
+    };
+    std::vector<std::vector<std::string>> ws;
+    for (auto& n : names) ws.push_back(words(n));
+    if (ws.size() < 2) return {};
+    size_t mn = SIZE_MAX;
+    for (auto& w : ws) mn = std::min(mn, w.size());
+    auto eqw = [](const std::string& a, const std::string& b) { return str_lower(a) == str_lower(b); };
+    size_t p = 0, s = 0;
+    while (p < mn && std::all_of(ws.begin(), ws.end(), [&](auto& w) { return eqw(w[p], ws[0][p]); })) ++p;
+    while (s < mn - p && std::all_of(ws.begin(), ws.end(), [&](auto& w) { return eqw(w[w.size() - 1 - s], ws[0][ws[0].size() - 1 - s]); }))
+        ++s;
+    // each label: the name's own text from its first distinct word to its last ("Jun's Outfit" keeps its apostrophe),
+    // '_' as a space, camel case split ("TigerPhoto": "Tiger Photo")
+    std::vector<std::string> out;
+    for (size_t n = 0; n < ws.size(); ++n) {
+        const auto& w = ws[n];
+        const std::string& name = names[n];
+        if (p + s >= w.size()) return {};
+        size_t at = 0, from = 0, to = 0;
+        for (size_t k = 0; k < w.size(); ++k) {   // each word where it is in the name (a version left out is skipped)
+            const size_t f = name.find(w[k], at);
+            if (f == std::string::npos) return {};
+            if (k == p) from = f;
+            if (k + 1 + s == w.size()) to = f + w[k].size();
+            at = f + w[k].size();
+        }
+        std::string l;
+        for (size_t i = from; i < to; ++i) {
+            const char c = name[i] == '_' ? ' ' : name[i];
+            if (i > from && isupper((unsigned char)c) && islower((unsigned char)name[i - 1])) l += ' ';
+            l += c;
+        }
+        l = trim_ws(l);
+        if (l.empty() || std::find(out.begin(), out.end(), l) != out.end()) return {};
+        out.push_back(l);
+    }
+    if (group) *group = s ? ws[0][ws[0].size() - s] : std::string();
+    if (common) {
+        common->clear();
+        for (size_t k = 0; k < p; ++k) *common += (common->empty() ? "" : " ") + ws[0][k];
+    }
+    return out;
+}
+
+// A subset (docs/RUNTIME_OPTIONS.md, Subsets): an outfit whose every mesh is the mesh a game outfit wears at that part
+// (the same bytes, or the same materials and joints with some materials taken off: left out of the mesh, or every
+// triangle of theirs folded to nothing, the others as they were), at least one of them with something taken off. Ryu
+// "Outfit 1 No Cloak" folds the cloak of the game's Outfit 1 body; Sagat "Outfit 1 Shirtless" ships Outfit 1's head
+// as it is and its body with the fur vest folded. It becomes an option of that game outfit (and of the outfits that
+// wear that part), its files moved to the paths the game outfit loads; a file the same as the game's there is left
+// out, files a model cannot swap (physics, colours) too. Its physics files must be the same bytes as physics files the
+// game outfit loads (under other names: Sagat Shirtless ships Outfit 1's under DriveTech's), its meshes the game
+// meshes' joints in the same order (Havok cloth and chains address bones by index): the option wears the game
+// outfit's physics. A changed chain stays an outfit: a game outfit has no base copy to go back to (a part unit needs
+// one).
+struct Subset {
+    int cno = -1;                      // the game outfit
+    bool physics = false;              // a game outfit's subset whose physics differ (why: which; audit)
+    std::string hidden, why, kin;     // kin: a mesh made from a game outfit's, without anything taken off (audit)
+    std::unordered_map<std::string, ModFileRef> files;     // the option, at the game outfit's paths
+    std::unordered_map<std::string, std::string> origin;
+};
+static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
+    Subset r;
+    if (u.costumes.size() != 1) { r.why = "not one outfit"; return r; }
+    const ModCostume& mc = u.costumes[0];
+    const std::string& fd = mc.fighter_dir;
+    const std::string& F = mc.original_folder;
+    std::map<std::string, std::string> mesh_of;   // part -> the mod's mesh
+    for (auto& [p, mf] : u.files) {
+        const std::string low = str_lower(p);
+        std::string pfd, folder;
+        if (low.find(".mesh.") == std::string::npos || !parse_model_folder(low, pfd, folder) || pfd != fd) continue;
+        if (folder != F && folder != "000") continue;
+        if (const std::string nn = part_number(low); !nn.empty()) mesh_of[nn] = p;
+    }
+    if (mesh_of.empty()) { r.why = "no mesh"; return r; }
+    std::map<std::string, GameMesh> mods;   // read once
+    auto mod_mesh = [&](const std::string& p) -> const GameMesh& {
+        auto it = mods.find(p);
+        if (it == mods.end()) {
+            const std::vector<uint8_t> d = u.files.at(p).read_data();
+            it = mods.emplace(p, GameMesh{md5_hex(d.data(), d.size()), mesh_shape(d)}).first;
+        }
+        return it->second;
+    };
+    // A mesh's materials and joints from the start of its file (its name table is there): the whole file is read
+    // only for a mesh whose tables are a game mesh's
+    std::map<std::string, MeshShape> heads;
+    auto mod_tables = [&](const std::string& p) -> const MeshShape& {
+        auto it = heads.find(p);
+        if (it != heads.end()) return it->second;
+        MeshShape t;
+        const ModFileRef& mf = u.files.at(p);
+        std::vector<uint8_t> d;
+        if (mf.is_disk()) {
+            HANDLE h = CreateFileW(make_wide_path(mf.disk_path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (h != INVALID_HANDLE_VALUE) {
+                d.resize(8u << 20);
+                DWORD rd = 0;
+                if (!ReadFile(h, d.data(), DWORD(d.size()), &rd, nullptr)) rd = 0;
+                d.resize(rd);
+                CloseHandle(h);
+            }
+        }
+        std::vector<std::string> mats, names;
+        if (d.empty() || !slotcheck::mesh_materials(d, mats, &names)) d = mf.read_data();   // not in the first 8 MB
+        t.ok = mesh_tables(d, t);
+        return heads.emplace(p, std::move(t)).first->second;
+    };
+    std::set<int> seen;
+    for (auto& c : inv.costumes) {
+        if (c.fighter != mc.fighter || c.costume_no >= 100 || !seen.insert(c.costume_no).second) continue;
+        const auto& parts = game_parts(inv, c.fighter, c.costume_no);
+        std::string hidden, fail, kin;
+        int minus = 0;
+        for (auto& [nn, p] : mesh_of) {
+            auto gp = parts.find(nn);
+            if (gp == parts.end() || gp->second.mesh.empty()) { fail = "no part " + nn; break; }
+            const PakEntry* ge = scan_game_entry(gp->second.mesh);
+            if (!ge || mod_file_size(u.files.at(p)) > uint64_t(ge->decompressed_size)) { fail = "part " + nn + " is bigger"; break; }
+            // (the game mesh is read only when its material file defines the mod mesh's materials)
+            const MeshShape& mt = mod_tables(p);
+            const std::set<std::string>& gmats = game_mdf_materials(gp->second.mdf);
+            if (!mt.ok || !std::includes(gmats.begin(), gmats.end(), mt.mats.begin(), mt.mats.end())) {
+                fail = "part " + nn + ": other materials";
+                break;
+            }
+            const GameMesh& gm = game_mesh(gp->second.mesh);
+            if (!gm.shape.ok || mt.joints != gm.shape.joints
+                || !std::includes(gm.shape.mats.begin(), gm.shape.mats.end(), mt.mats.begin(), mt.mats.end())) {
+                fail = "part " + nn + ": other materials or joints";
+                break;
+            }
+            if (mt.joint_order != gm.shape.joint_order) { fail = "part " + nn + ": its joints in another order"; break; }
+            const GameMesh& mm = mod_mesh(p);
+            if (mm.md5 == gm.md5) continue;
+            const MeshShape& ms = mm.shape;
+            const MeshShape& gs = gm.shape;
+            if (!ms.ok || !gs.ok) { fail = "a mesh is not readable"; break; }
+            if (ms.joints != gs.joints || !std::includes(gs.mats.begin(), gs.mats.end(), ms.mats.begin(), ms.mats.end())) {
+                fail = "part " + nn + ": other materials or joints";
+                break;
+            }
+            std::string h;
+            for (auto& m : gs.mats) {
+                auto a = ms.faces.find(m), b = gs.faces.find(m);
+                const auto g = b == gs.faces.end() ? std::make_pair(0u, 0u) : b->second;
+                if (!ms.mats.count(m)) { h += (h.empty() ? "" : ", ") + m; continue; }   // left out of the mesh
+                const auto x = a == ms.faces.end() ? std::make_pair(0u, 0u) : a->second;
+                if (x.first != g.first) { fail = "part " + nn + ": " + m + " edited"; break; }
+                if (x.second == x.first && x.first > 0 && g.second < g.first) { h += (h.empty() ? "" : ", ") + m; continue; }
+                if (x.second != g.second) { fail = "part " + nn + ": " + m + " partly folded"; break; }
+            }
+            if (!fail.empty()) { kin = game_outfit_name(c.costume_no) + " " + fail; break; }
+            if (h.empty()) { fail = game_outfit_name(c.costume_no) + " part " + nn + ", nothing taken off"; kin = fail; break; }
+            hidden += (hidden.empty() ? "" : "; ") + ("part " + nn + ": " + h);
+            minus++;
+        }
+        if (!kin.empty() && r.kin.empty()) r.kin = kin;
+        if (!fail.empty() || !minus) continue;
+        r.cno = c.costume_no;
+        r.hidden = hidden;
+        break;
+    }
+    if (r.cno < 0) { r.why = r.kin.empty() ? "no game outfit has these meshes" : r.kin; return r; }
+    if (const std::string f = physics_differ(costume_physics(u, mc), game_physics_md5(inv, mc.fighter, r.cno)); !f.empty()) {
+        r.why = game_outfit_name(r.cno) + " minus " + r.hidden + ", but its physics differ (" + f + ")";
+        r.physics = true;
+        r.cno = -1;
+        return r;
+    }
+    // Its files at the game outfit's paths; the same as the game's there, or a file no model swaps: left out
+    const auto& parts = game_parts(inv, mc.fighter, r.cno);
+    const CostumeInfo* gc = inv.get_costume(mc.fighter, r.cno);
+    const std::string gfolder = gc ? costume_folder(*gc) : F;
+    size_t same = 0, other = 0;
+    for (auto& [p, mf] : u.files) {
+        const std::string low = str_lower(p), base = model_path(low), kd = rto_kind(base);
+        std::string pfd, folder;
+        if (!parse_model_folder(base, pfd, folder)) { other += is_physics_file(low); continue; }   // its wind chain
+        if (pfd != fd || (folder != F && folder != "000")) continue;
+        if (kd != "mesh" && kd != "material" && kd != "texture" && kd != "chain") { other++; continue; }
+        std::string np = low;
+        if (folder == F) {
+            const std::string nn = part_number(base);
+            auto gp = parts.find(nn);
+            if (!nn.empty() && gp != parts.end() && !gp->second.mesh.empty()) {
+                // into the folder the game outfit takes that part from, named after it
+                const std::string& gm = gp->second.mesh;
+                std::string gfd, gf;
+                parse_model_folder(gm, gfd, gf);
+                std::string name = base.substr(base.rfind('/') + 1);
+                const std::string from = fd + "_" + F + "_", to = fd + "_" + gf + "_";
+                if (name.compare(0, from.size(), from) == 0) name = to + name.substr(from.size());
+                np = gm.substr(0, gm.rfind('/') + 1) + name;
+                if (low != base) np = std::string(STREAM_PFX) + np.substr(strlen(BASE_PFX));
+            } else np = relocate_path(low, fd, F, gfolder);
+        }
+        if (np != low) r.origin[np] = low;
+        if (same_as_game(mf, np)) { same++; continue; }
+        if (kd == "chain") {
+            r.why = "it ships a changed chain (" + rel_tail(low) + "): no way back on a game outfit";
+            r.cno = -1;
+            return r;
+        }
+        r.files[np] = mf;
+    }
+    printf("    subset of %s %s (%s): %zu file%s at its paths, %zu the same as the game's, %zu physics / colour file%s left out\n",
+           fd.c_str(), game_outfit_name(r.cno).c_str(), r.hidden.c_str(), r.files.size(), r.files.size() == 1 ? "" : "s",
+           same, other, other == 1 ? "" : "s");
+    return r;
+}
+
+// One outfit of a merge (docs/RUNTIME_OPTIONS.md, Versions): a costume of a unit, its files moved onto the base
+// outfit's folder
+struct Version {
+    size_t unit = 0, costume = 0;
+    std::string mod_id, name, row, source, folder, rel, label;
+    int cno = 0;
+    std::unordered_map<std::string, ModFileRef> files;     // remapped onto the base's folder (model files)
+    std::unordered_map<std::string, std::string> origin;
+    std::string why;      // not merged: why
+    bool alias = false;   // the same files as the base once on its outfit: merged, no option of its own
+};
+
+// The model files of a costume of a unit: its folder and 000/ (and their streaming twins), lowercase paths
+static std::unordered_map<std::string, ModFileRef> costume_model_files(const UnitFiles& u, const ModCostume& mc) {
+    std::unordered_map<std::string, ModFileRef> out;
+    for (auto& [p, mf] : u.files) {
+        const std::string low = str_lower(p), base = model_path(low);
+        std::string pfd, folder;
+        if (!parse_model_folder(base, pfd, folder) || pfd != mc.fighter_dir) continue;
+        if (folder == mc.original_folder || folder == "000") out[low] = mf;
+    }
+    return out;
+}
+
+// Why a version's files do not fit the base outfit, or empty (as addon_fit at the slot, against the base's files
+// and the game's files of the base's game outfit; read while the mods are scanned)
+static std::string version_fit(const VanillaIndex& inv, int fighter, int base_cno,
+                               const std::unordered_map<std::string, ModFileRef>& base_files, const Version& v) {
+    if (!g_scan_base_pak) return "the game's files are not read";
+    PakWriter none;
+    auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
+        const std::string low = str_lower(path);
+        if (const ModFileRef* mf = slotcheck::mod_file(base_files, low)) return mf->read_data();
+        if (!outfit_loads(inv, fighter, base_cno, low)) return {};
+        return scan_game_file(low);
+    };
+    std::set<std::string> own_tex;
+    for (auto* m : {&v.files, &base_files})
+        for (auto& [p, mf] : *m) if (p.find(".tex.") != std::string::npos) own_tex.insert(resource_name(p));
+    std::unordered_map<std::string, std::string> rebind;   // texture references by their path in the mod -> moved
+    for (auto& [np, orig] : v.origin) if (np.find(".tex.") != std::string::npos) rebind[resource_name(orig)] = resource_name(np);
+    for (auto& [p, mf] : v.files) {
+        const std::string kd = rto_kind(p);
+        if (kd != "mesh" && kd != "material" && kd != "texture" && kd != "chain") continue;
+        std::vector<uint8_t> d = mf.read_data();
+        if (kd == "material" && !rebind.empty()) mdf2_rebind_textures(d, rebind);
+        const std::string why = slotcheck::addon_fit(none, *g_scan_base_pak, inv.suffixes, v.files, p, d, p, worn, own_tex, &v.origin);
+        if (!why.empty()) return rel_tail(p) + ": " + why;
+    }
+    return {};
+}
+
+// The add-on sets RuntimeOptions=off makes with an outfit (finalize_units): each add-on alone and, with two or three
+// that replace no same file, all of them; none past three
+static std::vector<std::vector<size_t>> addon_sets(const std::vector<size_t>& adds) {
+    std::vector<std::vector<size_t>> sets;
+    if (adds.size() > 3) return sets;
+    bool apart = true;
+    for (size_t x = 0; x < adds.size(); ++x)
+        for (size_t y = x + 1; y < adds.size(); ++y)
+            if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
+    for (auto a : adds) sets.push_back({a});
+    if (adds.size() >= 2 && apart) sets.push_back(adds);
+    return sets;
+}
+
+// Several outfits of one fighter made one, the others' files a choice of it (docs/RUNTIME_OPTIONS.md, Versions):
+// versions of one archive ("Ryu Aloha Bundle": C1 / C2 / C3 for Outfits 1 / 2 / 3), or outfits of several archives
+// whose meshes are the same bytes for the same game outfit (Sagat's Tees: one mesh, other textures). The base is the
+// first of them (archive order; the first one the Slotsloader Manager leaves on): it keeps its slot, the others'
+// slots move to it with their version chosen. A version made for another game outfit is moved onto the base's folder
+// and carries what that game outfit wears at the parts it does not ship (Outfit 2's head for C2). Only where it fits
+// the base outfit (addon_fit) and its physics files are the same bytes as physics files the base loads (the version
+// wears the base's); else it stays an outfit of its own. A chain nothing of its own outfit names is left out (unused
+// there: Aloha C3's 003/esf001_003_02_chain.chain). Their add-ons go with them, the same add-on once.
+// handled: the units whose outfits and add-ons were made here.
+static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char* rule,
+                           std::map<size_t, std::vector<size_t>>& addons_of, std::set<size_t>& handled) {
+    const VanillaIndex& inv = o.inv;
+    size_t bi = 0;
+    while (bi < vs.size() && variant_chosen_off(vs[bi].source, vs[bi].row)) ++bi;
+    if (bi == vs.size()) bi = 0;
+    // An NSFW version (keywords, an NSFW mod's) is not worn by default: the first other one is the base (the outfit is
+    // NSFW only when its base is; the NSFW versions are NSFW options of it)
+    auto nsfw_v = [&](size_t k) { return !g_units[vs[k].unit].kw.empty() || g_units[vs[k].unit].u.nsfw; };
+    if (nsfw_v(bi))
+        for (size_t k = 0; k < vs.size(); ++k)
+            if (!nsfw_v(k) && !variant_chosen_off(vs[k].source, vs[k].row)) {
+                printf("    nsfw: base %s instead of %s (NSFW)\n", vs[k].name.c_str(), vs[bi].name.c_str());
+                bi = k;
+                break;
+            }
+    std::rotate(vs.begin(), vs.begin() + bi, vs.begin() + bi + 1);   // the base first, the others in their order
+    Version& b = vs[0];
+    const ModCostume bmc = g_units[b.unit].costumes[b.costume];
+    const std::string fd = bmc.fighter_dir, Fb = bmc.original_folder;
+    const int fighter = bmc.fighter;
+    b.files = costume_model_files(g_units[b.unit], bmc);
+    // The base's model per part: what its game outfit loads, and the parts the mod ships
+    std::map<std::string, std::string> base_part;   // part -> mesh path the base wears
+    for (auto& [nn, gp] : game_parts(inv, fighter, b.cno)) if (!gp.mesh.empty()) base_part[nn] = gp.mesh;
+    for (auto& [p, mf] : b.files)
+        if (p.find(".mesh.") != std::string::npos && p.compare(0, strlen(STREAM_PFX), STREAM_PFX) != 0)
+            if (const std::string nn = part_number(p); !nn.empty()) base_part[nn] = p;
+    auto base_has = [&](const std::string& low) -> const ModFileRef* { return slotcheck::mod_file(b.files, low); };
+    // The physics files the base loads (md5s): its own and its game outfit's
+    std::set<std::string> base_physics = game_physics_md5(inv, fighter, b.cno);
+    for (auto& [p, mf] : costume_physics(g_units[b.unit], bmc)) {
+        const std::vector<uint8_t> d = mf.read_data();
+        base_physics.insert(md5_hex(d.data(), d.size()));
+    }
+    for (size_t k = 1; k < vs.size(); ++k) {
+        Version& v = vs[k];
+        const ModCostume vmc = g_units[v.unit].costumes[v.costume];
+        std::set<std::string> shipped;   // parts the version ships a mesh of
+        size_t other = 0;
+        // What its own outfit names (resource names): its game outfit's physics files and what its own .user files name
+        std::set<std::string> named;
+        for (auto& [p, md5] : game_physics(inv, fighter, v.cno)) named.insert(resource_name(p));
+        std::map<std::string, ModFileRef> vphys = costume_physics(g_units[v.unit], vmc);
+        for (auto& [p, mf] : vphys)
+            if (p.find(".user.") != std::string::npos)
+                for (auto& s : slotcheck::utf16_strings(mf.read_data())) {
+                    std::string ref = str_lower(s);
+                    while (!ref.empty() && (ref[0] == '@' || ref[0] == '/')) ref.erase(0, 1);
+                    named.insert(ref);
+                }
+        for (auto& [low, mf] : costume_model_files(g_units[v.unit], vmc)) {
+            const std::string base = model_path(low), kd = rto_kind(base);
+            if (kd == "chain" && !named.count(resource_name(base))) {
+                printf("    %s: %s is named by nothing of its outfit: left out\n", v.name.c_str(), rel_tail(low).c_str());
+                continue;
+            }
+            if (kd == "other") { other++; continue; }
+            std::string pfd, folder;
+            parse_model_folder(base, pfd, folder);
+            const std::string np = folder == vmc.original_folder ? relocate_path(low, fd, vmc.original_folder, Fb) : low;
+            if (np != low) v.origin[np] = low;
+            v.files[np] = mf;
+            if (kd == "mesh" && low == base) if (const std::string nn = part_number(base); !nn.empty()) shipped.insert(nn);
+        }
+        // What its game outfit wears at the base's parts it does not ship (Outfit 2's head for a version made for
+        // Outfit 2): the game's mesh and material file, at the paths the base loads
+        if (v.cno != b.cno) {
+            const auto& vparts = game_parts(inv, fighter, v.cno);
+            for (auto& [nn, gp] : vparts)
+                if (!gp.mesh.empty() && !base_part.count(nn) && !shipped.count(nn) && v.why.empty())
+                    v.why = game_outfit_name(v.cno) + " has a part " + nn + " the base has not";
+            for (auto& [nn, bp] : base_part) {
+                if (!v.why.empty() || shipped.count(nn)) continue;
+                auto gp = vparts.find(nn);
+                if (gp == vparts.end() || gp->second.mesh.empty()) { v.why = "the base has a part " + nn + " " + game_outfit_name(v.cno) + " has not"; break; }
+                if (gp->second.mesh == bp) continue;   // the same game file
+                const PakEntry* em = scan_game_entry(gp->second.mesh);
+                const PakEntry* ed = gp->second.mdf.empty() ? nullptr : scan_game_entry(gp->second.mdf);
+                if (!em || !ed) { v.why = "the game's part " + nn + " of " + game_outfit_name(v.cno) + " is not readable"; break; }
+                auto sx = inv.suffixes.find("mdf2");
+                const std::string bmdf = bp.substr(0, bp.find(".mesh.")) + "_v00.mdf2." + (sx == inv.suffixes.end() ? std::string("31") : sx->second);
+                v.files[bp] = ModFileRef{g_scan_base_pak, pak_path_hash(std::string_view(gp->second.mesh)), {}};
+                v.files[bmdf] = ModFileRef{g_scan_base_pak, pak_path_hash(std::string_view(gp->second.mdf)), {}};
+            }
+        }
+        // A file the same as what the base wears there is left out (the version's material files still name it)
+        for (auto it = v.files.begin(); it != v.files.end();) {
+            const ModFileRef* bf = base_has(it->first);
+            const bool same = bf ? same_bytes(*bf, it->second)
+                                 : outfit_loads(inv, fighter, b.cno, model_path(it->first)) && same_as_game(it->second, it->first);
+            it = same ? v.files.erase(it) : std::next(it);
+        }
+        // (its model chains are swapped live where the base has a chain: version_fit)
+        for (auto it = vphys.begin(); it != vphys.end();) {
+            std::string pfd, folder;
+            it = rto_kind(it->first) == "chain" && parse_model_folder(it->first, pfd, folder) ? vphys.erase(it) : std::next(it);
+        }
+        if (v.why.empty())
+            if (const std::string f = physics_differ(vphys, base_physics); !f.empty()) v.why = "its physics differ (" + f + ")";
+        if (!v.why.empty()) continue;
+        bool live = false;
+        for (auto& [p, mf] : v.files) {
+            const std::string kd = rto_kind(p);
+            if (kd == "mesh" || kd == "material" || kd == "texture" || kd == "chain") live = true;
+        }
+        if (!live) {
+            bool any = false;
+            for (auto& [p, mf] : v.files) any = any || rto_kind(p) == "colour";
+            if (any) { v.why = "only its colours differ from " + b.name + "'s (not swapped live yet)"; continue; }
+            v.alias = true;   // the same files: its outfit is the base's
+            continue;
+        }
+        v.why = version_fit(inv, fighter, b.cno, b.files, v);
+        if (other && v.why.empty())
+            printf("    %s: %zu physics / colour file%s of its own left out (its physics: the base's bytes)\n", v.name.c_str(),
+                   other, other == 1 ? "" : "s");
+    }
+    std::vector<size_t> in_merge;   // indices in vs merged with the base (the base first)
+    for (size_t k = 0; k < vs.size(); ++k) if (k == 0 || vs[k].why.empty()) in_merge.push_back(k);
+    for (size_t k = 1; k < vs.size(); ++k)
+        if (!vs[k].why.empty())
+            merge_note(fd, std::string(rule) + ": " + vs[k].name + " (" + game_outfit_name(vs[k].cno) + ") not with " + b.name
+                               + " (" + game_outfit_name(b.cno) + "): " + vs[k].why);
+    if (in_merge.size() < 2) return false;
+    // A version's add-ons (user put with it in one sub-folder: as before)
+    for (auto k : in_merge)
+        if (auto ad = addons_of.find(vs[k].unit); ad != addons_of.end())
+            for (auto a : ad->second)
+                if (user_grouped(g_units[a], g_units[vs[k].unit])) {
+                    merge_note(fd, std::string(rule) + ": " + vs[k].name + " is put with its add-ons in a sub-folder: not merged");
+                    return false;
+                }
+    // Labels: the words that tell them apart (their names, else their archives' names, else their game outfits)
+    {
+        std::vector<std::string> names, srcs, outfits;
+        for (auto k : in_merge) {
+            names.push_back(vs[k].name);
+            std::string s = rel_tail(vs[k].source.empty() ? vs[k].rel : vs[k].source);
+            for (const char* ext : {".pak", ".zip", ".rar", ".7z"})
+                if (s.size() > strlen(ext) && str_ends_with(str_lower(s), ext)) s.resize(s.size() - strlen(ext));
+            srcs.push_back(s);
+            outfits.push_back(game_outfit_name(vs[k].cno));
+        }
+        std::string group, common;
+        std::vector<std::string> l = distinct_labels(names, &group, &common);
+        if (l.empty()) l = distinct_labels(srcs, &group, nullptr);
+        if (l.empty()) { l = distinct_labels(outfits, nullptr, nullptr); group.clear(); }
+        if (l.empty()) l = names;
+        for (size_t x = 0; x < in_merge.size(); ++x) vs[in_merge[x]].label = l[x];
+        b.label = l[0];
+        // the group's name: "Version" for versions of one archive, else the word their names end with ("Tee")
+        if (strcmp(rule, "versions of one archive") == 0 || group.empty()) group = "Version";
+        b.row = mod_label(b.mod_id);
+        // the outfit's name: what the versions' names share ("Aloha Ryu"), else the archive's name without its
+        // download numbers ("Lily Jun Kazama Cosplay-2505-1-0-..." -> "Lily Jun Kazama Cosplay"), else the base's
+        std::string merged = b.name;
+        if (strcmp(rule, "versions of one archive") == 0) {
+            std::string an;
+            if (!b.source.empty()) {
+                std::string t = rel_tail(b.source), cur;
+                for (const char* ext : {".pak", ".zip", ".rar", ".7z"})
+                    if (t.size() > strlen(ext) && str_ends_with(str_lower(t), ext)) t.resize(t.size() - strlen(ext));
+                for (char c : t + " ") {
+                    if (c != ' ' && c != '-' && c != '_') { cur += c; continue; }
+                    if (cur.empty()) continue;
+                    if (std::all_of(cur.begin(), cur.end(), [](char x) { return isdigit((unsigned char)x) || x == '.'; })) break;
+                    an += (an.empty() ? "" : " ") + cur;
+                    cur.clear();
+                }
+            }
+            merged = common.size() >= 3 ? common : an.size() >= 3 ? an : b.name;
+        }
+        // Units made here (indices stay valid: no reference into g_units is held from now on)
+        auto synth = [&](size_t from, const std::string& rel, const std::string& name,
+                         const std::unordered_map<std::string, ModFileRef>& files,
+                         const std::unordered_map<std::string, std::string>& origin) {
+            UnitFiles s;
+            s.u = g_units[from].u;
+            s.u.rel = rel;
+            s.source = g_units[from].source;
+            s.name = name;
+            s.mod_id = g_units[from].mod_id;
+            s.info_path = g_units[from].info_path;
+            s.files = files;
+            s.origin = origin;
+            g_units.push_back(std::move(s));
+            return g_units.size() - 1;
+        };
+        const bool several = std::any_of(in_merge.begin(), in_merge.end(), [&](size_t k) { return vs[k].unit == b.unit && k != 0; });
+        auto rel_of = [&](const Version& v) { return several ? v.rel + "/" + v.folder : v.rel; };
+        const size_t root = synth(b.unit, b.rel, merged, b.files, {});
+        // the base's pick: its own files where a version ships another one (going back to it)
+        std::unordered_map<std::string, ModFileRef> bpick;
+        for (auto k : in_merge)
+            if (k)
+                for (auto& [p, mf] : vs[k].files)
+                    if (const ModFileRef* bf = base_has(p)) bpick.emplace(p, *bf);
+        bool bpick_live = false;
+        for (auto& [p, mf] : bpick) { const std::string kd = rto_kind(p); bpick_live = bpick_live || (kd != "colour" && kd != "other"); }
+        std::vector<RtoGroupIn> in(3);
+        in[0].key = "outfit"; in[0].name = merged; in[0].root = in[0].outfit = true; in[0].members = {root};
+        in[1].key = "version"; in[1].name = group; in[1].choice = true; in[1].required = bpick_live;
+        in[2].key = "addon"; in[2].name = "Add-ons";
+        std::map<size_t, size_t> pick_of;   // index in vs -> its pick unit
+        if (bpick_live) pick_of[0] = synth(b.unit, rel_of(b), b.label, bpick, {});
+        for (auto k : in_merge)
+            if (k && !vs[k].alias) pick_of[k] = synth(vs[k].unit, rel_of(vs[k]), vs[k].label, vs[k].files, vs[k].origin);
+        for (auto& [k, u] : pick_of) in[1].members.push_back(u);
+        // add-ons, moved onto the base's folder; the same add-on (same files, same bytes) once
+        const std::string froot = std::string(BASE_PFX) + "model/esf/" + fd + "/";
+        std::map<std::pair<size_t, size_t>, size_t> addon_unit;   // (index in vs, add-on unit) -> its unit here
+        std::vector<size_t> made;
+        for (auto k : in_merge) {
+            auto ad = addons_of.find(vs[k].unit);
+            if (ad == addons_of.end()) continue;
+            const ModCostume vmc = g_units[vs[k].unit].costumes[vs[k].costume];
+            for (auto a : ad->second) {
+                std::unordered_map<std::string, ModFileRef> files;
+                std::unordered_map<std::string, std::string> origin;
+                for (auto& [p, mf] : g_units[a].files) {
+                    const std::string low = str_lower(p), base = model_path(low);
+                    std::string pfd, folder;
+                    if (!parse_model_folder(base, pfd, folder)) {
+                        // a named folder of the fighter ("esf028/cow/01/": the textures its material files name), at its
+                        // path: the slot stores it as any option's file there (rto/<id>/_/)
+                        if (base.compare(0, froot.size(), froot) == 0) files[low] = mf;
+                        continue;
+                    }
+                    if (pfd != fd) continue;
+                    if (folder != vmc.original_folder && folder != "000") continue;
+                    const std::string np = folder == vmc.original_folder ? relocate_path(low, fd, vmc.original_folder, Fb) : low;
+                    if (np != low) origin[np] = low;
+                    files[np] = mf;
+                }
+                if (files.empty()) continue;
+                size_t same = SIZE_MAX;
+                for (auto m : made) {
+                    if (g_units[m].files.size() != files.size()) continue;
+                    bool eq = true;
+                    for (auto& [p, mf] : files) {
+                        auto it = g_units[m].files.find(p);
+                        if (it == g_units[m].files.end() || !same_bytes(it->second, mf)) { eq = false; break; }
+                    }
+                    if (eq) { same = m; break; }
+                }
+                if (same == SIZE_MAX) {
+                    same = synth(a, g_units[a].u.rel, unit_label(g_units[a]), files, origin);
+                    made.push_back(same);
+                    in[2].members.push_back(same);
+                }
+                addon_unit[{k, a}] = same;
+            }
+        }
+        std::string list;
+        for (auto k : in_merge)
+            list += (list.empty() ? "" : ", ") + vs[k].name + (vs[k].alias ? " (the same files)" : "")
+                  + (k && g_units[vs[k].unit].u.nsfw && !g_units[b.unit].u.nsfw ? " (NSFW)" : "");
+        printf("\n  %s: one outfit %s, %s \"%s\": %s (base %s, %s)\n", rule, merged.c_str(),
+               bpick_live ? "choice" : "choice with None for the base,", group.c_str(), list.c_str(), b.name.c_str(),
+               game_outfit_name(b.cno).c_str());
+        // An add-on with the material file of a part whose mesh the base ships without one (mesh-only versions, the
+        // material file and its textures in another option of the archive: "Cow girl Mai C1,3", report 08/11): the
+        // outfit's main files. Without them it wore the game's material file on the mod's mesh, the add-on an option
+        // left off. Part of the base: the slot is made with them, an option that replaces them goes back to them.
+        std::vector<size_t> needed;   // their units here
+        {
+            std::map<std::string, const ModFileRef*> bare;   // "<folder>/<part>" -> the base's mesh there, without material file
+            std::set<std::string> dressed;
+            for (auto& [p, mf] : b.files) {
+                std::string pfd, folder;
+                if (p.compare(0, strlen(STREAM_PFX), STREAM_PFX) == 0 || !parse_model_folder(p, pfd, folder)) continue;
+                const std::string nn = part_number(p);
+                if (nn.empty()) continue;
+                if (p.find(".mesh.") != std::string::npos) bare[folder + "/" + nn] = &mf;
+                else if (p.find(".mdf2.") != std::string::npos) dressed.insert(folder + "/" + nn);
+            }
+            for (auto& k : dressed) bare.erase(k);
+            for (auto m : made)
+                for (auto& [p, mf] : g_units[m].files) {
+                    std::string pfd, folder;
+                    if (p.find(".mdf2.") == std::string::npos || !parse_model_folder(p, pfd, folder)) continue;
+                    auto bm = bare.find(folder + "/" + part_number(p));
+                    if (bm == bare.end()) continue;
+                    std::vector<std::string> mm, dm;   // it defines every material of the base's mesh
+                    if (!slotcheck::mesh_materials(bm->second->read_data(), mm) || !slotcheck::mdf2_materials(mf.read_data(), dm)
+                        || std::any_of(mm.begin(), mm.end(), [&](const std::string& x) { return std::find(dm.begin(), dm.end(), x) == dm.end(); }))
+                        continue;
+                    needed.push_back(m);
+                    for (auto& [q, qf] : g_units[m].files) {
+                        g_units[root].files.emplace(q, qf);   // the base's own files win
+                        std::string qfd, qfolder;   // its parts are dressed now: another add-on there stays an option
+                        if (q.find(".mdf2.") != std::string::npos && parse_model_folder(q, qfd, qfolder)) bare.erase(qfolder + "/" + part_number(q));
+                    }
+                    in[2].members.erase(std::remove(in[2].members.begin(), in[2].members.end(), m), in[2].members.end());
+                    printf("    runtime options: %s brings the material file of part %s, whose mesh %s ships alone: "
+                           "part of the outfit (main files)\n", unit_label(g_units[m]).c_str(), part_number(p).c_str(), b.name.c_str());
+                    break;
+                }
+        }
+        std::unordered_map<size_t, size_t> unit_option;
+        std::shared_ptr<RtoMod> rto = rto_from_groups(in, merged, {}, unit_option, g_units[b.unit].u.nsfw);
+        rto->defaults_from = "loader";
+        rto->source = b.source;
+        // The outfits RuntimeOptions=off makes: its rows (the base's first) and the slots that move here
+        for (auto k : in_merge) {
+            const Version& v = vs[k];
+            const size_t pick = pick_of.count(k) ? pick_of[k] : pick_of.count(0) ? pick_of[0] : SIZE_MAX;
+            std::vector<size_t> sel{unit_option[root]};
+            if (pick != SIZE_MAX) sel.push_back(unit_option[pick]);
+            const std::string src = v.source == b.source ? std::string() : v.source;
+            rto->variants.push_back({v.mod_id, v.name, sel, v.row, src, v.cno});
+            auto ad = addons_of.find(v.unit);
+            if (ad == addons_of.end()) continue;
+            for (auto& set : addon_sets(ad->second)) {
+                std::vector<size_t> parts{v.unit}, s = sel;
+                std::string label = v.name;
+                for (auto a : set) {
+                    parts.push_back(a);
+                    label += " + " + unit_label(g_units[a]);
+                    if (auto au = addon_unit.find({k, a}); au != addon_unit.end() && unit_option.count(au->second))
+                        s.push_back(unit_option[au->second]);   // (main files: in the base)
+                }
+                rto->variants.push_back({combined_mod_id(parts), label, s, label, src});
+            }
+        }
+        std::vector<size_t> base_sel{unit_option[root]};
+        if (pick_of.count(0)) base_sel.push_back(unit_option[pick_of[0]]);
+        // The base keeps its outfit (its slot), with these options; the others' outfits go
+        for (auto& e : o.mods_out) {
+            if (e.first != b.mod_id) continue;
+            for (auto& mc : e.second)
+                if (mc.original_costume_no == b.cno && mc.fighter_dir == fd) {
+                    mc.rto = rto;
+                    mc.rto_selected = base_sel;
+                    for (auto m : needed)   // the slot is made with the main files (a named folder's: written where they are)
+                        for (auto& [p, mf] : g_units[m].files) {
+                            std::string pfd, folder;
+                            if (parse_model_folder(p, pfd, folder))   // as detect_mod_costumes sorts them
+                                (folder == "000" ? mc.files_shared : mc.files_in_folder).emplace(p, mf);
+                            else if (parse_model_folder(model_path(p), pfd, folder) && folder == "000")
+                                mc.files_shared.emplace(p, mf);
+                        }
+                }
+        }
+        for (auto m : needed) {
+            o.all_mod_out.insert(g_units[m].files.begin(), g_units[m].files.end());
+            note_mod_paths(b.mod_id, g_units[m].files);
+        }
+        for (size_t x = 1; x < in_merge.size(); ++x) {
+            const Version& v = vs[in_merge[x]];
+            for (auto& e : o.mods_out)
+                if (e.first == v.mod_id)
+                    e.second.erase(std::remove_if(e.second.begin(), e.second.end(), [&](const ModCostume& mc) {
+                        return mc.fighter_dir == fd && mc.original_costume_no == v.cno && !(v.mod_id == b.mod_id && v.cno == b.cno);
+                    }), e.second.end());
+        }
+        o.mods_out.erase(std::remove_if(o.mods_out.begin(), o.mods_out.end(), [](const auto& e) { return e.second.empty(); }),
+                         o.mods_out.end());
+        g_mod_names[b.mod_id] = merged;
+        for (auto k : in_merge) handled.insert(vs[k].unit);
+        merge_note(fd, std::string(rule) + ": " + list + " -> one outfit \"" + merged + "\" (" + group + " choice, base " + b.name + ")");
+    }
+    return true;
+}
+
+// The merges of RuntimeOptions=on (merge_versions): the outfits of one archive for one fighter ("versions of one
+// archive"), then outfits of several archives whose meshes are the same bytes for the same game outfit ("identical
+// meshes"); outfits that share a mesh without being merged go in the audit. apart: units that are no outfit of their
+// own here (modular mods, retouches and subsets, complete add-ons of another option).
+static void merge_outfits(ScanOutputs& o, std::map<size_t, std::vector<size_t>>& addons_of, const std::set<size_t>& apart,
+                          std::set<size_t>& handled) {
+    std::vector<size_t> cand;   // complete units that made an outfit of their own, not installs of a mod manager
+    for (size_t i = 0; i < g_units.size(); ++i) {
+        const auto& u = g_units[i];
+        if (u.costumes.empty() || apart.count(i) || u.u.game_install || u.u.rel.compare(0, 19, "Fluffy Mod Manager/") == 0)
+            continue;
+        if (std::none_of(o.mods_out.begin(), o.mods_out.end(), [&](const auto& e) { return e.first == u.mod_id; })) continue;
+        cand.push_back(i);
+    }
+    auto version_of = [&](size_t i, size_t k) {
+        Version v;
+        const auto& u = g_units[i];
+        v.unit = i;
+        v.costume = k;
+        v.mod_id = u.mod_id;
+        v.name = unit_label(u);
+        v.row = mod_label(u.mod_id);
+        if (auto ms = g_mod_source.find(u.mod_id); ms != g_mod_source.end()) v.source = ms->second.source;
+        v.folder = u.costumes[k].original_folder;
+        v.rel = u.u.rel;
+        v.cno = u.costumes[k].original_costume_no;
+        return v;
+    };
+    // Versions of one archive (the same folder or archive, one fighter)
+    std::map<std::pair<int, std::string>, std::vector<Version>> by_archive;
+    for (auto i : cand)
+        for (size_t k = 0; k < g_units[i].costumes.size(); ++k)
+            by_archive[{g_units[i].source, g_units[i].costumes[k].fighter_dir}].push_back(version_of(i, k));
+    for (auto& [key, vs] : by_archive)
+        if (vs.size() >= 2) merge_versions(o, vs, "versions of one archive", addons_of, handled);
+    // Identical meshes: hashed only where two outfits of a fighter have a mesh of the same size at the same path
+    std::map<std::string, std::vector<std::pair<size_t, std::string>>> by_size;   // fighter \t path \t size
+    for (auto i : cand) {
+        if (handled.count(i) || g_units[i].costumes.size() != 1) continue;
+        const ModCostume& mc = g_units[i].costumes[0];
+        for (auto& [p, mf] : costume_model_files(g_units[i], mc))
+            if (p.find(".mesh.") != std::string::npos)
+                by_size[mc.fighter_dir + "\t" + p + "\t" + std::to_string(mod_file_size(mf))].push_back({i, p});
+    }
+    std::map<size_t, std::map<std::string, std::string>> md5_of;   // unit -> mesh -> md5
+    for (auto& [k, v] : by_size)
+        if (v.size() >= 2)
+            for (auto& [i, p] : v) {
+                const std::vector<uint8_t> d = g_units[i].files.at(p).read_data();
+                md5_of[i][p] = md5_hex(d.data(), d.size());
+            }
+    std::map<std::string, std::vector<size_t>> by_sig;   // fighter \t folder \t every mesh and its md5
+    for (auto i : cand) {
+        if (handled.count(i) || g_units[i].costumes.size() != 1 || is_group_unit(g_units[i])) continue;
+        const ModCostume& mc = g_units[i].costumes[0];
+        std::string sig = mc.fighter_dir + "\t" + mc.original_folder;
+        bool all = true, any = false;
+        for (auto& [p, mf] : costume_model_files(g_units[i], mc)) {
+            if (p.find(".mesh.") == std::string::npos) continue;
+            any = true;
+            auto it = md5_of.find(i);
+            if (it == md5_of.end() || !it->second.count(p)) { all = false; break; }
+        }
+        if (!any || !all) continue;
+        for (auto& [p, h] : md5_of[i]) sig += "\t" + p + "=" + h;
+        by_sig[sig].push_back(i);
+    }
+    for (auto& [sig, units] : by_sig) {
+        std::set<int> sources;
+        for (auto i : units) sources.insert(g_units[i].source);
+        if (units.size() < 2 || sources.size() < 2) continue;
+        std::vector<Version> vs;
+        for (auto i : units) vs.push_back(version_of(i, 0));
+        merge_versions(o, vs, "identical meshes", addons_of, handled);
+    }
+    // The files of an outfit made one with another are not written as they are (its options carry what it needs),
+    // unless an outfit that stays ships them too
+    {
+        std::unordered_set<std::string> kept_ids, used;
+        for (auto& [mid, cs] : o.mods_out) {
+            kept_ids.insert(mid);
+            if (auto it = g_mod_paths.find(mid); it != g_mod_paths.end()) used.insert(it->second.begin(), it->second.end());
+        }
+        for (auto i : handled) {
+            const std::string& mid = g_units[i].mod_id;
+            if (kept_ids.count(mid)) continue;
+            if (auto it = g_mod_paths.find(mid); it != g_mod_paths.end())
+                for (auto& p : it->second) if (!used.count(p)) o.all_mod_out.erase(p);
+        }
+    }
+    // The audit: outfits of a fighter sharing a mesh (same bytes) that were not made one
+    std::map<std::string, std::vector<std::pair<size_t, std::string>>> by_md5;   // fighter \t md5 -> (unit, mesh)
+    for (auto& [i, ms] : md5_of)
+        for (auto& [p, h] : ms) by_md5[g_units[i].costumes[0].fighter_dir + "\t" + h].push_back({i, p});
+    for (auto& [k, v] : by_md5) {
+        if (v.size() < 2 || std::all_of(v.begin(), v.end(), [&](auto& x) { return handled.count(x.first) > 0; })) continue;
+        std::string names, why;
+        std::set<std::string> folders;
+        bool in_group = false;
+        for (auto& [i, p] : v) {
+            names += (names.empty() ? "" : ", ") + unit_label(g_units[i]);
+            folders.insert(g_units[i].costumes[0].original_folder);
+            in_group = in_group || is_group_unit(g_units[i]);
+        }
+        if (in_group) why = "one of them is in a sub-folder with other mods";
+        else if (folders.size() > 1) why = "made for other game outfits";
+        else why = "their other meshes differ, or not every one fits";
+        merge_note(k.substr(0, k.find('\t')), "identical mesh " + rel_tail(v[0].second) + " in " + names + ": not one outfit (" + why + ")");
+    }
+}
+
+// Whether the folders of a sub-folder are the options of one unpacked mod and not several mods: Fluffy's own links say so (a
+// menu entry, an AddonFor, one bundle for all of them). An archive or a pak in the sub-folder is a mod of its own.
+static bool one_unpacked_mod(const std::set<std::string>& mods, const std::vector<size_t>& idx) {
+    for (auto& m : mods) if (is_archive_name(m) || str_ends_with(m, ".pak")) return false;
+    const UnitFiles& first = g_units[idx[0]];
+    if (std::any_of(g_menus.begin(), g_menus.end(), [&](const MenuNode& n) { return n.source == first.source; })) return true;
+    if (std::any_of(idx.begin(), idx.end(), [](size_t i) { return !trim_ws(g_units[i].addonfor).empty(); })) return true;
+    return !first.bundle.empty()
+        && std::all_of(idx.begin(), idx.end(), [&](size_t i) { return eq_ci(g_units[i].bundle, first.bundle); });
+}
+
+// Add-on archives of a modular mod: Fluffy links options and menu entries by their names, whatever archive ships them.
+// An archive (or folder mod) with no root of its own, whose every option hangs (AddonFor, followed through its own menu
+// entries and options) from names it does not ship, all of them shipped by one other mod of the same fighter, one of
+// them at least a menu entry there, is part of that mod's tree: its options and menu entries take that mod's source,
+// and build_modular makes one outfit of both. ("Sirn Secretary Mai NSFW addon": its group "4) NSFW styles" hangs from
+// "(Sirn Secretary Mai C1)", the root of the main archive, its other options from that archive's "Optional slots" and
+// "Optional panty options"; read alone it was a second outfit of 12 combinations without the main files, all black.)
+// Both must sit in the same place: loose in the character folder, or in one sub-folder (a mod alone in its sub-folder
+// stays its own outfit). An archive whose options name only options of another mod keeps the add-on rules
+// (finalize_units: AddonFor naming an option).
+static void join_addon_archives() {
+    std::map<int, std::vector<size_t>> units_of, menus_of;
+    for (size_t i = 0; i < g_units.size(); ++i) units_of[g_units[i].source].push_back(i);
+    for (size_t k = 0; k < g_menus.size(); ++k) menus_of[g_menus[k].source].push_back(k);
+    std::map<std::string, std::set<int>> menu_srcs, option_srcs;   // name (lowercase) -> the sources that ship it
+    for (auto& m : g_menus) menu_srcs[str_lower(trim_ws(m.name))].insert(m.source);
+    for (auto& u : g_units)
+        if (!u.files.empty() && !trim_ws(u.name).empty()) option_srcs[str_lower(trim_ws(u.name))].insert(u.source);
+    static const std::vector<size_t> none;
+    auto units_in = [&](int src) -> const std::vector<size_t>& { auto it = units_of.find(src); return it == units_of.end() ? none : it->second; };
+    auto menus_in = [&](int src) -> const std::vector<size_t>& { auto it = menus_of.find(src); return it == menus_of.end() ? none : it->second; };
+    auto fighters = [&](int src) {
+        std::set<std::string> f;
+        for (auto i : units_in(src)) for (auto& t : g_units[i].targets) f.insert(t.substr(0, t.find('/')));
+        return f;
+    };
+    std::map<int, int> into;   // add-on source -> the source of the mod whose tree it joins
+    for (auto& [src, idx] : units_of) {
+        if (std::none_of(idx.begin(), idx.end(), [](size_t i) { return !g_units[i].files.empty(); })) continue;
+        const std::string place = lone_key_of(g_units[idx[0]]);
+        if (std::any_of(idx.begin(), idx.end(), [&](size_t i) { return lone_key_of(g_units[i]) != place; })) continue;
+        const auto& own_menus = menus_in(src);
+        bool own_root = std::any_of(own_menus.begin(), own_menus.end(), [](size_t k) { return trim_ws(g_menus[k].addonfor).empty(); });
+        std::set<std::string> ends;   // the names its chains end at, none of them its own
+        for (size_t x = 0; x < idx.size() && !own_root; ++x) {
+            std::string cur = trim_ws(g_units[idx[x]].addonfor);
+            std::set<std::string> seen;
+            if (cur.empty()) own_root = true;
+            while (!cur.empty() && !own_root && seen.insert(str_lower(cur)).second) {
+                std::string next;
+                bool found = false;
+                for (auto k : own_menus)
+                    if (!found && eq_ci(g_menus[k].name, cur)) { next = trim_ws(g_menus[k].addonfor); found = true; }
+                for (auto j : idx)
+                    if (!found && j != idx[x] && eq_ci(g_units[j].name, cur)) { next = trim_ws(g_units[j].addonfor); found = true; }
+                if (!found) { ends.insert(str_lower(cur)); break; }
+                if (next.empty()) own_root = true;   // an entry of its own that hangs from nothing: its root
+                cur = next;
+            }
+        }
+        if (own_root || ends.empty()) continue;
+        const std::set<std::string> fs = fighters(src);
+        if (fs.empty()) continue;
+        std::set<int> cand;
+        bool first = true;
+        for (auto& e : ends) {
+            std::set<int> here;
+            for (int t : menu_srcs[e]) if (t != src) here.insert(t);
+            for (int t : option_srcs[e]) if (t != src) here.insert(t);
+            if (first) cand = here;
+            else for (auto it = cand.begin(); it != cand.end();) it = here.count(*it) ? std::next(it) : cand.erase(it);
+            first = false;
+        }
+        for (auto it = cand.begin(); it != cand.end();) {
+            const int t = *it;
+            const auto& tu = units_in(t);
+            const std::set<std::string> ft = fighters(t);
+            const bool menu_link = std::any_of(ends.begin(), ends.end(), [&](const std::string& e) { return menu_srcs[e].count(t) > 0; });
+            const bool same_place = !tu.empty() && std::all_of(tu.begin(), tu.end(), [&](size_t i) { return lone_key_of(g_units[i]) == place; });
+            const bool same_fighter = std::all_of(fs.begin(), fs.end(), [&](const std::string& f) { return ft.count(f) > 0; });
+            it = (menu_link && same_place && same_fighter) ? std::next(it) : cand.erase(it);
+        }
+        if (cand.size() != 1) {
+            if (cand.size() > 1)
+                printf("\n  %s: its options hang from names that %zu other mods ship: not joined to any of them\n",
+                       source_of_rel(g_units[idx[0]].u.rel).source.c_str(), cand.size());
+            continue;
+        }
+        into[src] = *cand.begin();
+    }
+    for (auto& [src, t0] : into) {
+        int t = t0;
+        for (int n = 0; n < 8 && into.count(t); ++n) t = into[t];   // an add-on of an add-on archive: the tree's own mod
+        if (t == src) continue;
+        if (units_in(t).empty()) continue;
+        const std::string from = source_of_rel(g_units[units_of[src][0]].u.rel).source;
+        const std::string to = source_of_rel(g_units[units_in(t)[0]].u.rel).source;
+        for (auto i : units_of[src]) {
+            g_units[i].joined_from = src;
+            g_units[i].source = t;
+        }
+        for (auto k : menus_in(src)) g_menus[k].source = t;
+        printf("\n  %s: an add-on archive of %s (its options and menu entries hang from that mod's, AddonFor): part of "
+               "its options\n", from.c_str(), to.c_str());
+        if (!units_of[src].empty() && !g_units[units_of[src][0]].targets.empty()) {
+            const std::string& tg = *g_units[units_of[src][0]].targets.begin();
+            merge_note(tg.substr(0, tg.find('/')), from + ": an add-on archive of " + to + " (AddonFor), part of its options");
+        }
+    }
+}
+
+// Two files on disk with the same last-write time (either not on disk: nothing to compare)
+static bool same_disk_date(const ModFileRef& a, const ModFileRef& b) {
+    if (!a.is_disk() || !b.is_disk()) return true;
+    uint64_t sa = 0, ma = 0, sb = 0, mb = 0;
+    return file_stat_long(a.disk_path, sa, ma) && file_stat_long(b.disk_path, sb, mb) && ma == mb;
+}
+// A junction or a link somewhere below a folder (the folder itself apart)
+static bool holds_reparse_point(const std::wstring& dir) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(long_w(dir + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    bool found = false;
+    do {
+        const std::wstring name(fd.cFileName);
+        if (name == L"." || name == L"..") continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) found = true;
+        else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) found = holds_reparse_point(dir + L"\\" + name);
+    } while (!found && FindNextFileW(h, &fd));
+    FindClose(h);
+    return found;
+}
+// Added parts of the Slotsloader Manager (manager_parts.json, load_manager_parts): the units of each listed outfit
+// (AddedParts), appended to g_units, by the outfit's own unit in `out`. Called once the outfits are made and before
+// their add-ons are (no reference into g_units is held across it). The outfit's unit is not touched: the outfit is
+// made from its folder as without the list.
+// A listed outfit is left out, exactly as its folder has it, with one line saying why, when: its source is not a folder
+// mod of costume_mods with one option that makes an outfit of its own; a listed folder is not below manager_parts, is
+// not there or holds no costume file; a part has no usable id; a part ships a file for another fighter or another
+// costume folder than the outfit's; the outfit's folder does not hold a file of a part that is on, or holds one of
+// another size or another date (the folder was changed after the list was written: the Manager copies a part's files into
+// the folder with their date, so the two are the same file only when both match); nothing of the folder is the outfit's own.
+// A listed folder that is, or holds, a junction or a link is not read (the Manager makes none; load_manager_parts does not
+// follow them either).
+static void added_parts_units(ScanOutputs& o, std::map<size_t, AddedParts>& out) {
+    std::set<std::string> seen;
+    for (const ManagerPartsOutfit& mo : g_manager_parts) {
+        auto left = [&](const std::string& why) {
+            printf("\n  added parts of %s (%s): %s: the outfit is left as its folder has it, none of its parts is an option\n",
+                   mo.source.empty() ? "an outfit" : mo.source.c_str(), MANAGER_PARTS_FILE, why.c_str());
+        };
+        if (!mo.bad.empty()) { left(mo.bad); continue; }
+        const std::string key = choice_source_key(mo.source);
+        if (!seen.insert(key).second) { left("listed twice"); continue; }
+        // The outfit: the one option of that folder
+        std::vector<size_t> us;
+        bool folder_mod = true;
+        for (size_t i = 0; i < g_units.size(); ++i) {
+            const UnitFiles& u = g_units[i];
+            if (u.files.empty() || u.u.game_install || u.u.nsfw_dir) continue;
+            const ModSource ms = source_of_rel(u.u.rel);
+            if (choice_source_key(ms.source) != key) continue;
+            us.push_back(i);
+            if (ms.kind != "folder" || !u.u.pak.empty()) folder_mod = false;
+            for (size_t a = 0; a <= u.u.rel.size();) {   // an archive unpacked from inside the folder: not the folder's files
+                size_t e = u.u.rel.find('/', a);
+                if (e == std::string::npos) e = u.u.rel.size();
+                if (is_archive_name(u.u.rel.substr(a, e - a))) folder_mod = false;
+                a = e + 1;
+            }
+        }
+        if (us.empty()) { left("no such mod in costume_mods"); continue; }
+        if (!folder_mod) { left("not a folder mod (parts are added to an outfit's folder, not to an archive or a pak)"); continue; }
+        if (us.size() > 1) { left("its folder holds " + std::to_string(us.size()) + " options, not one outfit"); continue; }
+        const size_t j = us[0];
+        // (made under the folder's own id: a complete outfit, or a lone partial one applied to the outfit it modifies)
+        auto made = std::find_if(o.mods_out.begin(), o.mods_out.end(), [&](const auto& m) { return m.first == g_units[j].mod_id; });
+        if (made == o.mods_out.end() || made->second.empty()) { left("its folder makes no outfit of its own"); continue; }
+        std::set<std::string> fighters, folders;   // "esf028", "esf028/003"
+        for (auto& mc : made->second) {
+            fighters.insert(mc.fighter_dir);
+            folders.insert(mc.fighter_dir + "/" + mc.original_folder);
+        }
+        // A listed folder's costume files, read as a mod's folder is; why not, else empty
+        auto read = [&](const std::string& rel, std::unordered_map<std::string, ModFileRef>& files) -> std::string {
+            const std::string abs = manager_parts_path(rel);
+            if (abs.empty()) return "folder \"" + rel + "\" is not below manager_parts";
+            const DWORD at = GetFileAttributesW(long_w(a2w_path(abs)).c_str());
+            if (at == INVALID_FILE_ATTRIBUTES || !(at & FILE_ATTRIBUTE_DIRECTORY)) return "folder \"" + rel + "\" is not there";
+            if ((at & FILE_ATTRIBUTE_REPARSE_POINT) || holds_reparse_point(a2w_path(abs)))
+                return "folder \"" + rel + "\" is or holds a junction or a link, not followed";
+            int ignored = 0, upgraded = 0;
+            files = scan_folder_mod(abs, o.inv, ignored, upgraded);
+            drop_stale_user_files(files);   // as the outfit's own folder was read (load_unit)
+            if (files.empty()) return "folder \"" + rel + "\" holds no costume file";
+            return {};
+        };
+        auto label_of = [&](size_t k) { return "part \"" + (mo.parts[k].name.empty() ? mo.parts[k].id : mo.parts[k].name) + "\""; };
+        std::vector<std::unordered_map<std::string, ModFileRef>> files(mo.parts.size());
+        std::set<std::string> ids;
+        std::string why;
+        if (mo.parts.empty()) why = "no part listed";
+        for (size_t k = 0; k < mo.parts.size() && why.empty(); ++k) {
+            const ManagerPart& p = mo.parts[k];
+            const bool id_ok = !p.id.empty() && p.id.size() <= 32
+                && std::all_of(p.id.begin(), p.id.end(), [](char c) { return isalnum((unsigned char)c) || c == '-' || c == '_'; });
+            if (!id_ok) why = label_of(k) + " has no usable \"id\"";
+            else if (!ids.insert(str_lower(p.id)).second) why = "two parts have the id " + p.id;
+            else if (!(why = read(p.dir, files[k])).empty()) why = label_of(k) + ": " + why;
+            // The runtime swaps files of the slot's own folders only: nothing for another fighter or costume folder
+            for (auto& [pth, mf] : files[k]) {
+                std::string fd, folder;
+                if (!why.empty() || !parse_model_folder(model_path(pth), fd, folder)) continue;
+                if (!fighters.count(fd) || (folder != "000" && !folders.count(fd + "/" + folder)))
+                    why = label_of(k) + " ships " + rel_tail(pth) + ", a file for " + fd + "/" + folder
+                        + ", which is no costume folder of this outfit";
+            }
+        }
+        // What the folder must hold: the parts that are on, laid over the outfit's own files in the listed order
+        std::map<std::string, size_t> owner;   // path -> the last part that is on and ships it
+        for (size_t k = 0; k < mo.parts.size() && why.empty(); ++k)
+            if (mo.parts[k].on) for (auto& [pth, mf] : files[k]) owner[pth] = k;
+        for (auto& [pth, k] : owner) {
+            if (!why.empty()) break;
+            auto f = g_units[j].files.find(pth);
+            if (f == g_units[j].files.end())
+                why = "the outfit's folder has no " + rel_tail(pth) + ", a file of " + label_of(k) + ", which is on";
+            else if (mod_file_size(f->second) != mod_file_size(files[k].at(pth)))
+                why = rel_tail(pth) + " in the outfit's folder is not the one of " + label_of(k) + ", which is on (another size)";
+            else if (!same_disk_date(f->second, files[k].at(pth)))
+                why = rel_tail(pth) + " in the outfit's folder is not the one of " + label_of(k) + ", which is on (same size, "
+                    "another date)";
+        }
+        std::unordered_map<std::string, ModFileRef> base;
+        if (why.empty() && !mo.base.empty() && !(why = read(mo.base, base)).empty()) why = "base: " + why;
+        if (!why.empty()) { left(why); continue; }
+        // The outfit's own files: the folder's, the files of the parts that are on taken out, what they replaced put back
+        std::unordered_map<std::string, ModFileRef> own = g_units[j].files;
+        size_t put_back = 0;
+        for (auto& [pth, k] : owner) {
+            own.erase(pth);
+            if (auto f = base.find(pth); f != base.end()) { own[pth] = f->second; ++put_back; }
+        }
+        if (own.empty()) { left("every file of its folder is a part's, nothing is the outfit's own"); continue; }
+        size_t n_on = 0;
+        for (auto& p : mo.parts) n_on += p.on ? 1 : 0;
+        printf("\n  added parts of %s (%s): %zu part%s, %zu on; %zu file%s of the outfit's own under them%s\n", mo.source.c_str(),
+               MANAGER_PARTS_FILE, mo.parts.size(), mo.parts.size() == 1 ? "" : "s", n_on, put_back, put_back == 1 ? "" : "s",
+               mo.base.empty() ? " (no base folder)" : "");
+        if (put_back != base.size())
+            printf("    %zu file%s of its base folder at no path of a part that is on: not used\n", base.size() - put_back,
+                   base.size() - put_back == 1 ? "" : "s");
+        AddedParts ap;
+        {
+            UnitFiles bu = g_units[j];   // the outfit without its parts: the base option, never an outfit of its own
+            bu.mod_id = "added-parts-base:" + bu.mod_id;
+            bu.files = std::move(own);
+            bu.costumes.clear();
+            g_units.push_back(std::move(bu));
+            ap.base = g_units.size() - 1;
+        }
+        for (size_t k = 0; k < mo.parts.size(); ++k) {
+            const ManagerPart& p = mo.parts[k];
+            UnitFiles pu;
+            pu.u = g_units[j].u;
+            // Its option's folder (and so its id, rto_option_id) is the part's id: the same at every rewrite of the list,
+            // whatever its name and place; the place before it keeps the options of one group in the listed order
+            char ord[16];
+            snprintf(ord, sizeof ord, "%03zu", k);
+            pu.u.rel = g_units[j].u.rel + "/added parts/" + ord + "/" + p.id;
+            pu.source = g_units[j].source;
+            pu.name = trim_ws(p.name).empty() ? "Part " + p.id : p.name;
+            pu.mod_id = "added-part:" + key + ":" + p.id;
+            pu.info_path = manager_parts_path(p.dir);
+            pu.files = std::move(files[k]);
+            // A file this part is the last to lay in the folder: the folder's own copy (the same file by the Manager's
+            // rule, its size checked above), so that the option's stored copy is exactly what the outfit wears
+            if (p.on)
+                for (auto& [pth, mf] : pu.files) if (owner.at(pth) == k) mf = g_units[j].files.at(pth);
+            for (auto& [pth, mf] : pu.files) {
+                std::string fd, folder;
+                if (parse_model_folder(pth, fd, folder) && folder != "000") pu.targets.insert(fd + "/" + folder);
+            }
+            g_units.push_back(std::move(pu));
+            ap.all.push_back(g_units.size() - 1);
+            if (p.on) ap.on.push_back(g_units.size() - 1);
+        }
+        out[j] = std::move(ap);
     }
 }
 
@@ -5000,8 +10127,10 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
 // then the same Fluffy bundle, then the same folder or archive; in every case it must touch the
 // same costume folder (except for the explicit "addonfor" name). A base with up to three add-ons
 // gets one variant per add-on, plus one with all of them when they do not replace the same files;
-// with more add-ons only the base is used. Modular mods (see build_modular) are handled apart.
+// with more add-ons only the base is used. Separate add-ons the user put with the costume in one
+// sub-folder give the complete outfit only. Modular mods (see build_modular) are handled apart.
 static void finalize_units(ScanOutputs& o) {
+    join_addon_archives();
     // Options of one mod often replace the same files (skins, bodies) and got the same id, hence
     // the same slot: the first one (by path) keeps the id, the others get one derived from their path.
     {
@@ -5009,11 +10138,13 @@ static void finalize_units(ScanOutputs& o) {
         for (size_t i = 0; i < g_units.size(); ++i) by_id[g_units[i].mod_id].push_back(i);
         for (auto& [id, v] : by_id) {
             if (v.size() < 2) continue;
-            std::sort(v.begin(), v.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
+            std::sort(v.begin(), v.end(), [](size_t a, size_t b) {
+                const auto& ua = g_units[a].u; const auto& ub = g_units[b].u;
+                return ua.nsfw != ub.nsfw ? !ua.nsfw : ua.rel < ub.rel; });
             for (size_t k = 1; k < v.size(); ++k) {
                 auto& u = g_units[v[k]];
                 char idb[24];
-                snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id + "|" + u.u.rel));
+                snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id + "|" + (u.u.nsfw ? "nsfw:" : "") + u.u.rel));
                 u.mod_id = idb;
                 g_mod_names[u.mod_id] = u.name.empty() ? rel_tail(u.u.rel) : u.name;
                 printf("  mod_id: %s for %s (same files and sizes as %s)\n", idb, u.u.rel.c_str(),
@@ -5022,14 +10153,155 @@ static void finalize_units(ScanOutputs& o) {
         }
     }
 
-    for (auto& u : g_units) g_mod_source[u.mod_id] = source_of_rel(u.u.rel);
+    for (auto& u : g_units) {
+        g_mod_source[u.mod_id] = source_of_rel(u.u.rel);
+        g_mod_source[u.mod_id].nsfw = u.u.nsfw;
+        g_mod_source[u.mod_id].nsfw_dir = u.u.nsfw_dir;
+    }
 
+    // Retouches (docs/RUNTIME_OPTIONS.md): with RuntimeOptions, a mod (its whole folder or archive) made of meshes and
+    // textures of costumes only, no material file, keeps the look of the outfit it retouches: no outfit of its own, it
+    // is an option of the outfits that wear the files it replaces, where it fits (attach_addons). One that fits none of
+    // the game outfits it modifies stays as before (an outfit, or an add-on of its mod's outfit). Only a mod that made
+    // an outfit: one with a body mesh, or a lone option applied to the outfit it modifies (C. Viper C2 Glasses
+    // Removed: Outfit 2's head); an add-on mod that makes none ("Mai face accessories") keeps the add-on rules.
+    // (RuntimeOptions=variants keeps the outfits of off: a retouch stays one there)
+    // A mod alone in its sub-folder (is_lone_unit) is always its own outfit: left out of every rule below, both sides.
+    // Several mods in one sub-folder, one of them at least an outfit (is_group_unit), are handled together: no retouch, the
+    // add-on rules below decide, inside that sub-folder (all of its units share a source: a mod of it is no lone option, so
+    // the subset rule leaves it out too).
+    g_lone_sources.clear();
+    g_group_sources.clear();
+    if (g_rto_layout == RtoLayout::One) {
+        std::map<std::string, std::set<std::string>> mods_in;   // "<char>/<sub>" -> the mods (3rd path part) in it
+        std::map<std::string, std::vector<size_t>> units_in;
+        for (size_t i = 0; i < g_units.size(); ++i) {
+            const std::string k = lone_key_of(g_units[i]);
+            if (k.empty()) continue;
+            const std::string& rel = g_units[i].u.rel;
+            size_t a = rel.find('/'); a = rel.find('/', a + 1) + 1;
+            size_t b = rel.find('/', a);
+            mods_in[k].insert(str_lower(rel.substr(a, b == std::string::npos ? std::string::npos : b - a)));
+            units_in[k].push_back(i);
+        }
+        for (auto& [k, mods] : mods_in) {
+            const auto& idx = units_in[k];
+            const std::string rel = g_units[idx[0]].u.rel;
+            size_t a = rel.find('/'); a = rel.find('/', a + 1);
+            const std::string sub = rel.substr(rel.find('/') + 1, a - rel.find('/') - 1);
+            const std::string label = unit_label(g_units[idx[0]]);
+            std::string fd;
+            for (auto i : idx) if (!g_units[i].costumes.empty()) { fd = g_units[i].costumes[0].fighter_dir; break; }
+            if (mods.size() != 1) {
+                // (an archive dropped in the root has no character folder, a Fluffy install is no folder of the user's; mods
+                // of several fighters have no outfit to share)
+                std::set<std::string> fighters;
+                for (auto i : idx)
+                    for (auto& [p, mf] : g_units[i].files) {
+                        std::string f, folder;
+                        if (parse_model_folder(str_lower(p), f, folder)) fighters.insert(f);
+                    }
+                if (fd.empty() || fighters.size() > 1 || is_archive_name(rel.substr(0, rel.find('/')))
+                    || rel.compare(0, 19, "Fluffy Mod Manager/") == 0 || one_unpacked_mod(mods, idx)) continue;
+                g_group_sources.insert(k);
+                printf("\n  sub-folder %s: %zu mods, handled together: an outfit of its own, the others its options\n", sub.c_str(),
+                       mods.size());
+                merge_note(fd, "sub-folder " + sub + ": " + std::to_string(mods.size()) + " mods, handled together");
+                continue;
+            }
+            if (fd.empty()) {
+                printf("\n  %s: alone in its sub-folder %s, but a pure add-on (no complete outfit): it cannot be its own "
+                       "outfit, made as before\n", label.c_str(), sub.c_str());
+                continue;
+            }
+            g_lone_sources.insert(k);
+            printf("\n  %s: alone in its sub-folder %s: its own outfit (no merge)\n", label.c_str(), sub.c_str());
+            merge_note(fd, label + ": alone in its sub-folder " + sub + ": its own outfit (no merge)");
+        }
+    }
+    std::set<size_t> retouch;
+    g_retouch_sources.clear();
+    if (g_rto_layout == RtoLayout::One) {
+        std::map<int, std::vector<size_t>> by_source;
+        for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
+        for (auto& [src, idx] : by_source) {
+            if (std::any_of(idx.begin(), idx.end(), [](size_t i) { return is_lone_unit(g_units[i]) || is_group_unit(g_units[i]); })) continue;
+            if (!std::all_of(idx.begin(), idx.end(), [](size_t i) { return unit_retouch(g_units[i]); })) continue;
+            const bool outfit = std::any_of(idx.begin(), idx.end(), [](size_t i) { return !g_units[i].costumes.empty(); })
+                || (idx.size() == 1 && trim_ws(g_units[idx[0]].addonfor).empty()
+                    && !detect_mod_costumes(g_units[idx[0]].files, o.inv, true).empty());
+            if (!outfit) continue;
+            std::string why;
+            for (auto i : idx)
+                if (why.empty() && !(why = retouch_game_fit(o.inv, g_units[i])).empty() && idx.size() > 1)
+                    why = unit_label(g_units[i]) + ": " + why;
+            if (!why.empty()) {
+                printf("\n  %s: meshes / textures only, no material file, but it fits no game outfit it modifies (%s): "
+                       "not a retouch, made as before\n", g_units[idx[0]].u.rel.c_str(), why.c_str());
+                continue;
+            }
+            g_retouch_sources.insert(src);
+            retouch.insert(idx.begin(), idx.end());
+        }
+    }
+    // Subsets (docs/RUNTIME_OPTIONS.md): with RuntimeOptions=on, an outfit that is a game outfit with some of its parts
+    // taken off (game_subset) makes no outfit of its own: an option of that game outfit and of the outfits that wear
+    // those files, where it fits (attach_addons, as a retouch). A lone outfit of its folder or archive only.
+    std::set<size_t> subset;
+    std::map<std::string, std::string> edited;   // fighter -> outfits with a mesh made from a game outfit's, edited (audit)
+    const ULONGLONG t_subsets = GetTickCount64();
+    if (g_rto_layout == RtoLayout::One) {
+        std::map<int, std::vector<size_t>> by_source;
+        for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
+        for (auto& [src, idx] : by_source) {
+            if (idx.size() != 1 || g_retouch_sources.count(src) || is_lone_unit(g_units[idx[0]])) continue;
+            UnitFiles& u = g_units[idx[0]];
+            if (u.costumes.size() != 1 || !trim_ws(u.addonfor).empty() || u.u.game_install
+                || u.u.rel.compare(0, 19, "Fluffy Mod Manager/") == 0) continue;
+            const std::string fd = u.costumes[0].fighter_dir;
+            Subset s = game_subset(o.inv, u);
+            if (s.cno < 0) {
+                if (s.physics) merge_note(fd, "subset: " + unit_label(u) + " stays an outfit (" + s.why + ")");
+                else if (!s.kin.empty()) edited[fd] += (edited[fd].empty() ? "" : "; ") + unit_label(u) + " (" + s.why + ")";
+                continue;
+            }
+            UnitFiles t = u;
+            t.files = s.files;
+            t.origin = s.origin;
+            t.costumes = detect_mod_costumes(t.files, o.inv, true);
+            const std::string why = t.costumes.empty() ? std::string("nothing of it to swap") : retouch_game_fit(o.inv, t);
+            if (!why.empty()) {
+                merge_note(fd, "subset: " + unit_label(u) + " stays an outfit (" + game_outfit_name(s.cno) + " minus " + s.hidden
+                               + ", but " + why + ")");
+                continue;
+            }
+            u.files = std::move(t.files);
+            u.origin = std::move(t.origin);
+            u.costumes = std::move(t.costumes);
+            g_retouch_sources.insert(src);
+            retouch.insert(idx[0]);
+            subset.insert(idx[0]);
+            merge_note(fd, "subset: " + unit_label(u) + " = " + game_outfit_name(s.cno) + " minus " + s.hidden
+                           + " -> an option of " + game_outfit_name(s.cno) + " (and of the outfits wearing those files)");
+        }
+        for (auto& [efd, list] : edited)
+            merge_note(efd, "a mesh made from a game outfit's, edited, nothing taken off (outfits as before): " + list);
+        printf("\n  subsets: %llu ms\n", (unsigned long long)(GetTickCount64() - t_subsets));
+    }
+
+    // One outfit per variant (Manager mode): options that are a choice for a complete option of their mod (below), each
+    // with that option's unit
+    std::map<size_t, size_t> choice_of;
+    std::map<size_t, std::string> choice_menu;   // such an option -> the menu entry it hangs from (its group in the in-game menu)
+    std::map<size_t, size_t> choice_parent;      // such an option -> the add-on of the outfit its menu entry hangs from, if any
     // Modular mods: options whose "addonfor" names no option of the same mod
     std::set<size_t> modular;
     {
         std::map<int, std::vector<size_t>> by_source;
         for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
         for (auto& [src, idx] : by_source) {
+            // the mod's own options first, those of its add-on archives after: the outfit is named and placed after the mod
+            std::stable_partition(idx.begin(), idx.end(), [](size_t i) { return g_units[i].joined_from == 0; });
             std::vector<size_t> tree;
             for (auto i : idx) {
                 const auto& u = g_units[i];
@@ -5040,11 +10312,77 @@ static void finalize_units(ScanOutputs& o) {
                 if (!names_option) tree.push_back(i);
             }
             if (tree.size() < 2) continue;
-            // Add-ons whose "addonfor" names nothing of their mod (no option, no menu entry) beside
-            // a single complete option that hangs from nothing: that option was renamed after the
-            // add-ons were written (the Buff Leon/Luke test copies: "Buff Leon as Luke" for an option
-            // now named "Buff Leon as Luke  - Buff Leon as Luke C1 [...]"). Fluffy would not link
-            // them either; not a modular mod: each add-on is made with that option (rules below).
+            // One outfit per variant (Manager mode): options that hang from a menu entry which itself names a complete
+            // option of the mod (a bundle with five material sets under "Skin Finish
+            // Options", a menu entry whose AddonFor is the bundle's outfit) are a choice for that outfit, not a mod of
+            // their own. None has a body mesh, so as a modular mod they could make no outfit: all were dropped ("an add-on
+            // mod, not used") and the outfit came without any of them. Each is made with that outfit instead: one variant
+            // per option (the add-on rules below). Only when no option of the tree has a body mesh and none is named by
+            // another option: a mod that gives outfits as a modular mod is read as before.
+            // A menu entry may also hang from an add-on of the outfit ("Artwork for Clean" names "Clean", an add-on of "Hair",
+            // in the same author's All Options bundle): its options are a choice for that outfit too, made with that add-on.
+            // With the options chosen in game (RtoLayout::Variants) they are options of the outfit, not variants (below).
+            if (g_manager_mode) {
+                std::map<size_t, size_t> base_of, parent_of;
+                std::string group;
+                bool choice = true;
+                for (auto i : tree) {
+                    const auto& u = g_units[i];
+                    if (!u.costumes.empty() || u.files.empty()) { choice = false; break; }
+                    for (auto j : idx)   // an option worn with this one: the modular rules
+                        if (j != i && !g_units[j].files.empty() && eq_ci(u.name, g_units[j].addonfor)) choice = false;
+                    std::string want = trim_ws(u.addonfor);
+                    if (group.empty()) group = want;
+                    size_t base = SIZE_MAX, parent = SIZE_MAX;
+                    for (int depth = 0; depth < 8 && base == SIZE_MAX; ++depth) {   // up the menu entries
+                        const MenuNode* menu = nullptr;
+                        for (auto& m : g_menus) if (m.source == src && eq_ci(m.name, want)) { menu = &m; break; }
+                        if (menu) want = trim_ws(menu->addonfor);
+                        else {   // not an entry: an add-on of the outfit that an entry hangs from (one such add-on at most)
+                            size_t via = SIZE_MAX;
+                            for (auto j : idx)
+                                if (j != i && !g_units[j].files.empty() && g_units[j].costumes.empty()
+                                    && !trim_ws(g_units[j].addonfor).empty() && eq_ci(g_units[j].name, want)) { via = j; break; }
+                            if (via == SIZE_MAX || parent != SIZE_MAX) break;
+                            parent = via;
+                            want = trim_ws(g_units[via].addonfor);
+                        }
+                        if (want.empty()) break;
+                        for (auto j : idx)
+                            if (!g_units[j].files.empty() && !g_units[j].costumes.empty() && trim_ws(g_units[j].addonfor).empty()
+                                && eq_ci(g_units[j].name, want)) { base = j; break; }
+                    }
+                    if (base == SIZE_MAX) { choice = false; break; }
+                    base_of[i] = base;
+                    if (parent != SIZE_MAX) parent_of[i] = parent;
+                }
+                if (choice && !base_of.empty()) {
+                    std::set<size_t> bases;
+                    for (auto& [i, b] : base_of) {
+                        choice_of[i] = b;
+                        bases.insert(b);
+                        choice_menu[i] = trim_ws(g_units[i].addonfor);
+                    }
+                    for (auto& [i, p] : parent_of) choice_parent[i] = p;
+                    for (auto b : bases) {
+                        size_t n = 0;
+                        std::set<std::string> entries;
+                        for (auto& [i, bb] : base_of) if (bb == b) { n++; entries.insert(choice_menu[i]); }
+                        std::string list;
+                        for (auto& e : entries) list += (list.empty() ? "" : ", ") + e;
+                        printf("\n  %s: %zu options of its menu (%s): a choice for this outfit, %s\n",
+                               unit_label(g_units[b]).c_str(), n, entries.size() == 1 ? group.c_str() : list.c_str(),
+                               g_rto_layout == RtoLayout::Off ? "one variant each" : "chosen in game");
+                    }
+                    continue;
+                }
+            }
+            // Add-ons whose "addonfor" names nothing of their mod (no option, no menu entry) beside a single
+            // complete option that hangs from nothing: that option was renamed after the add-ons were written
+            // ("Buff Leon as Luke" for an option now named "Buff Leon as Luke - Buff Leon as Luke C1 [...]").
+            // Fluffy would not link them either; not a modular mod (it made nothing of add-ons without a body
+            // mesh: they were lost): add-ons of that option (rules below). (from ZZtaii's Slotsloader fork
+            // (1.9.9), MIT)
             {
                 std::vector<size_t> bases;
                 for (auto j : idx)
@@ -5066,34 +10404,54 @@ static void finalize_units(ScanOutputs& o) {
                     continue;
                 }
             }
+            // Add-ons of the tree's options, and of those add-ons: their "addonfor" names one ("3b) Regular - Monokini"
+            // under "3a) Monokini Edits", the only mesh of "Cow girl Mai C1", report 08/11). Options of the modular mod,
+            // worn with the option they name (build_modular), not outfits or add-ons of their own.
+            std::map<size_t, size_t> kids;   // unit -> the unit it names
+            {
+                std::vector<size_t> known = tree;
+                for (size_t n = 0; n < known.size(); ++n) {
+                    if (g_units[known[n]].files.empty()) continue;
+                    for (auto j : idx) {
+                        const auto& u = g_units[j];
+                        if (u.files.empty() || trim_ws(u.addonfor).empty() || !eq_ci(g_units[known[n]].name, u.addonfor)
+                            || std::find(known.begin(), known.end(), j) != known.end()) continue;
+                        kids[j] = known[n];
+                        known.push_back(j);
+                    }
+                }
+            }
             for (auto i : tree) modular.insert(i);
-            build_modular(tree, o);
+            for (auto& [k, p] : kids) modular.insert(k);
+            std::vector<size_t> made;
+            build_modular(tree, o, kids, &made);
+            modular.insert(made.begin(), made.end());
         }
     }
 
     // A complete option (it has its own mesh) whose "addonfor" names another complete option of the
-    // same mod is an add-on of that option: Fluffy installs it over that option, both active (A.K.I.
-    // C2 Bare Legs Bundle: "01 Ribbon", addonfor "A.K.I. C2 - Bare Legs", the name of "00 Main").
-    // It gives the variant "<option> + <add-on>" made of both, not an outfit of its own without the
-    // option's files. An addonfor that names no option keeps the rules below.
+    // same mod is an add-on of that option: Fluffy installs it over that option, both active (Leon
+    // Requiem on Luke: "Optional - More muscles", addonfor "Leon as Luke", the name of the main option,
+    // ships only a body mesh). It is made with that option (the add-on rules below), not as an outfit of
+    // its own without the option's files. An option that is itself such an add-on is not a base (no
+    // chains). (from ZZtaii's Slotsloader fork (1.9.8), MIT)
     std::map<size_t, size_t> complete_addon_of;
     for (size_t i = 0; i < g_units.size(); ++i) {
         const auto& a = g_units[i];
         const std::string want = trim_ws(a.addonfor);
-        if (a.costumes.empty() || a.files.empty() || modular.count(i) || want.empty()) continue;
+        if (a.costumes.empty() || a.files.empty() || modular.count(i) || retouch.count(i) || want.empty()) continue;
         for (size_t j = 0; j < g_units.size(); ++j) {
             const auto& b = g_units[j];
-            if (j == i || b.source != a.source || b.costumes.empty() || modular.count(j)) continue;
+            if (j == i || b.source != a.source || b.costumes.empty() || modular.count(j) || retouch.count(j)) continue;
             if (eq_ci(trim_ws(b.name), want)) { complete_addon_of[i] = j; break; }
         }
     }
-    // an option that is itself such an add-on is not a base (no chains): it stays an outfit
     for (auto it = complete_addon_of.begin(); it != complete_addon_of.end(); )
         it = complete_addon_of.count(it->second) ? complete_addon_of.erase(it) : std::next(it);
 
     for (size_t i = 0; i < g_units.size(); ++i) {
         auto& uf = g_units[i];
-        if (uf.costumes.empty() || modular.count(i) || complete_addon_of.count(i)) continue;
+        if (uf.costumes.empty() || modular.count(i) || retouch.count(i) || complete_addon_of.count(i)) continue;
         o.mods_out.push_back({uf.mod_id, uf.costumes});
         o.all_mod_out.insert(uf.files.begin(), uf.files.end());
         note_mod_paths(uf.mod_id, uf.files);
@@ -5103,25 +10461,45 @@ static void finalize_units(ScanOutputs& o) {
     std::map<size_t, std::vector<size_t>> addons_of;
     for (size_t i = 0; i < g_units.size(); ++i) {
         const auto& a = g_units[i];
-        if (!a.costumes.empty() || a.files.empty() || modular.count(i)) continue;
+        if (!a.costumes.empty() || a.files.empty() || modular.count(i) || retouch.count(i)) continue;
         std::vector<size_t> bases;
+        if (auto c = choice_of.find(i); c != choice_of.end()) {   // a choice for a complete option of its mod (above)
+            const size_t b = c->second;
+            if (!g_units[b].costumes.empty() && !modular.count(b) && !retouch.count(b) && !complete_addon_of.count(b)) bases.push_back(b);
+            else choice_of.erase(c);
+        }
         for (int rule = 0; rule < 4 && bases.empty(); ++rule) {
             for (size_t j = 0; j < g_units.size(); ++j) {
                 const auto& b = g_units[j];
-                if (b.costumes.empty() || modular.count(j)) continue;
+                if (b.costumes.empty() || modular.count(j) || retouch.count(j) || complete_addon_of.count(j)) continue;
+                if (b.source != a.source && is_lone_unit(b)) continue;   // alone in its sub-folder: nobody else's add-on goes on it
+                if (b.source != a.source && is_group_unit(a)) continue;   // handled with its sub-folder: the folder wins
                 bool hit = false;
                 if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
                 if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
                 if (rule == 2) hit = a.source == b.source && shares_target(a, b);
                 // Same sub-folder, another outfit's folder: a partial add-on brings a part the costume lacks
-                if (rule == 3) hit = a.source == b.source && !shares_target(a, b) && b.costumes.size() == 1;
+                if (rule == 3) hit = a.source == b.source && !shares_target(a, b) && (b.costumes.size() == 1 || is_group_unit(a));
                 if (hit) bases.push_back(j);
             }
         }
         if (bases.empty()) {
             // Nothing in its own mod to complete (glasses removed, other earrings): it completes the
             // original outfit it modifies, in a slot of its own; that outfit stays as it is.
+            // (handled with its sub-folder: its outfit is there, not one of its own; attach_addons keeps it in the sub-folder)
             auto costumes = detect_mod_costumes(a.files, o.inv, true);
+            if ((costumes.empty() || is_group_unit(a)) && g_rto_layout != RtoLayout::Off && !g_manager_mode) {
+                // With RuntimeOptions: an option of the outfits whose files it replaces (attach_addons)
+                printf("\n  add-on %s: no costume it can complete was found: an option of the outfits whose files it "
+                       "replaces\n", a.u.rel.c_str());
+                RtoGroupIn g;
+                g.key = "addon";
+                g.name = unit_label(a);
+                g.members = {i};
+                auto src = g_mod_source.find(a.mod_id);
+                g_pending_addons.push_back({unit_label(a), src == g_mod_source.end() ? std::string() : src->second.source, {g}});
+                continue;
+            }
             if (costumes.empty()) {
                 printf("\n  add-on %s: no costume it can complete was found, ignored\n", a.u.rel.c_str());
                 continue;
@@ -5142,34 +10520,171 @@ static void finalize_units(ScanOutputs& o) {
         addons_of[j].push_back(i);
     }
 
-    for (auto& [j, adds] : addons_of) {
+    // Versions (docs/RUNTIME_OPTIONS.md): with RuntimeOptions=on, outfits of one archive for one fighter, and outfits
+    // of several archives with the same meshes for the same game outfit, are one outfit with a choice (merge_outfits;
+    // their add-ons are made with it). (It adds units of its own at the end of g_units: no reference into it is held.)
+    std::set<size_t> merged;
+    if (g_rto_layout == RtoLayout::One) {
+        std::set<size_t> apart = modular;
+        apart.insert(retouch.begin(), retouch.end());
+        for (auto& [i, j] : complete_addon_of) apart.insert(i);
+        for (size_t i = 0; i < g_units.size(); ++i) if (is_lone_unit(g_units[i])) apart.insert(i);
+        const ULONGLONG t0 = GetTickCount64();
+        merge_outfits(o, addons_of, apart, merged);
+        printf("\n  merges: %llu ms\n", (unsigned long long)(GetTickCount64() - t0));
+    }
+
+    // Manager mode with the options chosen in game: the outfits with added parts of the Slotsloader Manager
+    // (manager_parts.json), each part one more option of its outfit (build_addon_options). Their units are added here,
+    // once the outfits are made and their add-ons are known; an outfit without add-ons gets them after the loop.
+    std::map<size_t, AddedParts> added_parts;
+    std::set<size_t> added_parts_seen;
+    if (g_manager_mode && g_rto_layout == RtoLayout::Variants && !g_manager_parts.empty()) added_parts_units(o, added_parts);
+    auto added_parts_left = [&](size_t j, const char* why) {
+        printf("\n  added parts of %s (%s): %s: the outfit is left as its folder has it, none of its parts is an option\n",
+               unit_label(g_units[j]).c_str(), MANAGER_PARTS_FILE, why);
+    };
+
+    for (auto& [j, all_adds] : addons_of) {
+        if (merged.count(j)) continue;   // made with its merged outfit
         const auto& b = g_units[j];
+        // One outfit per variant (Manager mode): the options that are a choice for this outfit (choice_of) are set apart, one
+        // variant each after the others; the add-ons that are no such choice follow the rules below as if alone
+        std::vector<size_t> adds, choices;
+        for (auto a : all_adds) {
+            auto c = choice_of.find(a);
+            (c != choice_of.end() && c->second == j ? choices : adds).push_back(a);
+        }
+        bool apart = true;
+        for (size_t x = 0; x < adds.size(); ++x)
+            for (size_t y = x + 1; y < adds.size(); ++y)
+                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
+        // Separate downloads put with their costume in one sub-folder (each add-on its own archive or
+        // folder, not options of one mod) are all meant to be worn: only the complete outfit is made.
+        // One outfit per variant (Manager mode): not so, the Manager's Slotsloader fork lists each add-on and all of them
+        bool separate = g_rto_layout != RtoLayout::Off && !g_manager_mode && adds.size() >= 2 && apart;
+        for (size_t x = 0; x < adds.size() && separate; ++x) {
+            if (!user_grouped(g_units[adds[x]], b)) separate = false;
+            for (size_t y = x + 1; y < adds.size() && separate; ++y)
+                if (!user_grouped(g_units[adds[x]], g_units[adds[y]])) separate = false;
+        }
         // An add-on put with its costume in one sub-folder is meant for that costume: only the combined
         // outfit is made, not the costume alone as well
         bool grouped = false;
         for (auto a : adds) if (user_grouped(g_units[a], b)) grouped = true;
+        // The outfits made with add-ons (the add-ons of each): all of them for separate ones in its
+        // sub-folder; else one per add-on, plus all of them when they replace no same file; none past
+        // three add-ons (the base alone)
+        std::vector<std::vector<size_t>> variants;
+        if (separate) variants.push_back(adds);
+        else if (adds.size() <= 3) {
+            for (auto a : adds) variants.push_back({a});
+            if (adds.size() >= 2 && apart) variants.push_back(adds);
+        }
+        // Runtime options: the outfit with its add-ons chosen in game (any number of them). Put with its
+        // add-ons in one sub-folder, it wears by default the combination made without options (the most
+        // add-ons of that sub-folder), never the outfit alone.
+        std::vector<size_t> worn;
+        if (grouped && !variants.empty()) {
+            size_t best = 0, best_n = 0;
+            for (size_t v = 0; v < variants.size(); ++v) {
+                size_t n = 0;
+                for (auto a : variants[v]) if (user_grouped(g_units[a], b)) n++;
+                if (n > best_n || (n == best_n && variants[v].size() > variants[best].size())) { best = v; best_n = n; }
+            }
+            worn = variants[best];
+        }
+        if (g_rto_layout != RtoLayout::Off && !g_manager_mode && build_addon_options(j, adds, variants, worn, o)) continue;
+        // One outfit per variant (Manager mode): complete add-ons that all replace the same files (each its own copy
+        // of the body mesh, pick one) cannot be combined, so each is one variant, however many there are (Ingrid C1
+        // Barefoot Stockings v2: "Main Files" + five whole-body overrides naming it in AddonFor). From ZZtaii's
+        // Slotsloader fork (1.10.5), MIT. Other add-on sets keep the limit of three. With the options chosen in game
+        // ("menu_outfit_options") the same variants are made (they then carry the options): every outfit as without it.
+        bool alternatives = (g_rto_layout == RtoLayout::Off || g_manager_mode) && adds.size() > 3 && !separate;
+        for (size_t x = 0; x < adds.size() && alternatives; ++x) {
+            if (!complete_addon_of.count(adds[x])) alternatives = false;
+            for (size_t y = x + 1; y < adds.size() && alternatives; ++y)
+                if (!units_overlap(g_units[adds[x]], g_units[adds[y]])) alternatives = false;
+        }
+        if (alternatives) {
+            variants.clear();
+            for (auto a : adds) variants.push_back({a});
+            printf("\n  %s: %zu add-ons that each replace the same files: one variant each\n", unit_label(b).c_str(), adds.size());
+        }
+        if (adds.size() > 3 && !separate && !alternatives) {
+            printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
+                   unit_label(b).c_str(), adds.size());
+            // Outside Manager mode the base alone, as always (the add-ons could not be options either: build_addon_options
+            // above). Manager mode: the choices still make their variants; with the options chosen in game the outfit
+            // still gets its options below.
+            if (!g_manager_mode || (choices.empty() && g_rto_layout == RtoLayout::Off)) continue;
+            variants.clear();
+        }
+        // Manager mode with the options chosen in game ("menu_outfit_options"): the outfits made so far (the ones made without
+        // it, same ids, labels and numbers), each carrying every add-on and every choice of the outfit as an option of the
+        // in-game menu. The choices make no variant then. Not done (an add-on for another costume folder): as without it.
+        if (g_manager_mode && g_rto_layout != RtoLayout::Off) {
+            std::vector<size_t> all = adds, worn_now;
+            all.insert(all.end(), choices.begin(), choices.end());
+            if (grouped && !variants.empty()) {   // as `worn` above, from the outfits made in the end
+                size_t best = 0, best_n = 0;
+                for (size_t v = 0; v < variants.size(); ++v) {
+                    size_t n = 0;
+                    for (auto a : variants[v]) if (user_grouped(g_units[a], b)) n++;
+                    if (n > best_n || (n == best_n && variants[v].size() > variants[best].size())) { best = v; best_n = n; }
+                }
+                worn_now = variants[best];
+            }
+            // (with the outfit's added parts, when the Slotsloader Manager lists some: options too)
+            const AddedParts* parts = nullptr;
+            if (auto ap = added_parts.find(j); ap != added_parts.end()) { parts = &ap->second; added_parts_seen.insert(j); }
+            if (build_addon_options(j, all, variants, worn_now, o, &choice_menu, parts)) continue;
+            if (parts) added_parts_left(j, "an add-on of the outfit brings files for another costume folder");
+            // Not done, and nothing else to make (too many to combine, no choice): the base alone, as without the options;
+            // never taken out by the sub-folder rule below
+            if (choices.empty() && variants.empty()) continue;
+        }
+        if (!choices.empty()) {
+            // Each choice alone, then with each combination of the other add-ons made above ("Hair + Clean + Skin - Oily"),
+            // the choice last. Not with an add-on that replaces a file of the choice, and not past the
+            // limit of the modular mods. A choice whose menu entry hangs from an add-on of the outfit is made with that add-on
+            // (before it), unless it replaces every file of it ("Artwork for Clean": each option ships Clean's own texture).
+            auto with_parent = [&](size_t a) {
+                std::vector<size_t> v;
+                if (auto p = choice_parent.find(a); p != choice_parent.end()) {
+                    bool whole = true;
+                    for (auto& [pth, mf] : g_units[p->second].files)
+                        if (!g_units[a].files.count(pth)) { whole = false; break; }
+                    if (!whole) v.push_back(p->second);
+                }
+                v.push_back(a);
+                return v;
+            };
+            const std::vector<std::vector<size_t>> others = variants;
+            for (auto a : choices) variants.push_back(with_parent(a));
+            std::vector<std::vector<size_t>> with;
+            for (auto& v : others)
+                for (auto a : choices) {
+                    bool clash = false;
+                    for (auto x : v) if (units_overlap(g_units[x], g_units[a])) clash = true;
+                    if (clash) continue;
+                    const auto wp = with_parent(a);   // it needs an add-on this set has not got: made above, with it alone
+                    if (wp.size() > 1 && std::find(v.begin(), v.end(), wp[0]) == v.end()) continue;
+                    with.push_back(v);
+                    with.back().push_back(a);
+                }
+            if (variants.size() + with.size() <= MODULAR_MAX_COMBINATIONS) variants.insert(variants.end(), with.begin(), with.end());
+            else printf("\n  %s: %zu combinations of its choices with its other add-ons, too many: each choice alone\n",
+                        unit_label(b).c_str(), with.size());
+        }
         if (grouped) {
             o.mods_out.erase(std::remove_if(o.mods_out.begin(), o.mods_out.end(),
                              [&](const auto& e) { return e.first == b.mod_id; }), o.mods_out.end());
             printf("\n  %s: put with its add-on(s) in one sub-folder, only the combined outfit is made\n", unit_label(b).c_str());
         }
-        bool apart = true, alternatives = true;
-        for (size_t x = 0; x < adds.size(); ++x)
-            for (size_t y = x + 1; y < adds.size(); ++y)
-                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
-                else alternatives = false;
-        for (auto a : adds) if (!complete_addon_of.count(a)) alternatives = false;
-        // Complete add-ons that all replace the same files (one body mesh each, pick one) cannot be
-        // combined: each is one variant, however many there are (Ingrid C1 Barefoot Stockings v2:
-        // "Main Files" + five whole-body overrides, each with AddonFor "Main Files")
-        if (adds.size() > 3 && !alternatives) {
-            printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
+        if (separate)
+            printf("  %s: %zu separate add-ons in its sub-folder, only the complete outfit (all of them) is made\n",
                    unit_label(b).c_str(), adds.size());
-            continue;
-        }
-        std::vector<std::vector<size_t>> variants;
-        for (auto a : adds) variants.push_back({a});
-        if (adds.size() >= 2 && apart) variants.push_back(adds);
         for (auto& v : variants) {
             std::vector<size_t> parts{j};
             std::string label = unit_label(b);
@@ -5177,43 +10692,848 @@ static void finalize_units(ScanOutputs& o) {
             push_combined(parts, label, o, b.u.rel + " (with add-ons)", b.info_path);
         }
     }
+    // Outfits with added parts and no add-on of their own: the outfit as its folder makes it, its parts as options
+    for (auto& [j, parts] : added_parts)
+        if (!added_parts_seen.count(j) && !build_addon_options(j, {}, {}, {}, o, nullptr, &parts))
+            added_parts_left(j, "the outfit was not made");
+    // Retouches: their options (a modular one's groups were set apart by build_modular), in order of their paths
+    for (auto src : g_retouch_sources) {
+        std::vector<size_t> rest;
+        for (auto i : retouch) if (g_units[i].source == src && !modular.count(i)) rest.push_back(i);
+        if (rest.empty()) continue;
+        std::sort(rest.begin(), rest.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
+        for (auto i : rest)
+            printf("\n  %s %s: %s: no outfit of its own, an option of the outfits that wear its files\n",
+                   subset.count(i) ? "subset" : "retouch", g_units[i].u.rel.c_str(),
+                   subset.count(i) ? "a game outfit with parts taken off" : "meshes / textures only, no material file");
+        RtoGroupIn g;
+        g.key = "retouch";
+        g.name = unit_label(g_units[rest[0]]);
+        g.members = rest;
+        auto pa = std::find_if(g_pending_addons.begin(), g_pending_addons.end(),
+                               [&](const PendingAddon& x) { return x.retouch && x.src == src; });
+        if (pa != g_pending_addons.end()) { pa->groups.push_back(std::move(g)); continue; }
+        auto ms = g_mod_source.find(g_units[rest[0]].mod_id);
+        g_pending_addons.push_back({g.name, ms == g_mod_source.end() ? std::string() : ms->second.source, {g}, true, src});
+    }
+    attach_addons(o);
+    // On / Off options of an outfit that replace a same file (of its mod, or of add-ons put on it): one choice
+    {
+        std::set<const RtoMod*> seen;
+        for (auto& e : o.mods_out)
+            for (auto& mc : e.second)
+                if (mc.rto && seen.insert(mc.rto.get()).second) rto_one_of_shared(const_cast<RtoMod&>(*mc.rto));
+        for (auto& g : g_rto_game) rto_one_of_shared(*g.mod);
+    }
+    // The merge audit (RuntimeOptions=on): what was made one, and outfits that look related but were not
+    if (!g_merge_audit.empty()) {
+        std::stable_sort(g_merge_audit.begin(), g_merge_audit.end(), [](const MergeNote& a, const MergeNote& b) { return a.fd < b.fd; });
+        printf("\n  merge audit (RuntimeOptions=on): outfits that look related\n");
+        for (auto& n : g_merge_audit) printf("    %s: %s\n", n.fd.c_str(), n.text.c_str());
+    }
+    // An option of a mod made an outfit of its own (a bundle of outfits) with an NSFW name: an NSFW outfit
+    for (auto& [id, cs] : o.mods_out) {
+        if (outfit_is_nsfw(id)) continue;
+        for (auto& u : g_units)
+            if (u.mod_id == id && !u.kw.empty()) {
+                g_nsfw_ids.insert(id);
+                printf("\n  nsfw: %s (%s): an NSFW outfit\n", unit_label(u).c_str(), u.kw.c_str());
+                break;
+            }
+    }
+    if (g_nsfw_kw_mods || g_nsfw_kw_options) {
+        size_t outfits = 0;
+        for (auto& [id, cs] : o.mods_out) if (outfit_is_nsfw(id) && !mod_in_nsfw_dir(id)) ++outfits;
+        printf("\n  NSFW by keywords: %zu mod%s, %zu option%s; %zu NSFW outfit%s of costume_mods\n", g_nsfw_kw_mods,
+               g_nsfw_kw_mods == 1 ? "" : "s", g_nsfw_kw_options, g_nsfw_kw_options == 1 ? "" : "s", outfits, outfits == 1 ? "" : "s");
+    }
+    g_merge_audit.clear();
     g_units.clear();
     g_menus.clear();
 }
 
 // The game folder's natives tree holds costume files (a costume folder of a character)
-// Scan <game_dir>/reframework/costume_mods/<Character>/<CostumeName>/
-// Also handles mods placed directly in <Character>/ (no sub-folder).
-// Creates the directory structure if missing.
-static void scan_costume_mods(
-    const std::string& game_dir,
-    const VanillaIndex& inv,
-    std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods_out,
-    std::unordered_map<std::string, ModFileRef>& all_mod_out,
-    std::vector<std::unique_ptr<PakReader>>& pak_readers_out,
-    std::vector<FolderModInfo>& infos_out,
-    std::unordered_map<uint64_t, std::string>& upgraded_tex_out) {
+// ============================================================================
+// Fluffy Mod Manager: each mod it has installed, read from its own archive
+// ============================================================================
+// Fluffy copies the mods it installs into the game (loose files in natives\ when REFramework's
+// loose file loader is on, otherwise one pak), so two mods of the same outfit become one: the last
+// one written. Its list of installed mods (Games\SF6\installed.ini, beside the archives in
+// Games\SF6\Mods) names each mod and the files it wrote: each mod is read from its archive
+// instead and gets a slot of its own, and its copy in the game is left out of the scan.
 
-    ensure_costume_mods_dirs(game_dir);
+static std::string fluffy_norm_file(std::string p) {
+    p = str_lower(trim_ws(p));
+    for (auto& c : p) if (c == '\\') c = '/';
+    while (!p.empty() && p[0] == '/') p.erase(0, 1);
+    return p;
+}
 
-    std::string base_dir = game_dir + "\\reframework\\costume_mods";
-    if (GetFileAttributesA(base_dir.c_str()) == INVALID_FILE_ATTRIBUTES) return;
-    g_archive_cache_root = base_dir + "\\.cache";
-    g_archive_cache_used.clear();
-    g_units.clear();
-    g_menus.clear();
-    g_unit_source = 0;
-    g_mod_paths.clear();
+static std::string norm_dir(std::string p) {
+    p = str_lower(trim_ws(p));
+    for (auto& c : p) if (c == '/') c = '\\';
+    while (p.size() > 3 && p.back() == '\\') p.pop_back();
+    return p;
+}
 
-    ScanOutputs o{ inv, mods_out, all_mod_out, pak_readers_out, infos_out, upgraded_tex_out };
+static std::string join_dir(const std::string& dir, const std::string& name) {
+    return (!dir.empty() && dir.back() == '\\') ? dir + name : dir + "\\" + name;
+}
 
-    printf("\nScanning costume_mods in %s...\n", base_dir.c_str());
+static std::string read_text_file(const std::string& path) {
+    std::string txt;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return txt;
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) txt.append(buf, n);
+    fclose(f);
+    if (txt.size() >= 3 && (unsigned char)txt[0] == 0xEF && (unsigned char)txt[1] == 0xBB
+        && (unsigned char)txt[2] == 0xBF) txt.erase(0, 3);
+    return txt;
+}
+
+// installed.ini: GameInstallPath first, then one [section] per installed mod (ModName=, file=)
+static bool read_fluffy_installed(const std::string& ini, std::string& game_path,
+                                  std::vector<FluffyMod>* mods) {
+    if (GetFileAttributesA(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    std::string txt = read_text_file(ini);
+    size_t cur = SIZE_MAX, a = 0;
+    while (a < txt.size()) {
+        size_t b = txt.find('\n', a);
+        if (b == std::string::npos) b = txt.size();
+        std::string l = trim_ws(txt.substr(a, b - a));
+        a = b + 1;
+        if (l.empty() || l[0] == ';') continue;
+        if (l[0] == '[' && l.back() == ']') {
+            if (!mods) break;                            // only the game folder was wanted
+            mods->push_back({ l.substr(1, l.size() - 2), "", {} });
+            cur = mods->size() - 1;
+            continue;
+        }
+        auto eq = l.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = str_lower(trim_ws(l.substr(0, eq))), v = trim_ws(l.substr(eq + 1));
+        if (cur == SIZE_MAX) { if (k == "gameinstallpath") game_path = v; }
+        else if (k == "modname") (*mods)[cur].name = v;
+        else if (k == "file") (*mods)[cur].files.insert(fluffy_norm_file(v));
+    }
+    return true;
+}
+
+// A Fluffy folder that manages this game folder (its installed.ini names it)
+static bool fluffy_serves(const std::string& dir, const std::string& game_dir,
+                          std::string* other_game = nullptr) {
+    std::string gp;
+    if (!read_fluffy_installed(join_dir(dir, "Games\\SF6\\installed.ini"), gp, nullptr)) return false;
+    if (gp.empty() || norm_dir(gp) == norm_dir(game_dir)) return true;
+    if (other_game) *other_game = gp;
+    return false;
+}
+
+static std::string shell_folder(const char* name) {
+    char raw[MAX_PATH * 2] = {}, out[MAX_PATH * 2] = {};
+    DWORD sz = sizeof(raw);
+    if (RegGetValueA(HKEY_CURRENT_USER,
+                     "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+                     name, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, nullptr, raw, &sz)
+        != ERROR_SUCCESS) return {};
+    if (!ExpandEnvironmentStringsA(raw, out, sizeof(out))) return {};
+    return out;
+}
+
+static void sub_dirs(const std::string& dir, std::vector<std::string>& out) {
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(join_dir(dir, "*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    const DWORD hidden_system = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        if (fd.cFileName[0] == '.' || fd.cFileName[0] == '$') continue;
+        if ((fd.dwFileAttributes & hidden_system) == hidden_system) continue;   // old profile links
+        out.push_back(join_dir(dir, fd.cFileName));
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+// Where people keep a portable tool (Fluffy, the Slotsloader Manager: unzipped anywhere): the user's
+// Documents, Desktop and Downloads, the game folder and the one above it, and the root of each local
+// drive. Each place, its folders, and the folders of those whose name has one of the hints are tried.
+static std::string search_tool_dir(const std::string& game_dir, const std::vector<const char*>& hints,
+                                   const std::function<bool(const std::string&)>& serves) {
+    std::vector<std::string> roots;
+    auto add = [&](const std::string& p) {
+        if (p.empty()) return;
+        for (auto& r : roots) if (norm_dir(r) == norm_dir(p)) return;
+        DWORD at = GetFileAttributesA(p.c_str());
+        if (at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY)) roots.push_back(p);
+    };
+    for (const char* n : { "Personal", "Desktop", "{374DE290-123F-4565-9164-39C4925E467B}" })
+        add(shell_folder(n));
+    char env[MAX_PATH];
+    for (const char* var : { "USERPROFILE", "OneDrive" }) {
+        DWORD n = GetEnvironmentVariableA(var, env, MAX_PATH);
+        if (!n || n >= MAX_PATH) continue;
+        for (const char* sub : { "\\Documents", "\\Desktop", "\\Downloads", "" }) add(std::string(env) + sub);
+    }
+    add(game_dir);
+    if (auto sl = game_dir.find_last_of('\\'); sl != std::string::npos) add(game_dir.substr(0, sl));
+    DWORD drives = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if (!(drives & (1u << i))) continue;
+        char root[4] = { char('A' + i), ':', '\\', 0 };
+        if (GetDriveTypeA(root) == DRIVE_FIXED) add(root);
+    }
+    for (auto& r : roots) {
+        if (serves(r)) return r;
+        std::vector<std::string> d1;
+        sub_dirs(r, d1);
+        for (auto& d : d1) if (serves(d)) return d;
+        for (auto& d : d1) {
+            std::string low = str_lower(d.substr(d.find_last_of('\\') + 1));
+            if (std::none_of(hints.begin(), hints.end(),
+                             [&](const char* hn) { return low.find(hn) != std::string::npos; })) continue;
+            std::vector<std::string> d2;
+            sub_dirs(d, d2);
+            for (auto& e : d2) if (serves(e)) return e;
+        }
+    }
+    return {};
+}
+
+static std::string search_fluffy(const std::string& game_dir) {
+    return search_tool_dir(game_dir, { "fluffy", "mod", "game", "tool", "util", "app", "program" },
+                           [&](const std::string& d) { return fluffy_serves(d, game_dir); });
+}
+
+static const char* kSettingsTemplate =
+    "; SF6-SlotsLoader settings\r\n"
+    ";\r\n"
+    "; FluffyModManager: the folder of Fluffy Mod Manager (the folder that holds Modmanager.exe).\r\n"
+    "; Each costume mod Fluffy has installed gets a slot of its own, read from its archive in\r\n"
+    "; Fluffy's Games\\SF6\\Mods folder. Left empty, the loader looks for Fluffy by itself\r\n"
+    "; (Documents, Desktop, Downloads, the game folder and the root of each drive).\r\n"
+    "; Example: FluffyModManager=D:\\Tools\\FluffyModManager\r\n"
+    "FluffyModManager=\r\n"
+    ";\r\n"
+    "; SlotsloaderManager: the folder of the Slotsloader Manager (the folder that holds its Data folder).\r\n"
+    "; Mods it installed with \"Replace original\" replace the game's outfit and get no extra slot.\r\n"
+    "; Left empty, the loader looks for it by itself (same places as Fluffy).\r\n"
+    "SlotsloaderManager=\r\n"
+    ";\r\n"
+    "; NsfwKeywords: a mod of costume_mods whose name has one of these words is NSFW, as if it were in\r\n"
+    "; costume_mods_nsfw (shown in game only while \"Display NSFW Outfits\" is on); an option whose name has one\r\n"
+    "; is an NSFW option. Left out: the default list (nsfw, nude, naked, topless, bottomless, pubic, pubes,\r\n"
+    "; nipple, pasties, lewd, futa, see through, see thru, no panties, no underwear, erotic). A comma list\r\n"
+    "; replaces it; given empty (NsfwKeywords=) the names are not looked at.\r\n"
+    "; Example: NsfwKeywords=nsfw, nude, lingerie\r\n"
+    ";\r\n"
+    "; IncrementalPak: on (default): when mods change, the files of the others are taken from the costume pak\r\n"
+    "; already built instead of being read again (the pak comes out the same). off: every file is read again.\r\n"
+    "IncrementalPak=on\r\n";
+
+// A setting's value; *found: whether the key is there at all (a key given empty is not a key left out)
+static std::string read_setting(const std::string& path, const char* key, bool* found = nullptr) {
+    if (found) *found = false;
+    std::string txt = read_text_file(path);
+    size_t a = 0;
+    while (a < txt.size()) {
+        size_t b = txt.find('\n', a);
+        if (b == std::string::npos) b = txt.size();
+        std::string l = trim_ws(txt.substr(a, b - a));
+        a = b + 1;
+        auto eq = l.find('=');
+        if (l.empty() || l[0] == ';' || eq == std::string::npos) continue;
+        if (str_lower(trim_ws(l.substr(0, eq))) != key) continue;
+        std::string v = trim_ws(l.substr(eq + 1));
+        if (v.size() >= 2 && v.front() == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
+        if (found) *found = true;
+        return v;
+    }
+    return {};
+}
+
+// The settings.ini Slots Loader created up to 1.18 held a RuntimeOptions block (1.13.0: "off", 1.13.1 - 1.18: "on").
+// The setting is gone: that block, untouched, is taken out so the file matches the current template. Any edit of
+// those lines (another value, another comment) leaves the file as it is; the line is then only ignored (and logged).
+static void remove_settings_rto_block(const std::string& path) {
+    static const char* blocks[][6] = {
+        { "; RuntimeOptions: costume options chosen in game (in progress, see docs/RUNTIME_OPTIONS.md).",
+          ";   off: one outfit per combination of a modular mod's options, as before (default)",
+          ";   on: one outfit per modular mod, every option stored for the in-game menu",
+          ";   variants: the outfits of \"off\", every option stored as well",
+          "RuntimeOptions=off", nullptr },
+        { "; RuntimeOptions: costume options chosen in game. Changing it rebuilds the costume pak at the next launch.",
+          ";   on (default): a modular mod, or an outfit with its add-ons, is one outfit; its options are chosen in",
+          ";     game (Fighter Settings: F or a click on the Costume row; character select: R1 or C)",
+          ";   off: one outfit per combination of a modular mod's options, no options in game (as before 1.13)",
+          ";   variants: the outfits of \"off\", and every option stored for the in-game menus as well",
+          "RuntimeOptions=on" } };
+    std::string txt;
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+        char buf[65536];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) txt.append(buf, n);
+        fclose(f);
+    }
+    if (txt.empty()) return;
+    for (const char* eol : { "\r\n", "\n" }) {
+        for (auto& blk : blocks) {
+            std::string old_block;
+            for (const char* l : blk) if (l) old_block += std::string(l) + eol;
+            // the block and the ";" separator line that follows it in the template
+            const std::string with_sep = old_block + ";" + eol;
+            size_t at = txt.find(with_sep);
+            size_t len = with_sep.size();
+            if (at == std::string::npos) { at = txt.find(old_block); len = old_block.size(); }
+            if (at == std::string::npos) continue;
+            txt.erase(at, len);
+            if (FILE* f = fopen(path.c_str(), "wb")) {
+                fwrite(txt.data(), 1, txt.size(), f);
+                fclose(f);
+                logf("  settings.ini: the RuntimeOptions block (setting gone, runtime options are always on) taken out\n");
+            }
+            return;
+        }
+    }
+}
+
+static std::string archive_stem(const std::string& name) {
+    auto dot = name.find_last_of('.');
+    return dot == std::string::npos ? name : name.substr(0, dot);
+}
+
+// Files of an archive or folder of Fluffy's Mods folder, '/' separators, relative to its root
+static bool list_mod_entries(const std::string& path, bool is_dir, std::vector<std::string>& out) {
+    if (!is_dir) {
+        std::vector<std::wstring> w;
+        if (!archive_list(a2w_path(path), w)) return false;
+        for (auto& x : w) out.push_back(w2a(x.c_str()));
+        return true;
+    }
+    std::function<void(const std::string&, const std::string&, int)> walk =
+        [&](const std::string& dir, const std::string& rel, int depth) {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do {
+            if (fd.cFileName[0] == '.') continue;
+            std::string r = rel.empty() ? fd.cFileName : rel + "/" + fd.cFileName;
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) out.push_back(r);
+            else if (depth < 16) walk(dir + "\\" + fd.cFileName, r, depth + 1);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    };
+    walk(path, "", 0);
+    return true;
+}
+
+// Finds Fluffy, reads its installed mods and matches each one with the option of an archive in
+// its Mods folder that holds the same files (the option's folder name, which Fluffy names the mod
+// after, settles between two archives with the same files).
+static void find_fluffy(const std::string& game_dir, const std::string& costume_mods_dir,
+                        const std::string& registry_dir) {
+    g_fluffy = FluffyState{};
+    std::string settings = costume_mods_dir + "\\settings.ini";
+    if (GetFileAttributesA(settings.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        CreateDirectoryA(costume_mods_dir.c_str(), nullptr);
+        if (FILE* f = fopen(settings.c_str(), "wb")) { fputs(kSettingsTemplate, f); fclose(f); }
+    }
+    const std::string remembered = registry_dir + "\\fluffy_location.txt";
+    std::string dir, how;
+    std::string set = read_setting(settings, "fluffymodmanager");
+    if (!set.empty()) {
+        std::string other;
+        if (fluffy_serves(set, game_dir, &other)) { dir = set; how = "settings.ini"; }
+        else if (!other.empty())
+            logf("  WARN: the Fluffy Mod Manager of settings.ini (%s) manages another game folder: %s\n",
+                 set.c_str(), other.c_str());
+        else
+            logf("  WARN: settings.ini names %s as Fluffy Mod Manager's folder, but it has no "
+                 "Games\\SF6\\installed.ini (not Fluffy's folder, or no mod installed yet)\n", set.c_str());
+    }
+    if (dir.empty()) {
+        std::string rem = trim_ws(read_text_file(remembered));
+        if (!rem.empty() && fluffy_serves(rem, game_dir)) { dir = rem; how = "found before"; }
+    }
+    if (dir.empty()) {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        dir = search_fluffy(game_dir);
+        double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t0).count();
+        if (dir.empty()) {
+            logf("  Fluffy Mod Manager: not found (searched in %.0f ms; its folder can be given in "
+                 "reframework\\costume_mods\\settings.ini)\n", ms);
+            DeleteFileA(remembered.c_str());
+            return;
+        }
+        char b[48];
+        snprintf(b, sizeof(b), "found in %.0f ms", ms);
+        how = b;
+        if (FILE* f = fopen(remembered.c_str(), "wb")) { fputs(dir.c_str(), f); fclose(f); }
+    }
+    logf("  Fluffy Mod Manager: %s (%s)\n", dir.c_str(), how.c_str());
+
+    const std::string sf6 = join_dir(dir, "Games\\SF6");
+    g_fluffy.ini = sf6 + "\\installed.ini";
+    std::string gp;
+    std::vector<FluffyMod> mods;
+    read_fluffy_installed(g_fluffy.ini, gp, &mods);
+    if (mods.empty()) { logf("    no mod installed\n"); return; }
+
+    // The options of every archive in Mods: the folders holding a natives tree
+    struct Arc { std::string path, name; bool is_dir; };
+    struct Opt { size_t arc; std::string root; std::set<std::string> files; bool costume = false, taken = false; };
+    std::vector<Arc> arcs;
+    std::vector<Opt> opts;
+    {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((sf6 + "\\Mods\\*").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (fd.cFileName[0] == '.') continue;
+                bool d = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                if (d || is_archive_name(fd.cFileName))
+                    arcs.push_back({ sf6 + "\\Mods\\" + fd.cFileName, fd.cFileName, d });
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+        std::sort(arcs.begin(), arcs.end(), [](auto& x, auto& y) { return x.name < y.name; });
+    }
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < arcs.size(); ++i) {
+        std::vector<std::string> entries;
+        if (!list_mod_entries(arcs[i].path, arcs[i].is_dir, entries)) {
+            logf("    WARN: %s cannot be read\n", arcs[i].name.c_str());
+            continue;
+        }
+        std::map<std::string, size_t> by_root;
+        for (auto& e : entries) {
+            std::string low = fluffy_norm_file(e);
+            size_t at = low.compare(0, 8, "natives/") == 0 ? 0 : low.find("/natives/");
+            if (at == std::string::npos) continue;
+            std::string root = at ? low.substr(0, at) : std::string();
+            if (at) at += 1;
+            auto it = by_root.find(root);
+            if (it == by_root.end()) {
+                opts.push_back({ i, root, {} });
+                it = by_root.emplace(root, opts.size() - 1).first;
+            }
+            Opt& o = opts[it->second];
+            o.files.insert(low.substr(at));
+            if (low.find("/model/esf/esf", at) != std::string::npos) o.costume = true;
+        }
+    }
+    double list_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t0).count();
+
+    std::map<size_t, size_t> pick_of_arc;
+    int matched = 0, costume = 0;
+    for (auto& m : mods) {
+        const std::string shown = m.name.empty() ? m.key : m.name;
+        size_t natives = 0;
+        for (auto& f : m.files) if (f.compare(0, 8, "natives/") == 0) natives++;
+        long long best = -1;
+        size_t bi = 0;
+        for (size_t i = 0; i < opts.size(); ++i) {
+            const Opt& o = opts[i];
+            if (o.taken) continue;
+            size_t inter = 0;
+            for (auto& f : o.files) inter += m.files.count(f);
+            if (!inter) continue;
+            std::string last = o.root.substr(o.root.find_last_of('/') + 1), root_bs = o.root;
+            for (auto& c : root_bs) if (c == '/') c = '\\';
+            bool named = eq_ci(last, m.key) || eq_ci(o.root, m.key) || eq_ci(root_bs, m.key)
+                      || (o.root.empty() && eq_ci(archive_stem(arcs[o.arc].name), m.key));
+            if (!named && inter * 2 < natives) continue;
+            long long score = (named ? (1LL << 40) : 0) + (long long)inter * 1024
+                            - (long long)(o.files.size() - inter);
+            if (score > best) { best = score; bi = i; }
+        }
+        if (best < 0) {
+            logf("    %s: its archive is not in Fluffy's Mods folder, the copy in the game is read instead\n",
+                 shown.c_str());
+            continue;
+        }
+        Opt& o = opts[bi];
+        o.taken = true;
+        matched++;
+        g_fluffy.claimed.insert(m.files.begin(), m.files.end());
+        const Arc& ar = arcs[o.arc];
+        logf("    %s: %s%s%s\n", shown.c_str(), ar.name.c_str(), o.root.empty() ? "" : " / ",
+             o.root.c_str());
+        if (!o.costume) continue;                         // nothing the loader uses
+        costume++;
+        auto it = pick_of_arc.find(o.arc);
+        if (it == pick_of_arc.end()) {
+            FluffyPick pk;
+            pk.path = ar.path; pk.name = ar.name; pk.is_dir = ar.is_dir;
+            g_fluffy.picks.push_back(pk);
+            it = pick_of_arc.emplace(o.arc, g_fluffy.picks.size() - 1).first;
+        }
+        g_fluffy.picks[it->second].roots.insert(o.root);
+    }
+    logf("    %zu mods installed, %d found in their archives (%d with costumes; %zu archives read in %.0f ms)\n",
+         mods.size(), matched, costume, arcs.size(), list_ms);
+}
+
+// Fluffy's re-read of the game archives records every pak present as a game file. When its
+// ArchiveList.bin lists a pak of ours, Fluffy later reports "EXE changed" and the slots stay in
+// the game even with every mod off: one WARN line says so and points to SF6_SlotsClean.exe.
+static void warn_fluffy_archive_list(const std::string& registry_dir, const std::vector<std::string>& pak_names) {
+    std::string dir = trim_ws(read_text_file(registry_dir + "\\fluffy_location.txt"));
+    if (dir.empty() && !g_fluffy.ini.empty()) {
+        size_t cut = g_fluffy.ini.rfind("\\Games\\SF6\\");
+        if (cut != std::string::npos) dir = g_fluffy.ini.substr(0, cut);
+    }
+    if (dir.empty()) return;
+    auto hits = archive_list_hits(join_dir(dir, "Games\\SF6\\ArchiveList.bin"), pak_names);
+    if (hits.empty()) return;
+    std::string list;
+    for (auto& h : hits) list += (list.empty() ? "" : ", ") + h;
+    logf("  WARN: Fluffy Mod Manager's ArchiveList.bin lists %s as a game file. Fluffy recorded the slots' "
+         "pak while re-reading the game archives. After a game update, run SF6_SlotsClean.exe first and "
+         "only then let Fluffy re-read the archives (Patch day in the README)\n", list.c_str());
+}
+
+static std::string current_tex_ver(const VanillaIndex& inv) {
+    auto it = inv.suffixes.find("tex");
+    return it != inv.suffixes.end() ? it->second : std::string();
+}
+
+// A claimed file as the scan names it ("natives/stm/...", old texture versions renamed to the current
+// one); empty when it is not a game file the scan reads
+static std::string claimed_scan_name(const std::string& file, const std::string& tex_ver) {
+    auto idx = file.find("natives/stm/");
+    if (idx == std::string::npos) return {};
+    std::string p = file.substr(idx);
+    for (int oi = 0; oi < N_OLD_TEX && !tex_ver.empty(); oi++) {
+        std::string old_suf = std::string(".tex.") + OLD_TEX_SUFFIXES[oi];
+        if (str_ends_with(p, old_suf.c_str())) {
+            p = p.substr(0, p.size() - strlen(OLD_TEX_SUFFIXES[oi])) + tex_ver;
+            break;
+        }
+    }
+    return p;
+}
+
+// The claimed files as the scan names them (old texture versions renamed to the current one)
+static const std::set<std::string>& fluffy_claimed(const VanillaIndex& inv) {
+    static std::set<std::string> out;
+    static bool done = false;
+    if (done) return out;
+    done = true;
+    const std::string tex_ver = current_tex_ver(inv);
+    for (auto& f : g_fluffy.claimed) {
+        std::string p = claimed_scan_name(f, tex_ver);
+        if (!p.empty()) out.insert(p);
+    }
+    return out;
+}
+
+// ============================================================================
+// Slotsloader Manager "Replace original" installs (docs/MANAGER_CONTRACT.md). ZZtaii's Slotsloader
+// Manager can install a mod over the game's own outfit: its files go loose in natives\ (a mod's .pak as
+// the next patch pak). Such an install is the original outfit, not an extra one: its files and paks make
+// no slot. A mod also put in costume_mods stays an extra outfit (the user put it there on purpose).
+// Record read: manager_installs.json in SF6_Costumes_Data (written by the Manager, preferred), else the
+// Manager's own Data\replace-state.json ("sf6-replace-state-v1", ZZtaii's format), found like Fluffy.
+// ============================================================================
+
+static const char* MANAGER_INSTALLS_FILE = "manager_installs.json";
+static const char* MANAGER_INSTALLS_FORMAT = "sf6-manager-installs-1";
+static const char* MANAGER_STATE_FORMAT = "sf6-replace-state-v1";
+
+struct ManagerPak {
+    std::string name, sha256, mod;       // "re_chunk_000.pak.patch_NNN.pak" (lower case), the mod's name
+    long long size = -1;                 // -1: not given
+};
+struct ManagerState {
+    std::string record;                            // the file read, empty when none
+    std::map<std::string, std::string> claimed;    // loose file ("natives/stm/...", lower case) -> mod name
+    std::vector<ManagerPak> paks;                  // patch paks its mods added
+    int mods = 0, off = 0, gone = 0, changed = 0;  // mods on / off, listed files missing / changed since
+};
+static ManagerState g_manager;
+
+static long long file_size_of(const std::string& path) {
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(long_w(a2w_path(path)).c_str(), GetFileExInfoStandard, &fa)
+        || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return -1;
+    return (long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow);
+}
+
+static std::string sha256_file_hex(const std::string& path) {
+    FILE* f = _wfopen(long_w(a2w_path(path)).c_str(), L"rb");
+    if (!f) return {};
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE h = nullptr;
+    std::string hex;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0
+        && BCryptCreateHash(alg, &h, nullptr, 0, nullptr, 0, 0) == 0) {
+        std::vector<unsigned char> buf(1 << 20);
+        size_t n;
+        while ((n = fread(buf.data(), 1, buf.size(), f)) > 0) BCryptHashData(h, buf.data(), (ULONG)n, 0);
+        UCHAR d[32];
+        if (BCryptFinishHash(h, d, 32, 0) == 0) {
+            char b[65];
+            for (int i = 0; i < 32; i++) sprintf(b + i * 2, "%02x", d[i]);
+            hex = b;
+        }
+    }
+    if (h) BCryptDestroyHash(h);
+    if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    fclose(f);
+    return hex;
+}
+
+static bool is_patch_pak_name(const std::string& low) {
+    static const char pre[] = "re_chunk_000.pak.patch_";
+    return low.compare(0, sizeof(pre) - 1, pre) == 0 && str_ends_with(low, ".pak");
+}
+
+// Reads one record into out. own_format: manager_installs.json, else replace-state.json (which names
+// its game folder). False, with why, when it is not a record of this game folder.
+static bool read_manager_record(const std::string& path, const std::string& game_dir, bool own_format,
+                                ManagerState& out, std::string& why) {
+    out = ManagerState{};
+    std::string txt = read_text_file(path);
+    JsonValue root;
+    if (txt.empty() || !json_parse_text(txt, root) || root.kind != JsonValue::Obj) {
+        why = "not a JSON object";
+        return false;
+    }
+    const std::string fmt = root.str("format"), want = own_format ? MANAGER_INSTALLS_FORMAT : MANAGER_STATE_FORMAT;
+    if (fmt != want) {
+        why = "unknown format \"" + fmt + "\" (this loader reads \"" + want + "\")";
+        return false;
+    }
+    if (!own_format) {
+        std::string gr = root.str("GameRoot");
+        if (!gr.empty() && norm_dir(gr) != norm_dir(game_dir)) {
+            why = "it manages another game folder: " + gr;
+            return false;
+        }
+    }
+    // Files the Manager left to another tool ("Keep current file") are no longer its own
+    std::set<std::string> released;
+    for (auto& r : root.arr("Released")) {
+        std::string p = fluffy_norm_file(r.str("Path"));
+        if (!p.empty()) released.insert(p);
+    }
+    for (auto& m : root.arr("mods")) {
+        if (m.kind != JsonValue::Obj) continue;
+        std::string name = m.str("name");
+        if (name.empty()) name = m.str("id");
+        if (name.empty()) name = "(no name)";
+        const JsonValue* en = m.get("enabled");
+        if (en && en->kind == JsonValue::Bool && !en->b) { out.off++; continue; }
+        out.mods++;
+        auto take = [&](const JsonValue& f) {
+            std::string p = fluffy_norm_file(f.str("path"));
+            if (p.empty() || p.find("..") != std::string::npos || released.count(p)) return;
+            const JsonValue* sz = f.get("size");
+            long long size = sz && sz->kind == JsonValue::Num && sz->n >= 0 ? (long long)sz->n : -1;
+            if (p.find('/') == std::string::npos && is_patch_pak_name(p)) {
+                out.paks.push_back({ p, str_lower(f.str("sha256")), name, size });
+                return;
+            }
+            if (p.compare(0, 8, "natives/") != 0) return;
+            std::string full = game_dir + "\\" + p;
+            for (auto& c : full) if (c == '/') c = '\\';
+            long long have = file_size_of(full);
+            if (have < 0) { out.gone++; return; }                    // not in the game: nothing to claim
+            if (size >= 0 && have != size) { out.changed++; return; } // another tool wrote over it since
+            out.claimed.emplace(p, name);                             // first = highest priority (deployed)
+        };
+        for (auto& f : m.arr("files")) take(f);
+        for (auto& f : m.arr("paks")) take(f);
+    }
+    out.record = path;
+    return true;
+}
+
+static void log_manager_record(const ManagerState& m) {
+    logf("    %d mods installed with Replace original (%d off): %zu game files and %zu patch paks make no outfit",
+         m.mods, m.off, m.claimed.size(), m.paks.size());
+    if (m.gone || m.changed)
+        logf(" (listed but not claimed: %d missing, %d changed by another tool since)", m.gone, m.changed);
+    logf("\n");
+}
+
+// The Manager is portable ("Slotsloader Manager.exe" with its Data folder beside it, anywhere): a folder
+// is the one when its Data\replace-state.json is a record of this game folder
+static bool manager_serves(const std::string& dir, const std::string& game_dir, ManagerState* out,
+                           std::string* why) {
+    std::string p = join_dir(dir, "Data\\replace-state.json");
+    if (GetFileAttributesA(p.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    ManagerState tmp;
+    std::string w;
+    if (read_manager_record(p, game_dir, false, out ? *out : tmp, w)) return true;
+    if (why) *why = p + ": " + w;
+    return false;
+}
+
+// A Slotsloader Manager running now (it may have started the game): the folder of its exe
+static std::vector<std::string> running_manager_dirs() {
+    std::vector<std::string> dirs;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return dirs;
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+        std::string exe = str_lower(w2a(pe.szExeFile));
+        if (exe.find("slotsloader") == std::string::npos) continue;
+        HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (!p) continue;
+        wchar_t path[MAX_PATH * 2];
+        DWORD n = MAX_PATH * 2;
+        if (QueryFullProcessImageNameW(p, 0, path, &n)) {
+            std::string d = w2a(path);
+            auto sl = d.find_last_of('\\');
+            if (sl != std::string::npos) dirs.push_back(d.substr(0, sl));
+        }
+        CloseHandle(p);
+    }
+    CloseHandle(snap);
+    return dirs;
+}
+
+// Finds what the Slotsloader Manager installed with "Replace original" (g_manager)
+static void find_manager(const std::string& game_dir, const std::string& costume_mods_dir,
+                         const std::string& registry_dir) {
+    g_manager = ManagerState{};
+    std::string why;
+    const std::string own = registry_dir + "\\" + MANAGER_INSTALLS_FILE;
+    if (GetFileAttributesA(own.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        logf("  Slotsloader Manager: %s (written by the Manager)\n", MANAGER_INSTALLS_FILE);
+        if (read_manager_record(own, game_dir, true, g_manager, why)) { log_manager_record(g_manager); return; }
+        logf("    WARN: %s not read: %s; its Data\\replace-state.json is looked for instead\n",
+             MANAGER_INSTALLS_FILE, why.c_str());
+    }
+    const std::string remembered = registry_dir + "\\manager_location.txt";
+    std::string dir, how, last_why;
+    std::string set = read_setting(costume_mods_dir + "\\settings.ini", "slotsloadermanager");
+    if (!set.empty()) {
+        if (manager_serves(set, game_dir, nullptr, &last_why)) { dir = set; how = "settings.ini"; }
+        else logf("  WARN: settings.ini names %s as the Slotsloader Manager's folder: %s\n", set.c_str(),
+                  last_why.empty() ? "no Data\\replace-state.json there (no Replace-original install yet)"
+                                   : last_why.c_str());
+        last_why.clear();   // said once
+    }
+    if (dir.empty()) {
+        std::string rem = trim_ws(read_text_file(remembered));
+        if (!rem.empty() && manager_serves(rem, game_dir, nullptr, &last_why)) { dir = rem; how = "found before"; }
+    }
+    if (dir.empty())
+        for (auto& d : running_manager_dirs())
+            if (manager_serves(d, game_dir, nullptr, &last_why)) { dir = d; how = "running"; break; }
+    if (dir.empty()) {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        dir = search_tool_dir(game_dir, { "slots", "manager", "mod", "tool", "util", "app", "program" },
+                              [&](const std::string& d) { return manager_serves(d, game_dir, nullptr, &last_why); });
+        double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t0).count();
+        if (dir.empty()) {
+            logf("  Slotsloader Manager: no Replace-original install found (searched in %.0f ms; its folder "
+                 "can be given in reframework\\costume_mods\\settings.ini)\n", ms);
+            if (!last_why.empty()) logf("    not read: %s\n", last_why.c_str());
+            DeleteFileA(remembered.c_str());
+            return;
+        }
+        char b[48];
+        snprintf(b, sizeof(b), "found in %.0f ms", ms);
+        how = b;
+        if (FILE* f = fopen(remembered.c_str(), "wb")) { fputs(dir.c_str(), f); fclose(f); }
+    }
+    logf("  Slotsloader Manager: %s (%s), Data\\replace-state.json\n", dir.c_str(), how.c_str());
+    if (manager_serves(dir, game_dir, &g_manager, &why)) log_manager_record(g_manager);
+    else logf("    WARN: not read: %s\n", why.c_str());   // changed between the two reads
+}
+
+// Manager mode (common/manager_mode.hpp, docs/MANAGER_CONTRACT.md): the Slotsloader Manager installed this
+// loader. Read once per launch, before anything else of the scan depends on it. why: what decided, for the
+// log line (empty when there is no list: nothing to say, the log stays as it always was).
+static bool detect_manager_mode(const std::string& game_dir, const std::string& registry_dir, std::string* why_out = nullptr) {
+    std::string scratch;
+    std::string& why = why_out ? *why_out : scratch;
+    why.clear();
+    const std::string list = registry_dir + "\\" + manager_mode::kRecordFile;
+    if (GetFileAttributesA(list.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    JsonValue root;
+    const std::string txt = read_text_file(list);
+    if (txt.empty() || !json_parse_text(txt, root) || root.kind != JsonValue::Obj) {
+        why = "the list is not a JSON object";
+        return false;
+    }
+    std::vector<manager_mode::ListedFile> files;
+    for (auto& m : root.arr("mods")) {
+        if (m.kind != JsonValue::Obj) continue;
+        const JsonValue* en = m.get("enabled");
+        const bool on = !(en && en->kind == JsonValue::Bool && !en->b);
+        for (auto& f : m.arr("files")) {
+            const JsonValue* sz = f.get("size");
+            files.push_back({ on, f.str("path"), sz && sz->kind == JsonValue::Num && sz->n >= 0 ? (long long)sz->n : -1,
+                              str_lower(f.str("sha256")) });
+        }
+    }
+    std::string plugin = game_dir + "\\" + manager_mode::kPluginPath;
+    for (auto& c : plugin) if (c == '/') c = '\\';
+    const manager_mode::Decision d = manager_mode::decide(root.str("format"), files, file_size_of(plugin),
+                                                          [&] { return sha256_file_hex(plugin); });
+    why = d.why;
+    return d.manager;
+}
+
+// The Manager's claimed loose files as the scan names them -> the mod's name
+static const std::map<std::string, std::string>& manager_claimed(const VanillaIndex& inv) {
+    static std::map<std::string, std::string> out;
+    static bool done = false;
+    if (done) return out;
+    done = true;
+    const std::string tex_ver = current_tex_ver(inv);
+    for (auto& [f, mod] : g_manager.claimed) {
+        std::string p = claimed_scan_name(f, tex_ver);
+        if (!p.empty()) out.emplace(p, mod);
+    }
+    return out;
+}
+
+// The Manager's record of a patch pak in the game folder: same name, and same size (else same
+// SHA-256) when the record gives one, since patch numbers get reused
+static const ManagerPak* manager_pak_of(const std::string& pak_path) {
+    auto sl = pak_path.find_last_of("\\/");
+    const std::string name = str_lower(sl == std::string::npos ? pak_path : pak_path.substr(sl + 1));
+    for (auto& mp : g_manager.paks) {
+        if (mp.name != name) continue;
+        if (mp.size >= 0) { if (file_size_of(pak_path) != mp.size) continue; }
+        else if (!mp.sha256.empty() && sha256_file_hex(pak_path) != mp.sha256) continue;
+        return &mp;
+    }
+    return nullptr;
+}
+
+static bool has_loose_files(const std::string& game_dir) {
+    for (const char* sub : {"\\natives\\stm\\product\\model\\esf"}) {
+        DWORD a = GetFileAttributesA((game_dir + sub).c_str());
+        if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) return true;
+    }
+    return false;
+}
+
+// One root of costume mods: costume_mods, or costume_mods_nsfw (nsfw: its mods are marked; their outfits shown in game
+// only while the plugin's "Display NSFW Outfits" is on, their options on other outfits NSFW options; every rule mixes
+// them with the mods of costume_mods as if both were one folder, a sub-folder staying its root's own). Same layout and
+// rules in both: <root>/<Character>/<mod folder | archive | sub-folder>, archives dropped in the root, a mod straight
+// in the character folder.
+static void scan_mods_root(const std::string& base_dir, bool nsfw, ScanOutputs& o) {
+    printf("\nScanning %s in %s...\n", nsfw ? "costume_mods_nsfw" : "costume_mods", base_dir.c_str());
 
     WIN32_FIND_DATAA fd_char;
     HANDLE hc = FindFirstFileA((base_dir + "\\*").c_str(), &fd_char);
     if (hc == INVALID_HANDLE_VALUE) return;
 
-    // Character folders, plus archives dropped straight into costume_mods
+    // Character folders, plus archives dropped straight into the root
     std::vector<std::pair<std::string, std::string>> char_dirs; // (name, abs_path)
     std::vector<std::string> root_archives;
     do {
@@ -5233,6 +11553,7 @@ static void scan_costume_mods(
         std::vector<ModUnit> units;
         std::string ex = ensure_archive_extracted(base_dir + "\\" + a);
         if (!ex.empty()) collect_mod_units(ex, a, 0, 1, units);
+        mark_nsfw(units, nsfw);
         process_units(units, a, o);
     }
 
@@ -5267,7 +11588,7 @@ static void scan_costume_mods(
         for (auto& [cos_name, cos_dir] : sub_dirs) {
             std::string rel = char_name + "/" + cos_name;
             printf("\n  folder: %s\n", rel.c_str());
-            scan_one_mod_folder(cos_dir, rel, o);
+            scan_one_mod_folder(cos_dir, rel, o, nsfw);
         }
 
         // Archives left as downloaded (.zip / .7z / .rar)
@@ -5277,6 +11598,7 @@ static void scan_costume_mods(
             std::vector<ModUnit> units;
             std::string ex = ensure_archive_extracted(char_dir + "\\" + a);
             if (!ex.empty()) collect_mod_units(ex, rel, 0, 1, units);
+            mark_nsfw(units, nsfw);
             process_units(units, rel, o);
         }
 
@@ -5286,8 +11608,82 @@ static void scan_costume_mods(
             std::vector<ModUnit> units;
             if (has_direct_natives) units.push_back({char_dir, "", char_name});
             for (auto& p : direct_paks) units.push_back({char_dir, p, char_name + "/" + p});
+            mark_nsfw(units, nsfw);
             process_units(units, char_name, o);
         }
+    }
+
+}
+
+// Scan <game_dir>/reframework/costume_mods/<Character>/<CostumeName>/
+// Also handles mods placed directly in <Character>/ (no sub-folder).
+// Creates the directory structure if missing.
+static void scan_costume_mods(
+    const std::string& game_dir,
+    const VanillaIndex& inv,
+    std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods_out,
+    std::unordered_map<std::string, ModFileRef>& all_mod_out,
+    std::vector<std::unique_ptr<PakReader>>& pak_readers_out,
+    std::vector<FolderModInfo>& infos_out,
+    std::unordered_map<uint64_t, std::string>& upgraded_tex_out) {
+
+    ensure_costume_mods_dirs(game_dir);
+
+    std::string base_dir = game_dir + "\\reframework\\costume_mods";
+    if (GetFileAttributesA(base_dir.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    g_archive_cache_root = base_dir + "\\.cache";
+    g_archive_cache_used.clear();
+    g_units.clear();
+    g_menus.clear();
+    g_pending_addons.clear();
+    g_merge_audit.clear();
+    g_game_parts.clear();
+    g_game_parts_read = false;
+    g_game_meshes.clear();
+    g_game_mdf_mats.clear();
+    g_unit_source = 0;
+    g_nsfw_ids.clear();
+    g_nsfw_kw_mods = g_nsfw_kw_options = 0;
+    g_moved_slots.clear();
+
+    ScanOutputs o{ inv, mods_out, all_mod_out, pak_readers_out, infos_out, upgraded_tex_out };
+
+    scan_mods_root(base_dir, false, o);
+
+    // Mods Fluffy Mod Manager installed, each read from its own archive (see find_fluffy)
+    for (auto& pk : g_fluffy.picks) {
+        std::string rel = "Fluffy Mod Manager/" + pk.name;
+        printf("\n  Fluffy Mod Manager: %s\n", pk.name.c_str());
+        std::string root_dir = pk.is_dir ? pk.path : ensure_archive_extracted(pk.path);
+        std::vector<ModUnit> all, units;
+        if (!root_dir.empty()) collect_mod_units(root_dir, rel, 0, 2, all);
+        for (auto& u : all) {
+            if (u.menu) { units.push_back(u); continue; }   // menu entries: where its options sit in Fluffy's menu
+            if (!u.pak.empty()) continue;
+            std::string r = u.dir.size() > root_dir.size() ? str_lower(u.dir.substr(root_dir.size() + 1)) : "";
+            for (auto& c : r) if (c == '\\') c = '/';
+            if (pk.roots.count(r)) units.push_back(u);
+        }
+        process_units(units, rel, o);
+    }
+
+    // Loose files in the game's natives tree: that is how Fluffy installs mods when REFramework's
+    // loose file loader is on (or someone copied them there). The game reads them over every pak:
+    // the outfit they replace keeps them. What is left once the mods read from their archives are
+    // taken out gets a slot too.
+    if (!g_manager_mode && has_loose_files(game_dir)) {   // Manager mode: outfits come from costume_mods only
+        printf("\n  folder: natives (loose files in the game folder, as Fluffy Mod Manager installs them)\n");
+        process_units({ ModUnit{ game_dir, "", "natives (Fluffy Mod Manager)", true } }, "natives (Fluffy Mod Manager)", o);
+    }
+
+    // NSFW mods (costume_mods_nsfw, made with costume_mods): read after every other mod (the other outfits keep the ids
+    // and numbers they have without it), then handled with them as one folder; their archives share costume_mods\.cache.
+    // Manager mode: not read (outfits come from costume_mods only, and nothing is NSFW: the plugin has no row to show it)
+    const std::string nsfw_dir = game_dir + "\\reframework\\costume_mods_nsfw";
+    const DWORD nsfw_attr = GetFileAttributesA(nsfw_dir.c_str());
+    if (!g_manager_mode && nsfw_attr != INVALID_FILE_ATTRIBUTES && (nsfw_attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        ensure_mod_dirs(nsfw_dir);
+        scan_mods_root(nsfw_dir, true, o);
     }
 
     finalize_units(o);
@@ -5296,20 +11692,20 @@ static void scan_costume_mods(
 
 // Lists every variant the scan made, per mod, for variants.json, and takes out the ones
 // variant_choices.json turns off: no slot, no registry record (their numbers are free again; the
-// other variants keep theirs), and their files only when no variant that stays uses them.
+// other variants keep theirs), and their files only when no variant that stays uses them. (from
+// ZZtaii's Slotsloader fork (1.10.0), MIT.) RuntimeOptions=on: a mod made one outfit lists the outfits
+// off would make (RtoMod::Variant::row); the outfit goes only when every one of them is off (which one it
+// wears by default is chosen in build_modular / build_addon_options). Fluffy paks, Fluffy's own
+// archives and the game's loose files are not listed: the Manager names sources in costume_mods only.
 static void apply_variant_choices(std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods,
                                   std::unordered_map<std::string, ModFileRef>& all_mod_files) {
     g_variant_archives.clear();
     std::unordered_set<std::string> off_ids, on_ids;
-    for (auto& [mid, cs] : mods) {
-        if (cs.empty()) continue;
-        auto ms = g_mod_source.find(mid);
-        const std::string source = ms == g_mod_source.end() ? std::string() : ms->second.source;
-        const std::string label = mod_label(mid);
+    auto row_of = [&](const std::string& source, const std::string& fighter_dir, const std::string& label) -> VariantRow& {
         auto ar = std::find_if(g_variant_archives.begin(), g_variant_archives.end(),
                                [&](const VariantArchive& a) { return a.source == source; });
         if (ar == g_variant_archives.end()) {
-            g_variant_archives.push_back({source, cs[0].fighter_dir, {}});
+            g_variant_archives.push_back({source, fighter_dir, {}});
             ar = g_variant_archives.end() - 1;
         }
         auto row = std::find_if(ar->variants.begin(), ar->variants.end(),
@@ -5321,8 +11717,29 @@ static void apply_variant_choices(std::vector<std::pair<std::string, std::vector
             ar->variants.push_back(std::move(r));
             row = ar->variants.end() - 1;
         }
-        row->mod_ids.push_back(mid);
-        (row->enabled ? on_ids : off_ids).insert(mid);
+        return *row;
+    };
+    for (auto& [mid, cs] : mods) {
+        if (cs.empty()) continue;
+        auto ms = g_mod_source.find(mid);
+        if (ms == g_mod_source.end() || !choice_source(ms->second)) continue;
+        const std::string& source = ms->second.source;
+        const auto& rto = cs[0].rto;
+        if (g_rto_layout == RtoLayout::One && rto) {
+            bool any_on = false;
+            for (auto& v : rto->variants) {
+                if (v.row.empty()) continue;
+                // (an outfit of another archive merged into this one: listed under its own archive)
+                VariantRow& r = row_of(v.source.empty() ? source : v.source, cs[0].fighter_dir, v.row);
+                if (std::find(r.mod_ids.begin(), r.mod_ids.end(), mid) == r.mod_ids.end()) r.mod_ids.push_back(mid);
+                any_on |= r.enabled;
+            }
+            (any_on ? on_ids : off_ids).insert(mid);
+            continue;
+        }
+        VariantRow& r = row_of(source, cs[0].fighter_dir, mod_label(mid));
+        r.mod_ids.push_back(mid);
+        (r.enabled ? on_ids : off_ids).insert(mid);
     }
     for (auto& ar : g_variant_archives) {
         size_t off = 0;
@@ -5331,8 +11748,9 @@ static void apply_variant_choices(std::vector<std::pair<std::string, std::vector
     }
     if (off_ids.empty()) return;
     std::unordered_set<std::string> used;
-    for (auto& id : on_ids)
-        if (auto it = g_mod_paths.find(id); it != g_mod_paths.end()) used.insert(it->second.begin(), it->second.end());
+    for (auto& [mid, cs] : mods)
+        if (!off_ids.count(mid))
+            if (auto it = g_mod_paths.find(mid); it != g_mod_paths.end()) used.insert(it->second.begin(), it->second.end());
     for (auto& id : off_ids)
         if (auto it = g_mod_paths.find(id); it != g_mod_paths.end())
             for (auto& p : it->second)
@@ -5341,213 +11759,77 @@ static void apply_variant_choices(std::vector<std::pair<std::string, std::vector
                mods.end());
 }
 
-// ============================================================================
-// Fingerprint (paks + costume_mods folders)
-// ============================================================================
-
-// This is a cache identity, not an authenticity check. Stream the relatively small
-// metadata and PAK index; never hash the game's multi-gigabyte PAK payload at launch.
-struct CacheDigest {
-    uint64_t value = 14695981039346656037ull;
-    void add(const void* data, size_t size) {
-        auto p = static_cast<const uint8_t*>(data);
-        for (size_t i = 0; i < size; i++) { value ^= p[i]; value *= 1099511628211ull; }
-    }
-    void text(const std::string& s) {
-        uint64_t size = s.size();
-        add(&size, sizeof size);
-        add(s.data(), s.size());
-    }
-    std::string hex() const {
-        char buf[17];
-        snprintf(buf, sizeof buf, "%016llx", (unsigned long long)value);
-        return buf;
-    }
-};
-
-// The variants variant_choices.json turns off (what it means, not its bytes: a file rewritten with
-// the same choices, or one that only adds true, rebuilds nothing). Empty when every variant is on.
+// The variants variant_choices.json turns off (what it means, not its bytes: a file rewritten with the
+// same choices, or one that only adds true, rebuilds nothing). Empty when every variant is on, so the
+// fingerprint of an install without choices stays as it was. (from ZZtaii's Slotsloader fork (1.10.0), MIT)
 static std::string variant_choices_fingerprint() {
-    CacheDigest d;
+    std::string all;
     size_t n = 0;
     for (auto& [source, labels] : g_variant_choices)
         for (auto& [label, on] : labels)
-            if (!on) { d.text(source); d.text(label); n++; }
-    return n ? ";choices:" + std::to_string(n) + ":" + d.hex() : std::string();
+            if (!on) { all += choice_source_key(source) + "\t" + label + "\n"; n++; }
+    if (!n) return {};
+    char buf[64];
+    snprintf(buf, sizeof buf, ";choices:%zu:%016llx", n, (unsigned long long)fnv1a64(all));
+    return buf;
 }
 
-static bool fingerprint_input_file(CacheDigest& digest, const std::string& path,
-                                   bool executable = false) {
-    digest.text(path);
-    auto wp = make_wide_path(path);
-    WIN32_FILE_ATTRIBUTE_DATA fa;
-    if (!GetFileAttributesExW(wp.c_str(), GetFileExInfoStandard, &fa)) {
-        DWORD error = GetLastError();
-        // The CLI fixtures need no game executable; missing optional static files
-        // must acquire a different identity when they are subsequently supplied.
-        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
-            digest.text("missing");
-            return true;
-        }
-        return false;
-    }
-    if (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
-    uint64_t size = (uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow;
-    digest.text("file");
-    digest.add(&size, sizeof size);
-    uint64_t remaining = size;
-    if (executable) {
-        // Steam changes the EXE's file identity on update. The prefix additionally
-        // covers the PE build headers without reading a large executable in full.
-        digest.add(&fa.ftLastWriteTime, sizeof fa.ftLastWriteTime);
-        remaining = std::min<uint64_t>(remaining, 4096);
-    }
-    FILE* f = _wfopen(wp.c_str(), L"rb");
-    if (!f) return false;
-    std::array<uint8_t, 65536> buffer;
-    bool ok = true;
-    while (remaining) {
-        size_t n = (size_t)std::min<uint64_t>(remaining, buffer.size());
-        if (fread(buffer.data(), 1, n, f) != n) { ok = false; break; }
-        digest.add(buffer.data(), n);
-        remaining -= n;
-    }
-    fclose(f);
-    return ok;
+// The game files probed by the last build (g_loose_probes), one "state<TAB>pak path" per line beside the registry;
+// none: no file. Their digest ends the saved fingerprint (nothing when there are none: a build that probed nothing
+// keeps the fingerprint of a loader without probes); at launch it is computed again from their state then.
+static const char* LOOSE_PROBES_FILE = "loose_probes.tsv";
+static std::string loose_probes_digest(const std::map<std::string, std::string>& probes) {
+    if (probes.empty()) return {};
+    std::string all;
+    for (auto& [p, state] : probes) { all += p; all += '\t'; all += state; all += '\n'; }
+    char buf[64];
+    snprintf(buf, sizeof buf, ";loose:%zu:%016llx", probes.size(), (unsigned long long)fnv1a64(all));
+    return buf;
 }
-
-// wanted: path hashes to look for in the index (the game colour files of the last pak build);
-// each is set to true when a row has it
-static bool fingerprint_base_pak(CacheDigest& digest, const std::string& path,
-                                 std::unordered_map<uint64_t, bool>* wanted = nullptr) {
-    uint64_t size = 0, mtime = 0;
-    if (!file_stat_long(path, size, mtime) || size < 16) return false;
-    FILE* f = _wfopen(make_wide_path(path).c_str(), L"rb");
-    if (!f) return false;
-    std::array<uint8_t, 16> header{};
-    bool ok = fread(header.data(), 1, header.size(), f) == header.size();
-    uint32_t magic = 0, count = 0;
-    memcpy(&magic, header.data(), sizeof magic);
-    memcpy(&count, header.data() + 8, sizeof count);
-    ok = ok && magic == 0x414B504B && header[4] == 4 && count <= (size - 16) / 48;
-    digest.text(path);
-    digest.add(&size, sizeof size);
-    digest.add(header.data(), header.size());
-    // Fluffy zeroes/restores the two path-hash fields and touches the PAK date.
-    // Ignore only those fields and the date. Offsets, compressed/decompressed
-    // sizes, attributes and payload checksums still identify a changed game index.
-    std::array<std::array<uint8_t, 48>, 4096> rows;
-    while (ok && count) {
-        size_t n = std::min<size_t>(count, rows.size());
-        if (fread(rows.data(), 48, n, f) != n) { ok = false; break; }
-        for (size_t i = 0; i < n; i++) {
-            if (wanted && !wanted->empty()) {
-                uint64_t h;
-                memcpy(&h, rows[i].data(), sizeof h);   // hash_lower, hash_upper: the combined hash
-                if (auto w = wanted->find(h); w != wanted->end()) w->second = true;
-            }
-            memset(rows[i].data(), 0, 8);
-        }
-        digest.add(rows.data(), n * 48);
-        count -= (uint32_t)n;
-    }
-    fclose(f);
-    return ok;
-}
-
-static bool game_inputs_fingerprint(const std::string& game_dir, const std::string& base_path,
-                                    const std::string& tsv_path, const std::string& static_dir,
-                                    const StaticMeta& meta, std::string& out,
-                                    std::unordered_map<uint64_t, bool>* wanted = nullptr) {
-    CacheDigest digest;
-    if (!fingerprint_input_file(digest, game_dir + "\\StreetFighter6.exe", true)
-        || !fingerprint_base_pak(digest, base_path, wanted)
-        || !fingerprint_input_file(digest, tsv_path)
-        || !fingerprint_input_file(digest, static_dir + "\\static_meta.json")) return false;
-    // Match the actual static-file selection below, including old metadata's
-    // hardcoded fallback. Unused files in the static directory are not inputs.
-    std::vector<std::string> files;
-    if (meta.files.empty()) {
-        files = {"esf.scn.20", "fightercostumeuserdata.user.2", "fightercostumemessage.msg.21"};
-    } else {
-        for (auto& sf : meta.files) files.push_back(sf.local);
-    }
-    for (auto& local : files)
-        if (!fingerprint_input_file(digest, static_dir + "\\" + local)) return false;
-    out = ";game-inputs=" + digest.hex();
-    return true;
-}
-
-// The game colour files of the last pak build (g_game_colour_probes), one "state<TAB>pak path" per
-// line, saved next to registry.json. Their digest ends the saved fingerprint: at launch it is
-// computed again from their current state, so a change of one of them rebuilds the pak.
-static std::string game_colours_digest(const std::map<std::string, std::string>& probes) {
-    CacheDigest d;
-    for (auto& [path, state] : probes) { d.text(path); d.text(state); }
-    return ";game-colours=" + std::to_string(probes.size()) + ":" + d.hex();
-}
-
-static std::map<std::string, std::string> load_game_colours(const std::string& path) {
+static std::map<std::string, std::string> load_loose_probes(const std::string& path) {
     std::map<std::string, std::string> out;
-    FILE* f = _wfopen(long_w(a2w_path(path)).c_str(), L"rb");
-    if (!f) return out;
-    std::string text;
-    char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
-    fclose(f);
-    size_t at = 0;
-    while (at < text.size()) {
+    const std::string text = read_text_file(path);
+    for (size_t at = 0; at < text.size(); ) {
         size_t e = text.find('\n', at);
         if (e == std::string::npos) e = text.size();
         std::string line = text.substr(at, e - at);
         at = e + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        auto tab = line.find('\t');
+        const auto tab = line.find('\t');
         if (tab == std::string::npos || tab == 0 || tab + 1 >= line.size()) continue;
         out[line.substr(tab + 1)] = line.substr(0, tab);
     }
     return out;
 }
-
-static bool save_game_colours(const std::string& path, const std::map<std::string, std::string>& probes) {
-    std::wstring wp = a2w_path(path), tmp = wp + L".tmp";
-    if (probes.empty()) {
-        DWORD a = GetFileAttributesW(long_w(wp).c_str());
-        return a == INVALID_FILE_ATTRIBUTES || DeleteFileW(long_w(wp).c_str());
-    }
-    FILE* f = _wfopen(long_w(tmp).c_str(), L"wb");
+static std::map<std::string, std::string> current_loose_probes(const std::map<std::string, std::string>& saved) {
+    std::map<std::string, std::string> now;
+    for (auto& sp : saved)
+        // Manager mode: a path looked up only ("there"), or with no loose file then ("none": anything there now builds
+        // again, whatever it holds), is not read; only a loose file the build took content from is
+        now[sp.first] = g_manager_mode && (sp.second == LOOSE_THERE || sp.second == "none") ? loose_exists_state(sp.first)
+                                                                                           : loose_probe_state(sp.first);
+    return now;
+}
+static bool save_loose_probes(const std::string& path, const std::map<std::string, std::string>& probes) {
+    if (probes.empty())
+        return GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES || DeleteFileA(path.c_str());
+    const std::string tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
     bool ok = true;
-    for (auto& [p, state] : probes)
-        ok = fprintf(f, "%s\t%s\n", state.c_str(), p.c_str()) > 0 && ok;
+    for (auto& [p, state] : probes) ok = fprintf(f, "%s\t%s\n", state.c_str(), p.c_str()) > 0 && ok;
     ok = fclose(f) == 0 && ok;
-    if (!ok || !MoveFileExW(long_w(tmp).c_str(), long_w(wp).c_str(), MOVEFILE_REPLACE_EXISTING)) {
-        DeleteFileW(long_w(tmp).c_str());
-        return false;
-    }
+    if (!ok || !MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp.c_str()); return false; }
     return true;
 }
 
-// The state the saved game colour files have now. present: whether re_chunk_000.pak's index has
-// each one (from fingerprint_base_pak). The DLC paks have their own fingerprint, so "dlc" stays
-// "dlc" while re_chunk_000.pak still lacks the file.
-static std::map<std::string, std::string> current_game_colours(
-        const std::map<std::string, std::string>& saved,
-        const std::unordered_map<uint64_t, bool>& present) {
-    std::map<std::string, std::string> now;
-    for (auto& [path, state] : saved) {
-        auto it = present.find(pak_path_hash(std::string_view(path)));
-        if (it != present.end() && it->second) now[path] = "pak";
-        else if (state == "dlc") now[path] = "dlc";
-        else now[path] = loose_colour_state(path);
-    }
-    return now;
-}
+// ============================================================================
+// Fingerprint (paks + costume_mods folders)
+// ============================================================================
 
 static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
                                        const std::vector<FolderModInfo>& folder_infos = {}) {
-    std::string fp = std::string("loader=") + LOADER_BUILD_ID;
+    std::string fp = std::string("loader=") + LOADER_PAK_ID;
     for (auto& pi : mod_paks) {
         WIN32_FILE_ATTRIBUTE_DATA fa;
         if (!GetFileAttributesExA(pi.path.c_str(), GetFileExInfoStandard, &fa)) continue;
@@ -5578,9 +11860,10 @@ static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
                 continue;
             }
         }
-        // Walk all files in abs_path, include relative path + size + mtime. Wide calls with the
-        // long-path prefix: a folder mod with long option names under a deep game folder goes past
-        // MAX_PATH (its files were missing from the fingerprint), and the entry has no fixed size.
+        // Walk all files in abs_path, include relative path + size + mtime. Wide calls with the long-path
+        // prefix (from ZZtaii's Slotsloader fork (1.9.7), MIT): a folder mod with long option names under a
+        // deep game folder goes past MAX_PATH (its files were missing from the fingerprint), and the
+        // entry has no fixed size.
         std::function<void(const std::wstring&, const std::string&)> walk;
         walk = [&](const std::wstring& dir, const std::string& prefix) {
             WIN32_FIND_DATAW fd;
@@ -5643,69 +11926,614 @@ static void open_dlc_paks(const std::string& game_dir, PakReader& base_pak,
     }
 }
 
-// Buying, removing or updating a DLC changes what the game reads.
-static std::string dlc_fingerprint(const std::string& game_dir) {
+// Buying or removing a DLC changes what the game reads: part of the fingerprint. with_date (Manager mode only, as ZZtaii's
+// Slotsloader fork 1.9.5, MIT): each pak's date too, since an update can replace a DLC pak with one of the same size.
+static std::string dlc_fingerprint(const std::string& game_dir, bool with_date = false) {
     std::string fp;
     for (auto& p : dlc_pak_paths(game_dir)) {
         WIN32_FILE_ATTRIBUTE_DATA fa;
         if (!GetFileAttributesExA(p.c_str(), GetFileExInfoStandard, &fa)) continue;
         char buf[400];
-        snprintf(buf, sizeof buf, ";dlc/%s:%llu:%llu", p.substr(p.rfind('\\') + 1).c_str(),
-                 (unsigned long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow),
-                 (unsigned long long)((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32)
-                                       | fa.ftLastWriteTime.dwLowDateTime));
+        snprintf(buf, sizeof buf, ";dlc/%s:%llu", p.substr(p.rfind('\\') + 1).c_str(),
+                 (unsigned long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow));
         fp += buf;
+        if (with_date) {
+            snprintf(buf, sizeof buf, ":%llu", (unsigned long long)((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32)
+                                                                    | fa.ftLastWriteTime.dwLowDateTime));
+            fp += buf;
+        }
     }
     return fp;
 }
 
-// ============================================================================
-// Structural files and vanilla index from the game's own
-// ============================================================================
+// A game update rewrites re_chunk_000.pak: part of the fingerprint, so that the costume pak is built
+// again from the updated game (13/10: the pak of the day before was kept after the update that added
+// Arjun, and its copies of the game's tables hid him).
+static std::string base_pak_fingerprint(const std::string& base_path) {
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExA(base_path.c_str(), GetFileExInfoStandard, &fa)) return {};
+    char buf[96];
+    snprintf(buf, sizeof buf, ";base:%llu:%llu",
+             (unsigned long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow),
+             (unsigned long long)((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32)
+                                  | fa.ftLastWriteTime.dwLowDateTime));
+    return buf;
+}
 
-// The structural files built from the game replace the shipped copies only when they declare at least
-// what the shipped copies do: every shipped slot record (same fighter, costume number, record id and
-// ManageId: saved choices and replays name slots by record) and every shipped structural file. Anything
-// less (a scene Fluffy has invalidated in the base pak's index, a layout an update changed) would hide
-// slots that work today; the shipped copies are then used, as before.
-static bool structural_covers_shipped(const GameStructural& st, const StaticMeta& meta, std::string& why) {
-    std::map<std::pair<int, int>, int> ids;
-    for (auto& r : st.records) ids[{ r.fighter, r.costume_no }] = r.record_id;
-    char buf[256];
-    for (auto& r : meta.records) {
-        auto it = ids.find({ r.fighter, r.costume_no });
-        if (it == ids.end() || it->second != r.record_id || it->second != r.manage_id) {
-            snprintf(buf, sizeof buf, "fighter %d costume %d: the shipped record %d is %s", r.fighter,
-                     r.costume_no, r.record_id, it == ids.end() ? "missing" : "numbered differently");
-            why = buf;
-            return false;
-        }
+// Manager mode only. The game's and the loader's own inputs, by content (ported from ZZtaii's Slotsloader fork 1.9.5, MIT). base_pak_fingerprint
+// sees a base pak of another size or date. A game update can leave both as they were and still change what the costume pak is
+// built from, and an update of the loader's data alone changes neither. One digest of: the game's executable (size, date, its
+// first 4 KiB: the PE build headers), re_chunk_000.pak's header and whole index with the two path-hash fields of each row
+// zeroed (a mod manager turns rows off and on there: that is not a game update), vanilla_costume_index.tsv, static_meta.json
+// and the static files it names. A cache identity, not an authenticity check: the multi-gigabyte payload is never read.
+struct CacheDigest {
+    uint64_t value = 14695981039346656037ull;
+    void add(const void* data, size_t size) {
+        auto p = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < size; i++) { value ^= p[i]; value *= 1099511628211ull; }
     }
-    for (auto& f : meta.files) {
-        bool built = false;
-        for (auto& g : st.files) built = built || g.pak == f.pak_path;
-        if (!built) { why = f.pak_path + " is shipped but was not built"; return false; }
+    void text(const std::string& s) {
+        uint64_t size = s.size();
+        add(&size, sizeof size);
+        add(s.data(), s.size());
+    }
+    std::string hex() const {
+        char buf[17];
+        snprintf(buf, sizeof buf, "%016llx", (unsigned long long)value);
+        return buf;
+    }
+};
+
+// A file that is not there has an identity of its own (the test fixtures have no game executable; a static file supplied
+// later changes the digest). False: there, and not readable.
+static bool fingerprint_input_file(CacheDigest& digest, const std::string& path, bool executable = false) {
+    digest.text(path);
+    auto wp = make_wide_path(path);
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(wp.c_str(), GetFileExInfoStandard, &fa)) {
+        DWORD error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) { digest.text("missing"); return true; }
+        return false;
+    }
+    if (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
+    uint64_t size = (uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow;
+    digest.text("file");
+    digest.add(&size, sizeof size);
+    uint64_t remaining = size;
+    if (executable) {   // Steam changes the executable's date on an update; the prefix covers its PE build headers
+        digest.add(&fa.ftLastWriteTime, sizeof fa.ftLastWriteTime);
+        remaining = std::min<uint64_t>(remaining, 4096);
+    }
+    FILE* f = _wfopen(wp.c_str(), L"rb");
+    if (!f) return false;
+    std::vector<uint8_t> buffer(65536);
+    bool ok = true;
+    while (remaining) {
+        size_t n = (size_t)std::min<uint64_t>(remaining, buffer.size());
+        if (fread(buffer.data(), 1, n, f) != n) { ok = false; break; }
+        digest.add(buffer.data(), n);
+        remaining -= n;
+    }
+    fclose(f);
+    return ok;
+}
+
+// The base pak's table as the index pass sees it, for the questions of the last build (g_asked): which of the wanted hashes
+// a row has, and the turned-off rows (zeros over the hash) with the hashes around them, as PakReader::open keeps them.
+struct BaseRows {
+    std::unordered_map<uint64_t, bool> present;   // in: the hashes to look for (false); out: true when a row has it
+    struct Off { uint64_t after, before; long long offset; };
+    std::vector<Off> off;
+    bool read = false;                            // the whole table was read
+};
+static bool fingerprint_base_index(CacheDigest& digest, const std::string& path, BaseRows* base_rows = nullptr) {
+    uint64_t size = 0, mtime = 0;
+    if (!file_stat_long(path, size, mtime) || size < 16) return false;
+    FILE* f = _wfopen(make_wide_path(path).c_str(), L"rb");
+    if (!f) return false;
+    uint8_t header[16] = {};
+    bool ok = fread(header, 1, sizeof header, f) == sizeof header;
+    uint32_t magic = 0, count = 0;
+    memcpy(&magic, header, sizeof magic);
+    memcpy(&count, header + 8, sizeof count);
+    ok = ok && magic == 0x414B504B && header[4] == 4 && count <= (size - 16) / 48;
+    digest.text(path);
+    digest.add(&size, sizeof size);
+    digest.add(header, sizeof header);
+    std::vector<uint8_t> rows(4096 * 48);
+    uint64_t last = 0;
+    bool sorted = true;
+    size_t open_from = 0;
+    while (ok && count) {
+        size_t n = std::min<size_t>(count, rows.size() / 48);
+        if (fread(rows.data(), 48, n, f) != n) { ok = false; break; }
+        if (base_rows)
+            for (size_t i = 0; i < n; i++) {   // as PakReader::open reads the table
+                uint64_t h; long long at;
+                memcpy(&h, rows.data() + i * 48, 8);
+                memcpy(&at, rows.data() + i * 48 + 8, 8);
+                if (h == 0) { base_rows->off.push_back({last, UINT64_MAX, at}); continue; }
+                if (h < last) sorted = false;
+                for (; open_from < base_rows->off.size(); open_from++) base_rows->off[open_from].before = h;
+                last = h;
+                if (auto w = base_rows->present.find(h); w != base_rows->present.end()) w->second = true;
+            }
+        for (size_t i = 0; i < n; i++) memset(rows.data() + i * 48, 0, 8);   // hash_lower, hash_upper: a mod manager's
+        digest.add(rows.data(), n * 48);
+        count -= (uint32_t)n;
+    }
+    fclose(f);
+    if (base_rows) { if (!sorted) base_rows->off.clear(); base_rows->read = ok; }
+    return ok;
+}
+
+// out: ";game-inputs=<digest>", or left empty (false) when an input could not be read: the fingerprint is then the one of
+// before this check, never a refusal to start.
+static bool game_inputs_fingerprint(const std::string& game_dir, const std::string& base_path, const std::string& tsv_path,
+                                    const std::string& static_dir, const StaticMeta& meta, std::string& out,
+                                    BaseRows* base_rows = nullptr) {
+    CacheDigest digest;
+    if (!fingerprint_input_file(digest, game_dir + "\\StreetFighter6.exe", true)
+        || !fingerprint_base_index(digest, base_path, base_rows)
+        || !fingerprint_input_file(digest, tsv_path)
+        || !fingerprint_input_file(digest, static_dir + "\\static_meta.json")) return false;
+    // the static files the build would take (old metadata: the three hardcoded names); others in the folder are no input
+    std::vector<std::string> files;
+    if (meta.files.empty()) files = {"esf.scn.20", "fightercostumeuserdata.user.2", "fightercostumemessage.msg.21"};
+    else for (auto& sf : meta.files) files.push_back(sf.local);
+    for (auto& local : files)
+        if (!fingerprint_input_file(digest, static_dir + "\\" + local)) return false;
+    out = ";game-inputs=" + digest.hex();
+    return true;
+}
+
+// ---- Manager mode: the questions of the last build and their answers (g_asked), kept in game_lookups.tsv ----
+static const char* GAME_LOOKUPS_FILE = "game_lookups.tsv";
+struct AskedJournal {
+    std::map<uint64_t, bool> strict;         // g_asked_strict: decides
+    std::map<std::string, bool> exists;      // g_exists_asked: decides
+    std::map<uint64_t, bool> found;          // PakReader::Asked::found: for the log
+    std::map<uint64_t, std::string> off;     // PakReader::Asked::off: for the log
+    size_t found_total = 0, off_total = 0;   // read back: how many the build had (more than were kept: asked_log_kept)
+    size_t deciding() const { return strict.size() + exists.size(); }
+};
+// "f" and "o" are for the launch's log line alone, and read at every launch: the first ones are kept, with how many there were.
+// Tests only: SF6_COSTUME_TEST_ASKED_KEPT gives another number.
+static size_t asked_log_kept() {
+    char v[32];
+    const DWORD n = GetEnvironmentVariableA("SF6_COSTUME_TEST_ASKED_KEPT", v, sizeof v);
+    return n > 0 && n < sizeof v ? (size_t)strtoull(v, nullptr, 10) : 300;
+}
+// Ends the saved fingerprint (before the meta id): at launch it is computed again from the answers of then
+static std::string asked_digest(const AskedJournal& j) {
+    CacheDigest d;
+    for (auto& [h, there] : j.strict) { d.add(&h, sizeof h); d.add(&there, 1); }
+    d.text("|");
+    for (auto& [p, there] : j.exists) { d.text(p); d.add(&there, 1); }
+    return ";asked:" + std::to_string(j.deciding()) + ":" + d.hex();
+}
+static AskedJournal asked_by_build() {
+    AskedJournal j;
+    for (uint64_t h : g_asked_strict) j.strict[h] = g_asked_pak && g_asked_pak->has_own(h);
+    j.exists = g_exists_asked;
+    for (auto& [h, there] : g_asked.found) j.found[h] = there;
+    for (auto& [h, rows] : g_asked.off) j.off[h] = rows;
+    return j;
+}
+// One line each: "s<TAB>hash<TAB>0|1", "e<TAB>path<TAB>0|1", "f<TAB>hash<TAB>0|1", "o<TAB>hash<TAB>rows", then
+// "c<TAB>f<TAB>count" and "c<TAB>o<TAB>count" when there were more "f" or "o" than are kept
+static AskedJournal load_asked(const std::string& path) {
+    AskedJournal j;
+    const std::string text = read_text_file(path);
+    for (size_t at = 0; at < text.size(); ) {
+        size_t e = text.find('\n', at);
+        if (e == std::string::npos) e = text.size();
+        std::string line = text.substr(at, e - at);
+        at = e + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.size() < 3 || line[1] != '\t') continue;
+        const std::string rest = line.substr(2);
+        const size_t tab = rest.find('\t');
+        if (tab == std::string::npos) continue;
+        const std::string key = rest.substr(0, tab), value = rest.substr(tab + 1);
+        if (line[0] == 'e') { j.exists[key] = value == "1"; continue; }
+        if (line[0] == 'c') {
+            const size_t n = (size_t)strtoull(value.c_str(), nullptr, 10);
+            if (key == "f") j.found_total = n; else if (key == "o") j.off_total = n;
+            continue;
+        }
+        const uint64_t h = strtoull(key.c_str(), nullptr, 16);
+        if (line[0] == 's') j.strict[h] = value == "1";
+        else if (line[0] == 'f') j.found[h] = value == "1";
+        else if (line[0] == 'o') j.off[h] = value;
+    }
+    j.found_total = std::max(j.found_total, j.found.size());
+    j.off_total = std::max(j.off_total, j.off.size());
+    return j;
+}
+static bool save_asked(const std::string& path, const AskedJournal& j) {
+    const std::string tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    bool ok = true;
+    for (auto& [h, there] : j.strict) ok = fprintf(f, "s\t%016llx\t%d\n", (unsigned long long)h, there ? 1 : 0) > 0 && ok;
+    for (auto& [p, there] : j.exists) ok = fprintf(f, "e\t%s\t%d\n", p.c_str(), there ? 1 : 0) > 0 && ok;
+    const size_t keep = asked_log_kept();
+    size_t n = 0;
+    for (auto& [h, there] : j.found)
+        if (++n <= keep) ok = fprintf(f, "f\t%016llx\t%d\n", (unsigned long long)h, there ? 1 : 0) > 0 && ok;
+    if (n > keep) ok = fprintf(f, "c\tf\t%zu\n", n) > 0 && ok;
+    n = 0;
+    for (auto& [h, rows] : j.off) {
+        if (j.found.count(h)) continue;   // the log counts the hash once, by its "f"
+        if (++n <= keep) ok = fprintf(f, "o\t%016llx\t%s\n", (unsigned long long)h, rows.c_str()) > 0 && ok;
+    }
+    if (n > keep) ok = fprintf(f, "c\to\t%zu\n", n) > 0 && ok;
+    ok = fclose(f) == 0 && ok;
+    if (!ok || !MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp.c_str()); return false; }
+    return true;
+}
+// Tests only: the paths SF6_COSTUME_TEST_TURNED_OFF makes the build read as turned off (costume_loader_run)
+static std::vector<uint64_t> test_turned_off_hashes() {
+    std::vector<uint64_t> out;
+    char zf[MAX_PATH];
+    DWORD zn = GetEnvironmentVariableA("SF6_COSTUME_TEST_TURNED_OFF", zf, MAX_PATH);
+    if (zn == 0 || zn >= MAX_PATH) return out;
+    FILE* f = fopen(zf, "rb");
+    char line[1024];
+    while (f && fgets(line, sizeof line, f)) {
+        std::string p = str_lower(trim_ws(line));
+        if (!p.empty()) out.push_back(pak_path_hash(std::string_view(p)));
+    }
+    if (f) fclose(f);
+    return out;
+}
+// The hashes the index pass has to look for
+static void asked_wanted(const AskedJournal& saved, BaseRows& rows) {
+    for (auto& kv : saved.strict) rows.present[kv.first] = false;
+    for (auto& kv : saved.found) rows.present[kv.first] = false;
+    for (auto& kv : saved.off) rows.present[kv.first] = false;
+    for (auto& kv : saved.exists) rows.present[pak_path_hash(std::string_view(kv.first))] = false;
+}
+// The same questions, answered from the base pak's table as it is now
+static AskedJournal current_asked(const AskedJournal& saved, const BaseRows& rows) {
+    AskedJournal now;
+    auto has = [&](uint64_t h) { auto it = rows.present.find(h); return it != rows.present.end() && it->second; };
+    for (auto& kv : saved.strict) now.strict[kv.first] = has(kv.first);
+    for (auto& kv : saved.found) now.found[kv.first] = has(kv.first);
+    for (auto& kv : saved.off) {
+        const uint64_t h = kv.first;
+        std::string s;
+        if (h != 0 && !has(h))
+            for (auto& t : rows.off) if (t.after < h && h < t.before) { s += std::to_string(t.offset); s += ','; }
+        now.off[h] = s;
+    }
+    for (auto& kv : saved.exists)
+        now.exists[kv.first] = has(pak_path_hash(std::string_view(kv.first))) || loose_file_there(kv.first);
+    return now;
+}
+// Says which deciding answers changed (the first few), with the game's path of a hash when the index names it
+static void log_asked_changes(const AskedJournal& then, const AskedJournal& now, const std::string& tsv_path) {
+    std::string tsv;
+    bool tsv_read = false;
+    auto name = [&](uint64_t h) {
+        char b[40];
+        snprintf(b, sizeof b, "%016llX", (unsigned long long)h);
+        if (!tsv_read) { tsv = read_text_file(tsv_path); tsv_read = true; }
+        const size_t at = tsv.find(std::string("\n") + b + "\t");
+        if (at != std::string::npos) {
+            size_t e = tsv.find('\n', at + 1);
+            if (e == std::string::npos) e = tsv.size();
+            std::string line = tsv.substr(at + 1, e - at - 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const size_t tab = line.rfind('\t');
+            if (tab != std::string::npos && tab + 1 < line.size()) return line.substr(tab + 1);
+        }
+        return std::string("the file of hash ") + b;
+    };
+    size_t n = 0;
+    std::string what;
+    auto say = [&](const std::string& s) { if (++n <= 3) what += (what.empty() ? "" : "; ") + s; };
+    for (auto& kv : then.strict)
+        if (auto it = now.strict.find(kv.first); it == now.strict.end() || it->second != kv.second)
+            say(name(kv.first) + (kv.second ? " (a colour file a slot took: its row is off now)" : " (a colour file: its row is back)"));
+    for (auto& kv : then.exists)
+        if (auto it = now.exists.find(kv.first); it == now.exists.end() || it->second != kv.second)
+            say(kv.first + (kv.second ? " (gone from the game)" : " (in the game now)"));
+    if (n)
+        logf("  the pak is built again: %zu of the %zu game files that decide it are read differently now (a replacement "
+             "installed or removed over the game): %s%s\n", n, then.deciding(), what.c_str(), n > 3 ? "; ..." : "");
+}
+// The pak is kept: says how many of the other game files it was built from are replaced, or back, since
+static void log_asked_kept(const AskedJournal& then, const AskedJournal& now) {
+    size_t n = 0;
+    for (auto& kv : then.found)
+        if (auto it = now.found.find(kv.first); it != now.found.end() && it->second != kv.second && !then.strict.count(kv.first)) n++;
+    for (auto& kv : then.off)
+        if (auto it = now.off.find(kv.first); it != now.off.end() && it->second != kv.second && !then.found.count(kv.first)) n++;
+    const size_t kept = then.found.size() + then.off.size(), total = then.found_total + then.off_total;
+    if (n && total > kept)
+        logf("  %zu of the %zu game files kept for this line (of %zu this pak was built from) are replaced, or back, since (no "
+             "colour file a slot took): the pak is kept, as the Slotsloader fork keeps it\n", n, kept, total);
+    else if (n)
+        logf("  %zu game files this pak was built from are replaced, or back, since (no colour file a slot took): the pak is "
+             "kept, as the Slotsloader fork keeps it\n", n);
+}
+
+// ============================================================================
+// Previous pak as a source (incremental build)
+// ============================================================================
+// After each build pak_sources.tsv (beside the registry) lists where the pak holds the data of every file
+// put in it exactly as read (put_mod_raw / put_mod_data / put_game_raw), by a key naming the same bytes at
+// the next build (lasting_key). Its header names the loader's pak id, the game's paks and the pak itself
+// (name, size, date). The next build takes that data from the pak in place instead of reading the sources
+// again, for every outfit whose files did not change; the pak comes out the same as a full build
+// (costumes/tools/fastpak_test checks it byte for byte). IncrementalPak=off (costume_mods\settings.ini)
+// reads every source again.
+static const char* PAK_SOURCES_FORMAT = "sf6-pak-sources-1";   // change it when what a key means changes
+static const char* PAK_SOURCES_FILE = "pak_sources.tsv";
+
+static std::string pak_sources_header(const std::string& game_fp, const std::string& pak_path) {
+    uint64_t sz = 0, mt = 0;
+    if (!file_stat_long(pak_path, sz, mt)) return {};
+    return std::string(PAK_SOURCES_FORMAT) + "\t" + LOADER_PAK_ID + "\t" + game_fp + "\t"
+         + str_lower(pak_path.substr(pak_path.find_last_of("\\/") + 1)) + "\t" + std::to_string(sz) + "\t" + std::to_string(mt);
+}
+
+static bool load_pak_sources(const std::string& file, const std::string& header,
+                             std::unordered_map<std::string, PakWriter::SourceData>& out) {
+    if (header.empty()) return false;
+    const std::string txt = read_text_file(file);
+    size_t a = txt.find('\n');
+    if (a == std::string::npos || txt.compare(0, a, header) != 0) return false;
+    for (a++; a < txt.size();) {
+        size_t b = txt.find('\n', a);
+        if (b == std::string::npos) b = txt.size();
+        const std::string line = txt.substr(a, b - a);
+        a = b + 1;
+        const size_t t = line.find('\t');
+        if (t == std::string::npos) continue;
+        PakWriter::SourceData s;
+        unsigned long long off, size, sig;
+        long long attr, ds;
+        if (sscanf(line.c_str() + t + 1, "%llu\t%llu\t%lld\t%lld\t%llx", &off, &size, &attr, &ds, &sig) != 5) return false;
+        s.offset = off; s.size = size; s.attributes = attr; s.decompressed_size = ds; s.sig = sig;
+        out[line.substr(0, t)] = s;
     }
     return true;
 }
+
+static void save_pak_sources(const std::string& file, const std::string& header,
+                             const std::vector<std::pair<std::string, PakWriter::SourceData>>& sources) {
+    const std::string tmp = file + ".tmp";
+    FILE* f = header.empty() ? nullptr : fopen(tmp.c_str(), "wb");
+    bool ok = f != nullptr;
+    if (f) {
+        std::setvbuf(f, nullptr, _IOFBF, 1 << 20);
+        fprintf(f, "%s\n", header.c_str());
+        for (auto& [key, s] : sources)
+            fprintf(f, "%s\t%llu\t%llu\t%lld\t%lld\t%llx\n", key.c_str(), (unsigned long long)s.offset,
+                    (unsigned long long)s.size, (long long)s.attributes, (long long)s.decompressed_size,
+                    (unsigned long long)s.sig);
+        ok = fclose(f) == 0;
+    }
+    if (!ok || !MoveFileExA(tmp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileA(tmp.c_str());
+        DeleteFileA(file.c_str());   // an old list would not name this pak: never read anyway
+    }
+}
+
+// ============================================================================
+// Structural files, built from the game's own
+// ============================================================================
+// The costume pak replaces some game files to declare the slots: the root fighter scene and one version
+// scene per season (a via.Folder per slot), the costume table (a record per slot) and the costume name file
+// ("Outfit I" .. "Outfit C"). They are built here from the game's current files, so that an update that
+// adds a fighter or an outfit is taken in without a new release (13/10: the copies shipped in static/,
+// made before the update, hid Arjun and C. Viper's Outfit 4). Same output as make_static_structural.py
+// (checked byte for byte by costumes/tools/structural_test). The shipped copies stay as the fallback.
+
+static const char* VER_SCENE_FMT = "natives/stm/product/flow/version_update/ver_%02d_%04d/esf.scn.20";
+static const uint32_t SLOT_RECORD_ID_BASE = 5000;
+static const uint32_t SLOT_SORT_NO_BASE = 101;
+static const int SLOTS_PER_FIGHTER = 100;   // costume_slot_index() blocks
+
+struct StructuralFiles {
+    bool ok = false;
+    std::string why;                           // when !ok
+    std::vector<StaticRecord> records;         // every slot record of every fighter of the game
+    std::vector<int> fighters;
+    struct File { std::string pak; std::vector<uint8_t> data; };
+    std::vector<File> files;                   // the costume table holds every record (trimmed later)
+    // what the table and the name file were made from, for the slots' labels (apply_outfit_labels)
+    std::vector<uint8_t> game_table, game_msg;
+    std::vector<CostumeSlotRecord> add;
+    std::vector<std::vector<uint8_t>> guids;
+    std::vector<MsgEntry> names;
+};
+
+static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int slot_max) {
+    StructuralFiles st;
+    auto fail = [&](const std::string& why) { st.why = why; st.files.clear(); st.records.clear(); return st; };
+    auto load = [&](const std::string& p, std::vector<uint8_t>& out) {
+        auto* e = base_pak.find(pak_path_hash(std::string_view(p)));
+        if (!e) return false;
+        out = base_pak.read(*e);
+        return !out.empty();
+    };
+    if (slot_max - slot_min + 1 != SLOTS_PER_FIGHTER) return fail("slot range is not 100 slots");
+
+    // Fighters: those of the game's costume table
+    std::vector<uint8_t> table;
+    std::vector<std::pair<int, int>> game_records;
+    if (!load(COSTUME_TBL, table) || !costume_table_records(table, game_records))
+        return fail("costume table not found or not recognised");
+    std::set<int> fighters;
+    for (auto& r : game_records) fighters.insert(r.first);
+    auto dir_of = [](int f) { char b[16]; snprintf(b, sizeof b, "esf%03d", f); return std::string(b); };
+    auto is_fighter = [&](const std::string& dir) {
+        return dir.size() == 6 && fighters.count(atoi(dir.c_str() + 3)) > 0;
+    };
+
+    // Root scene: the fighters that have their Outfit 1 folder there, each slot a copy of it
+    std::vector<uint8_t> root;
+    if (!load(ESF_ROOT, root)) return fail("root fighter scene not found");
+    std::set<std::string> seen;
+    std::vector<std::string> root_dirs;
+    for (auto& [dir, costumes] : scene_costume_folders(root)) {
+        if (!costumes.count(0)) continue;
+        seen.insert(dir);
+        if (is_fighter(dir)) root_dirs.push_back(dir);
+    }
+    std::string err;
+    if (!add_scene_folders(root, root_dirs, false, slot_min, slot_max + 1, &err))
+        return fail("root fighter scene: " + err);
+    st.files.push_back({ ESF_ROOT, std::move(root) });
+
+    // Version scenes: a fighter goes in the first one that has its folders (a later one can add an outfit
+    // to an older fighter: ver_02_0500 has C. Viper's Outfit 4, she stays in ver_02_0300). Probed in game
+    // version order, ver_02_0300 to ver_09_9900 by hundreds (the seasons' scenes: 0300, 0400, 0500): 797
+    // lookups, at a build only. A scene there that cannot be read fails the whole build (the shipped
+    // copies are used): left out, its fighters would get no slot. From ZZtaii's Slotsloader fork 1.9.7, MIT.
+    std::set<std::string> in_scene(root_dirs.begin(), root_dirs.end());
+    for (int ver = 20300; ver <= 99900; ver += 100) {   // ver_MM_mmmm = MM * 10000 + mmmm
+        char p[128];
+        snprintf(p, sizeof p, VER_SCENE_FMT, ver / 10000, ver % 10000);
+        if (!base_pak.find(pak_path_hash(std::string_view(p)))) continue;
+        std::vector<uint8_t> scn;
+        if (!load(p, scn)) return fail(std::string(p) + ": cannot be read");
+        std::vector<std::string> dirs;
+        for (auto& [dir, costumes] : scene_costume_folders(scn)) {
+            if (seen.count(dir)) continue;
+            seen.insert(dir);
+            if (is_fighter(dir)) dirs.push_back(dir);
+        }
+        if (dirs.empty()) continue;
+        if (!add_scene_folders(scn, dirs, true, slot_min, slot_max + 1, &err))
+            return fail(std::string(p) + ": " + err);
+        in_scene.insert(dirs.begin(), dirs.end());
+        st.files.push_back({ p, std::move(scn) });
+    }
+    for (int f : fighters)
+        if (!in_scene.count(dir_of(f))) logf("  WARN: fighter %d is in the costume table but in no fighter scene: no slots for it\n", f);
+
+    // Costume table: 100 records per fighter, ids and sort numbers by fighter block (costume_slot_index)
+    std::vector<std::vector<uint8_t>> guids(SLOTS_PER_FIGHTER);
+    std::vector<MsgEntry> names;
+    for (int so = 0; so < SLOTS_PER_FIGHTER; so++) {
+        char g[64];
+        snprintf(g, sizeof g, "a1b2c3d4-%04x-4000-8000-%012x", so + 1, (unsigned)(STATIC_MSG_ID_BASE + so));
+        guid_bytes(g, guids[so]);
+        names.push_back({ g, "FighterCostumeMessage" + std::to_string(6 + so), "Outfit " + int_to_roman(so + 1) });
+    }
+    std::vector<CostumeSlotRecord> add;
+    for (int f : fighters) {
+        if (!in_scene.count(dir_of(f))) continue;   // no folder to load its slots from: no record either (fork 1.9.7)
+        const int idx = costume_slot_index(f);
+        for (int so = 0; so < SLOTS_PER_FIGHTER; so++) {
+            const uint32_t id = SLOT_RECORD_ID_BASE + (uint32_t)(idx * SLOTS_PER_FIGHTER + so);
+            add.push_back({ id, (uint32_t)f, (uint32_t)(slot_min + so),
+                            SLOT_SORT_NO_BASE + (uint32_t)(idx * SLOTS_PER_FIGHTER + so), (uint32_t)so });
+            st.records.push_back({ f, slot_min + so, (int)id, (int)id });
+        }
+    }
+    st.game_table = table;
+    if (!add_costume_records(table, add, STATIC_MSG_ID_BASE, guids, &err)) return fail("costume table: " + err);
+    st.files.push_back({ COSTUME_TBL, std::move(table) });
+
+    // Names
+    std::vector<uint8_t> msg;
+    if (!load(COSTUME_MSG, msg)) return fail("costume name file not found");
+    st.game_msg = msg;
+    if (!add_msg_entries(msg, names, &err)) return fail("costume name file: " + err);
+    st.files.push_back({ COSTUME_MSG, std::move(msg) });
+    st.add = std::move(add);
+    st.guids = std::move(guids);
+    st.names = std::move(names);
+
+    st.fighters.assign(fighters.begin(), fighters.end());
+    st.ok = true;
+    return st;
+}
+
+// The Random outfit's name per via.Language: the game's own word (CommonMessage756, "Random", copied from its message files
+// on 10/11, as tools/localisation/game_msgs.py reads them); the languages it is not copied for keep the English one
+static std::map<uint32_t, std::string> random_outfit_words() {
+    return {
+        { 0, "\xE3\x83\xA9\xE3\x83\xB3\xE3\x83\x80\xE3\x83\xA0" },                                     // ja
+        { 1, "Random" },                                                                                 // en
+        { 2, "Al\xC3\xA9\x61toire" },                                                                    // fr
+        { 3, "Casuale" },                                                                                // it
+        { 4, "Zufall" },                                                                                 // de
+        { 5, "Aleatorio" },                                                                              // es
+        { 6, "\xD0\x9F\xD1\x80\xD0\xBE\xD0\xB8\xD0\xB7\xD0\xB2\xD0\xBE\xD0\xBB\xD1\x8C\xD0\xBD\xD0\xBE" },   // ru
+        { 7, "Losowo" },                                                                                 // pl
+        { 10, "Aleat\xC3\xB3rio" },                                                                      // pt
+        { 11, "\xEB\x9E\x9C\xEB\x8D\xA4" },                                                              // ko
+        { 12, "\xE9\x9A\xA8\xE6\xA9\x9F" },                                                              // zh-Hant
+        { 13, "\xE9\x9A\x8F\xE6\x9C\xBA" },                                                              // zh-Hans
+        { 21, "\xD8\xB9\xD8\xB4\xD9\x88\xD8\xA7\xD8\xA6\xD9\x8A" },                                      // ar
+        { 32, "Aleatorio" },                                                                             // es-419
+    };
+}
+
+// ============================================================================
+// costume_mods folders of the game's fighters
+// ============================================================================
+
+// A folder per fighter of the game's costume table that the fixed list has none for, named like the
+// others from the game's own name for the fighter. Existing folders are never touched: this only adds
+// names to what ensure_costume_mods_dirs creates.
+static void note_new_fighter_folders(const std::string& game_dir, const std::vector<int>& fighters) {
+    g_extra_character_dirs.clear();
+    // "Edmond Honda" (the game's spelling) is the "E. Honda" folder: a name of several words is compared by its
+    // first letter and its last word, case and dots ignored
+    auto key = [](std::string n) {
+        n = str_lower(n);
+        n.erase(std::remove(n.begin(), n.end(), '.'), n.end());
+        size_t sp = n.rfind(' ');
+        return sp == std::string::npos ? n : n.substr(0, 1) + " " + n.substr(sp + 1);
+    };
+    const auto names = game_fighter_names(game_dir);
+    std::string added;
+    for (int f : fighters) {
+        auto it = names.find(f);
+        if (it == names.end()) continue;
+        const std::string folder = fighter_folder_name(it->second);
+        if (folder.empty()) continue;
+        bool known = false;
+        for (int i = 0; i < N_CHARACTERS; i++)
+            if (key(folder) == key(CHARACTER_NAMES[i])) known = true;
+        for (auto& d : g_extra_character_dirs)
+            if (key(folder) == key(d)) known = true;
+        if (known) continue;
+        g_extra_character_dirs.push_back(folder);
+        added += (added.empty() ? "" : ", ") + folder;
+    }
+    if (!added.empty()) logf("  costume_mods folders for fighters of the game not in the shipped list: %s\n", added.c_str());
+}
+
+// ============================================================================
+// Vanilla index completed from the game
+// ============================================================================
 
 // vanilla_costume_index.tsv lists the costumes of the game it was built from. A costume a game update
 // added (a fighter, an outfit) is missing from it, and a mod for that costume would not be recognised
 // until the index is rebuilt. Such a costume is inventoried here from the game's paks (vanilla_inventory.cpp,
 // the rules of costumes/tools/build_vanilla_inventory.py) and its rows go through the same parser as the
 // TSV's. Costumes the index has cost nothing: finding which are missing is one lookup per possible scene.
-static void complete_vanilla_index(VanillaIndex& inv, PakReader& game, const std::vector<int>& fighters) {
+static void complete_vanilla_index(VanillaIndex& inv, PakReader& base_pak, const std::vector<int>& fighters) {
     const auto t0 = std::chrono::high_resolution_clock::now();
     SuffixMap suffixes = vanilla_known_suffixes();
     for (auto& kv : inv.suffixes) suffixes[kv.first] = kv.second;
     std::string done;
     size_t n = 0;
     for (int f : fighters) {
-        for (int no : vanilla_costume_numbers(game, f, suffixes)) {
+        for (int no : vanilla_costume_numbers(base_pak, f, suffixes)) {
             if (inv.get_costume(f, no)) continue;
             VanillaCostume vc;
             std::string why;
-            if (!vanilla_costume_inventory(game, f, no, suffixes, vc, &why)) {
+            if (!vanilla_costume_inventory(base_pak, f, no, suffixes, vc, &why)) {
                 logf("  WARN: %s is not in the vanilla index and could not be inventoried from the game: %s\n",
                      vanilla_costume_label(f, no).c_str(), why.c_str());
                 continue;
@@ -5733,13 +12561,12 @@ static void complete_vanilla_index(VanillaIndex& inv, PakReader& game, const std
 
 int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_override) {
     auto t0 = std::chrono::high_resolution_clock::now();
+    g_run_t0 = t0;
 
     std::string game_dir = w2a(game_dir_w);
     if (game_dir.empty()) return 1;
-    g_game_dir_w = game_dir_w;
-    while (g_game_dir_w.size() > 3 && (g_game_dir_w.back() == L'\\' || g_game_dir_w.back() == L'/'))
-        g_game_dir_w.pop_back();
-    g_game_colour_probes.clear();
+    g_game_dir = game_dir;
+    g_loose_probes.clear();
 
     // Derive paths
     std::string data_dir = game_dir + "\\reframework\\data\\SF6_Costumes_Data\\loader";
@@ -5748,7 +12575,6 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::string registry_dir = game_dir + "\\reframework\\data\\SF6_Costumes_Data";
     std::string pak_dir = game_dir;
     std::string out_dir = game_dir;
-    std::string variants_path = registry_dir + "\\variants.json";
 
     // Silent exit if loader data dir doesn't exist (MatchScout-only install)
     if (GetFileAttributesA(data_dir.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -5756,10 +12582,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     log_open(game_dir);
     logf("=== SF6 Costume Slot Loader ===\n");
+    // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): its variant choices, read before the fingerprint
+    const std::string variants_path = registry_dir + "\\variants.json";
     g_variant_archives.clear();
+    g_mod_paths.clear();
     load_variant_choices(registry_dir + "\\variant_choices.json");
-    g_swap_repairs = GetFileAttributesA((registry_dir + "\\swap_repairs.txt").c_str()) != INVALID_FILE_ATTRIBUTES;
-    if (g_swap_repairs) logf("  swap repairs: on (swap_repairs.txt)\n");
 
     // Base pak path
     std::string base_path;
@@ -5816,28 +12643,120 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // 3. Classify patch paks
     logf("Scanning patch paks...\n");
-    std::vector<PakInfo> our_paks, our_stubs, mod_paks;
-    int stage_pak_num = 0, unreadable_top = 0;
-    fill_patch_gaps(pak_dir);
-    classify_patch_paks(pak_dir, our_paks, our_stubs, mod_paks, stage_pak_num, unreadable_top);
-    int top_foreign = std::max(stage_pak_num, unreadable_top);   // our pak goes above these
+    std::vector<PakInfo> our_paks, our_stubs, mod_paks, unreadable_paks;
+    int stage_pak_num = 0;
+    classify_patch_paks(pak_dir, our_paks, our_stubs, mod_paks, stage_pak_num, unreadable_paks);
+    drop_temp_paks(pak_dir);
+    int top_foreign = stage_pak_num;   // our pak goes above these
     for (auto& pi : mod_paks) top_foreign = std::max(top_foreign, pi.num);
+    for (auto& pi : unreadable_paks) top_foreign = std::max(top_foreign, pi.num);
     drop_stale_stubs(our_stubs, top_foreign);
     if (stage_pak_num)
         logf("  patch_%03d: stage slots pak, not a costume mod (the costume pak goes above it)\n", stage_pak_num);
+    for (auto& pi : unreadable_paks)
+        logf("  patch_%03d: cannot be read (in use by another program?), kept as another mod's pak (the costume pak goes above it)\n",
+             pi.num);
+    fill_patch_row_holes(pak_dir, top_foreign);
 
     // 3a. Check if costume_mods folder exists (quick existence check)
     std::string costume_mods_dir = game_dir + "\\reframework\\costume_mods";
     bool has_costume_mods = (GetFileAttributesA(costume_mods_dir.c_str()) != INVALID_FILE_ATTRIBUTES);
-    // 3b. Only explicitly supplied costume_mods entries may create slots.
-    if (!has_costume_mods) {
-        logf("  costume_mods folder absent; installed PAKs do not create slots in 1.9.4-custom\n");
-        // Take our old paks out of the row (a placeholder stays where a mod pak sits above)
+    // NSFW outfits: a second root, made with costume_mods (ensure_costume_mods_dirs); read like costume_mods
+    const std::string nsfw_mods_dir = game_dir + "\\reframework\\costume_mods_nsfw";
+    const DWORD nsfw_attr = GetFileAttributesA(nsfw_mods_dir.c_str());
+    const bool nsfw_dir_there = nsfw_attr != INVALID_FILE_ATTRIBUTES && (nsfw_attr & FILE_ATTRIBUTE_DIRECTORY);
+    // Manager mode (common/manager_mode.hpp): the Slotsloader Manager installed this loader
+    std::string mode_why;
+    g_manager_mode = detect_manager_mode(game_dir, registry_dir, &mode_why);
+    // Manager mode: costume_mods_nsfw is not read (as the Manager's own Slotsloader, which had no such folder)
+    const bool has_nsfw_mods = nsfw_dir_there && !g_manager_mode;
+    if (g_manager_mode)
+        logf("  Manager mode: installed by the Slotsloader Manager (manager_installs.json: %s): outfits as the Manager's "
+             "Slotsloader made them (costume_mods only, one outfit per variant)\n", mode_why.c_str());
+    else if (!mode_why.empty())
+        logf("  %s: %s: normal mode (not the Slotsloader Manager's install)\n", manager_mode::kRecordFile,
+             mode_why.c_str());
+    // Character-swap repairs: the Manager's setting (an empty swap_repairs.txt), read in Manager mode only
+    g_swap_repairs = g_manager_mode
+        && GetFileAttributesA((registry_dir + "\\swap_repairs.txt").c_str()) != INVALID_FILE_ATTRIBUTES;
+    if (g_swap_repairs) logf("  swap repairs: on (swap_repairs.txt)\n");
+    // Manager mode only: the plugin's settings.json "menu_outfit_names": false (the Manager's player wants the game's lists as
+    // they are) keeps each slot's "Outfit V" name in the game's lists, in place of its mod's label. A file without that key
+    // takes "menu_additions" (every addition to the game's menus: plugin/src/main.cpp, menus::shown). Installed any other way
+    // neither key is read.
+    g_outfit_labels = true;
+    // Manager mode only: "menu_outfit_options": true keeps one outfit per variant and stores every option of the mod as well,
+    // chosen in game (runtime options, below). Only that key, written true: a file without it changes nothing.
+    bool manager_options = false;
+    if (g_manager_mode) {
+        std::string txt = read_text_file(game_dir + "\\reframework\\data\\SF6_CostumeSlots_data\\settings.json");
+        if (txt.compare(0, 3, "\xEF\xBB\xBF") == 0) txt.erase(0, 3);
+        JsonValue s;
+        const char* by = "menu_outfit_names";
+        if (!txt.empty() && json_parse_text(txt, s) && s.kind == JsonValue::Obj) {
+            const JsonValue* k = s.get(by);
+            if (!k || k->kind != JsonValue::Bool) k = s.get(by = "menu_additions");
+            if (k && k->kind == JsonValue::Bool && !k->b) g_outfit_labels = false;
+            const JsonValue* ko = s.get("menu_outfit_options");
+            manager_options = ko && ko->kind == JsonValue::Bool && ko->b;
+        }
+        if (!g_outfit_labels) logf("  outfit names: the \"Outfit\" names are kept (settings.json \"%s\": false)\n", by);
+    }
+    // Runtime costume options (docs/RUNTIME_OPTIONS.md)
+    {
+        remove_settings_rto_block(costume_mods_dir + "\\settings.ini");   // the old template's block, untouched
+        bool rto_found = false;
+        const std::string rto_v = read_setting(costume_mods_dir + "\\settings.ini", "runtimeoptions", &rto_found);
+        if (rto_found) logf("  RuntimeOptions=%s ignored: runtime options are always on\n", rto_v.c_str());
+        g_rto_slots.clear();
+        g_rto_game.clear();
+        // Manager mode: one outfit per variant, as the Manager's Slotsloader made them. With "menu_outfit_options": true
+        // (above) the same outfits, numbers and rows, and each also carries the options of its own mod for the in-game menu
+        // (RtoLayout::Variants). Nothing of one mod goes on another mod's outfit or on a game outfit there: no retouch,
+        // subset, merge or add-on placement (those belong to RtoLayout::One).
+        g_rto_layout = !g_manager_mode ? RtoLayout::One : manager_options ? RtoLayout::Variants : RtoLayout::Off;
+        logf(!g_manager_mode ? "  runtime options: on (one outfit per modular mod)\n"
+             : manager_options ? "  runtime options: on for each mod's own options (Manager mode: one outfit per variant, "
+                                 "settings.json \"menu_outfit_options\": true)\n"
+                               : "  runtime options: off (Manager mode: one outfit per variant)\n");
+        // Manager mode without options writes no options manifest. One a build in normal mode (or with the options on) left
+        // names the same pak, so the plugin would take it as this pak's and offer its options on outfits that are numbered
+        // otherwise now.
+        if (g_rto_layout == RtoLayout::Off && DeleteFileA((registry_dir + "\\" + RTO_FILE).c_str()))
+            logf("  %s removed (no in-game options in this mode)\n", RTO_FILE);
+        // Manager mode with the options chosen in game only: the parts the Manager added to outfits (manager_parts.json)
+        // are options of those outfits. In every other case the file is not opened and nothing of it counts.
+        g_manager_parts.clear();
+        g_manager_parts_fp.clear();
+        if (g_manager_mode && g_rto_layout == RtoLayout::Variants) load_manager_parts(registry_dir);
+    }
+    // NSFW keywords (docs/RUNTIME_OPTIONS.md, NSFW outfits): ZZtaii's list, or NsfwKeywords= (a comma list replacing it;
+    // given empty: detection off). Manager mode: off (the Manager's Slotsloader hid nothing)
+    bool nsfw_kw_set = false;
+    if (g_manager_mode) {
+        g_nsfw_keywords.clear();
+    } else {
+        const std::string v = read_setting(costume_mods_dir + "\\settings.ini", "nsfwkeywords", &nsfw_kw_set);
+        g_nsfw_keywords = nsfw_kw_set ? nsfw::parse_keywords(v) : nsfw::default_keywords();
+        if (nsfw_kw_set) logf("  NSFW keywords (NsfwKeywords): %s\n", g_nsfw_keywords.empty() ? "none, detection off" : v.c_str());
+    }
+    const bool has_loose = has_loose_files(game_dir);   // Fluffy Mod Manager's loose files
+    // Fluffy is looked for only when it has put files in the game (loose files or a mod pak)
+    g_fluffy = FluffyState{};
+    g_manager = ManagerState{};
+    if (has_loose || !mod_paks.empty()) {
+        if (!g_manager_mode) find_fluffy(game_dir, costume_mods_dir, registry_dir);   // Manager mode: no slot from Fluffy
+        find_manager(game_dir, costume_mods_dir, registry_dir);   // the Slotsloader Manager's Replace-original installs
+    }
+
+    // 3b. No mod paks AND no costume_mods -> clean up and exit
+    if (mod_paks.empty() && !has_costume_mods && !has_nsfw_mods && !has_loose) {
+        logf("  no mod paks found\n");
+        // Delete our old paks
         for (auto& op : our_paks) {
             bool stub = false;
             if (!retire_pak(op, top_foreign, &stub)) { logf("  WARN: cannot remove %s\n", op.path.c_str()); continue; }
-            logf(stub ? "  replaced %s by a marker-only pak (a pak of another mod sits above it)\n"
-                      : "  deleted %s\n", op.path.c_str());
+            logf(stub ? "  replaced %s by a marker-only pak (a pak of another mod sits above it)\n" : "  deleted %s\n", op.path.c_str());
         }
         // Clear possession in registry
         std::string reg_path = registry_dir + "\\registry.json";
@@ -5856,18 +12775,21 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::vector<FolderModInfo> folder_infos;
     // We need to know about costume_mods for the fingerprint, but the full scan
     // requires the VanillaIndex (already loaded). We build folder_infos now.
-    if (has_costume_mods) {
+    // costume_mods_nsfw: the same, its entries named "nsfw:<path>" (none without that folder: the fingerprint is
+    // unchanged)
+    auto prescan = [&](const std::string& root, const std::string& tag) {
+        std::vector<FolderModInfo> found;
         WIN32_FIND_DATAA fd_c;
-        HANDLE hc = FindFirstFileA((costume_mods_dir + "\\*").c_str(), &fd_c);
+        HANDLE hc = FindFirstFileA((root + "\\*").c_str(), &fd_c);
         if (hc != INVALID_HANDLE_VALUE) {
             do {
                 if (fd_c.cFileName[0] == '.') continue;
-                std::string cd = costume_mods_dir + "\\" + fd_c.cFileName;
+                std::string cd = root + "\\" + fd_c.cFileName;
                 if (!(fd_c.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                    // archive dropped straight into costume_mods; other files (notes, the audit
+                    // archive dropped straight into the root; other files (notes, the audit
                     // report) are not read and must not trigger a rebuild
                     if (is_archive_name(fd_c.cFileName))
-                        folder_infos.push_back({ std::string(fd_c.cFileName), cd });
+                        found.push_back({ tag + fd_c.cFileName, cd });
                     continue;
                 }
                 WIN32_FIND_DATAA fd_co;
@@ -5878,8 +12800,8 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                     if (!(fd_co.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
                         && !is_archive_name(fd_co.cFileName)
                         && !str_ends_with(str_lower(fd_co.cFileName), ".pak")) continue;
-                    folder_infos.push_back({
-                        std::string(fd_c.cFileName) + "/" + fd_co.cFileName,
+                    found.push_back({
+                        tag + fd_c.cFileName + "/" + fd_co.cFileName,
                         cd + "\\" + fd_co.cFileName
                     });
                 } while (FindNextFileA(hco, &fd_co));
@@ -5887,43 +12809,138 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             } while (FindNextFileA(hc, &fd_c));
             FindClose(hc);
         }
-        std::sort(folder_infos.begin(), folder_infos.end(),
+        std::sort(found.begin(), found.end(),
                   [](auto& a, auto& b){ return a.rel_path < b.rel_path; });
+        folder_infos.insert(folder_infos.end(), found.begin(), found.end());
+    };
+    if (has_costume_mods) prescan(costume_mods_dir, "");
+    if (has_nsfw_mods) prescan(nsfw_mods_dir, "nsfw:");
+    else if (g_manager_mode && nsfw_dir_there) {   // Manager mode: said when something was put there, nothing of it counted
+        const size_t before = folder_infos.size();
+        prescan(nsfw_mods_dir, "nsfw:");
+        const size_t n = folder_infos.size() - before;
+        folder_infos.erase(folder_infos.begin() + before, folder_infos.end());
+        if (n) logf("  Manager mode: costume_mods_nsfw is not read: the %zu mod%s in it give%s no outfit (the Slotsloader Manager "
+                    "installs to costume_mods)\n", n, n == 1 ? "" : "s", n == 1 ? "s" : "");
     }
+    // Manager mode: not the walk of the game's loose files (a replacement installed there would rebuild every time):
+    // the loose files a build asked for are watched one by one (probe_loose), the rest are not its concern (g_asked)
+    if (has_loose && !g_manager_mode) folder_infos.push_back({ "natives", game_dir + "\\natives\\stm\\product\\model\\esf" });
+    if (!g_fluffy.ini.empty()) {
+        folder_infos.push_back({ "fluffy/installed.ini", g_fluffy.ini });
+        for (auto& pk : g_fluffy.picks) folder_infos.push_back({ "fluffy/" + pk.name, pk.path });
+    }
+    // Manager mode: the Manager's list decides nothing of the pak (outfits come from costume_mods alone, its replacements
+    // are the game's files), and what a replacement changes for a build is asked for itself (g_asked)
+    if (!g_manager.record.empty() && !g_manager_mode) {   // an install / uninstall in the Manager rebuilds
+        auto sl = g_manager.record.find_last_of('\\');
+        folder_infos.push_back({ "manager/" + g_manager.record.substr(sl + 1), g_manager.record });
+    }
+
     // 3d. Fingerprint check for early exit
-    // The game colour files the last pak build took from the game, and their state now
-    std::string game_colours_path = registry_dir + "\\game_colours.tsv";
-    auto saved_colours = load_game_colours(game_colours_path);
-    std::unordered_map<uint64_t, bool> colours_present;
-    for (auto& sc : saved_colours) colours_present[pak_path_hash(std::string_view(sc.first))] = false;
-    std::string game_fp;
-    if (!game_inputs_fingerprint(game_dir, base_path, tsv_path, static_dir, meta, game_fp, &colours_present)) {
-        logf("ERROR: cannot fingerprint game or loader inputs; cached PAK was not reused\n");
-        log_close(); return 1;
+    // Manager mode only (the fingerprint of every other install stays as it was): the game's and the loader's own inputs by
+    // content, for a game update that the base pak's size and date do not show, and each DLC pak's date
+    std::string inputs_fp;
+    // Manager mode: the questions of the last build (g_asked) are answered by the same pass over the base pak's table
+    const std::string lookups_path = registry_dir + "\\" + GAME_LOOKUPS_FILE;
+    AskedJournal asked_then;
+    BaseRows base_rows;
+    if (g_manager_mode) { asked_then = load_asked(lookups_path); asked_wanted(asked_then, base_rows); }
+    if (g_manager_mode && !game_inputs_fingerprint(game_dir, base_path, tsv_path, static_dir, meta, inputs_fp, &base_rows))
+        logf("  WARN: the game's or the loader's own files could not be read for the fingerprint: an update that keeps the base "
+             "pak's size and date is not seen at this launch\n");
+    for (uint64_t h : test_turned_off_hashes())
+        if (auto w = base_rows.present.find(h); w != base_rows.present.end()) w->second = false;
+    // Manager mode: the base pak's size is in the digest and its date says nothing a build depends on (a replacement
+    // installed over the game changes it); without the digest, the size and the date as before
+    std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + dlc_fingerprint(game_dir, g_manager_mode)
+                       + (g_manager_mode && !inputs_fp.empty() ? std::string() : base_pak_fingerprint(base_path)) + inputs_fp;
+    if (g_rto_layout != RtoLayout::Off)   // the options change the pak; off keeps the fingerprint as before
+        new_fp += std::string(";options=") + RTO_FORMAT + (g_rto_layout == RtoLayout::One ? ":one" : ":variants");
+    new_fp += variant_choices_fingerprint();   // empty while every variant is on
+    new_fp += g_manager_parts_fp;              // empty unless manager_parts.json is read (Manager mode, options chosen in game) and there
+    // A change of mode rebuilds (normal mode: unchanged). 2: a costume's add-ons in one sub-folder each give an outfit too; a pak
+    // built before that (test packages of this branch only) is built again
+    // 3: nothing written at the game's own paths, a mod's scene on another body followed whatever it names: a pak built in
+    // Manager mode before that is built again
+    // 4: options of a menu group that names a complete outfit are variants of that outfit (finalize_units, choice_of): a pak
+    // built before that has not got them. A rule that changes what a build makes in Manager mode moves this number: with the
+    // number kept, the pak in place is "Up to date" and the new outfits never come.
+    // 5: the pak is kept after a replacement is installed over the game (g_asked): its questions are not known for a pak
+    // built before that
+    // 6: options under a menu entry that hangs from an add-on of the outfit are a choice for that outfit too (choice_of)
+    // 7: with the options chosen in game, a base copy is made in two more cases: a material file naming a texture the mods
+    // ship in a fighter folder that is no costume folder (written after the slots), and a game file whose row a replacement
+    // turned off, taken from the loose file in the game folder. A pak built before that lacks those copies (an option worn
+    // by default there could not be turned off). Without the options a build makes what it made.
+    // 8: with the options chosen in game, the variants of complete add-ons that all replace the same files are made (as
+    // without them), an outfit with too many add-ons to combine is kept when its add-ons cannot be options, and an added
+    // part's file must have the date of the outfit folder's copy as well as its size.
+    if (g_manager_mode) new_fp += ";manager_mode8";
+    if (!g_outfit_labels) new_fp += ";names=outfit";   // Manager mode's "menu_outfit_names": false: turning it on or off rebuilds
+    if (g_swap_repairs) new_fp += "|swap_repairs";    // turning them on or off rebuilds
+    if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_PAK_ID)
+        std::string k;
+        for (auto& w : g_nsfw_keywords) k += (k.empty() ? "" : ",") + nsfw::compact(w);
+        char h[24];
+        snprintf(h, sizeof(h), "%016llx", (unsigned long long)fnv1a64(k));
+        new_fp += std::string(";nsfwkw=") + h;
     }
-    std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + game_fp + dlc_fingerprint(game_dir)
-                       + variant_choices_fingerprint() + (g_swap_repairs ? "|swap_repairs" : "");
-    // Compared with the saved one: new_fp, then the game colour files of that build as they are now
-    std::string check_fp = new_fp + game_colours_digest(current_game_colours(saved_colours, colours_present));
+    // Compared with the saved one: new_fp, then the game files the last build probed, as they are now (probe_loose)
+    const std::string probes_path = registry_dir + "\\" + LOOSE_PROBES_FILE;
+    std::string check_fp = new_fp + loose_probes_digest(current_loose_probes(load_loose_probes(probes_path)));
+    AskedJournal asked_now;
+    if (g_manager_mode) {
+        asked_now = current_asked(asked_then, base_rows);
+        check_fp += base_rows.read ? asked_digest(asked_now) : std::string(";asked:unread");
+    }
+    const bool options_missing = g_rto_layout != RtoLayout::Off
+        && GetFileAttributesA((registry_dir + "\\" + RTO_FILE).c_str()) == INVALID_FILE_ATTRIBUTES;
     int target_num = top_foreign + 1;
     char target_name[128];
     sprintf(target_name, "re_chunk_000.pak.patch_%03d.pak", target_num);
     std::string target_path = out_dir + "\\" + target_name;
 
+    // The registry keeps the fingerprint followed by ";meta=<LOADER_META_ID>". Same fingerprint but another
+    // meta id (or none: a loader from before the split): the pak would come out the same, only the files
+    // written beside it change. Everything is built again but the pak in place is kept (step 8).
+    const std::string meta_tag = std::string(";meta=") + LOADER_META_ID;
+    bool keep_pak = false;
+    uint32_t keep_entries = 0;
     {
         std::string reg_path = registry_dir + "\\registry.json";
         auto reg_check = load_registry(reg_path.c_str());
-        // variants.json is only written by a scan: without it, scan again (the previous one, from the
-        // same fingerprint, is still right when it is there)
-        const bool have_variants = GetFileAttributesA(variants_path.c_str()) != INVALID_FILE_ATTRIBUTES;
-        if (reg_check.fingerprint == check_fp && !new_fp.empty() && !have_variants)
-            logf("  variants.json missing: mods scanned again to write it\n");
-        if (reg_check.fingerprint == check_fp && !new_fp.empty() && have_variants) {
+        const size_t mt = reg_check.fingerprint.rfind(";meta=");
+        const bool meta_same = mt != std::string::npos && reg_check.fingerprint.compare(mt, std::string::npos, meta_tag) == 0;
+        if (mt != std::string::npos) reg_check.fingerprint.erase(mt);
+        if (g_manager_mode && base_rows.read && reg_check.fingerprint != check_fp) {   // the game's answers changed: said
+            const size_t a = reg_check.fingerprint.rfind(";asked:"), b = check_fp.rfind(";asked:");
+            if (a != std::string::npos && b != std::string::npos && reg_check.fingerprint.compare(a, std::string::npos, check_fp, b, std::string::npos) != 0)
+                log_asked_changes(asked_then, asked_now, tsv_path);
+        }
+        // variants.json (read by the Slotsloader Manager) is written by a build only: missing, the same mods are
+        // built again like for another meta id, the pak in place kept. From ZZtaii's Slotsloader fork 1.10.0, MIT.
+        const bool variants_missing = GetFileAttributesA(variants_path.c_str()) == INVALID_FILE_ATTRIBUTES;
+        if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && meta_same && variants_missing)
+            logf("  variants.json missing: rebuilding\n");
+        if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && (!meta_same || variants_missing)) {
+            uint32_t target_entries = 0;
+            if (our_paks.size() == 1 && _stricmp(our_paks[0].path.c_str(), target_path.c_str()) == 0
+                && classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
+                keep_pak = true;
+                keep_entries = target_entries;
+                if (!meta_same)
+                    logf("  same mods, same pak (%s), files beside it from another loader version: they are written again\n",
+                         LOADER_PAK_ID);
+            }
+        }
+        if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && meta_same && !variants_missing) {
             // Check our pak exists (the real one: a marker-only placeholder holds no costume)
             uint32_t target_entries = 0;
-            if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume
-                && target_entries != 1) {
+            if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
                 sync_outfits_pak(registry_dir + "\\outfits.json", target_name);   // the stage loader may have moved it
+                if (g_rto_layout != RtoLayout::Off) sync_outfits_pak(registry_dir + "\\" + RTO_FILE, target_name);   // same "pak" key
+                if (g_manager_mode) log_asked_kept(asked_then, asked_now);
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match, %s exists) in %.1f ms\n",
                      target_name, std::chrono::duration<double,std::milli>(t1-t0).count());
@@ -5933,9 +12950,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             // has to move, the game reading the patch paks in an unbroken row from 001
             if (our_paks.size() == 1 && MoveFileA(our_paks[0].path.c_str(), target_path.c_str())) {
                 // it came from below a pak that stays: a placeholder takes its place, no hole in the row
-                if (our_paks[0].num < top_foreign && !write_marker_pak(our_paks[0].path.c_str(), PatchPakKind::Costume))
-                    logf("  WARN: could not leave a placeholder at %s\n", our_paks[0].path.c_str());
+                if (our_paks[0].num < top_foreign)
+                    write_marker_pak(our_paks[0].path.c_str(), PatchPakKind::Costume);
                 sync_outfits_pak(registry_dir + "\\outfits.json", target_name);
+                if (g_rto_layout != RtoLayout::Off) sync_outfits_pak(registry_dir + "\\" + RTO_FILE, target_name);
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match), %s moved to %s in %.1f ms\n",
                      our_paks[0].path.c_str(), target_name,
@@ -5957,8 +12975,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     open_dlc_paks(game_dir, base_pak, dlc_readers);
     if (!dlc_readers.empty()) logf("  + %zu DLC paks read over it\n", dlc_readers.size());
     {
-        // Tests only: game files whose pak entries read as turned off (a replacement installed over
-        // the pak by Fluffy), one path per line in the file this variable names
+        // Tests only: game files whose pak entries read as turned off (a replacement installed over the pak
+        // by a mod manager's PAK method), one path per line in the file this variable names. From ZZtaii's
+        // Slotsloader fork (1.9.9), MIT.
         char zf[MAX_PATH];
         DWORD zn = GetEnvironmentVariableA("SF6_COSTUME_TEST_TURNED_OFF", zf, MAX_PATH);
         if (zn > 0 && zn < MAX_PATH) {
@@ -5977,60 +12996,114 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             logf("  test: %d game files read as turned off\n", n);
         }
     }
+    // Manager mode: from here every question put to the base pak's table is kept for the next launch (g_asked)
+    g_asked = PakReader::Asked{};
+    g_exists_asked.clear();
+    g_asked_strict.clear();
+    g_asked_pak = nullptr;
+    // base_pak is this function's: whatever way the build ends, an early return included, nothing points at it after
+    struct AskedPakReset {
+        PakReader& pak;
+        ~AskedPakReset() { pak.record_asked(nullptr); g_asked_pak = nullptr; }
+    } asked_pak_reset{ base_pak };
+    if (g_manager_mode) { base_pak.record_asked(&g_asked); g_asked_pak = &base_pak; }
     load_current_crcs(base_pak);
 
-    // 4b. Structural files from the game's own: every fighter of the game gets its slots, new ones
-    // included. Kept only when they declare at least what the shipped copies do; else the shipped copies.
-    GameStructural structural = build_game_structural(base_pak, meta.slot_min, meta.slot_max, STATIC_MSG_ID_BASE);
-    if (structural.ok && !structural_covers_shipped(structural, meta, structural.why)) structural.ok = false;
-    std::vector<int> game_fighters = structural.fighters;
+    // 4b. Structural files from the game's own: every fighter of the game gets its slots, new ones included
+    StructuralFiles structural = build_structural(base_pak, meta.slot_min, meta.slot_max);
     if (structural.ok) {
-        std::set<int> shipped, with_slots;
+        std::set<int> shipped;
         for (auto& r : meta.records) shipped.insert(r.fighter);
-        for (auto& r : structural.records) with_slots.insert(r.fighter);
         std::string added;
-        for (int f : with_slots)
+        for (int f : structural.fighters)
             if (!shipped.count(f)) added += (added.empty() ? "" : ", ") + std::to_string(f);
-        logf("  structural files built from the game: %zu files, slots for %zu fighters%s%s\n",
-             structural.files.size(), with_slots.size(),
-             added.empty() ? "" : "; not in the shipped tables: fighter ", added.c_str());
-        for (auto& n : structural.notes) logf("  WARN: %s\n", n.c_str());
-        meta.records.clear();
-        for (auto& r : structural.records) meta.records.push_back({ r.fighter, r.costume_no, r.record_id, r.record_id });
+        logf("  structural files built from the game: %zu fighters%s%s\n", structural.fighters.size(),
+             added.empty() ? "" : ", not in the shipped tables: ", added.c_str());
+        meta.records = structural.records;
     } else {
         logf("  WARN: structural files taken from the shipped copies (%s)\n", structural.why.c_str());
-        if (!game_costume_fighters(base_pak, game_fighters))
-            logf("  WARN: the game's costume table cannot be read: the vanilla index is not completed\n");
     }
 
-    // 4c. Costumes of the game that the shipped vanilla index does not know (added by a game update), and
-    // a costume_mods folder for a fighter the shipped list does not name
-    complete_vanilla_index(inv, base_pak, game_fighters);
-    note_new_fighter_folders(base_pak, game_fighters);
+    // 4c. Costumes of the game that the shipped vanilla index does not know (added by a game update)
+    if (structural.ok) complete_vanilla_index(inv, base_pak, structural.fighters);
+    if (structural.ok) note_new_fighter_folders(game_dir, structural.fighters);
+    log_step("game files read");
 
-    // 5. Installed patch PAKs remain resolution sources only. Never enumerate
-    // costumes from them or add them to mods_with_costumes.
+
+    // 5. Scan each mod pak
     std::vector<std::pair<std::string, std::vector<ModCostume>>> mods_with_costumes;
     std::unordered_map<std::string, ModFileRef> all_mod_files;
-    std::unordered_map<uint64_t, std::string> all_upgraded_tex;
+    std::unordered_map<uint64_t, std::string> all_upgraded_tex; // old hash -> current path
     std::vector<std::unique_ptr<PakReader>> mod_pak_readers;
-    std::vector<std::pair<int, PakReader*>> game_patch_readers;
+    std::vector<std::pair<int, PakReader*>> game_patch_readers;   // patch paks the game loads
+
     for (auto& pi : mod_paks) {
+        printf("\n  patch_%03d: %s\n", pi.num, pi.path.c_str());
         auto reader = std::make_unique<PakReader>();
         if (!reader->open(pi.path.c_str())) continue;
-        printf("    patch_%03d: dependency resolution only (no slots)\n", pi.num);
+        note_pak_ident(reader.get(), pi.path);
+        printf("    %zu entries\n", reader->entry_count());
+
+        std::string mod_id = identify_mod_pak(pi.path.c_str());
+        printf("    mod_id: %s\n", mod_id.c_str());
+        {
+            auto sl = pi.path.find_last_of("\\/");
+            g_mod_source[mod_id] = {"fluffy pak", sl == std::string::npos ? pi.path : pi.path.substr(sl + 1)};
+            g_mod_names[mod_id] = g_mod_source[mod_id].source;
+        }
+
+        std::unordered_map<std::string, ModFileRef> known;
+        std::vector<uint64_t> unknown;
+        std::unordered_map<uint64_t, std::string> upgraded_tex;
+        scan_mod_pak(*reader, inv, known, unknown, upgraded_tex);
+        all_upgraded_tex.insert(upgraded_tex.begin(), upgraded_tex.end());
+        printf("    resolved: %zu paths, unattributed: %zu\n", known.size(), unknown.size());
+        if (const ManagerPak* mp = manager_pak_of(pi.path)) {
+            printf("    %s: installed by the Slotsloader Manager (Replace original): no outfit\n", mp->mod.c_str());
+            game_patch_readers.push_back({pi.num, reader.get()});   // the game still loads it
+            mod_pak_readers.push_back(std::move(reader));
+            continue;
+        }
+        if (g_manager_mode) {   // Manager mode: outfits come from costume_mods only
+            printf("    Manager mode: a game pak, no outfit\n");
+            game_patch_readers.push_back({pi.num, reader.get()});   // the game still loads it
+            mod_pak_readers.push_back(std::move(reader));
+            continue;
+        }
+        if (!g_fluffy.claimed.empty() && !known.empty()) {
+            const auto& claimed = fluffy_claimed(inv);
+            if (std::all_of(known.begin(), known.end(), [&](auto& kv) { return claimed.count(kv.first) > 0; })) {
+                printf("    every costume file of it belongs to mods Fluffy Mod Manager installed, "
+                       "read from their archives instead\n");
+                game_patch_readers.push_back({pi.num, reader.get()});
+                mod_pak_readers.push_back(std::move(reader));
+                continue;
+            }
+        }
+
+        auto costumes = detect_mod_costumes(known, inv);
+        for (auto& mc : costumes)
+            printf("    -> %s costume %d (folder %s): %zu files\n",
+                   mc.fighter_dir.c_str(), mc.original_costume_no,
+                   mc.original_folder.c_str(), mc.files_in_folder.size());
+
+        mods_with_costumes.push_back({mod_id, std::move(costumes)});
+        all_mod_files.insert(known.begin(), known.end());
         game_patch_readers.push_back({pi.num, reader.get()});
         mod_pak_readers.push_back(std::move(reader));
     }
 
-    // 5b. The sole source of new costume slots: costume_mods, alphabetical order.
-    if (has_costume_mods) {
+    // 5b. Scan costume_mods folders (merged after paks, alphabetical order), then natives
+    if (has_costume_mods || has_nsfw_mods || has_loose || !g_fluffy.picks.empty()) {
+        g_scan_base_pak = &base_pak;   // retouches are checked against the game's files
         scan_costume_mods(game_dir, inv, mods_with_costumes, all_mod_files,
                           mod_pak_readers, folder_infos, all_upgraded_tex);
-        // 5b'. Variants turned off in variant_choices.json are not built (before 5c: an identical
-        // variant that stays on must not be dropped as a copy of one turned off)
-        apply_variant_choices(mods_with_costumes, all_mod_files);
+        g_scan_base_pak = nullptr;
     }
+    // 5b'. Variants turned off in variant_choices.json are not built (before 5c: an identical variant
+    // that stays on must not be dropped as a copy of one turned off)
+    apply_variant_choices(mods_with_costumes, all_mod_files);
+    log_step("mods scanned");
 
     if (mods_with_costumes.empty() || !std::any_of(mods_with_costumes.begin(),
             mods_with_costumes.end(), [](auto& p){ return !p.second.empty(); })) {
@@ -6042,8 +13115,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                      "Close every Street Fighter 6 and launch the game again.\n", op.path.c_str());
                 log_close(); return 1;
             }
-            logf(stub ? "  replaced %s by a marker-only pak (a pak of another mod sits above it)\n"
-                      : "  deleted %s\n", op.path.c_str());
+            logf(stub ? "  replaced %s by a marker-only pak (a pak of another mod sits above it)\n" : "  deleted %s\n", op.path.c_str());
         }
         std::string reg_path = registry_dir + "\\registry.json";
         auto registry = load_registry(reg_path.c_str());
@@ -6082,7 +13154,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::string reg_path = registry_dir + "\\registry.json";
     auto registry = load_registry(reg_path.c_str());
     printf("\nAssigning slots...\n");
-    auto slots = assign_slots(mods_with_costumes, inv, registry, meta);
+    const std::vector<RegSlot> former_slots = registry.slots;   // for costume_options.json "former"
+    std::map<int, int> random_no;                                 // fighter -> its Random outfit's number (costume_loader_run: "Each character's Random outfit")
+    auto slots = assign_slots(mods_with_costumes, inv, registry, meta, random_no);
     if (slots.empty()) { logf("No slots to create.\n"); write_variants_json(variants_path, {}); log_close(); return 0; }
 
     // Build possession for registry
@@ -6108,6 +13182,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         pos.costume_no = sl.new_costume_no;
         pos.record_id = sl.record_id;
         pos.manage_id = sl.manage_id;
+        pos.nsfw = sl.nsfw;
         pos.name = std::string("Outfit ") + roman;
         sl.outfit_name = pos.name;
         registry.possession.push_back(pos);
@@ -6117,34 +13192,62 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
 
     // 7. Build output pak
+    log_step("slots assigned");
     printf("\nAssembling output pak (minimal)...\n");
     PakWriter writer;
-    std::vector<std::string> structural_paths;
-    if (structural.ok) for (auto& f : structural.files) structural_paths.push_back(f.pak);
-    writer.exclude_hashes(original_asset_hashes(inv, base_pak, dlc_readers, structural_paths));
+    // The big files wait in a scratch file beside the pak, past what the free memory holds without
+    // paging (half of what is free beyond 4 GB, the game itself still to load; 8 GB at most)
+    {
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof(ms);
+        const uint64_t gb = uint64_t(1) << 30;
+        uint64_t keep = 0;
+        if (GlobalMemoryStatusEx(&ms) && ms.ullAvailPhys > 4 * gb) keep = std::min((ms.ullAvailPhys - 4 * gb) / 2, 8 * gb);
+        if (writer.spill_to((target_path + ".spill").c_str(), 1 << 20, keep))
+            logf("  big files kept in memory up to %.1f GB (%.1f GB free), then in %s.spill\n", keep / double(gb),
+                 ms.ullAvailPhys / double(gb), target_name);
+        else
+            logf("  WARN: cannot create %s.spill, the pak is built in memory\n", target_path.c_str());
+    }
+    // The files that did not change since the last build are taken from the pak in place
+    const std::string game_fp = base_pak_fingerprint(base_path) + dlc_fingerprint(game_dir);
+    const std::string sources_path = registry_dir + "\\" + PAK_SOURCES_FILE;
+    {
+        const std::string v = str_lower(read_setting(costume_mods_dir + "\\settings.ini", "incrementalpak"));
+        std::unordered_map<std::string, PakWriter::SourceData> prev;
+        if (v == "off" || v == "0")
+            logf("  IncrementalPak=off: every file read from its source\n");
+        else if (our_paks.size() == 1
+                 && load_pak_sources(sources_path, pak_sources_header(game_fp, our_paks[0].path), prev)
+                 && writer.use_previous(our_paks[0].path.c_str(), std::move(prev)))
+            logf("  files unchanged since the last build taken from %s\n", our_paks[0].path.c_str());
+    }
     std::unordered_set<std::string> written_paths;
 
     g_relocated_mod_paths.clear();
     g_donated_meshes.clear();
+    std::sort(game_patch_readers.begin(), game_patch_readers.end(),
+              [](auto& a, auto& b) { return a.first > b.first; });
+    slotcheck::g_game_patch_paks.clear();
+    for (auto& [num, r] : game_patch_readers) slotcheck::g_game_patch_paks.push_back(r);
     for (auto& sl : slots)
         add_slot_files(writer, written_paths, sl, inv, base_pak, all_mod_files);
 
-    // Manual-only sources do not replace the originals. Keep only new custom
-    // dependencies; never restore assets at paths Fluffy may be replacing.
-    add_unrelocated_dependencies(writer, written_paths, all_mod_files, base_pak);
+    // Restorations
+    add_restorations(writer, written_paths, slots, inv, base_pak, all_mod_files);
+    if (g_rto_layout != RtoLayout::Off) add_game_options(writer, written_paths, inv, base_pak, all_mod_files);
+    log_step("files assembled");
 
     // Slot check: every slot must be loadable as the game will load it, else it is left out
+    std::set<int> random_scene;   // the characters whose Random outfit got the Outfit 1 scene (below)
     {
         slotcheck::Ctx ctx;
         ctx.gf.writer = &writer;
-        ctx.gf.game_dir = game_dir;   // 1.10.1: loose files of PAK-method replacements
-        std::sort(game_patch_readers.begin(), game_patch_readers.end(),
-                  [](auto& a, auto& b) { return a.first > b.first; });
         for (auto& [num, r] : game_patch_readers) ctx.gf.paks.push_back(r);
         ctx.gf.paks.push_back(&base_pak);   // with the DLC paks over it
         ctx.suffixes = &inv.suffixes;
         ctx.all_mod = &all_mod_files;
-        ctx.gf.base = &base_pak;
+        if (g_manager_mode) ctx.originals = &inv.all_hashes;
         printf("\nChecking slots...\n");
         std::vector<SlotInfo> kept;
         int left_out = 0;
@@ -6174,6 +13277,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             slots = std::move(kept);
             name_outfits();
         }
+        log_step("slots checked");
 
         // Colour swatches of the select screen, from each slot's own colour files and masks
         {
@@ -6191,6 +13295,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                     }
             printf("  colour swatches: %d colours for %d slots\n", colours, with);
         }
+        log_step("colour swatches made");
 
         // Every slot number the static scenes declare gets a scene. A choice saved by the game, or a
         // replay, can still name the number of a removed or left-out outfit; with no scene there,
@@ -6203,13 +13308,14 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 auto sd = ctx.gf.load(ci.scene);
                 if (!sd.empty()) outfit1[ci.fighter] = {ci.fighter_dir, std::move(sd)};
             }
-            // A fighter the vanilla index could not take in: its Outfit 1 scene by the game's naming
+            // A fighter newer than the vanilla index: its Outfit 1 scene by the game's naming
             for (auto& r : meta.records) {
                 if (outfit1.count(r.fighter)) continue;
                 char fd[16], p[96];
                 snprintf(fd, sizeof fd, "esf%03d", r.fighter);
                 snprintf(p, sizeof p, "natives/stm/product/charparam/esf/%s/%sv00.scn.20", fd, fd);
-                outfit1[r.fighter] = {fd, ctx.gf.load(p)};
+                auto sd = ctx.gf.load(p);
+                outfit1[r.fighter] = {fd, std::move(sd)};
             }
             for (auto it = outfit1.begin(); it != outfit1.end(); )
                 it = it->second.second.empty() ? outfit1.erase(it) : std::next(it);
@@ -6225,18 +13331,99 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 std::string p = "natives/stm/product/charparam/esf/" + it->second.first + "/" + nm + ".scn.20";
                 slotcheck::put_file(writer, p, it->second.second);
                 n_fallback++;
+                if (auto rn = random_no.find(r.fighter); rn != random_no.end() && rn->second == r.costume_no) random_scene.insert(r.fighter);
             }
             printf("  %d unused slot numbers given the Outfit 1 scene (a save or a replay naming a removed outfit shows Outfit 1)\n",
                    n_fallback);
         }
     }
 
-    // Structural files: built from the game's (4b), else the shipped copies (static_meta.json's list,
-    // else the 3 hardcoded names)
+    // What the game shows for each slot: its mod's label, one name message per slot after the "Outfit I".."Outfit C" ones.
+    // Only the text a record points at changes: its number, its "Outfit V" in the json files, its id stay. Local display: the
+    // game's name file and table, read on this PC; a slot travels as its number (the online alias shows the carrier). With the
+    // shipped copies (no table built here), or if the labels' files can't be made: the "Outfit V" ones.
+    std::unordered_map<uint32_t, uint32_t> label_message;   // record id -> message id
+    // The Random outfits (costume_loader_run: "Each character's Random outfit"): one name message for all of them; a character has its Random outfit once that name and
+    // its Outfit 1 scene are there
+    uint32_t random_message = 0;
+    std::vector<const StaticRecord*> random_records;
+    if (structural.ok) {
+        std::vector<MsgEntry> names = structural.names;
+        std::vector<std::vector<uint8_t>> guids = structural.guids;
+        size_t no_label = 0;
+        for (auto& sl : slots) {
+            auto nm = g_mod_names.find(sl.mod_id);
+            const std::string text = nm == g_mod_names.end() || !g_outfit_labels ? std::string() : outfit_display_name(nm->second);
+            if (text.empty()) { ++no_label; continue; }
+            char g[64];
+            const size_t at = names.size();
+            snprintf(g, sizeof g, "a1b2c3d4-%04x-4000-8000-%012x", (unsigned)(at + 1), (unsigned)(STATIC_MSG_ID_BASE + at));
+            std::vector<uint8_t> gb;
+            if (!guid_bytes(g, gb)) continue;
+            names.push_back({ g, "FighterCostumeMessage" + std::to_string(6 + at), text });
+            guids.push_back(std::move(gb));
+            label_message[(uint32_t)sl.record_id] = STATIC_MSG_ID_BASE + (uint32_t)at;
+        }
+        // after the mods' labels: theirs keep the ids they had
+        size_t random_at = SIZE_MAX;
+        if (!random_scene.empty()) {
+            char g[64];
+            const size_t at = names.size();
+            snprintf(g, sizeof g, "a1b2c3d4-%04x-4000-8000-%012x", (unsigned)(at + 1), (unsigned)(STATIC_MSG_ID_BASE + at));
+            std::vector<uint8_t> gb;
+            if (guid_bytes(g, gb)) {
+                MsgEntry me{ g, "FighterCostumeMessage" + std::to_string(6 + at), "Random" };
+                me.texts = random_outfit_words();
+                names.push_back(std::move(me));
+                guids.push_back(std::move(gb));
+                random_at = at;
+            }
+        }
+        std::vector<uint8_t> table = structural.game_table, msg = structural.game_msg;
+        std::string err;
+        if (add_costume_records(table, structural.add, STATIC_MSG_ID_BASE, guids, &err) && add_msg_entries(msg, names, &err)) {
+            for (auto& f : structural.files) {
+                if (f.pak == COSTUME_TBL) f.data = std::move(table);
+                else if (f.pak == COSTUME_MSG) f.data = std::move(msg);
+            }
+            printf("  outfit names: %zu slots show their mod's label, %zu their \"Outfit\" name\n", label_message.size(), no_label);
+            if (random_at != SIZE_MAX) random_message = STATIC_MSG_ID_BASE + (uint32_t)random_at;
+        } else {
+            label_message.clear();
+            logf("  WARN: outfit labels not written (%s): the slots show their \"Outfit\" names\n", err.c_str());
+        }
+    }
+    // Each character's Random outfit: the last of its Costume row, the character's Outfit 1 scene (given above to every number no
+    // outfit has: its preview is Outfit 1), named Random. Never worn: the plugin draws one of the character's outfits in its place
+    // (plugin/src/random_logic.hpp). In registry.json's possession only ("random": true): it is no mod's outfit, so outfits.json,
+    // variants.json and the options files do not list it.
+    if (random_message) {
+        for (int f : random_scene)
+            if (const StaticRecord* r = meta.find(f, random_no[f])) {
+                random_records.push_back(r);
+                Possession pos;
+                char fd[16];
+                snprintf(fd, sizeof fd, "esf%03d", f);
+                pos.fighter = f;
+                pos.fighter_dir = fd;
+                pos.costume_no = r->costume_no;
+                pos.record_id = r->record_id;
+                pos.manage_id = r->manage_id;
+                pos.name = "Random";
+                pos.random = true;
+                registry.possession.push_back(pos);
+            }
+        printf("  Random outfits: %zu characters, the last outfit of each\n", random_records.size());
+    } else if (!random_no.empty()) {
+        printf("  no Random outfit: %s\n", structural.ok ? "its name could not be written" : "the shipped structural files have no name for it");
+    }
+
+    // Structural files: built from the game's (4b), else the shipped copies (static_meta.json's list, else
+    // the 3 hardcoded names)
     struct SFile { std::string local; std::string pak; };
     std::vector<SFile> sfiles;
     if (structural.ok) {
-        for (auto& f : structural.files) sfiles.push_back({ f.pak.substr(f.pak.find("product/") + 8), f.pak });
+        for (auto& f : structural.files) sfiles.push_back({ "", f.pak });
     } else if (!meta.files.empty()) {
         for (auto& mf : meta.files)
             sfiles.push_back({mf.local, mf.pak_path});
@@ -6250,6 +13437,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         std::vector<uint8_t> data;
         if (structural.ok) {
             for (auto& f : structural.files) if (f.pak == sf.pak) data = std::move(f.data);
+            sf.local = sf.pak.substr(sf.pak.find("product/") + 8);
         } else {
             std::string fp = static_dir + "\\" + sf.local;
             data = read_file_bin(fp.c_str());
@@ -6261,32 +13449,23 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         // The costume table only lists the slots in use: a character the player does not own shows
         // every record of the table, and a reserved slot has no scene to load.
         if (str_ends_with(sf.pak, "fightercostumeuserdata.user.2")) {
-            // Static data reserves our extra records, but its vanilla prefix is
-            // a snapshot. Keep the current game's records after a game update.
-            const auto* current_entry = base_pak.find(pak_path_hash(std::string_view(COSTUME_TBL)));
-            std::string reason;
-            if (!current_entry || !refresh_costume_table(data, base_pak.read(*current_entry), &reason)) {
-                logf("  ERROR: cannot refresh costume table from current game: %s. "
-                     "No replacement PAK was published.\n",
-                     current_entry ? reason.c_str() : "current table missing from base/DLC PAKs");
-                log_close(); return 1;
-            }
-            logf("  costume table: current game records preserved before adding extra slots\n");
             std::unordered_set<uint32_t> keep;
             std::unordered_map<uint32_t, uint32_t> message_for_record;
             for (auto& sl : slots) {
                 keep.insert((uint32_t)sl.record_id);
-                message_for_record[(uint32_t)sl.record_id] =
-                    STATIC_MSG_ID_BASE + uint32_t(roman_to_int(sl.outfit_name.substr(7)) - 1);
+                auto lm = label_message.find((uint32_t)sl.record_id);
+                message_for_record[(uint32_t)sl.record_id] = lm != label_message.end() ? lm->second
+                    : STATIC_MSG_ID_BASE + uint32_t(roman_to_int(sl.outfit_name.substr(7)) - 1);
+            }
+            for (const StaticRecord* r : random_records) {
+                keep.insert((uint32_t)r->record_id);
+                message_for_record[(uint32_t)r->record_id] = random_message;
             }
             size_t kept = 0, removed = 0;
             if (trim_costume_table(data, keep, &kept, &removed, &message_for_record))
                 printf("  costume table: %zu slot records kept, %zu unused ones left out\n", kept, removed);
-            else {
-                logf("  ERROR: refreshed costume table could not be reduced safely. "
-                     "No replacement PAK was published.\n");
-                log_close(); return 1;
-            }
+            else
+                printf("  WARN: costume table layout not recognised, shipped with every reserved record\n");
         }
         size_t dsz = data.size();
         uint64_t h = pak_path_hash(std::string_view(sf.pak));
@@ -6295,10 +13474,6 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         printf("  %s: %s (%zu bytes)\n", structural.ok ? "from the game" : "static", sf.local.c_str(), dsz);
     }
 
-
-    if (writer.excluded_write_count())
-        printf("  WARN: %zu writes to original asset paths excluded to preserve external mods\n",
-               writer.excluded_write_count());
 
     // Mod files made before a game update
     if (!g_crc_upgraded_files.empty())
@@ -6327,14 +13502,31 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         written_paths.insert(MARKER_PATH);
     }
 
-    // 8. Delete old our-paks. A Street Fighter 6 that was just closed often keeps running for a while
-    // with the pak open, which can then be neither deleted nor rewritten (27/09: the pak stayed the old
-    // one while the log said "wrote", and the saved fingerprint kept it for good). Up to ~10 s of
-    // waiting covers a normal exit; past that nothing is changed, the old pak and the old registry
-    // still match, and the next launch tries again.
+    // 8. Write the new pak beside the old ones (<pak>.tmp) and flush it to the disk before anything is
+    // removed: a full disk, a crash or a power cut while writing leaves the previous pak and registry
+    // as they were (the old pak used to be deleted first, and a write cut short left no costumes).
+    // A pak kept (3d) is not written when it would come out with as many entries as it has.
+    const bool write_pak = !keep_pak || writer.entry_count() != keep_entries;
+    const std::string tmp_path = target_path + ".tmp";
+    if (write_pak && !writer.write(tmp_path.c_str(), true)) {
+        DeleteFileA(tmp_path.c_str());
+        logf("ERROR: could not write %s (disk full or access denied), costumes not updated.\n",
+             tmp_path.c_str());
+        log_close(); return 1;
+    }
+    if (write_pak) log_step("new pak written");
+
+    // 9. Old our-paks out, the new one in. A Street Fighter 6 that was just closed often keeps running
+    // for a while with the pak open, which can then be neither deleted nor rewritten (27/09: the pak
+    // stayed the old one while the log said "wrote", and the saved fingerprint kept it for good). Up to
+    // ~10 s of waiting covers a normal exit; past that nothing more is changed, the registry is not
+    // saved, and the next launch tries again. An old pak at the new pak's number is replaced in one
+    // step by the rename.
     for (auto& op : our_paks) {
+        if (!write_pak || _stricmp(op.path.c_str(), target_path.c_str()) == 0) continue;
         bool stub = false;
         if (!retire_pak(op, top_foreign, &stub)) {
+            DeleteFileA(tmp_path.c_str());
             logf("ERROR: %s is in use by another Street Fighter 6 process, costumes not updated. "
                  "Close every Street Fighter 6 (see the Task Manager) and launch the game again.\n",
                  op.path.c_str());
@@ -6344,36 +13536,82 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                   : "  removed old pak: %s\n", op.path.c_str());
     }
 
-    // 9. Write output pak; the registry is saved only once it is on disk
-    if (!writer.write(target_path.c_str())) {
-        DeleteFileA(target_path.c_str());
-        logf("ERROR: could not write %s (disk full or access denied), costumes not updated.\n",
-             target_path.c_str());
-        log_close(); return 1;
+    {
+        std::vector<std::string> pak_names{ target_name };
+        for (auto& op : our_paks) pak_names.push_back(op.path.substr(op.path.find_last_of("\\/") + 1));
+        warn_fluffy_archive_list(registry_dir, pak_names);
     }
-    logf("  wrote %s (%zu entries)\n", target_path.c_str(), writer.entry_count());
+
+    // The registry is saved only once the new pak is in place
+    if (write_pak) {
+        bool moved = false;
+        for (int i = 0; i < 20 && !moved; i++) {
+            moved = MoveFileExA(tmp_path.c_str(), target_path.c_str(),
+                                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+            if (!moved) Sleep(500);
+        }
+        if (!moved) {
+            DeleteFileA(tmp_path.c_str());
+            logf("ERROR: %s is in use by another Street Fighter 6 process, costumes not updated. "
+                 "Close every Street Fighter 6 (see the Task Manager) and launch the game again.\n",
+                 target_path.c_str());
+            log_close(); return 1;
+        }
+    }
+    logf(write_pak ? "  wrote %s (%zu entries)\n" : "  kept %s (%zu entries, the pak this build makes)\n",
+         target_path.c_str(), writer.entry_count());
+    log_step("pak in place");
     if (writer.dedup_count())
         logf("  %zu entries share data with an identical one (%.1f MB not written twice)\n",
              writer.dedup_count(), writer.dedup_bytes() / 1048576.0);
+    if (writer.source_hits())
+        logf("  %zu of them added again from the same file, not read twice (%.1f MB)\n",
+             writer.source_hits(), writer.source_bytes() / 1048576.0);
+    if (writer.spilled_bytes())
+        logf("  %.1f MB held in the spill file while building, not in memory\n", writer.spilled_bytes() / 1048576.0);
+    if (writer.previous_hits())
+        logf("  %zu entries taken from the previous pak, not read from their sources (%.1f MB)\n",
+             writer.previous_hits(), writer.previous_bytes() / 1048576.0);
+    if (write_pak) save_pak_sources(sources_path, pak_sources_header(game_fp, target_path), writer.lasting_sources());
 
-    // 10. Save registry with fingerprint
-    // The game colour files this pak took from the game: saved first, the registry naming their
-    // digest; if they cannot be saved, the next launch rebuilds (no stale pak is kept)
-    if (!save_game_colours(game_colours_path, g_game_colour_probes))
-        logf("  WARN: could not save %s, the costume pak will be rebuilt at the next launch\n",
-             game_colours_path.c_str());
-    {
+    // 10. Save registry with fingerprint (and the game files this build probed: probe_loose)
+    if (!save_loose_probes(probes_path, g_loose_probes))
+        logf("  WARN: could not write %s: the pak is built again at the next launch\n", probes_path.c_str());
+    if (!g_loose_probes.empty()) {
         size_t loose = 0;
-        for (auto& gc : g_game_colour_probes) if (gc.second.compare(0, 6, "loose:") == 0) loose++;
-        if (!g_game_colour_probes.empty())
-            logf("  %zu game files this pak depends on (colour files taken from the game, shared paths of outfits; %zu of them loose files in its natives folder) are watched for changes\n",
-                 g_game_colour_probes.size(), loose);
+        for (auto& lp : g_loose_probes) if (lp.second.compare(0, 6, "loose:") == 0 || lp.second == LOOSE_THERE) loose++;
+        logf("  %zu game files outside the model folders this pak depends on (%zu of them loose files in its natives "
+             "folder) are watched for changes\n", g_loose_probes.size(), loose);
     }
-    registry.fingerprint = new_fp + game_colours_digest(g_game_colour_probes);
+    // The colours follow their outfits to these numbers, the pak being in place: before the registry naming them is saved
+    // (a launch cut short in between builds again, and the pass finds the colours where colour_owners.txt says), and before
+    // outfits.json is written again (the former labels, for the first launch of this loader)
+    follow_colours(game_dir, registry_dir, former_slots, registry.slots);
+    // Manager mode: what this build asked of the base pak, for the next launch (g_asked). Not written: built again then.
+    std::string asked_fp;
+    if (g_manager_mode) {
+        const AskedJournal asked = asked_by_build();
+        base_pak.record_asked(nullptr);
+        g_asked_pak = nullptr;
+        asked_fp = asked_digest(asked);
+        if (!save_asked(lookups_path, asked)) {
+            logf("  WARN: could not write %s: the pak is built again at the next launch\n", lookups_path.c_str());
+            asked_fp = ";asked:unsaved";
+        } else
+            logf("  %zu game files decide whether this pak is kept (%zu colour files the slots took, %zu files the slots refer "
+                 "to; %s)\n", asked.deciding(), asked.strict.size(), asked.exists.size(), GAME_LOOKUPS_FILE);
+    }
+    registry.fingerprint = new_fp + loose_probes_digest(g_loose_probes) + asked_fp + meta_tag;
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);
     write_variants_json(variants_path, slots);
+    if (g_rto_layout != RtoLayout::Off) {
+        write_options_json(registry_dir + "\\" + RTO_FILE, slots, target_name, former_slots);
+        logf("  %s: options of %zu slots, %zu game outfits\n", RTO_FILE, (size_t)std::count_if(slots.begin(), slots.end(),
+             [](const SlotInfo& sl) { return g_rto_slots.count({sl.fighter_dir, sl.new_costume_no}) > 0; }),
+             (size_t)std::count_if(g_rto_game.begin(), g_rto_game.end(), [](const RtoGame& g) { return !g.out.files.empty(); }));
+    }
 
     auto t1 = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();

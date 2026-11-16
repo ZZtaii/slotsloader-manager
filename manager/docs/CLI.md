@@ -11,7 +11,7 @@ Keep `Slotsloader CLI.exe.config` beside `Slotsloader CLI.exe`. In PowerShell:
 
 `list-options` prints component IDs, defaults and file counts. `test-mod` builds the GUI's composition, checks required choices and character identity, reads the selected payload, validates ZIP CRC/size limits, and records SHA256 hashes. It does not install anything. RAR/7Z use an installed 7-Zip, else (or when the installed one is older) the copy in the Manager's `7-Zip` folder, downloaded the first time a RAR/7Z needs it when there is none; override with `--sevenzip 'C:\path\7z.exe'`.
 
-For bundles, choose options explicitly with repeated `--select '<ID>'`, or save an ordered array of IDs and pass `--selection '.\selection.json'`. The empty string is a valid root ID. Later options override earlier ones; main files apply first. An installed `.slots-installer.json` is accepted if its source matches. Missing options and incomplete required groups fail; defaults do not guess a skin/outfit choice.
+For bundles, choose options explicitly with repeated `--select '<ID>'`, or save an ordered array of IDs and pass `--selection '.\selection.json'`. The empty string is a valid root ID. Later options override earlier ones; main files apply first. An installed `.slots-installer.json` is accepted if its source matches. Missing options and an empty selection fail. Leaving out what the mod marks as needed (a required group, a parent, main files) installs with a warning naming it. Defaults do not guess a skin/outfit choice.
 
 Use `--character 'A.K.I'` or `--character esf013` to resolve ambiguity; this does not retarget assets. Use `--json -` for machine-readable stdout. A report file must be new and outside the source/game. Exit codes: **0** passed, **1** validation failure, **2** invalid arguments, **130** Ctrl+C cancellation.
 
@@ -65,6 +65,7 @@ $game = '<game folder>'
 | `preset-map <file.prt>` | Shows how an external preset (`.prt`) maps to the configured libraries. Read-only. |
 | `variants [--set <source> <label> on/off]` | (2.5.0) Variants of archives and folders dropped into costume_mods: list, or turn one on or off (see below). |
 | `pak-repair [--yes]` | (2.4.2) Game entries another tool left invalidated (zeroed PAK entries no installed mod owns). A dry run lists each with the hash it would restore and its proof (TOC backup, the mod manager's archive list, or hash(path) between the neighbouring entries); `--yes` restores the proven ones. Refused while SF6 or the mod manager runs. |
+| `loader-flags [--menus on\|off] [--show <names>] [--hide <names>] [--others-see outfit1\|drivetech]` | (1.0.19) What this Manager sets for a Slots Loader of the SF6 Mod Suite line that it installed: what its plugin adds to the game's menus, each with its own switch (all off unless turned on), and the check for updates inside the game, which the Manager always keeps off. `--menus` sets every switch at once; `--show` and `--hide` take names separated by commas: `names` (mod names in the costume lists), `options` (costume options in the game), `fighter-settings` (mod name on Fighter Settings), `online-outfit` (Outfit Others See), `title-screen` (Title Screen Selection), `interface-packs` (Interface Packs), `replays` (the Settings tab in the Replays menu). `--others-see` sets the game outfit other players see in place of an extra outfit. Options apply in the order given. Without options, shows each choice and what the game folder holds. Written while SF6 is closed; applies at the next launch. |
 
 Exit codes: **0** success, **1** refused or failed (the reason is printed), **2** invalid arguments, **130** cancelled.
 
@@ -109,27 +110,27 @@ An archive or folder you dropped into `costume_mods` can hold several variants. 
 & '.\Slotsloader CLI.exe' loader-fetch --library '<manager folder>\Games\SF6\Mods' --no-download
 ```
 
-`loader-fetch` finds the one Slotsloader build the app installs (since 2.5.9 the newest published `loader-v*` release of ZZtaii/slotsloader-manager when the Manager was packaged; 2.4.3–2.5.8 `loader-v1.9.8`, 1.9.7 before):
+`loader-fetch` finds the one Slotsloader build the app installs (1.0.19: the approved entry of `dependencies.json` when the Manager was built):
 0. the copy bundled with the Manager (`Slotsloader\<asset>` beside the exe, 2.5.9) if it verifies;
 1. a file in a library (top level, any name) with that SHA-256 (only files of exactly that size are hashed);
 2. else `Data\downloads\<asset>` if it still verifies (a copy that doesn't is deleted);
 3. else it downloads it over HTTPS (system proxy, redirects only to HTTPS, 30 s time-out, Ctrl+C cancels) into `Data\downloads\<asset>.part`, stops if it grows past the pinned size, checks size and SHA-256 and only then renames it. `--no-download` skips this step.
 
-It prints the pin, `Hashed N library file(s) of the pinned size.`, `Source: copy bundled with the Manager|library|cached download|download`, `Path:` and `SHA-256:`. It installs nothing and never writes into a library. `--library <dir>` (repeatable) replaces the libraries from Settings. Exit codes: **0** found or downloaded and verified, **1** not found with `--no-download` or the download failed (`ERROR: Couldn't download Slotsloader 1.9.7: <reason>. …`), **2** invalid arguments, **130** cancelled.
+It prints the pin, `Hashed N library file(s) of the pinned size.`, `Source: copy bundled with the Manager|library|cached download|download`, `Path:` and `SHA-256:`. It installs nothing and never writes into a library. `--library <dir>` (repeatable) replaces the libraries from Settings. Exit codes: **0** found or downloaded and verified, **1** not found with `--no-download` or the download failed (`ERROR: Couldn't download Slotsloader <version>: <reason>. …`), **2** invalid arguments, **130** cancelled.
 ## Updates (2.4.0)
 
 ```powershell
-& '.\Slotsloader CLI.exe' update-check                          # installed vs latest for Slotsloader and Slotsloader Manager
-& '.\Slotsloader CLI.exe' update-check --include-prereleases    # test builds too
+& '.\Slotsloader CLI.exe' update-check                          # installed vs approved Slotsloader, installed vs latest Manager
+& '.\Slotsloader CLI.exe' update-check --include-prereleases    # Manager test builds too
 & '.\Slotsloader CLI.exe' update-install loader --yes           # download, verify, install Slotsloader in place (Replace mode)
 & '.\Slotsloader CLI.exe' update-install manager --yes          # download, verify, replace the 7 app files (Data untouched)
 & '.\Slotsloader CLI.exe' update-rollback                       # put back the app files kept before the last update
 & '.\Slotsloader CLI.exe' loader-pak-remove                     # Slotsloader not installed: remove its leftover costume pak
 ```
 
-- The source is the GitHub Releases API of ZZtaii/slotsloader-manager (one unauthenticated request). Slotsloader releases are tagged `loader-v*`, app releases `manager-v*` (since 1.0.0 the private builds' `installer-v*` tags are ignored). Drafts are ignored; pre-releases only with `--include-prereleases` (or the Settings option). A release is offered only when its zip (the app: the `*-portable.zip`) has a SHA-256: GitHub's asset digest, else a `SHA256SUMS.txt` in the release; otherwise it is listed as refused.
-- `update-check` prints the installed version (Slotsloader: from the zip this app installed it from), the latest release with its tag, asset, size, SHA-256 and where the checksum came from, and refused releases.
-- `update-install` without `--yes` only says what it would install and exits 1. Downloads go through HTTPS only, are checked (size and SHA-256) before use and kept in `Data\downloads`. Slotsloader is installed over the recorded one at the same priority (the genuine amd_ags_x64.dll backup stays); a Slotsloader that was never installed by the app gets the newest known release (never older than 1.9.7). The app update renames the running executables to `*.old` (removed at the next start), keeps the previous 7 files in `Data\updates\previous` and puts everything back if any copy fails.
+- Slotsloader (1.0.19): the approved `slots_loader` entry of `dependencies.json` (main branch of ZZtaii/slotsloader-manager); the zip comes only from the Wael3rd/SF6-ModSuite release it names. The Manager: the GitHub Releases API of ZZtaii/slotsloader-manager, tags `manager-v*`. Drafts are ignored; pre-releases only with `--include-prereleases` (or the Settings option). A release is offered only when its `*-portable.zip` has a SHA-256: GitHub's asset digest, else a `SHA256SUMS.txt` in the release; otherwise it is listed as refused.
+- `update-check` prints the installed version (Slotsloader: from the zip this app installed it from), the approved Slotsloader and the latest Manager with tag, asset, size and SHA-256, and refused releases.
+- `update-install` without `--yes` only says what it would install and exits 1. Downloads go through HTTPS only, are checked (size and SHA-256) before use and kept in `Data\downloads`. Slotsloader is installed over the recorded one at the same priority (the genuine amd_ags_x64.dll backup stays); a Slotsloader that was never installed by the app gets the approved version too. The app update renames the running executables to `*.old` (removed at the next start), keeps the previous 7 files in `Data\updates\previous` and puts everything back if any copy fails.
 - `loader-pak-remove` refuses while SF6 runs or while a Slotsloader is installed. `replace-status` lists every patch pak (`Patch PAKs: re_chunk_000.pak.patch_001.pak (generated by Slotsloader, 8724 entries, 1.7 GB)`, another mod's, the stage pak) and says when Slotsloader's pak is left over. 1.0.11: each mod PAK names its owner, `(this Manager's mod 'NAME')` (with `, disabled` and `, empty placeholder` when they apply) or `(the external mod manager's mod 'NAME')`; `(another mod's, left alone)` only when no external mod manager is found. A patch PAK no mod manager lists reads `(leftover: no mod manager lists it, 48.0 MB)`, the empty 16-byte placeholder `(empty placeholder)`, and a line "N leftover PAKs not listed by any mod manager (SF6 still loads them): … (remove: select it on the Installed page, then Remove PAK)." follows; there is no CLI command to remove one.
 ## After moving the app folder (2.1.0)
 

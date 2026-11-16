@@ -125,7 +125,7 @@ namespace SlotsInstaller
             if (a.OptionIds.Count == 0) a.OptionIds = Composer.DefaultSelection(package, true);
             a.OptionNames = a.OptionIds.Select(id => package.Find(id)).Where(c => c != null && !c.IsDummy).Select(c => c.Name).ToList();
             CompositionPlan plan = Composer.Plan(package, a.OptionIds, true);
-            errors.AddRange(plan.Errors);
+            errors.AddRange(plan.StrictErrors());   // 1.0.19: the Assistant keeps the strict rules (MissingNeed)
             ReplaceEngine engine = workspace.Engine();
             FluffyInstalls fluffy = engine.Fluffy();
             ReplaceState state = engine.LoadState();
@@ -211,7 +211,7 @@ namespace SlotsInstaller
             if (a.OptionIds.Count == 0) { errors.Add("Select at least one option (include the main files)."); return null; }
             a.OptionNames = a.OptionIds.Select(id => package.Find(id)).Where(c => !c.IsDummy).Select(c => c.Name).ToList();
             CompositionPlan plan = Composer.Plan(package, a.OptionIds);
-            errors.AddRange(plan.Errors);
+            errors.AddRange(plan.StrictErrors());   // 1.0.19: the Assistant keeps the strict rules (MissingNeed)
             string wrong = AssistantWorkspace.CharacterOfFiles(plan, a.Character);
             if (wrong != null) errors.Add(wrong);
             string name = a.OutfitName ?? "";

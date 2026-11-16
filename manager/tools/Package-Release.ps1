@@ -1,9 +1,9 @@
-# 2.5.9: builds the Manager release zip with the newest published Slotsloader inside it.
-#  1. Asks GitHub (gh, signed in) for the newest non-draft, non-pre-release loader-v* release of ZZtaii/slotsloader-manager,
-#     with exactly one .zip asset and GitHub's sha256 digest. Refuses a release older than the current pin unless
-#     -AllowOlderLoader (so a Manager never ships an older loader than the one it already pins).
-#  2. Downloads that zip, checks its size and SHA-256 against the digest, and rewrites assets\loader-pin.json.
-#  3. Builds (build.ps1 embeds the pin) and packs Slotsloader-Manager-<version>-portable.zip: the Manager exe, its
+# 2.5.9: builds the Manager release zip with the approved Slotsloader inside it. 1.0.19: the approved one is the
+# slots_loader entry of the repository's dependencies.json (one source of truth: build.ps1 embeds the same file).
+#  1. Reads ..\dependencies.json (format 1, source Wael3rd/SF6-ModSuite) and its slots_loader entry.
+#  2. Downloads that file from https://github.com/<source>/releases/download/<release>/<file> (or takes -LoaderZip) and
+#     checks its size and SHA-256 against the list. Nothing is rewritten.
+#  3. Builds (build.ps1 embeds the list) and packs Slotsloader-Manager-<version>-portable.zip: the Manager exe, its
 #     config and README.md at the root plus
 #     Slotsloader\<loader zip>, then SHA256SUMS.txt beside it.
 #  4. 1.0.11: 7-Zip is NOT in the zip: a Manager 1.0.10 or older refuses an update zip with a 7-Zip folder ("unexpected
@@ -12,30 +12,19 @@
 #     7-Zip\7z.exe, 7z.dll and License.txt in (x64, unmodified, from -SevenZipDir, default: the installed 7-Zip), for
 #     a zip that is never offered as an update.
 # Nothing is published: the commands to do that are printed at the end.
-# -LoaderZip <path>: use this local zip instead of downloading (it must match the pin, or the newest release's
-#  digest when fetching). -NoLoaderFetch: keep assets\loader-pin.json as it is (offline); needs -LoaderZip or a
-#  cached copy in <output>\loader-cache.
-param([string]$OutputDirectory = '', [switch]$NoLoaderFetch, [switch]$AllowOlderLoader, [string]$LoaderZip = '', [string]$TestReport = '', [string]$SevenZipDir = '', [switch]$BundleSevenZip)
+# -LoaderZip <path>: use this local zip instead of downloading (it must match the list). -NoLoaderFetch: never
+#  download (offline); needs -LoaderZip or a cached copy in <output>\loader-cache.
+param([string]$OutputDirectory = '', [switch]$NoLoaderFetch, [string]$LoaderZip = '', [string]$TestReport = '', [string]$SevenZipDir = '', [switch]$BundleSevenZip)
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $repo = 'ZZtaii/slotsloader-manager'
-$pinFile = Join-Path $project 'assets\loader-pin.json'
+$listFile = Join-Path (Split-Path -Parent $project) 'dependencies.json'
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $project ('out\release-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 if ((Test-Path -LiteralPath $OutputDirectory) -and (Get-ChildItem -LiteralPath $OutputDirectory -Force | Select-Object -First 1)) { throw "Choose a new or empty output directory: $OutputDirectory" }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $cache = Join-Path $OutputDirectory 'loader-cache'; New-Item -ItemType Directory -Path $cache -Force | Out-Null
 
-function Get-LoaderVersion([string]$text) {
-    $m = [regex]::Match($text, '(\d+)\.(\d+)(?:\.(\d+))?')
-    if (-not $m.Success) { throw "No version in '$text'." }
-    $build = if ($m.Groups[3].Success) { $m.Groups[3].Value } else { '0' }
-    return [version]('{0}.{1}.{2}' -f $m.Groups[1].Value, $m.Groups[2].Value, $build)
-}
 function Get-Sha256([string]$path) { return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant() }
-function Write-Pin($pin) {
-    $text = "{`n  ""tag"": ""$($pin.tag)"",`n  ""version"": ""$($pin.version)"",`n  ""asset"": ""$($pin.asset)"",`n  ""size"": $($pin.size),`n  ""sha256"": ""$($pin.sha256)""`n}`n"
-    [IO.File]::WriteAllText($pinFile, $text, (New-Object Text.UTF8Encoding($false)))
-}
 
 # 4 (checked first, so a missing 7-Zip stops before anything is downloaded or rewritten).
 $sevenFiles = @('7z.exe', '7z.dll', 'License.txt'); $sevenVersion = ''
@@ -54,46 +43,29 @@ if ($BundleSevenZip) {
     Write-Output "7-Zip $sevenVersion from $SevenZipDir"
 }
 
-$current = Get-Content -LiteralPath $pinFile -Raw | ConvertFrom-Json
-$pin = [ordered]@{ tag = $current.tag; version = $current.version; asset = $current.asset; size = [long]$current.size; sha256 = ([string]$current.sha256).ToUpperInvariant() }
+# 1. The approved entry.
+if (-not (Test-Path -LiteralPath $listFile)) { throw "dependencies.json is missing: $listFile" }
+$list = [IO.File]::ReadAllText($listFile) | ConvertFrom-Json
+$entry = $list.packages.slots_loader
+if ($list.format -ne 1 -or $list.source -ne 'Wael3rd/SF6-ModSuite' -or -not $entry) { throw 'dependencies.json: expected format 1, source Wael3rd/SF6-ModSuite and a slots_loader entry.' }
+if (-not $entry.version -or [string]$entry.release -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$' -or [string]$entry.file -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.zip$' -or [string]$entry.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or -not ([long]$entry.size -gt 0)) { throw 'dependencies.json: the slots_loader entry is malformed.' }
+$pin = [ordered]@{ version = [string]$entry.version; release = [string]$entry.release; asset = [string]$entry.file; size = [long]$entry.size; sha256 = ([string]$entry.sha256).ToUpperInvariant() }
+$url = 'https://github.com/' + $list.source + '/releases/download/' + [uri]::EscapeDataString($pin.release) + '/' + [uri]::EscapeDataString($pin.asset)
+Write-Output ("Approved Slots Loader: {0} ({1} release {2}), {3}, {4} bytes, SHA-256 {5}" -f $pin.version, $list.source, $pin.release, $pin.asset, $pin.size, $pin.sha256)
 
-# 1. The newest published loader release.
-if (-not $NoLoaderFetch) {
-    $json = (& gh api "repos/$repo/releases?per_page=100") -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw "gh api failed (signed in with access to $repo?)." }
-    $all = ConvertFrom-Json $json   # a variable, so the array is enumerated (PowerShell 5.1 pipes it as one item)
-    $loaders = @($all | Where-Object { $_.tag_name -like 'loader-v*' -and -not $_.draft -and -not $_.prerelease } | Sort-Object { Get-LoaderVersion $_.tag_name.Substring(8) } -Descending)
-    if ($loaders.Count -eq 0) { throw "No published loader-v* release on $repo." }
-    $newest = $loaders[0]
-    $zips = @($newest.assets | Where-Object { $_.name -like '*.zip' })
-    if ($zips.Count -ne 1) { throw "$($newest.tag_name) has $($zips.Count) .zip assets (expected one)." }
-    $asset = $zips[0]
-    if ([string]$asset.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw "$($newest.tag_name): GitHub shows no sha256 digest for $($asset.name)." }
-    $digest = $Matches[1].ToUpperInvariant()
-    $newestVersion = Get-LoaderVersion $newest.tag_name.Substring(8)
-    if ($newestVersion -lt (Get-LoaderVersion $pin.version) -and -not $AllowOlderLoader) {
-        throw "The newest published Slotsloader is $($newest.tag_name), older than the current pin $($pin.tag). Publish $($pin.tag) (or newer) first, or pass -AllowOlderLoader."
-    }
-    $pin = [ordered]@{ tag = $newest.tag_name; version = $newest.tag_name.Substring(8); asset = $asset.name; size = [long]$asset.size; sha256 = $digest }
-    Write-Output ("Newest Slotsloader release: {0}, {1}, {2} bytes, SHA-256 {3}" -f $pin.tag, $pin.asset, $pin.size, $pin.sha256)
-}
-
-# 2. The zip, verified against the pin.
+# 2. The zip, verified against the list.
 $zipPath = Join-Path $cache $pin.asset
 if ($LoaderZip) { Copy-Item -LiteralPath $LoaderZip -Destination $zipPath -Force }
 elseif (-not (Test-Path -LiteralPath $zipPath)) {
-    if ($NoLoaderFetch) { throw "-NoLoaderFetch needs -LoaderZip (the pinned $($pin.asset))." }
-    & gh release download $pin.tag --repo $repo --pattern $pin.asset --dir $cache --clobber
-    if ($LASTEXITCODE -ne 0) { throw "gh release download $($pin.tag) failed." }
+    if ($NoLoaderFetch) { throw "-NoLoaderFetch needs -LoaderZip (the approved $($pin.asset))." }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
 }
 $size = (Get-Item -LiteralPath $zipPath).Length; $hash = Get-Sha256 $zipPath
-if ($size -ne $pin.size -or $hash -ne $pin.sha256) { throw "$($pin.asset) is $size bytes, SHA-256 $hash; the pin says $($pin.size) bytes, $($pin.sha256). Nothing was built." }
+if ($size -ne $pin.size -or $hash -ne $pin.sha256) { Remove-Item -LiteralPath $zipPath -Force; throw ("The approved hash in dependencies.json differs from the file: $($pin.asset) is $size bytes, SHA-256 $hash, but dependencies.json approves $($pin.size) bytes, SHA-256 $($pin.sha256). " + $(if ($size -eq $pin.size) { "Same size, other bytes: the release asset was probably re-uploaded under the same name; approve the new file (update dependencies.json) or use the approved one with -LoaderZip. " } else { "" }) + "Nothing was built.") }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $probe = [IO.Compression.ZipFile]::OpenRead($zipPath); $entries = $probe.Entries.Count; $probe.Dispose()
 if ($entries -eq 0) { throw "$($pin.asset) is an empty zip." }
-if ($pin.tag -ne $current.tag -or $pin.sha256 -ne ([string]$current.sha256).ToUpperInvariant()) { Write-Pin $pin; Write-Output "assets\loader-pin.json now pins $($pin.tag) (was $($current.tag))." }
-else { Write-Output "assets\loader-pin.json already pins $($pin.tag)." }
-
 # 3. Build and pack.
 $build = Join-Path $OutputDirectory 'build'
 & (Join-Path $project 'build.ps1') -OutputDirectory $build
@@ -105,7 +77,7 @@ foreach ($f in @('Slotsloader Manager.exe', 'Slotsloader Manager.exe.config')) {
 }
 Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination $stage
 Copy-Item -LiteralPath $zipPath -Destination (Join-Path $stage 'Slotsloader')
-$validation = @("Slotsloader Manager $version", "Built $(Get-Date -Format 'yyyy-MM-dd HH:mm') by tools\Package-Release.ps1.", "Bundled Slotsloader: $($pin.tag), Slotsloader\$($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256)")
+$validation = @("Slotsloader Manager $version", "Built $(Get-Date -Format 'yyyy-MM-dd HH:mm') by tools\Package-Release.ps1.", "Bundled Slots Loader $($pin.version): $($list.source) release $($pin.release), Slotsloader\$($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256) (dependencies.json)")
 if (-not $BundleSevenZip) { $validation += "7-Zip: not in this zip; the Manager downloads its pinned 7-Zip release tool-7zip-26.00 when no usable 7-Zip is installed." }
 else {
     New-Item -ItemType Directory -Path (Join-Path $stage '7-Zip') -Force | Out-Null
@@ -130,5 +102,5 @@ try {
 finally { $archive.Dispose() }
 $sum = Get-Sha256 $portable
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'SHA256SUMS.txt'), ("{0}  {1}`n" -f $sum.ToLowerInvariant(), (Split-Path -Leaf $portable)), (New-Object Text.UTF8Encoding($false)))
-Write-Output "Packed $portable ($((Get-Item -LiteralPath $portable).Length) bytes, SHA-256 $sum) with $($pin.tag)."
+Write-Output "Packed $portable ($((Get-Item -LiteralPath $portable).Length) bytes, SHA-256 $sum) with Slots Loader $($pin.version)."
 Write-Output "To publish (only when approved): gh release create manager-v$version --repo $repo --latest --title ""Slotsloader Manager $version"" ""$portable"" ""$(Join-Path $OutputDirectory 'SHA256SUMS.txt')"""

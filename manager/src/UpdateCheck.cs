@@ -7,11 +7,13 @@ using System.Web.Script.Serialization;
 
 namespace SlotsInstaller
 {
-    // 2.4.0 update check: the GitHub Releases API of our fork (unauthenticated). SlotsLoader releases are tagged
-    // loader-v*, Manager releases manager-v* (the private builds' installer-v* tags are ignored). Drafts are skipped, pre-releases only with the
-    // setting; the highest version whose single .zip (Manager: *-portable.zip preferred) can be verified (the
-    // API's sha256 digest + size, else a SHA256SUMS.txt asset of the release) wins. Unverifiable releases are
-    // refused and logged. Nothing here installs anything.
+    // 2.4.0 update check. Manager releases: the GitHub Releases API of this repository (unauthenticated), tags
+    // manager-v* (the private builds' installer-v* tags and the old loader-v* tags are ignored). Drafts are skipped,
+    // pre-releases only with the setting; the highest version whose single .zip (*-portable.zip preferred) can be
+    // verified (the API's sha256 digest + size, else a SHA256SUMS.txt asset of the release) wins. Unverifiable releases
+    // are refused and logged. 1.0.19: the Slots Loader is no longer a release here: the offer is the approved entry of
+    // the repository's dependencies.json (raw.githubusercontent.com, ReadList), whose file is on the upstream releases.
+    // Nothing here installs anything.
     internal static class UpdateProducts { internal const string Loader = "loader", Manager = "manager"; }
 
     public sealed class ReleaseOffer
@@ -20,7 +22,14 @@ namespace SlotsInstaller
         public long Size;
         public bool Prerelease;
         internal Version Parsed { get { return UpdateCheck.ParseVersion(Version); } }
-        internal LoaderPin AsPin() { return new LoaderPin { Version = Version, Asset = Asset, Size = Size, Sha256 = Sha256, Url = Url, ReleasePage = HtmlUrl, Origin = "github.com/" + LoaderPin.Repo }; }
+        internal LoaderPin AsPin() { return new LoaderPin { Tag = Tag, Name = Name, Version = Version, Asset = Asset, Size = Size, Sha256 = Sha256, Url = Url, ReleasePage = HtmlUrl, Origin = "github.com/" + LoaderPin.Source }; }
+        // 1.0.19: the approved Slots Loader as an offer (DigestSource names the list, so an offer an older Manager saved
+        // from a loader-v* release is never taken for an approval).
+        internal static ReleaseOffer Approved(LoaderPin pin)
+        {
+            return new ReleaseOffer { Product = UpdateProducts.Loader, Tag = pin.Tag, Version = pin.Version, Name = pin.Name, HtmlUrl = pin.ReleasePage, Asset = pin.Asset, Url = pin.Url, Size = pin.Size, Sha256 = pin.Sha256, DigestSource = UpdateCheck.ListMarker };
+        }
+        internal bool IsApproval { get { return Product == UpdateProducts.Loader && DigestSource == UpdateCheck.ListMarker && Parsed != null && LoaderPin.DownloadRefusal(Url) == null; } }
     }
 
     public sealed class UpdateCheckResult
@@ -30,6 +39,7 @@ namespace SlotsInstaller
         public int Status;
         public ReleaseOffer Loader, Manager;
         public List<string> Refused = new List<string>();
+        public string ListReason = "";   // 1.0.19: why the approved list could not be used (Loader is then null)
     }
 
     // Data\update-settings.json: the two settings, the last check and what the user chose per product.
@@ -40,6 +50,26 @@ namespace SlotsInstaller
         public string LastCheckUtc = "";
         public UpdateCheckResult Last;
         public string SkipLoader = "", SkipManager = "", DismissedLoader = "", DismissedManager = "";
+        // 1.0.19: the last approved Slots Loader read from the list (at start or with a check), when, and by which Manager
+        // version. A list read by another version (before a Manager update) is not used: the next read replaces it.
+        public ReleaseOffer Approved;
+        public string ApprovedUtc = "", ApprovedBy = "";
+        // Every approved zip's SHA-256 this Manager has read (UpdateCheck.FromApproval: a loader installed from one of
+        // them may be offered going back; one the user installed themselves never is).
+        public List<string> ApprovedSeen = new List<string>();
+        internal ReleaseOffer ApprovedLoader() { return Approved != null && Approved.IsApproval && ApprovedBy == SafeHttp.AppVersion() ? Approved : null; }
+        // True when the approved version changed (a ✕ on the old offer then no longer hides the new one).
+        internal bool RememberApproved(ReleaseOffer approved, string utc)
+        {
+            if (approved == null) return false;
+            ReleaseOffer before = ApprovedLoader();
+            bool changed = before == null || before.Version != approved.Version || before.Sha256 != approved.Sha256;
+            Approved = approved; ApprovedUtc = utc ?? ""; ApprovedBy = SafeHttp.AppVersion();
+            if (ApprovedSeen == null) ApprovedSeen = new List<string>();
+            if (!ApprovedSeen.Contains(approved.Sha256.ToUpperInvariant())) ApprovedSeen.Add(approved.Sha256.ToUpperInvariant());
+            if (changed) DismissedLoader = "";
+            return changed;
+        }
         internal static string FilePath { get { return Path.Combine(AppConfig.DataDir, "update-settings.json"); } }
         internal static UpdateSettings Load()
         {
@@ -65,6 +95,11 @@ namespace SlotsInstaller
     {
         internal const string DefaultApiUrl = "https://api.github.com/repos/" + LoaderPin.Repo + "/releases?per_page=100";
         internal static string ApiUrl = DefaultApiUrl;   // tests: a loopback URL
+        // 1.0.19: the approved list (the maintainer approves a Slots Loader by merging the change to this file).
+        internal const string DefaultListUrl = "https://raw.githubusercontent.com/" + LoaderPin.Repo + "/main/dependencies.json";
+        internal static string ListUrl = DefaultListUrl;   // tests: a loopback URL
+        internal const long MaxListBytes = 64 * 1024;
+        internal const string ListMarker = "dependencies.json";
         internal static int TimeoutMs = 10000;
         internal static readonly TimeSpan Interval = TimeSpan.FromHours(24);
         private static readonly Regex VersionPart = new Regex(@"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?", RegexOptions.IgnoreCase);
@@ -100,9 +135,26 @@ namespace SlotsInstaller
             return false;
         }
 
+        // 1.0.19: the approved Slots Loader from the list, or null with the reason (logged: offline, a refused list).
+        internal static ReleaseOffer ReadList(out string reason)
+        {
+            reason = "";
+            string json;
+            try { json = SafeHttp.GetText(ListUrl, MaxListBytes, null, TimeoutMs); }
+            catch (DownloadFailure f) { reason = f.Reason; Program.LogLine("Update check: the approved Slotsloader list could not be read: " + f.Reason + "."); return null; }
+            try
+            {
+                DependencyList list = DependencyList.Parse(json);
+                if (list.IgnoredPackages.Count > 0) Program.LogLine("Update check: approved Slotsloader " + list.Loader.Version + " (" + list.Loader.Asset + "); not used here: " + String.Join(", ", list.IgnoredPackages) + ".");
+                return ReleaseOffer.Approved(list.Loader);
+            }
+            catch (InvalidDataException ex) { reason = ex.Message.TrimEnd('.'); Program.LogLine("Update check: refused the approved Slotsloader list: " + ex.Message); return null; }
+        }
+
         internal static UpdateCheckResult Check(bool includePrereleases)
         {
             var result = new UpdateCheckResult { CheckedUtc = DateTime.UtcNow.ToString("o") };
+            string listReason; result.Loader = ReadList(out listReason); result.ListReason = listReason;
             string json;
             try { json = SafeHttp.GetText(ApiUrl, 8L * 1024 * 1024, "application/vnd.github+json", TimeoutMs); }
             catch (DownloadFailure f) { result.Reason = f.Reason; result.Status = f.Status; return result; }
@@ -110,7 +162,7 @@ namespace SlotsInstaller
             try { releases = ((object[])new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue }.DeserializeObject(json)).OfType<Dictionary<string, object>>().ToList(); }
             catch (Exception ex) { if (ex is InvalidCastException || ex is ArgumentException || ex is InvalidOperationException) { result.Reason = "the releases list could not be read"; return result; } throw; }
             result.Ok = true;
-            foreach (string product in new[] { UpdateProducts.Loader, UpdateProducts.Manager })
+            foreach (string product in new[] { UpdateProducts.Manager })   // 1.0.19: loader-v* releases are no longer read
             {
                 var candidates = new List<KeyValuePair<Version, Dictionary<string, object>>>();
                 foreach (var r in releases)
@@ -125,7 +177,7 @@ namespace SlotsInstaller
                 {
                     string why; ReleaseOffer offer = Offer(product, c.Value, out why);
                     if (offer == null) { string line = Str(c.Value, "tag_name") + ": " + why; result.Refused.Add(line); Program.LogLine("Update check: refused " + line + "."); continue; }
-                    if (product == UpdateProducts.Loader) result.Loader = offer; else result.Manager = offer;
+                    result.Manager = offer;
                     break;
                 }
             }
@@ -174,17 +226,37 @@ namespace SlotsInstaller
         private static bool Bool(Dictionary<string, object> d, string key) { object v; return d.TryGetValue(key, out v) && v is bool && (bool)v; }
         private static long Long(Dictionary<string, object> d, string key) { object v; if (!d.TryGetValue(key, out v) || v == null) return 0; try { return Convert.ToInt64(v, System.Globalization.CultureInfo.InvariantCulture); } catch (FormatException) { return 0; } }
 
-        // What to offer. SlotsLoader: only when this app installed it (a tool-mod record) and the release is
-        // newer than that record's version and not older than the pin. Manager: newer than the running build.
-        // The pin these rules compare with: the build's own, or a test's fixture pin (the updates suite).
+        // What to offer. SlotsLoader (1.0.19): only when this app installed it (a tool-mod record) and the approved
+        // version differs from that record's: newer is an update, older means the maintainer took an approval back and
+        // is offered as going back (GoesBack). Equal: nothing. Manager: newer than the running build.
+        // The pin the install link falls back to: the build's own, or a test's fixture pin (the updates suite).
         internal static LoaderPin PinOverride;
         private static LoaderPin Pin { get { return PinOverride ?? LoaderPin.Release; } }
-        internal static ReleaseOffer LoaderUpdate(UpdateCheckResult r, string installedVersion)
+        // fromApproval (1.0.19, the user): going back is offered only over a loader the Manager installed from an approved
+        // entry (FromApproval). One the user installed themselves (a zip they are testing before it is approved) is
+        // never offered a downgrade; a newer approved version is still offered over it.
+        internal static ReleaseOffer LoaderUpdate(ReleaseOffer approved, string installedVersion, bool fromApproval)
         {
-            if (r == null || r.Loader == null || r.Loader.Parsed == null) return null;
-            Version installed = ParseVersion(installedVersion), pin = ParseVersion(Pin.Version);
-            if (installed == null || r.Loader.Parsed <= installed || r.Loader.Parsed < pin) return null;
-            return r.Loader;
+            if (approved == null || approved.Parsed == null) return null;
+            Version installed = ParseVersion(installedVersion);
+            if (installed == null || approved.Parsed == installed) return null;
+            if (approved.Parsed < installed && !fromApproval) return null;
+            return approved;
+        }
+        internal static ReleaseOffer LoaderUpdate(UpdateCheckResult r, string installedVersion, bool fromApproval) { return LoaderUpdate(r == null ? null : r.Loader, installedVersion, fromApproval); }
+        // The recorded loader came from an approved zip: the build's pin, or one this Manager read from the list (by
+        // the SHA-256 of the installed archive, ReplaceMod.ArchiveSha).
+        internal static bool FromApproval(ReplaceMod record, UpdateSettings s)
+        {
+            string sha = record == null ? null : record.ArchiveSha;
+            if (String.IsNullOrEmpty(sha)) return false;
+            if (sha.Equals(Pin.Sha256, StringComparison.OrdinalIgnoreCase) || sha.Equals(LoaderPin.Release.Sha256, StringComparison.OrdinalIgnoreCase)) return true;
+            return s != null && s.ApprovedSeen != null && s.ApprovedSeen.Any(x => sha.Equals(x, StringComparison.OrdinalIgnoreCase));
+        }
+        internal static bool GoesBack(ReleaseOffer offer, string installedVersion)
+        {
+            Version installed = ParseVersion(installedVersion);
+            return offer != null && offer.Parsed != null && installed != null && offer.Parsed < installed;
         }
         internal static ReleaseOffer ManagerUpdate(UpdateCheckResult r, Version running)
         {
@@ -192,11 +264,13 @@ namespace SlotsInstaller
             if (r == null || r.Manager == null || r.Manager.Parsed == null || running == null) return null;
             return r.Manager.Parsed > running ? r.Manager : null;
         }
-        // The install link without a loader: the newest known release, never older than the pin.
-        internal static LoaderPin InstallPin(UpdateCheckResult last)
+        // The install link without a loader (1.0.19): the approved version last read from the list, else the build's pin
+        // (the same entry as it was when this Manager was built; its zip is bundled beside the exe).
+        internal static LoaderPin InstallPin(ReleaseOffer approved)
         {
-            if (last != null && last.Loader != null && last.Loader.Parsed != null && last.Loader.Parsed > ParseVersion(Pin.Version)) return last.Loader.AsPin();
-            return Pin;
+            if (approved == null || !approved.IsApproval) return Pin;
+            if (approved.Sha256.Equals(Pin.Sha256, StringComparison.OrdinalIgnoreCase) && approved.Asset == Pin.Asset) return Pin;
+            return approved.AsPin();
         }
 
         // A 404 (the repository is private), offline or a time-out is not an error for the background check.
@@ -235,7 +309,7 @@ namespace SlotsInstaller
                 }
             }
             catch (Exception ex) { if (!(ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException)) throw; }
-            Match n = Regex.Match(Path.GetFileName(path), @"v(\d+\.\d+(?:\.\d+)?)", RegexOptions.IgnoreCase);
+            Match n = Regex.Match(Path.GetFileName(path), @"v(\d+\.\d+(?:\.\d+){0,2})", RegexOptions.IgnoreCase);   // 1.0.19: four parts too (v1.27.3.14)
             if (n.Success) { source = "file name"; return n.Groups[1].Value; }
             return null;
         }

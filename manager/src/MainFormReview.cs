@@ -247,7 +247,7 @@ namespace SlotsInstaller
             int generation = reviewGeneration; ModPackage current = package; string[] selection = selectedOrder.ToArray(); string mode = installMode; bool replace = IsReplaceMode;
             string expectedStamp = packageStamp;
             string[] missing = missingRestoredOptions.ToArray(); string sevenZip = config.SevenZipPath;
-            bool choicesOpen = unresolvedChoices.Count > 0;
+            bool choicesOpen = choicesBlock;   // 1.0.19: an empty required group stops the check only while nothing is ticked
             ReplaceEngine engine = replace ? Engine() : null;
             string updateId = editingReplacement == null ? PendingLoaderReplaceId() : editingReplacement.Id;   // 2.4.0: a SlotsLoader update replaces the recorded one
             if (replace && (checkCache == null || !Object.ReferenceEquals(checkCachePackage, current)))

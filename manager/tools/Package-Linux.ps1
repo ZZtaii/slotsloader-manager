@@ -15,8 +15,23 @@ if ((Test-Path -LiteralPath $OutputDirectory) -and (Get-ChildItem -LiteralPath $
 foreach ($name in @('Slotsloader Manager.exe', 'Slotsloader Manager.exe.config')) {
     if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory $name) -PathType Leaf)) { throw "Missing build file: $name" }
 }
-$pin = Get-Content -LiteralPath (Join-Path $project 'assets\loader-pin.json') -Raw | ConvertFrom-Json
-if ((Get-Item -LiteralPath $LoaderZip).Length -ne $pin.size -or (Get-FileHash -LiteralPath $LoaderZip -Algorithm SHA256).Hash -ne $pin.sha256) { throw 'Loader archive does not match assets/loader-pin.json.' }
+# 1.0.19: the bundled loader is the approved slots_loader entry of the repository's dependencies.json (the file
+# build.ps1 embeds and tools\Package-Release.ps1 reads), published on the SF6 Mod Suite releases.
+$listFile = Join-Path (Split-Path -Parent $project) 'dependencies.json'
+if (-not (Test-Path -LiteralPath $listFile -PathType Leaf)) { throw "dependencies.json is missing: $listFile" }
+$listText = [IO.File]::ReadAllText($listFile)
+$list = $listText | ConvertFrom-Json
+$entry = $list.packages.slots_loader
+if ($list.format -ne 1 -or $list.source -ne 'Wael3rd/SF6-ModSuite' -or -not $entry) { throw 'dependencies.json: expected format 1, source Wael3rd/SF6-ModSuite and a slots_loader entry.' }
+if (-not $entry.version -or [string]$entry.release -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$' -or [string]$entry.file -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.zip$' -or [string]$entry.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or -not ([long]$entry.size -gt 0)) { throw 'dependencies.json: the slots_loader entry is malformed.' }
+$pin = [ordered]@{ name = $(if ($entry.name) { [string]$entry.name } else { 'SF6 Slots Loader' }); version = [string]$entry.version; release = [string]$entry.release; asset = [string]$entry.file; size = [long]$entry.size; sha256 = ([string]$entry.sha256).ToUpperInvariant() }
+if ((Get-Item -LiteralPath $LoaderZip).Length -ne $pin.size -or (Get-FileHash -LiteralPath $LoaderZip -Algorithm SHA256).Hash -ne $pin.sha256) { throw "Loader archive does not match the approved slots_loader entry of dependencies.json ($($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256))." }
+# The built Manager must embed this same list, or its bundled-copy lookup would not accept the zip.
+$exeBytes = [IO.File]::ReadAllBytes((Join-Path $BuildDirectory 'Slotsloader Manager.exe'))
+$embedded = [Reflection.Assembly]::ReflectionOnlyLoad($exeBytes).GetManifestResourceStream('SlotsInstaller.Dependencies.json')
+if ($embedded -eq $null) { throw 'The build has no embedded dependencies.json.' }
+$reader = New-Object IO.StreamReader($embedded); $embeddedText = $reader.ReadToEnd(); $reader.Dispose()
+if ($embeddedText.Replace("`r`n", "`n").Trim() -ne $listText.Replace("`r`n", "`n").Trim()) { throw 'The build embeds another dependencies.json than the repository has: rebuild and retest.' }
 # This exact source pin is used by Manager's own verified download path.
 $sevenSource = Get-Content -LiteralPath (Join-Path $project 'src\SevenZipTool.cs') -Raw
 $sevenHash = [regex]::Match($sevenSource, 'Sha256 = "([A-Fa-f0-9]{64})"').Groups[1].Value
@@ -66,9 +81,11 @@ source-available terms) and THIRD_PARTY_NOTICES.md (embedded component notices).
 The bundled 7-Zip/License.txt contains the applicable LGPL and unRAR restrictions.
 7-Zip source and notices: https://www.7-zip.org/
 
-SlotsLoader: the exact pinned loader distribution is included under app/Slotsloader.
-Its original archive and notices are preserved byte for byte.
-Its original license and third-party notice are appended below.
+SF6 Slots Loader: by Wael3rd, from the SF6 Mod Suite releases
+(https://github.com/Wael3rd/SF6-ModSuite/releases), under the MIT License. The
+release archive approved in this repository's dependencies.json is included
+unmodified under app/Slotsloader, checked by size and SHA-256. Its license and
+third-party notices are appended below.
 
 Bottles, Wine, Microsoft .NET Framework and Microsoft GDI+ are NOT redistributed
 in this package. GDI+ is downloaded by Bottles under Microsoft's EULA and copied
@@ -81,7 +98,8 @@ Linux launcher and host helper are supplied as readable Python source alongside
 the application. See the repository licence.
 '@
 $noticePath = Join-Path $stage 'THIRD_PARTY_NOTICES.md'
-$combined = [IO.File]::ReadAllText($noticePath) + "`n`n## Linux package components`n`n" + $notices + "`n`n## Bundled Slotsloader license`n`n" + [IO.File]::ReadAllText((Join-Path (Split-Path -Parent $project) 'LICENSE')) + "`n`n## Bundled Slotsloader third-party notices`n`n" + [IO.File]::ReadAllText((Join-Path (Split-Path -Parent $project) 'THIRD_PARTY.md'))
+$loaderLine = "$($pin.name) $($pin.version), SF6 Mod Suite release $($pin.release), app/Slotsloader/$($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256)."
+$combined = [IO.File]::ReadAllText($noticePath) + "`n`n## Linux package components`n`n" + $notices + "`n`n## Bundled SF6 Slots Loader license`n`n" + $loaderLine + "`n`n" + [IO.File]::ReadAllText((Join-Path (Split-Path -Parent $project) 'LICENSE')) + "`n`n## Bundled SF6 Slots Loader third-party notices`n`n" + [IO.File]::ReadAllText((Join-Path (Split-Path -Parent $project) 'THIRD_PARTY.md'))
 [IO.File]::WriteAllText($noticePath, $combined.Replace("`r`n", "`n") + "`n", $utf8)
 $script = @'
 import hashlib,json,pathlib,sys,zipfile

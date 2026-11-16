@@ -15,7 +15,7 @@ Updates preserve your settings, mod libraries, recovery records and compatibilit
 
 The Linux launcher checks GitHub once a day and offers newer **complete Linux packages**. Click Yes to download, verify and install an update before Manager opens. Nothing installs without your approval. Offline checks fail quietly so you can still use the app.
 
-For an immediate check, use **Settings → Updates → Check Linux app updates**, or right-click the application-menu entry and choose **Check for Linux app updates**. Manager closes safely and reopens after the check. The daily-check checkbox in Settings controls automatic checks. The Linux beta follows its own beta-release channel; Windows packages cannot overwrite it.
+For an immediate check, use **Settings → Slotsloader → Check Linux app updates**, or right-click the application-menu entry and choose **Check for Linux app updates**. Manager closes safely and reopens after the check. The daily-check checkbox in Settings controls automatic checks. The Linux beta follows its own beta-release channel; Windows packages cannot overwrite it.
 
 Coming from 1.0.12 beta2 or earlier, install this ZIP once using the graphical installer. Later Linux releases can be offered automatically. An interrupted program-file update is rolled back on the next launch. Do not use a Windows portable ZIP to update this installation.
 

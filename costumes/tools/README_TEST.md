@@ -4,8 +4,8 @@
 
 | File | Role | Source |
 |------|------|--------|
-| `re_chunk_000.pak.patch_001.pak` | Vagrant mod (simulates a mod-manager install) | `--make-fluffy-pak` from vagrant directory |
-| `re_chunk_000.pak.patch_002.pak` | Aloha C1 mod (simulates a mod-manager install) | `--make-fluffy-pak` from aloha directory |
+| `re_chunk_000.pak.patch_001.pak` | Vagrant mod (simulates Fluffy install) | `--make-fluffy-pak` from vagrant directory |
+| `re_chunk_000.pak.patch_002.pak` | Aloha C1 mod (simulates Fluffy install) | `--make-fluffy-pak` from aloha directory |
 | `re_chunk_000.pak.patch_003.pak` | Costume slot loader output (our pak) | Production mode scan of patch_001 + patch_002 |
 
 ## What patch_003 contains
@@ -65,7 +65,7 @@ do not store paths). Breakdown:
 - 3 `000/02/halbd.tex` etc. (short-named textures the mod ships but no mdf2 references by that name)
 
 These are all non-functional for the costume slot system. The first 3 are
-character-global files that only matter if an external mod manager is used (the mod pak
+character-global files that only matter if Fluffy is used (the mod pak
 serves them directly). The last 3 appear to be unreferenced bonus files.
 
 In `--mod-dir` mode (where paths are known from disk), all files are handled.

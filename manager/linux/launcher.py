@@ -475,7 +475,7 @@ def game_setup(dialog):
                 "2. For REFramework, add its native DLL override to Launch Options. The next window lets you copy it.\n"
                 "3. Install the required tool mod through Manager, then launch SF6 from Steam.\n\n"
                 "If Launch Options already contains anything, keep it. Merge the DLL override into your existing command instead of replacing it. This setup does not change Steam for you.\n\n"
-                "The bundled SlotsLoader 1.10.4 proxy and plugin passed a Wine bootstrap check. SF6 gameplay and Steam Deck hardware still need tester confirmation; see VALIDATION.md.")
+                "SF6 gameplay with the bundled Slots Loader and Steam Deck hardware still need tester confirmation.")
     dialog.copy_text("REFramework launch options. Copy this only into an empty Launch Options field; preserve and merge any existing options.", GAME_LAUNCH_OPTIONS)
 
 

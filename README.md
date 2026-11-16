@@ -6,7 +6,7 @@ An **experimental Linux / Steam Deck build** runs the same interface through Bot
 
 ![Slotsloader Manager: the mod library filtered to Cammy, with a mod's preview, author and install options](docs/images/slotsloader-manager.webp)
 
-This repo also includes **Slotsloader**, the SF6 loader that allows mods to be installed on extra costume slots
+This repo also includes the source of **Slotsloader** (SF6 Slots Loader), the SF6 loader that allows mods to be installed on extra costume slots.
 
 > Not affiliated with or endorsed by Capcom or any other publisher. Mods change game files, so keep backups and use them at your own risk.
 
@@ -23,10 +23,15 @@ This repo also includes **Slotsloader**, the SF6 loader that allows mods to be i
 
 ## What Slotsloader does (SF6)
 
+Slotsloader from this fork and the SF6 Mod Suite are now one, with combined fixes and improvements. Latest releases are now synced. <!-- repo readers; not in the Assistant pack -->
+
 - Up to 100 extra outfits per fighter, straight from `.zip`, `.rar`, `.7z` or plain folders.
-- Mods with options become one outfit per combination (up to 50 per mod), and you can switch each one on or off.
+- Mods with options become one outfit per combination (up to 50 per mod), and you can switch each one on or off. Or pick an outfit's options in the game, if you turn that on in the Manager.
 - After a game update it rebuilds its data from the game's own files, so new fighters and outfits work without waiting for a loader update.
 - Slots made from Outfit 2, 3 or 4 only show up if you own that outfit. Outfit 1 and DriveTech (C5) slots always show.
+- Installed through the Manager, it never checks for updates from inside the game, and adds to the game's menus only what you tick in the Manager's Slotsloader settings.
+
+The Manager installs the official Slots Loader zip, unchanged, and offers a new version only once it's been tested here: [dependencies.json](dependencies.json) names the approved version and its SHA-256, and the Manager checks every file against it. The loader source in this repo is synced from each release; see [UPSTREAM.md](UPSTREAM.md). <!-- repo readers; not in the Assistant pack -->
 
 ## Getting started with SF6
 
@@ -40,13 +45,13 @@ This repo also includes **Slotsloader**, the SF6 loader that allows mods to be i
 
 When there's an update, a small notice shows up in the app. Nothing installs until you click it.
 
-**Prefer not to use the Manager?** Install the loader zip from [Releases](../../releases) as a tool mod with your mod manager, then drop costume mods into `reframework\costume_mods\<Character>\`. The next time the game starts, it builds the outfit PAK.
+**Prefer not to use the Manager?** Install the `SF6_SlotsLoader_v<version>.zip` of the [SF6 Mod Suite releases](https://github.com/Wael3rd/SF6-ModSuite/releases) as a tool mod with your mod manager, then drop costume mods into `reframework\costume_mods\<Character>\`. The next time the game starts, it builds the outfit PAK.
 
 ## Building from source
 
-- **Slotsloader:** Visual Studio 2022 (or Build Tools) with the C++ workload, then run `build.bat`. There's also a Linux cross-build with llvm-mingw in [docs/BUILD-CUSTOM.md](docs/BUILD-CUSTOM.md). Tests are in [tests/README.md](tests/README.md).
-- **Slotsloader Manager:** .NET Framework 4.8 (C# 5, no NuGet). Build with `manager\build.ps1` and test with `manager\test.ps1`. `manager\tools\Package-Release.ps1` builds the release zip with the newest published loader inside.
-- **Linux package:** `manager/tools/Package-Linux.ps1` packs a tested build; see [native checks](manager/linux/README.md#advanced-testing).
+- **Slotsloader:** Visual Studio 2022 (or Build Tools) with the C++ workload, then run `build.bat loader`, `build.bat plugin` or `build.bat sorter`. Testing is described in [TESTING.md](TESTING.md). <!-- repo readers; not in the Assistant pack -->
+- **Slotsloader Manager:** .NET Framework 4.8 (C# 5, no NuGet). Build with `manager\build.ps1` and test with `manager\test.ps1`. `manager\tools\Package-Release.ps1` builds the release zip with the approved loader inside. <!-- repo readers; not in the Assistant pack -->
+- **Linux package:** `manager/tools/Package-Linux.ps1` packs a tested build with the approved loader inside; see [native checks](manager/linux/README.md#advanced-testing). <!-- repo readers; not in the Assistant pack -->
 
 ## Community
 
@@ -57,8 +62,8 @@ When there's an update, a small notice shows up in the app. Nothing installs unt
 
 ## Credits
 
-- **[ZZtaii](https://github.com/ZZtaii)**: Slotsloader Manager and maintainer of this Slotsloader fork.
-- **[Wael3rd](https://github.com/Wael3rd/)**: creator of the original [SF6 Slots Loader](https://github.com/Wael3rd/SF6-SlotsLoader), the backend Slotsloader builds on.
+- **[ZZtaii](https://github.com/ZZtaii)**: Slotsloader Manager, the Slotsloader fork, and its fixes and Manager mode in the SF6 Slots Loader.
+- **[Wael3rd](https://github.com/Wael3rd/)**: creator of the [SF6 Slots Loader](https://github.com/Wael3rd/SF6-ModSuite) and the SF6 Mod Suite.
 - Third-party code and its licenses: [THIRD_PARTY.md](THIRD_PARTY.md) (loader) and [manager/THIRD_PARTY_NOTICES.md](manager/THIRD_PARTY_NOTICES.md) (Manager).
 
 ## License

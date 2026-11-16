@@ -665,7 +665,11 @@ namespace SlotsInstaller
             bool narrowed = fitting.Count < all.Count;
             modsCaption.Text = !narrowed ? "MODS IN YOUR LIBRARY" : showAll ? "ALL " + all.Count + " MODS" : "FITS " + String.Join(", ", slots.Select(s => "C" + Int32.Parse(s))) + " · " + fitting.Count + " OF " + all.Count;
             showAllButton.Visible = narrowed; showAllButton.Text = showAll ? "Only fitting" : "Show all";
-            shown = (narrowed && !showAll ? fitting : all).Where(e => text.Length == 0 || Shown(e).IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0).OrderBy(Shown, StringComparer.OrdinalIgnoreCase).ToList();
+            // 1.0.19: a colour word ("color pack", "cmd") also finds the colour packs (and, for cmd, the mods with colour
+            // files) whatever their name, the colour packs first (LibrarySearch.ColourKeyword).
+            string colour = LibrarySearch.ColourKeyword(text);
+            shown = (narrowed && !showAll ? fitting : all).Where(e => text.Length == 0 || Shown(e).IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0 || LibrarySearch.MatchesColour(e, colour))
+                .OrderBy(e => colour == null ? 0 : LibrarySearch.ColourRank(e)).ThenBy(Shown, StringComparer.OrdinalIgnoreCase).ToList();
             mods.SetRows(shown.Select(Shown));
         }
         private void ToggleShowAll() { LibraryEntry kept = SelectedMod; showAll = !showAll; FillMods(); SelectMod(kept); }

@@ -11,7 +11,7 @@ namespace SlotsInstaller
     // Data folder (beside the executable) and safety checks as the app window.
     internal static class ReplaceCommandLine
     {
-        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
+        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "loader-flags", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
         // 2.5.1: the fluffy-* names keep working (left out of the help).
         internal static readonly Dictionary<string, string> Aliases = new Dictionary<string, string> { { "fluffy-status", "manager-status" }, { "fluffy-uninstall", "manager-uninstall" }, { "fluffy-restore", "manager-restore" } };
 
@@ -25,6 +25,7 @@ namespace SlotsInstaller
         internal static int Run(string[] raw)
         {
             if (raw[0].TrimStart('-') == "variants") return VariantsCommandLine.Run(raw);   // 2.5.0 (VariantChoices.cs)
+            if (raw[0].TrimStart('-') == "loader-flags") return LoaderFlagsCommandLine.Run(raw);   // 1.0.19 (LoaderFlags.cs)
             Args a;
             try { a = Parse(raw); }
             catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 2; }
@@ -415,39 +416,43 @@ namespace SlotsInstaller
         }
 
         // ---- 2.4.0 updates
-        private static UpdateCheckResult CheckOrThrow(Args a)
+        // 1.0.19: the Manager part needs the releases API, the Slotsloader part the approved list; each command needs its own.
+        private static UpdateCheckResult CheckOrThrow(Args a, bool manager, bool loader)
         {
             bool pre = a.IncludePrereleases || UpdateSettings.Load().IncludePrereleases;
             UpdateCheckResult r = UpdateCheck.Check(pre);
-            UpdateSettings s = UpdateSettings.Load(); s.LastCheckUtc = r.CheckedUtc; if (r.Ok) s.Last = r; s.Save();
-            if (!r.Ok) throw new IOException("Could not check for updates: " + r.Reason + ".");
+            UpdateSettings s = UpdateSettings.Load(); s.LastCheckUtc = r.CheckedUtc; s.RememberApproved(r.Loader, r.CheckedUtc); if (r.Ok) s.Last = r; s.Save();
+            if (manager && !r.Ok) throw new IOException("Could not check for updates: " + r.Reason + ".");
+            if (loader && r.Loader == null) throw new IOException("Could not read the approved Slotsloader list: " + r.ListReason + ".");
             return r;
         }
         private static string Describe(ReleaseOffer o) { return o == null ? "none published" : o.Version + (o.Prerelease ? " (pre-release)" : "") + " · " + o.Tag + " · " + o.Asset + " · " + o.Size + " bytes · SHA-256 " + o.Sha256 + " (" + o.DigestSource + ") · " + o.HtmlUrl; }
         private static int UpdateCheckCommand(Args a)
         {
-            UpdateCheckResult r = CheckOrThrow(a);
+            UpdateCheckResult r = CheckOrThrow(a, true, false);
             AppConfig config = File.Exists(Path.Combine(AppConfig.DataDir, "settings.json")) ? AppConfig.Load() : AppConfig.Detected();
             if (a.Game != null) config.GameRoot = a.Game;
-            string installed = null, source = "";
-            try { installed = InstalledLoader.Version(InstalledLoader.Record(ReplaceEngine.ForConfig(config).LoadState()), out source); } catch (Exception ex) { Program.Log(ex); }
+            string installed = null, source = ""; bool fromApproval = false;
+            try { ReplaceMod record = InstalledLoader.Record(ReplaceEngine.ForConfig(config).LoadState()); installed = InstalledLoader.Version(record, out source); fromApproval = UpdateCheck.FromApproval(record, UpdateSettings.Load()); } catch (Exception ex) { Program.Log(ex); }
             Console.WriteLine("Source: " + UpdateCheck.ApiUrl);
-            Console.WriteLine("Slotsloader installed: " + (installed == null ? "not installed by this app" : installed + " (from the " + source + ")") + " · latest: " + Describe(r.Loader));
+            Console.WriteLine("Approved Slotsloader list: " + UpdateCheck.ListUrl + (r.Loader == null ? " (not read: " + r.ListReason + ")" : ""));
+            Console.WriteLine("Slotsloader installed: " + (installed == null ? "not installed by this app" : installed + " (from the " + source + ")") + " · approved: " + Describe(r.Loader));
             Console.WriteLine("Slotsloader Manager installed: " + SafeHttp.AppVersion() + " · latest: " + Describe(r.Manager));
             foreach (string refused in r.Refused) Console.WriteLine("Refused: " + refused);
-            ReleaseOffer loader = UpdateCheck.LoaderUpdate(r, installed), manager = UpdateCheck.ManagerUpdate(r, UpdateCheck.Running);
-            Console.WriteLine(loader == null && manager == null ? "Up to date." : (loader != null ? "Slotsloader " + loader.Version + " is available (update-install loader). " : "") + (manager != null ? "Slotsloader Manager " + manager.Version + " is available (update-install manager)." : ""));
+            ReleaseOffer loader = UpdateCheck.LoaderUpdate(r, installed, fromApproval), manager = UpdateCheck.ManagerUpdate(r, UpdateCheck.Running);
+            string loaderText = loader == null ? "" : UpdateCheck.GoesBack(loader, installed) ? "Slotsloader " + loader.Version + " is the approved version; go back to it with update-install loader. " : "Slotsloader " + loader.Version + " is available (update-install loader). ";
+            Console.WriteLine(loader == null && manager == null ? "Up to date." : loaderText + (manager != null ? "Slotsloader Manager " + manager.Version + " is available (update-install manager)." : ""));
             return 0;
         }
         private static int UpdateInstallLoader(Args a, ReplaceEngine engine)
         {
-            UpdateCheckResult r = CheckOrThrow(a);
+            UpdateCheckResult r = CheckOrThrow(a, false, true);
             ReplaceMod record = InstalledLoader.Record(engine.LoadState());
             string source; string installed = InstalledLoader.Version(record, out source);
             LoaderPin pin;
-            if (record == null) pin = UpdateCheck.InstallPin(r);
-            else { ReleaseOffer offer = UpdateCheck.LoaderUpdate(r, installed); if (offer == null) { Console.WriteLine("Slotsloader is up to date (" + installed + ")."); return 0; } pin = offer.AsPin(); }
-            Console.WriteLine((record == null ? "Install Slotsloader " : "Update Slotsloader " + installed + " -> ") + pin.Version + ": " + pin.Asset + " (" + pin.Size + " bytes) from " + pin.Url);
+            if (record == null) pin = UpdateCheck.InstallPin(r.Loader);
+            else { ReleaseOffer offer = UpdateCheck.LoaderUpdate(r, installed, UpdateCheck.FromApproval(record, UpdateSettings.Load())); if (offer == null) { Console.WriteLine("Slotsloader is up to date (" + installed + ")."); return 0; } pin = offer.AsPin(); }
+            Console.WriteLine((record == null ? "Install Slotsloader " : (UpdateCheck.GoesBack(r.Loader, installed) ? "Go back from Slotsloader " : "Update Slotsloader ") + installed + " -> ") + pin.Version + ": " + pin.Asset + " (" + pin.Size + " bytes) from " + pin.Url);
             if (!a.Yes) { Console.WriteLine("Nothing changed: add --yes to install."); return 1; }
             LoaderFile file = LoaderRelease.FindLocal(pin, new string[0], LoaderRelease.DownloadDir) ?? LoaderRelease.Download(pin, LoaderRelease.DownloadDir);
             a.Source = file.Path;
@@ -463,7 +468,7 @@ namespace SlotsInstaller
         {
             if (LinuxPlatform.IsLinux) throw new IOException(LinuxPlatform.UpdateMessage);
             if (!String.Equals(a.Target, "manager", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("update-install needs loader or manager.");
-            UpdateCheckResult r = CheckOrThrow(a);
+            UpdateCheckResult r = CheckOrThrow(a, true, false);
             ReleaseOffer offer = UpdateCheck.ManagerUpdate(r, UpdateCheck.Running);
             if (offer == null) { Console.WriteLine("Slotsloader Manager is up to date (" + SafeHttp.AppVersion() + ")."); return 0; }
             Console.WriteLine("Update Slotsloader Manager " + SafeHttp.AppVersion() + " -> " + offer.Version + ": " + offer.Asset + " (" + offer.Size + " bytes) from " + offer.Url);

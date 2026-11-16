@@ -13,3 +13,11 @@ manager/out/
 manager/releases/
 manager/tests.local.json
 manager/tests/*.txt
+
+# The Slots Loader (Wael3rd/SF6-ModSuite): its build.bat outputs
+*.obj
+*.exp
+*.ilk
+*.pdb
+test_out/
+test_mods/

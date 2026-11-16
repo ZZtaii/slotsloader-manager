@@ -1,0 +1,21 @@
+# Paths copied byte for byte from Wael3rd/SF6-ModSuite (see UPSTREAM.md).
+# One per line; a trailing slash marks a folder. Read by .github/scripts/sync_suite.py.
+costumes/
+plugin/
+common/
+proxy/
+stages/
+updater/
+tools/
+packaging/
+build.bat
+TESTING.md
+THIRD_PARTY.md
+core/include/
+colormod/include/
+colormod/third_party/
+docs/FLUFFY.md
+docs/MANAGER_CONTRACT.md
+docs/REFRAMEWORK_COMPATIBILITY.md
+docs/RUNTIME_OPTIONS.md
+docs/SLOTS_LOADER_1.13_CHANGES.md

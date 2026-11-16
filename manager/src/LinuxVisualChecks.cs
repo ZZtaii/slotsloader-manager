@@ -153,7 +153,7 @@ namespace SlotsInstaller
                         Call(form, "ShowPage", Get<Panel>(form, "settingsPage")); Call(form, "LoadSettingsFields");
                         Get<ListBox>(form, "settingsLibraries").SelectedIndex = 0; Pump(100);
                         Capture(form, root, "05-settings-1280x800", externalCapture, report);
-                        Call(form, "ShowUpdatesTab"); Pump(100);
+                        Call(form, "ShowLoaderTab"); Pump(100);
                         if (LinuxPlatform.IsLinux)
                         {
                             var update = form.Controls.Find("linuxAppUpdate", true).Single();
@@ -192,7 +192,7 @@ namespace SlotsInstaller
                         report.Add("PASS: window resize preserves usable layout; actual native bounds are recorded for every capture.");
                         if (externalCapture && LinuxPlatform.IsLinux)
                         {
-                            Call(form, "ShowPage", Get<Panel>(form, "settingsPage")); Call(form, "ShowUpdatesTab"); Pump(100);
+                            Call(form, "ShowPage", Get<Panel>(form, "settingsPage")); Call(form, "ShowLoaderTab"); Pump(100);
                             ((Button)form.Controls.Find("linuxAppUpdate", true).Single()).PerformClick(); Pump(100);
                             Require(form.IsDisposed, "Linux update action did not close the idle window.");
                             report.Add("PASS: Linux app update action hands off to the authenticated native session and closes the idle app.");

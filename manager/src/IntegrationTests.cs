@@ -413,7 +413,8 @@ namespace SlotsInstaller
             Require(skin.ParentId == Named(package, "2) Goth Juri skin options").Id, "Trimmed Addonfor parent resolution failed.");
             Require(outfit.ParentId == Named(package, "3) Goth Juri outfit options").Id, "Outfit parent resolution failed.");
             CompositionPlan incomplete = Composer.Plan(package, new[] { main.Id });
-            Require(!incomplete.CanInstall && incomplete.Errors.Count > 0, "Main-only Juri package must fail missing mesh/MDF validation.");
+            // 1.0.19 (relaxed requirements): what is left out is a note for the user and still an error for the Assistant.
+            Require(incomplete.Needs.Count > 0 && incomplete.StrictErrors().Count > 0, "Main-only Juri package must still name the missing mesh/MDF options (a note since 1.0.19, strict for the Assistant).");
             CompositionPlan plan = Composer.Plan(package, new[] { main.Id, skin.Id, outfit.Id });
             Require(plan.CanInstall && plan.Files.Count == 49, "Complete Goth Juri expected 49 assets: " + string.Join("; ", plan.Errors));
             CompositionPlan conflicting = Composer.Plan(package, new[] { main.Id, skin.Id, Named(package, "oily").Id, outfit.Id });
@@ -600,8 +601,9 @@ namespace SlotsInstaller
             CompositionPlan plan = Composer.Plan(package, new[] { mainA.Id, Named(package, "A skin").Id });
             Require(plan.CanInstall && plan.Files.Count == 2, "Unselected Bundle B requirements blocked complete Bundle A: " + string.Join("; ", plan.Errors));
             CompositionPlan incomplete = Composer.Plan(package, new[] { mainA.Id });
-            Require(!incomplete.CanInstall, "Active Bundle A must still enforce its required skin choice.");
-            Require(incomplete.Errors.All(e => e.IndexOf("B skin", StringComparison.OrdinalIgnoreCase) < 0), "Inactive Bundle B should not produce choice errors.");
+            // 1.0.19 (relaxed requirements): the required skin choice is a note for the user and still an error for the Assistant.
+            Require(incomplete.Needs.Count > 0 && incomplete.StrictErrors().Count > 0, "Active Bundle A must still name its required skin choice (strict for the Assistant).");
+            Require(incomplete.StrictErrors().All(e => e.IndexOf("B skin", StringComparison.OrdinalIgnoreCase) < 0) && incomplete.Needs.All(n => n.Text.IndexOf("B skin", StringComparison.OrdinalIgnoreCase) < 0), "Inactive Bundle B should not produce choice errors or notes.");
         }
 
         private static void TestRealLibraryCharacters()

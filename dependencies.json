@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "source": "Wael3rd/SF6-ModSuite",
+  "packages": {
+    "slots_loader": {
+      "name": "SF6 Slots Loader",
+      "version": "1.27.4",
+      "release": "v1.37.0",
+      "file": "SF6_SlotsLoader_v1.27.4.zip",
+      "size": 5140963,
+      "sha256": "9b5c865895aeaf560930d08b521cac9d01a93854aa0510a5e09c7fc5ede5a11c"
+    },
+    "native_core": {
+      "name": "SF6 Native Core",
+      "version": "0.9.14",
+      "release": "v1.37.0",
+      "file": "SF6_NativeCore_0.9.14.zip",
+      "size": 684069,
+      "sha256": "f361ac85f870c47df408a57846bad9151a24f749cc5d373004916cafd83226c5"
+    }
+  }
+}

@@ -657,7 +657,7 @@ namespace SlotsInstaller
             report.Add("PASS: " + context + " managed full-row buffer; 24 immediate native hover/leave frames retain orange indicator; mouse/Space toggles, Home/Down/End navigation and checked accessibility state; hover/scroll roundtrip bitmap stable. Saved images are hidden-control renderings, not desktop captures.");
         }
 
-        private static void ClickOption(OptionTree tree, Point point, int downMessage)
+        internal static void ClickOption(OptionTree tree, Point point, int downMessage)
         {
             IntPtr location=new IntPtr((point.Y<<16)|(point.X & 0xffff));
             SendMessage(tree.Handle,downMessage,new IntPtr(1),location);
@@ -878,7 +878,7 @@ namespace SlotsInstaller
             settingsItem.PerformClick(); ControlField<FlatButton>(form, "settingsAboutTab").PerformClick(); Application.DoEvents(); LayoutChildren(layoutHost);
             Panel aboutPanel = ControlField<Panel>(form, "settingsAboutPanel");
             AboutCard[] aboutCards = AllControls(aboutPanel).OfType<AboutCard>().OrderBy(c => c.Parent.Top).ThenBy(c => c.Left).ToArray();   // reading order
-            Require(settingsPage.Visible && aboutPanel.Visible && ControlField<FlatButton>(form, "settingsAboutTab").Active && !ControlField<Panel>(form, "settingsUpdatesPanel").Visible, context + ": the About tab did not open Settings → About.");
+            Require(settingsPage.Visible && aboutPanel.Visible && ControlField<FlatButton>(form, "settingsAboutTab").Active && !ControlField<Panel>(form, "settingsLoaderPanel").Visible, context + ": the About tab did not open Settings → About.");
             Require(aboutCards.Select(c => c.Url).SequenceEqual(new[] { MainForm.DiscordUrl, MainForm.PatreonUrl, MainForm.RepoUrl, MainForm.AuthorUrl, MainForm.ColorSyncUrl, MainForm.NexusProfileUrl, MainForm.AuthorGitHubUrl, MainForm.Wael3rdUrl, MainForm.BrewedVfxUrl }), context + ": About cards: " + String.Join(", ", aboutCards.Select(c => c.Title)));
             // Cards keep their size and stay side by side inside the panel's width (it scrolls vertically when short, never sideways).
             Require(aboutCards.All(c => c.Visible && c.Width > 0 && c.Height > 0 && c.Right <= c.Parent.Width) && !aboutPanel.HorizontalScroll.Visible && aboutCards.First().Parent.Right <= aboutPanel.ClientSize.Width, context + ": About cards are clipped or scroll sideways.");

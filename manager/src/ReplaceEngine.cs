@@ -604,6 +604,7 @@ namespace SlotsInstaller
                 File.Delete(JournalPath);
             }
             using (InstallMetrics.Measure("manager installs")) ManagerInstalls.Write(GameRoot, next);   // never throws
+            LoaderFlags.Apply(GameRoot, DataDir, next);   // 1.0.19: the suite loader's updater and menu settings follow the state (never throws)
         }
 
         // Recoverable uninstall: the removed mod's stored files and its record move to <store>\.removed.
@@ -656,6 +657,32 @@ namespace SlotsInstaller
             }
         }
 
+        // 1.0.19: the files of Slotsloader Fork 1.10.9 (SF6_Slotsloader_Fork_v1.10.9.zip) that the suite-line Slots Loader
+        // does not ship, by path and SHA-256 (read from that zip). A takeover removes them only with exactly these bytes.
+        internal static class ForkLeftovers
+        {
+            internal static readonly Dictionary<string, string[]> Table = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "reframework/autorun/SlotsloaderOpponentOutfitSummary.lua", new[] { "601CD2DE240470A700285CBDFC1F91CB9B922A20F11D8A40E0A91438243BBF49" } },
+                { "reframework/costume_mods/README.txt", new[] { "F2FD37C94B6FDAE506FE996DC7DE8563E4EBDFC807968699C9E5354C7745C54A" } },
+                { "README.txt", new[] { "F2FD37C94B6FDAE506FE996DC7DE8563E4EBDFC807968699C9E5354C7745C54A" } },
+            };
+            internal static readonly Dictionary<string, string[]> Extra = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);   // checks add fixture files
+            internal static IEnumerable<KeyValuePair<string, string[]>> All() { return Table.Concat(Extra); }
+        }
+
+        // 1.0.19: the game's AMD AGS library and the genuine copy a Slotsloader keeps beside its proxy.
+        internal const string AgsPath = "amd_ags_x64.dll", AgsRealPath = "amd_ags_x64_real.dll";
+        // amd_ags_x64.dll is the proxy of a Slotsloader installed outside the Manager: a known proxy build, or the loader's
+        // plugin in the game folder; either way with an amd_ags_x64_real.dll that is not the same file.
+        private bool OutsideLoaderProxy(string actual)
+        {
+            string real = GamePath(AgsRealPath);
+            if (!File.Exists(real)) return false;
+            string name = KnownBuilds.Name(actual);
+            bool proxy = (name != null && name.IndexOf("proxy", StringComparison.OrdinalIgnoreCase) >= 0) || File.Exists(GamePath(LoaderCostumePak.PluginPath));
+            return proxy && Sha(real) != actual;
+        }
         // Full TOC copy (header + entry table) before the first change of each PAK identity.
         internal string EnsureTocBackup(PakIndex pak)
         {
@@ -780,6 +807,9 @@ namespace SlotsInstaller
                 ModFile found; return map.TryGetValue(p, out found) ? found : null;
             };
 
+            // 1.0.19: the Slotsloader records in the next state (their files at pre-existing paths are taken over, not backed up).
+            var loaderIds = new HashSet<string>(next.Mods.Where(LoaderCostumePak.IsLoaderMod).Select(m => m.Id), StringComparer.OrdinalIgnoreCase);
+            int takenOver = 0;
             List<string> ordered = paths.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
             Dictionary<string, string> preHashed = PreHash(ordered);
             foreach (string path in ordered)
@@ -843,14 +873,38 @@ namespace SlotsInstaller
                     {
                         // 2.5.6: a PAK mod never takes over a patch number another PAK uses (it would hide that PAK).
                         if (wanted && IsPatchPakPath(path)) throw new IOException(path + " is already used by another PAK now. Uninstall this PAK mod and install it again: it gets the next free number.");
-                        if (wanted)
+                        bool loaderFile = wanted && loaderIds.Contains(want.Key.Id);
+                        if (loaderFile && !path.Equals(AgsPath, StringComparison.OrdinalIgnoreCase))
                         {
+                            // 1.0.19: a Slotsloader taking over one installed outside the Manager (by hand or another tool):
+                            // files at the loader's own paths are replaced and never kept as originals to put back later
+                            // (the same rule as a Slotsloader record replacing another). A copy serves only a rollback.
+                            string own = Path.Combine(BackupDir, "takeover-" + Guid.NewGuid().ToString("N") + ".bin");
+                            journal.CreatedPaths.Add(own);
+                            Directory.CreateDirectory(BackupDir); File.Copy(full, own);
+                            if (Sha(own) != actual) throw new IOException("Could not keep an exact copy of " + path + ".");
+                            journal.CleanupAfterCommit.Add(own); beforeSource = own; takenOver++;
+                        }
+                        else if (wanted)
+                        {
+                            // The game's own amd_ags_x64.dll is the original. Under a Slotsloader installed outside the
+                            // Manager the file there is that loader's proxy: the genuine library is its amd_ags_x64_real.dll.
+                            string from = full;
+                            if (loaderFile && OutsideLoaderProxy(actual)) from = GamePath(AgsRealPath);
                             string backup = Path.Combine(BackupDir, Guid.NewGuid().ToString("N") + ".bin");
                             journal.CreatedPaths.Add(backup);
-                            Directory.CreateDirectory(BackupDir); File.Copy(full, backup);
-                            if (Sha(backup) != actual) throw new IOException("Could not back up " + path + " exactly.");
-                            original = new OriginalBackup { Path = path, Backup = backup, Sha256 = actual, Size = new FileInfo(full).Length };
+                            Directory.CreateDirectory(BackupDir); File.Copy(from, backup);
+                            string backupSha = Sha(backup);
+                            if (backupSha != (from == full ? actual : Sha(from))) throw new IOException("Could not back up " + path + " exactly.");
+                            original = new OriginalBackup { Path = path, Backup = backup, Sha256 = backupSha, Size = new FileInfo(backup).Length };
                             originals.Add(original); beforeSource = backup;
+                            if (from != full)
+                            {
+                                string own = Path.Combine(BackupDir, "takeover-" + Guid.NewGuid().ToString("N") + ".bin");
+                                journal.CreatedPaths.Add(own); File.Copy(full, own);
+                                if (Sha(own) != actual) throw new IOException("Could not keep an exact copy of " + path + ".");
+                                journal.CleanupAfterCommit.Add(own); beforeSource = own; takenOver++;
+                            }
                         }
                     }
                     else
@@ -957,8 +1011,14 @@ namespace SlotsInstaller
                 }
                 else
                 {
-                    string targetSha = original == null ? null : original.Sha256;
-                    if (actual != targetSha) fileOps.Add(new JournalOp { Kind = "file", Path = path, BeforeSha = actual, BeforeSource = beforeSource, AfterSha = targetSha, AfterSource = original == null ? null : original.Backup });
+                    // 1.0.19: one Slotsloader record replacing another (an update, the fork to the suite line): a file only
+                    // the old loader had is removed, never swapped back for the file that was there before the first
+                    // loader install (on the maintainer's machine an old SlotsloaderOpponentOutfitSummary.lua came back and
+                    // broke the new loader). An uninstall still restores every original.
+                    bool dropOriginal = original != null && was != null && options.LoaderSwitchFrom != null && String.Equals(was.Owner, options.LoaderSwitchFrom, StringComparison.OrdinalIgnoreCase);
+                    string targetSha = original == null || dropOriginal ? null : original.Sha256;
+                    if (actual != targetSha) fileOps.Add(new JournalOp { Kind = "file", Path = path, BeforeSha = actual, BeforeSource = beforeSource, AfterSha = targetSha, AfterSource = targetSha == null ? null : original.Backup });
+                    if (dropOriginal) Program.LogLine("Slotsloader replaced: " + path + " removed with the old loader; the file from before it (" + original.Size + " bytes, SHA-256 " + original.Sha256 + ") is not put back.");
                     if (original != null) { originals.Remove(original); journal.CleanupAfterCommit.Add(original.Backup); }
                 }
             }
@@ -966,6 +1026,28 @@ namespace SlotsInstaller
             {
                 throw new DriftException(DriftMessage(drift, options.Choice), drift);
             }
+            // 1.0.19: a takeover (a new Slotsloader record, none before) also removes what a Slotsloader Fork installed outside
+            // the Manager left that the new loader does not ship, but only a file whose bytes are exactly a known fork
+            // file's (a user's own edit or another file is never touched). A copy stays in the backup folder.
+            if (!current.Mods.Any(LoaderCostumePak.IsLoaderMod) && next.Mods.Any(m => m.Enabled && loaderIds.Contains(m.Id) && current.Find(m.Id) == null))
+            {
+                string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+                foreach (KeyValuePair<string, string[]> known in ForkLeftovers.All())
+                {
+                    string path = known.Key, full = GamePath(path);
+                    if (paths.Contains(path) || fluffy.Owner(path) != null || !File.Exists(full)) continue;
+                    Safety.NoReparseChain(full, checkedFolders);
+                    string actual = Sha(full);
+                    if (!known.Value.Contains(actual, StringComparer.OrdinalIgnoreCase)) continue;
+                    string keep = Path.Combine(BackupDir, "takeover-leftovers", stamp, path.Replace('/', '\\'));
+                    Directory.CreateDirectory(Path.GetDirectoryName(keep));
+                    journal.CreatedPaths.Add(keep); File.Copy(full, keep);
+                    if (Sha(keep) != actual) throw new IOException("Could not keep an exact copy of " + path + ".");
+                    fileOps.Add(new JournalOp { Kind = "file", Path = path, BeforeSha = actual, BeforeSource = keep, AfterSha = null });
+                    Program.LogLine("Slotsloader taken over: " + path + " (a file of Slotsloader Fork that the new loader does not ship) removed; a copy is kept at " + keep + ".");
+                }
+            }
+            if (takenOver > 0) Program.LogLine("Slotsloader taken over: " + ReplacePlanner.N(takenOver, "file") + " of a Slotsloader installed outside the Manager replaced, not kept as originals.");
             if (staleDropped > 0) messages.Add("Dropped " + ReplacePlanner.N(staleDropped, "PAK invalidation") + " because the archive layout or entry ownership changed.");
             next.Deployed = deployed;
             next.Originals = originals;
@@ -1036,6 +1118,7 @@ namespace SlotsInstaller
             internal HashSet<string> RestoreReleased;   // "Restore original game file" for these kept paths
             internal bool RecycleSurvivingFiles;
             internal bool IncludeReleased;              // restore-all: kept files are part of the question
+            internal string LoaderSwitchFrom;           // 1.0.19: the Slotsloader record an Install replaces with another Slotsloader
         }
 
         private static string DriftMessage(List<DriftItem> items, DriftChoice choice)
@@ -1156,6 +1239,7 @@ namespace SlotsInstaller
         {
             if (plan == null || !plan.CanInstall) throw new IOException(plan == null ? "Nothing to install." : String.Join(" ", plan.Errors));
             ReplaceMod mod = null; string storeDir = null;
+            var options = new ChangeOptions { Choice = DriftChoice.Refuse };
             try
             {
                 Change("Install " + name, true, delegate(ReplaceState state)
@@ -1169,6 +1253,7 @@ namespace SlotsInstaller
                     string root = StoreRoot(state);
                     if (existing != null)
                     {
+                        if (LoaderCostumePak.IsLoaderMod(existing) && LoaderCostumePak.IsLoaderMod(mod)) options.LoaderSwitchFrom = existing.Id;
                         int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer;
                         if (keepPlace || existing.PresetLayer) state.Mods[at] = mod;
                         else { state.Mods.RemoveAt(at); state.Mods.Insert(0, mod); historySwitched = existing.Id; }   // still an Update in History
@@ -1177,7 +1262,7 @@ namespace SlotsInstaller
                     if (below != null && !ReferenceEquals(below, mod)) { state.Mods.Remove(mod); state.Mods.Insert(state.Mods.IndexOf(below), mod); historySwitched = existing == null ? null : existing.Id; }
                     if (String.IsNullOrEmpty(state.StoreRoot)) state.StoreRoot = root;
                     return state;
-                }, false, null);
+                }, options, null, null);
             }
             catch
             {

@@ -53,7 +53,8 @@ namespace SlotsInstaller
                 && rest.All(w => (r.Name + " " + r.Character + " " + r.Summary).IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
         }
         // 1.0.18 (the user, about recipes in their own strip above the list: "the recipes are stuck and pinned, and
-        // they don't move as you scroll between entries"): recipes are rows of the mod list itself, first in it. They
+        // they don't move as you scroll between entries"): recipes are rows of the mod list itself (1.0.19: sorted with
+        // the mods, MainForm.ApplyFilters; first in it only when the search has a recipe word). They
         // scroll with it and are selected like a mod. A row is a LibraryEntry with its Recipe set and no source file,
         // so what works on mod files passes it by (the install queue, rename, delete, read-ahead); opening one goes
         // to OpenRecipe (LoadPackage), its right-click menu is the recipe's own, and it is drawn by DrawLibraryItem.
@@ -70,11 +71,25 @@ namespace SlotsInstaller
             {
                 LibraryEntry entry;
                 if (!recipeEntries.TryGetValue(r.Id, out entry) || !ReferenceEquals(entry.Recipe, r))
-                    recipeEntries[r.Id] = entry = new LibraryEntry { SourcePath = "", Name = r.Name, DisplayName = r.Name, Character = r.Character, Kind = "Recipe", Recipe = r };
+                    recipeEntries[r.Id] = entry = new LibraryEntry { SourcePath = "", Name = r.Name, DisplayName = r.Name, Character = r.Character, Kind = "Recipe", Recipe = r, AddedUtc = LibraryUsage.ParseUtc(r.CreatedUtc) };   // 1.0.19: the Added sort goes by when the recipe was made
                 rows.Add(entry);
             }
             recipeHitList = hits; recipeRowsShown = rows;
             return rows;
+        }
+        // 1.0.19: the search has a recipe word (RecipeWords): the recipes are listed before the mods.
+        internal static bool HasRecipeWord(string text)
+        {
+            return (text ?? "").Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries).Any(w => RecipeWords.Contains(w.Trim(), StringComparer.OrdinalIgnoreCase));
+        }
+        // 1.0.19: a recipe's place in the Last used sort: the last time it was installed (its outfits and replacement
+        // records that are installed now), 0 = not installed.
+        internal long RecipeLastUsedTicks(OutfitRecipe recipe)
+        {
+            RecipeInstall made = InstalledRecipe(recipe); long best = 0;
+            foreach (InstalledOutfit o in made.Outfits) best = Math.Max(best, o.InstalledUtc.Ticks);
+            foreach (GameModRow row in made.Replacements) if (row.Mod != null) best = Math.Max(best, LibraryUsage.ParseUtc(row.Mod.InstalledUtc).Ticks);
+            return best;
         }
         internal int RecipeStripCountForTest { get { return recipeRowsShown.Count; } }
         // What a recipe row says under its name: the mods it is made of (their options are in the view on the right).
@@ -183,7 +198,16 @@ namespace SlotsInstaller
         // Nothing recorded (a recipe installed by an earlier build, or its mods installed by hand): it still reads
         // installed when what is there is exactly the recipe, the same mods with the same options and nothing else
         // of it turned off; never "changed", and never a record of a mod only because the recipe names that mod.
+        // Set while MainForm.ApplyFilters runs: each recipe's answer is read once in that pass.
+        private Dictionary<OutfitRecipe, RecipeInstall> recipeInstallPass;
         internal RecipeInstall InstalledRecipe(OutfitRecipe recipe)
+        {
+            RecipeInstall known;
+            if (recipeInstallPass == null || recipe == null) return InstalledRecipeNow(recipe);
+            if (!recipeInstallPass.TryGetValue(recipe, out known)) recipeInstallPass[recipe] = known = InstalledRecipeNow(recipe);
+            return known;
+        }
+        private RecipeInstall InstalledRecipeNow(OutfitRecipe recipe)
         {
             var found = new RecipeInstall();
             if (recipe == null || recipe.Base == null) return found;
