@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -51,6 +52,14 @@ namespace SlotsInstaller
             if (openCancel != null) try { openCancel.Cancel(); } catch (ObjectDisposedException) { }
         }
         private bool keepShown;
+        internal static int ReadingDelay = 250;   // ms before a read in flight shows "Reading …" (checks may shorten it)
+        internal static int SlowHintDelay = 1750;   // then, for a RAR/7Z still read (two seconds in all), the hint below
+        internal const string SlowArchiveHint = "   ·   RAR and 7Z mods open slower than ZIP mods: Settings → General → Convert RAR to ZIP.";
+        private string ReadingName(string path)
+        {
+            LibraryEntry listed = library.FirstOrDefault(x => x != null && String.Equals(x.SourcePath, path, StringComparison.OrdinalIgnoreCase));
+            return listed != null ? LibraryRowName(listed) : Path.GetFileName(path ?? "");
+        }
 
         private void OpenWork(string path, Func<PackageResult> read, Action<PackageResult> show)
         {
@@ -59,6 +68,25 @@ namespace SlotsInstaller
             busy = true;
             if (hoverTimer != null) { hoverTimer.Stop(); hoverNode = null; }
             UpdateInstallButton();
+            // 17 Nov 2026 (the user: "if I do click another mod, it shows up late", with the old mod still on screen): a read
+            // still going after a quarter second says so in the status strip, and the shown mod's options are locked, so a
+            // tick can't land on the mod being left. Kept packages still open at once, quietly (the 1.0.12 rule above).
+            // The user: "maybe add a hint that RAR mods load slow, consider converting them to zip? when loading is taking
+            // long": a RAR or 7Z still read after two seconds adds that to the line.
+            var reading = new System.Windows.Forms.Timer { Interval = ReadingDelay };
+            string readingName = ReadingName(path);
+            bool slowKind = Regex.IsMatch(path ?? "", @"\.(rar|7z)$", RegexOptions.IgnoreCase); int stage = 0;
+            reading.Tick += delegate
+            {
+                reading.Stop();
+                if (openCancel != cancel || cancel.IsCancellationRequested || IsDisposed) return;
+                stage++;
+                statusText.Text = "Reading " + readingName + "…" + (stage > 1 ? SlowArchiveHint : ""); statusText.ForeColor = Palette.Muted;
+                statusProgress.Style = ProgressBarStyle.Marquee; statusProgress.Visible = true;
+                componentTree.Enabled = false;
+                if (stage == 1 && slowKind) { reading.Interval = SlowHintDelay; reading.Start(); }
+            };
+            reading.Start();
             var worker = new BackgroundWorker();
             worker.DoWork += delegate(object s, DoWorkEventArgs e)
             {
@@ -70,6 +98,7 @@ namespace SlotsInstaller
             {
                 if (OffUiThread(delegate { finished(s, e); })) return;
                 PackageResult result = e.Error == null && !e.Cancelled ? (PackageResult)e.Result : null;
+                reading.Stop(); reading.Dispose();   // SetBusy(false) below hides the strip's bar and unlocks the options
                 if (openCancel == cancel) openCancel = null;
                 cancel.Dispose(); worker.Dispose();
                 packageLoading = false; loadingPath = null;

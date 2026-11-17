@@ -16,6 +16,7 @@ $env:SLOTSLOADER_TEST_CONFIG = $LocalConfig; $env:SLOTSLOADER_PROJECT = $testPro
 $local = if (Test-Path -LiteralPath $LocalConfig) { Get-Content -LiteralPath $LocalConfig -Raw | ConvertFrom-Json } else { $null }
 $realGame = if ($local) { $local.GameRoot } else { '<set GameRoot in tests.local.json>' }
 $realJuri = if ($local -and $local.Archives.juri) { $local.Archives.juri } else { '<set Archives.juri in tests.local.json>' }
+$realRar = if ($local -and $local.Archives.viperHair) { $local.Archives.viperHair } else { '<set Archives.viperHair in tests.local.json>' }
 New-Item -ItemType Directory -Path (Join-Path $OutputDirectory 'Data') -Force | Out-Null
 @{ GameRoot = (Join-Path $testFixtures 'game'); Libraries = @(); SevenZipPath = 'C:\Program Files\7-Zip\7z.exe' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory 'Data\settings.json') -Encoding UTF8
 $testCases = @(
@@ -35,6 +36,7 @@ $testCases = @(
     @{ Name='updates'; Arguments=@('--updates-check', ('"' + (Join-Path $OutputDirectory 'updates-check') + '"')) },
     @{ Name='history'; Arguments=@('--history-check', ('"' + (Join-Path $OutputDirectory 'history-check') + '"')) },
     @{ Name='library-delete'; Arguments=@('--delete-check', ('"' + (Join-Path $OutputDirectory 'delete-check') + '"')) },
+    @{ Name='convert'; Arguments=@('--convert-check', ('"' + (Join-Path $OutputDirectory 'convert-check') + '"')) },
     @{ Name='variants'; Arguments=@('--variants-check', ('"' + $testFixtures + '"')) },
     @{ Name='slots'; Arguments=@('--slots-check', ('"' + $testFixtures + '"')) },
     @{ Name='queue'; Arguments=@('--queue-check', ('"' + (Join-Path $OutputDirectory 'queue-check') + '"')) },
@@ -47,6 +49,7 @@ $realCases = @(
     @{Name='replace-real'; Arguments=@('--replace-real-check', ('"' + (Join-Path $OutputDirectory 'replace-real') + '"'))},
     @{Name='filter-real'; Arguments=@('--filter-real-check', ('"' + (Join-Path $OutputDirectory 'filter-real') + '"'), ('"' + $realGame + '"'))},
     @{Name='loader-real'; Arguments=@('--loader-real-check', ('"' + (Join-Path $OutputDirectory 'loader-real') + '"'))},
+    @{Name='convert-real'; Arguments=@('--convert-real-check', ('"' + (Join-Path $OutputDirectory 'convert-real') + '"'), ('"' + $realRar + '"'))},
     @{Name='history-real'; Arguments=@('--history-real-check', ('"' + (Join-Path $OutputDirectory 'history-real') + '"'), ('"' + $realGame + '"'))},
     @{Name='bundle-polish'; Arguments=@('--polish-check', ('"' + $testFixtures + '"'), ('"' + $realJuri + '"'))}
 )

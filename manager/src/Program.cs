@@ -171,6 +171,20 @@ namespace SlotsInstaller
                     if (args.Length < 2) throw new ArgumentException("--delete-check requires a fixture output directory.");
                     return LibraryDeleteChecks.Run(args[1]);
                 }
+                if (args.Length > 0 && args[0] == "--convert-check")
+                {
+                    // 1.0.20 Convert RAR and 7Z to ZIP on generated 7Z fixtures, with a stub Recycle Bin (hidden window).
+                    Headless = true;
+                    if (args.Length < 2) throw new ArgumentException("--convert-check requires a fixture output directory.");
+                    return ConvertChecks.Run(args[1]);
+                }
+                if (args.Length > 0 && args[0] == "--convert-real-check")
+                {
+                    // Read-only for the real archive: a copy of a real RAR is converted inside the output directory.
+                    Headless = true;
+                    if (args.Length < 3) throw new ArgumentException("--convert-real-check requires an output directory and a RAR.");
+                    return ConvertChecks.RunReal(args[1], args[2]);
+                }
                 if (args.Length > 0 && args[0] == "--wording-check")
                 {
                     // 2.5.1: no user-visible text names another product (literals, CLI, Assistant, window).

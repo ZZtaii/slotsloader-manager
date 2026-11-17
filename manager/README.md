@@ -1,4 +1,4 @@
-# Slotsloader Manager 1.0.19
+# Slotsloader Manager 1.0.20
 
 A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
@@ -9,6 +9,13 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 **Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
+
+- 1.0.20:
+  - Settings > General > Convert RAR to ZIP: turns RAR and 7Z mods into ZIPs, which open and preview much faster. Each ZIP is checked file by file, installed copies, recipes and presets switch to it, and the originals can go to the Recycle Bin at the end. Mods your external mod manager has installed are left out.
+  - Mods open faster: a mod named like the open one is read as its add-on only when it says so (AddonFor=), so packs that share one name (robhal's base files) no longer read each other. A mod that takes long shows "Reading…" and its options wait; a slow RAR or 7Z points to Convert RAR to ZIP.
+  - Typing "hair" (or hairstyle, custom hair) also finds the mods with hair files, besides the ones named so, in the Mod library and the recipe builder.
+  - Save and install of an edited recipe updates the outfit installed from it instead of adding a second one.
+  - A pack of base textures for swap mods says to install it with Replace original, which every extra outfit then uses.
 
 - 1.0.19:
   - Slotsloader comes from its author's releases: the Manager offers the version approved for it, checked at start and once a day, straight from any older one. An approval taken back offers Go back.

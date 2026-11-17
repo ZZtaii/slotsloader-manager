@@ -54,20 +54,29 @@ namespace SlotsInstaller
         private static readonly Regex ColourPackWord = new Regex(@"^colou?rs?(?: (?:packs?|bundles?))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private static readonly Regex ColourStart = new Regex(@"^colou?rs?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private static readonly Regex ColourEnd = new Regex(@"^(?:packs?|bundles?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        // 17 Nov 2026 (the user: typing hair "should not only match keywords, it should also match those mods that have
+        // custom hairs in them"): "hair", "hairs", "hairstyle(s)", "custom hair(s)" are a file-kind word like the colour
+        // words: OR-ed with the name match, the mods with hair files (LibraryEntry.FileMix[3]: a model's part folder 02)
+        // first. It goes through the same plumbing (Word.Colour, Query.Colour), with its own keyword.
+        internal const string HairKeyword = "hair";
+        private static readonly Regex HairWord = new Regex(@"^(?:custom )?hair(?:s|styles?)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         internal static string ColourKeyword(string term)
         {
             string t = Regex.Replace((term ?? "").Trim(), @"\s+", " ");
             if (t.Equals("cmd", StringComparison.OrdinalIgnoreCase) || t.Equals("cmds", StringComparison.OrdinalIgnoreCase)) return ColourCmd;
+            if (HairWord.IsMatch(t)) return HairKeyword;
             return ColourPackWord.IsMatch(t) ? ColourPack : null;
         }
         internal static bool HasColourFiles(LibraryEntry e) { return e != null && e.FileMix != null && e.FileMix.Count >= 3 && e.FileMix[1] > 0; }
         internal static bool IsColourPack(LibraryEntry e) { return HasColourFiles(e) && e.FileMix[2] == 0 && e.FileMix[1] * 2 >= e.FileMix[0]; }
+        internal static bool HasHairFiles(LibraryEntry e) { return e != null && e.FileMix != null && e.FileMix.Count >= 4 && e.FileMix[3] > 0; }
         internal static bool MatchesColour(LibraryEntry e, string keyword)
         {
-            return keyword == ColourPack ? IsColourPack(e) : keyword == ColourCmd && HasColourFiles(e);
+            return keyword == ColourPack ? IsColourPack(e) : keyword == ColourCmd ? HasColourFiles(e) : keyword == HairKeyword && HasHairFiles(e);
         }
-        // 0 = a colour pack, 1 = another mod with colour files, 2 = the rest.
+        // Colour words: 0 = a colour pack, 1 = another mod with colour files, 2 = the rest. Hair: 0 = a mod with hair files.
         internal static int ColourRank(LibraryEntry e) { return IsColourPack(e) ? 0 : HasColourFiles(e) ? 1 : 2; }
+        internal static int ColourRank(LibraryEntry e, string keyword) { return keyword == HairKeyword ? (HasHairFiles(e) ? 0 : 2) : ColourRank(e); }
         // "Colour pack" for the library row, or "".
         internal static string ColourLabel(LibraryEntry e) { return IsColourPack(e) ? "Colour pack" : ""; }
 

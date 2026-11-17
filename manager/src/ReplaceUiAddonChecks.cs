@@ -98,6 +98,10 @@ namespace SlotsInstaller
             // Another copy of the main mod (the same names): never read to look for addons.
             string copy = Path.Combine(folder, AddonTestName + " (copy).zip"); File.Copy(main, copy, true);
             var copyEntry = new LibraryEntry { SourcePath = copy, Name = Path.GetFileNameWithoutExtension(copy), DisplayName = AddonTestName, Kind = "ZIP", OptionNames = mainEntry.OptionNames.ToList() };
+            // 17 Nov 2026: a mod of the same name with other option names whose index says it has no AddonFor= (robhal's base
+            // packs share one bundle name): never read either. Its file is the addon's, so a read would merge it in.
+            string sibling = Path.Combine(folder, AddonTestName + " (base pack).zip"); File.Copy(addon, sibling, true);
+            var siblingEntry = new LibraryEntry { SourcePath = sibling, Name = Path.GetFileNameWithoutExtension(sibling), DisplayName = AddonTestName, Kind = "ZIP", OptionNames = new List<string> { AddonTestName, "Base pack" }, AddonFors = new List<string>() };
             Func<string, bool> isMain = p => ReplacePlanner.SameSource(p, main);
             Func<string, bool> isAddon = p => ReplacePlanner.SameSource(p, addon);
             Func<string, OptionNode> node = name => Get<Dictionary<string, OptionNode>>(form, "componentNodes").Values.First(n => ((ModComponent)n.Tag).Name == name);
@@ -111,7 +115,7 @@ namespace SlotsInstaller
                 List<InstalledOutfit> mine = Installer.ListInstalled(root).Where(o => o.Managed && isMain(o.SourcePath)).ToList();
                 if (mine.Count > 0) OutfitSetStore.UninstallOutfits(root, mine, null);
             };
-            library.Add(mainEntry); library.Add(addonEntry); library.Add(copyEntry);
+            library.Add(mainEntry); library.Add(addonEntry); library.Add(copyEntry); library.Add(siblingEntry);
             try
             {
                 cleanup();
@@ -119,7 +123,7 @@ namespace SlotsInstaller
                 // Opening the main mod reads it and its addon, not the copy of the main mod (the same option names).
                 int reads = form.PackageReads;
                 open(mainEntry);
-                Require(form.PackageReads == reads + 2 && Get<ModPackage>(form, "package").MergedFrom != null, "reads while opening the main mod: +" + (form.PackageReads - reads));
+                Require(form.PackageReads == reads + 2 && Get<ModPackage>(form, "package").MergedFrom != null && Get<ModPackage>(form, "package").AddonParts.Count == 1, "reads while opening the main mod: +" + (form.PackageReads - reads));
                 // The addon opened alone is listed as before: Barefoot a root option with the note.
                 open(addonEntry);
                 ModPackage alone = Get<ModPackage>(form, "package");

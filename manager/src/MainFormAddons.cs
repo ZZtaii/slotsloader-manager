@@ -94,6 +94,10 @@ namespace SlotsInstaller
                 if (String.Equals(e.SourcePath, opened.SourcePath, StringComparison.OrdinalIgnoreCase)) continue;
                 // A known name: only rows named the same (the package name is checked again once it is read).
                 if (openedName.Length > 0 && !String.Equals(e.DisplayName.Trim(), openedName, StringComparison.OrdinalIgnoreCase)) continue;
+                // 17 Nov 2026 (the user's Mod library was slow on robhal's base packs: 20 archives named "!BASE FILES (for swap by
+                // robhal)", each read in full, about 18.7 s per open): an addon has an AddonFor= (LibraryAddons.IsAddonOf), so a
+                // mod known to have none is never read for this. Not known yet (an older index record): read, as before.
+                if (e.AddonFors != null && e.AddonFors.Count == 0) continue;
                 list.Add(new AddonCandidate { SourcePath = e.SourcePath, Name = e.DisplayName.Trim(), OptionNames = e.OptionNames.ToList() });
             }
             return list;
