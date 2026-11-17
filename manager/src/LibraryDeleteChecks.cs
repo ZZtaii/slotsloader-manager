@@ -95,11 +95,11 @@ namespace SlotsInstaller
                             catch (Exception ex) { failures++; report.Add("FAIL " + name + ": " + ex); }
                         };
                         check("menu: Open, Open in Explorer, separator, the uninstall items, separator, Delete last in the danger colour; Delete archive / Delete folder; disabled while busy; not offered for an unreadable library row", delegate { MenuShape(form); });
-                        check("rename (1.0.5): Rename after Open in Explorer (F2); edited on the row; Enter renames the archive and the installed outfit's manifest, entry and history follow; Esc cancels; a taken or invalid name and a Fluffy-installed mod are refused inline; a failed record write puts everything back; a case-only rename works", delegate { Rename(form, lib, config, root); });
-                        check("rename records (1.0.5): Replace-original records and Install all variants records take the new path under the game lock", delegate { RenameRecords(lib, config, root); });
-                        check("rename metadata: valid archive cache survives, stale identities are rejected, filename guesses refresh, managed manifest discovery preserves scope", delegate { RenameMetadataChecks.Run(root); });
-                        check("rename UI: native click-away saves before opening the clicked row; options, typed name, target and replacement edit survive a rename", delegate { ManagerImprovementChecks.RenameUi(form, lib, config, root); });
-                        check("folder freshness: scans run off the UI thread, superseded checks cancel, switching mods ignores old results, Install revalidates; activation leaves an unchanged archive alone and reloads a changed one",delegate { ManagerImprovementChecks.FolderReview(form, lib, config, root); });
+                        if (TestTier.Full) check("rename (1.0.5): Rename after Open in Explorer (F2); edited on the row; Enter renames the archive and the installed outfit's manifest, entry and history follow; Esc cancels; a taken or invalid name and a Fluffy-installed mod are refused inline; a failed record write puts everything back; a case-only rename works", delegate { Rename(form, lib, config, root); });
+                        if (TestTier.Full) check("rename records (1.0.5): Replace-original records and Install all variants records take the new path under the game lock", delegate { RenameRecords(lib, config, root); });
+                        if (TestTier.Full) check("rename metadata: valid archive cache survives, stale identities are rejected, filename guesses refresh, managed manifest discovery preserves scope", delegate { RenameMetadataChecks.Run(root); });
+                        if (TestTier.Full) check("rename UI: native click-away saves before opening the clicked row; options, typed name, target and replacement edit survive a rename", delegate { ManagerImprovementChecks.RenameUi(form, lib, config, root); });
+                        if (TestTier.Full) check("folder freshness: scans run off the UI thread, superseded checks cancel, switching mods ignores old results, Install revalidates; activation leaves an unchanged archive alone and reloads a changed one",delegate { ManagerImprovementChecks.FolderReview(form, lib, config, root); });
                         check("Fluffy: a mod Fluffy's installed.ini lists is refused inline (" + LibraryDelete.FluffyRefusal + "); nothing deleted, row kept", delegate { FluffyRefused(form, bin, Path.Combine(fluffyMods, "Fluffy Mod.zip")); });
                         check("scope: a source outside the libraries and a library root are refused inline; .. escapes, case and trailing separators resolve; a folder holding a library or the game folder is refused", delegate { Scope(form, bin, lib, outside, game); });
                         if (junctions) check("links: a junction mod and a folder mod with a junction inside are refused; the junction targets are untouched", delegate { Links(form, bin, lib, outside); });
@@ -444,6 +444,7 @@ namespace SlotsInstaller
         private static void Put(string root, string path, string contents) { string file = Safety.Under(root, path); Directory.CreateDirectory(Path.GetDirectoryName(file)); File.WriteAllText(file, contents, new UTF8Encoding(false)); }
         private static void Render(MainForm form, string file)
         {
+            if (!TestTier.Render) return;   // 1.0.21: review PNGs only in a full run or with SLOTSLOADER_RENDER=1
             using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(file, ImageFormat.Png); }
         }
         private static T Get<T>(object o, string name) { FieldInfo field = o.GetType().GetField(name, PrivateInstance); if (field == null) throw new MissingFieldException(name); return (T)field.GetValue(o); }

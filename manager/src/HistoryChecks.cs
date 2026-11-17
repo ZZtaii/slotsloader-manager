@@ -58,7 +58,7 @@ namespace SlotsInstaller
                 check("compaction past the size cap: the newest events are kept, older ones fold into one summary line per mod plus one for launches; every per-mod total (plays, last played, install dates, installed and enabled state, event counts) and the launch/slot totals are identical before and after; a launch is never split; uninstalled and deleted sources keep their rows", "compact", Compaction);
                 check("Last used sort from history: last played, else the last install or switch, else the older install records; the sort order and the row meta text (\"played 3d ago\" / \"installed 12 Oct\"); 2,667 lookups without file access", "lastused", LastUsedSort);
                 check("get_history (Assistant): strict schema (every property required, \"\" / 0 = default), filters by character, kind, install state, not_used_days, used_within_days and query, orders, current installs predating the history, ids for the actions, no local paths; tool count 17", "assistant", AssistantTool);
-                check("History view: reachable from the Installed page (History icon button) and gear → History; timeline rows (played, installs, switches, uninstalls, enable/disable, moves, undo); filters by mod (Installed-page matching), character and kind; the × clear; empty state; no tooltips; fits at 1232 and 1110 logical; render at the device DPI", "view", View);
+                if (TestTier.Full) check("History view: reachable from the Installed page (History icon button) and gear → History; timeline rows (played, installs, switches, uninstalls, enable/disable, moves, undo); filters by mod (Installed-page matching), character and kind; the × clear; empty state; no tooltips; fits at 1232 and 1110 logical; render at the device DPI", "view", View);
             }
             finally
             {
@@ -606,7 +606,7 @@ namespace SlotsInstaller
                 form.Close();
             }
         }
-        private static void Save(Control c, string path, string name) { using (var bitmap = new Bitmap(c.Width, c.Height)) { c.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(Path.Combine(path, name + "-" + c.DeviceDpi + ".png"), ImageFormat.Png); } }
+        private static void Save(Control c, string path, string name) { if (!TestTier.Render) return; using (var bitmap = new Bitmap(c.Width, c.Height)) { c.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(Path.Combine(path, name + "-" + c.DeviceDpi + ".png"), ImageFormat.Png); } }
 
         // ---- real, read-only: the user's SlotsLoader log
         internal static int RunReal(string output, string gameRoot)

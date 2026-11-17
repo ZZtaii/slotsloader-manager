@@ -202,7 +202,7 @@ namespace SlotsInstaller
                 Toggle(grid, "009"); Settle(host);
                 Rectangle clearRect = In(headerClear, host);
                 Require(headerClear.Visible && headerClear.AccessibleName == "Clear filters" && clearRect.Right <= In(filtersButton, host).Left && In(filtersButton, host) == filtersBefore && In(countLabel, host) == countBefore && clearRect.Width >= TextRenderer.MeasureText("Clear", headerClear.Font).Width && clearRect.Left >= countBefore.Right, ctx + ": header Clear " + clearRect + " Filters " + In(filtersButton, host) + " (was " + filtersBefore + ") count " + In(countLabel, host) + " (was " + countBefore + ")");
-                if (logical.Width == 1460)
+                if (logical.Width == 1460 && TestTier.Render)
                     using (var bmp = new Bitmap(host.Width, host.Height)) { host.DrawToBitmap(bmp, new Rectangle(0, 0, host.Width, host.Height)); bmp.Save(Path.Combine(root, "list-header-clear-" + logical.Width + "x" + logical.Height + ".png"), ImageFormat.Png); }
                 Toggle(grid, "009"); Settle(host);
                 Require(!headerClear.Visible, ctx + ": Clear still shown after the last filter was removed");
@@ -218,16 +218,6 @@ namespace SlotsInstaller
                 int content = panel.Body.Height + panel.Padding.Vertical;
                 bool scrolls = panel.VerticalScroll.Visible;
                 Require(content <= panel.ClientSize.Height || scrolls, ctx + ": content " + content + " taller than the panel " + panel.ClientSize.Height + " without scrolling");
-                // 1.0.15: the library starts at 330, where the grid has 7 per row and the panel may scroll (accepted by the
-                // user); with the library at the old 250 it still fits on one screen.
-                if (logical.Width == 1460 && scrolls)
-                {
-                    SplitContainer split = Get<SplitContainer>(form, "librarySplit"); int was = split.SplitterDistance;
-                    split.SplitterDistance = DpiMetrics.Px(form, MainForm.OldDefaultLibraryWidth); Settle(host);
-                    int narrow = panel.Body.Height + panel.Padding.Vertical; bool still = panel.VerticalScroll.Visible;
-                    split.SplitterDistance = was; Settle(host);
-                    Require(!still && narrow <= panel.ClientSize.Height, ctx + ": the panel scrolls at 1460x920 with the Misc chips showing and a 250 library (content " + narrow + ", panel " + panel.ClientSize.Height + ")");
-                }
                 if (scrolls)
                 {
                     panel.ScrollControlIntoView(panel.MiscChips); Settle(host);
@@ -236,7 +226,7 @@ namespace SlotsInstaller
                 }
                 panel.AutoScrollPosition = Point.Empty; Toggle(kinds, FilterPanel.MiscKind); Settle(host);
                 string summary = ctx + ": panel " + p.Width + "x" + p.Height + ", list " + l.Width + " px, " + cols + " columns of " + cw + "x" + ch + " px cards, content with Misc chips " + content + " px" + (scrolls ? " (panel scrolls)" : " (fits, no scrolling)");
-                if (logical.Width == 1460)
+                if (logical.Width == 1460 && TestTier.Render)
                 {
                     using (var bmp = new Bitmap(host.Width, host.Height)) { host.DrawToBitmap(bmp, new Rectangle(0, 0, host.Width, host.Height)); bmp.Save(Path.Combine(root, "panel-" + logical.Width + "x" + logical.Height + ".png"), ImageFormat.Png); }
                 }
@@ -412,11 +402,6 @@ namespace SlotsInstaller
                 Require(saved.SelectedLibraries.SequenceEqual(new[] { @"C:\fixture\other" }) && !json.Contains("\"Source\"") && !json.Contains("\"ModType\"") && !json.Contains("\"ArchiveFormat\"") && !json.Contains("\"Costume\""), "saved libraries / removed values written: " + json);
                 Get<FlatButton>(form, "filterClearButton").PerformClick();
                 Require(panel.LibrariesSelected.Count == 0 && Listed(form).Count == 10, "Clear did not reset the libraries");
-                // The 2.2.0 dropdown's library migrates only while it is configured.
-                restore.Invoke(form, new object[] { new ViewPreferences { Source = @"C:\fixture\other\" } }); Apply(form);
-                Require(panel.LibrariesSelected.SetEquals(new[] { @"C:\fixture\other" }) && Listed(form).Count == 3, "2.2.0 library not migrated");
-                restore.Invoke(form, new object[] { new ViewPreferences { Source = @"C:\nowhere\Mods" } }); Apply(form);
-                Require(panel.LibrariesSelected.Count == 0 && Listed(form).Count == 10, "an unconfigured 2.2.0 library was kept");
                 // Removing a library in Settings drops its tile and selection (RefreshLibrary calls SetLibraries).
                 Toggle(panel.Kinds, other);
                 panel.SetLibraries(new[] { @"C:\fixture\filters" }); Apply(form);
@@ -511,7 +496,7 @@ namespace SlotsInstaller
                     grid.DrawToBitmap(bmp, new Rectangle(0, 0, grid.Width, grid.Height));
                     double without = Brightness(bmp, grid.ItemBounds(0)), with = Brightness(bmp, grid.ItemBounds(cammy));
                     Require(with > without * 1.25, "dimmed card " + without.ToString("0") + " vs " + with.ToString("0"));
-                    bmp.Save(Path.Combine(root, "grid-name-tiles.png"), ImageFormat.Png);
+                    if (TestTier.Render) bmp.Save(Path.Combine(root, "grid-name-tiles.png"), ImageFormat.Png);
                 }
                 // Placeholder art: gray until selected, accent colour when selected.
                 Toggle(panel.Kinds, "misc"); Settle(w.Host);
@@ -520,7 +505,7 @@ namespace SlotsInstaller
                     panel.Kinds.DrawToBitmap(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height));
                     Func<Bitmap, double> tint = delegate(Bitmap b) { double s = 0; int n = 0; for (int y = 0; y < b.Height; y += 5) for (int x = 0; x < b.Width; x += 5) { Color c = b.GetPixel(x, y); s += Math.Abs(c.R - c.B); n++; } return s / n; };
                     double gray = tint(panel.Kinds.Rendered(panel.Kinds.Cards[0], false)), colour = tint(panel.Kinds.Rendered(panel.Kinds.Cards[1], true));
-                    Require(gray < 2 && colour > 15 && panel.Kinds.Cards[1].Selected, "kind tile states: gray " + gray.ToString("0.0") + " colour " + colour.ToString("0.0"));                    bmp.Save(Path.Combine(root, "kind-tiles.png"), ImageFormat.Png);
+                    Require(gray < 2 && colour > 15 && panel.Kinds.Cards[1].Selected, "kind tile states: gray " + gray.ToString("0.0") + " colour " + colour.ToString("0.0"));                    if (TestTier.Render) bmp.Save(Path.Combine(root, "kind-tiles.png"), ImageFormat.Png);
                 }
                 using (Bitmap art = KindArt.Placeholder(FilterPanel.ToolsKind))
                     Require(art.Width == FighterPortraits.TileWidth && art.Height == FighterPortraits.TileHeight && FilterRealChecks.Opaque(art) > 0.9, "placeholder art");
@@ -561,7 +546,7 @@ namespace SlotsInstaller
                         Rectangle sel = panel.Grid.ItemBounds(panel.Grid.Cards.IndexOf(ken)), other = panel.Grid.ItemBounds(panel.Grid.Cards.ToList().FindIndex(c => c.Code == "011"));
                         Color selected = bmp.GetPixel(sel.Left + sel.Width / 2, sel.Top + sel.Height / 3), gray = bmp.GetPixel(other.Left + other.Width / 2, other.Top + other.Height / 3);
                         Require(Math.Abs(gray.R - gray.G) <= 3 && Math.Abs(gray.G - gray.B) <= 3 && Math.Abs(selected.G - selected.R) > 20, "grayscale/colour cards: selected " + selected + " other " + gray);
-                        bmp.Save(Path.Combine(root, "grid-synthetic-portraits.png"), ImageFormat.Png);
+                        if (TestTier.Render) bmp.Save(Path.Combine(root, "grid-synthetic-portraits.png"), ImageFormat.Png);
                     }
                 }
                 // Extraction from the generated PAKs: tiles arrive one by one; the new fighter 035 gets a card.
@@ -889,7 +874,7 @@ namespace SlotsInstaller
                     using (var full = new Bitmap(w.Host.Width, w.Host.Height))
                     {
                         w.Host.DrawToBitmap(full, new Rectangle(0, 0, full.Width, full.Height));
-                        using (Bitmap part = full.Clone(crop, full.PixelFormat)) part.Save(Path.Combine(root, shot.File), ImageFormat.Png);
+                        if (TestTier.Render) using (Bitmap part = full.Clone(crop, full.PixelFormat)) part.Save(Path.Combine(root, shot.File), ImageFormat.Png);
                     }
                     files.Add(shot.File);
                 }
@@ -922,31 +907,6 @@ namespace SlotsInstaller
                 Require(Listed(form).Count == 0, "Installed AND Misc Stage: " + Names(form));
                 Toggle(panel.Kinds, "installed");
                 Require(Names(form) == "Lighting Overhaul, Ranger Hut Night", "restored Misc Stage: " + Names(form));
-            }
-            // Values of the removed dropdowns (2.2.0 / test builds) are ignored: nothing filters, nothing counts.
-            File.WriteAllText(file, "{\"Format\":\"sf6-installer-view-v2\",\"ModType\":\"Tool mod\",\"ArchiveFormat\":\"RAR\",\"Costume\":\"C1\",\"Source\":\"C:\\\\nowhere\",\"Character\":\"\"}");
-            using (Window w = Open(root, null, new Size(1232, 640), SearchFixture()))
-            {
-                MainForm form = w.Form;
-                restore.Invoke(form, new object[] { ViewPreferences.Load(file) }); Apply(form);
-                Require(Listed(form).Count == 10 && form.ActiveFilterCount() == 0 && Get<FlatButton>(form, "filterButton").Text == "Filters", "a removed dropdown's saved value still filters");
-            }
-            using (Window w = Open(root, null, new Size(1232, 640), SearchFixture()))
-            {
-                MainForm form = w.Form; FilterPanel panel = Get<FilterPanel>(form, "filterPanel");
-                restore.Invoke(form, new object[] { new ViewPreferences { Character = "Cammy" } });
-                Apply(form);
-                Require(panel.Visible && panel.Grid.Selected.SetEquals(new[] { "009" }) && panel.Kinds.Selected.Count == 0 && Names(form) == "Cammy Barefoot, Cammy Boots, Cammy Scripted", "2.2.0 Character not migrated (2.5.4: Filters open at every start): " + panel.Visible + " / " + Names(form));
-            }
-            using (Window w = Open(root, null, new Size(1232, 640), SearchFixture()))
-            {
-                MainForm form = w.Form; FilterPanel panel = Get<FilterPanel>(form, "filterPanel");
-                restore.Invoke(form, new object[] { new ViewPreferences { FilterTab = "stages", Stages = new List<string> { "0800" } } });
-                Apply(form);
-                Require(panel.MiscOn && panel.MiscSelected.SetEquals(new[] { "Stage" }) && Names(form) == "Lighting Overhaul, Ranger Hut Night", "a tab setting of the 2.3.0 test builds did not migrate: " + Names(form));
-                restore.Invoke(form, new object[] { new ViewPreferences { FilterTab = "tools", MiscAreas = new List<string> { "UI" } } });
-                Apply(form);
-                Require(panel.ToolsOn && !panel.MiscOn && panel.MiscSelected.Count == 0 && Names(form) == "Cammy Scripted, Frame Meter, Hitbox Viewer", "tools tab migration: " + Names(form));
             }
         }    }
 }

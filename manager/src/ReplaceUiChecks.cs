@@ -34,6 +34,10 @@ namespace SlotsInstaller
             ReplaceSettings savedSettings = ReplaceSettings.Load();
             int failures = 0;
             bool previousAutoRefresh = MainForm.FluffyAutoRefresh; MainForm.FluffyAutoRefresh = false;   // checks edit installed.ini themselves; FluffyLink turns it on
+            // 1.0.21: short review delays here (about a minute of waiting on the real ones); AutoCheck, Supersede and
+            // Browse test the delays and run with the real values (RealReviewDelays).
+            int previousReviewDelay = MainForm.ReviewDelay, previousBrowseDelay = MainForm.BrowseReviewDelay;
+            MainForm.ReviewDelay = TestReviewDelay; MainForm.BrowseReviewDelay = TestBrowseReviewDelay;
             try
             {
                 var settings = new ReplaceSettings { Method = ReplaceMethods.Pak }; settings.Save();
@@ -60,57 +64,61 @@ namespace SlotsInstaller
                             try { action(); report.Add("PASS " + name); }
                             catch (Exception ex) { failures++; report.Add("FAIL " + name + ": " + ex); }
                         };
-                        check("Migration wizard previews, pauses, resumes and completes a fixture handoff", delegate { MigrationWizard(Path.Combine(root,"migration")); });
+                        // 1.0.21: the lean run keeps the core install, uninstall and Undo flows in this order (they share the
+                        // window and the fixture); test.ps1 -Full runs every check.
+                        Action<string, Action> full = delegate(string name, Action action) { if (TestTier.Full) check(name, action); };
+                        Action<string, Action> fullRealDelays = delegate(string name, Action action) { full(name, delegate { RealReviewDelays(action); }); };
+                        full("Migration wizard previews, pauses, resumes and completes a fixture handoff", delegate { MigrationWizard(Path.Combine(root,"migration")); });
                         check("Ctrl tap listener (2.5.5): registered as soon as the window is built, not on a later handle creation that the real app never has", delegate { Require(ctrlTapAtStart, "the Ctrl tap filter was not registered when the constructor returned"); });
-                        check("install-mode toggle: Extra outfit by default, switches the inspector and footer, remembers the last mode", delegate { Toggle(form); });
-                        check("INSTALL AS (2.3.0): one joined toggle, the selected half accent-filled with a check, radio-group accessibility, Left/Right keys, the choice remembered across a restart (no '· remembered' hint since 2.3.1), a tool mod forces Replace ('· locked for this mod', reason shown, remembered choice kept) and the next costume returns to it; no Default install mode in Settings", delegate { ModeToggle(form, f, root); });
+                        full("install-mode toggle: Extra outfit by default, switches the inspector and footer, remembers the last mode", delegate { Toggle(form); });
+                        full("INSTALL AS (2.3.0): one joined toggle, the selected half accent-filled with a check, radio-group accessibility, Left/Right keys, the choice remembered across a restart (no '· remembered' hint since 2.3.1), a tool mod forces Replace ('· locked for this mod', reason shown, remembered choice kept) and the next costume returns to it; no Default install mode in Settings", delegate { ModeToggle(form, f, root); });
+                        if (!TestTier.Full) check("lean setup: Replace original, as the skipped toggle checks leave it", delegate { Call(form, "SetInstallMode", InstallModes.Replace, true); Application.DoEvents(); });
                 check("health check on a fixture mod: replaced outfit, fixes and Ready to install", delegate { Health(form, f); });
                         check("no popups for recoverable actions (2.4.1): Disable, Move and Restore original game files run without a dialog; Undo restores records, order and enabled state; SF6 running refuses inline; the footer's one-click Uninstall of every record of a mod runs without a dialog and keeps no copy, so no Undo (1.0.1); a new change ends the previous Undo", delegate { UndoFlows(form, f, probe); });
-                        check("Space installs (2.4.1): from the mod list and the options tree like a click on Install; Enter toggles an option; Space types in the search and outfit name, selects in Filters, presses a focused button, does nothing while Install is disabled; auto-repeat installs once; the footer reads Install [Space] / Health; 2.5.2/2.5.3: a lone Ctrl tap uninstalls in the library and on Installed (not Ctrl+key/click or in the searches), also a replacement in Extra outfit mode; W/S move on Installed", delegate { SpaceInstall(form, f); });
-                        check("footer and inspector fit without overlap in both modes at 1232x640 and 1110x610", delegate { Layout(form, root); });
+                        full("Space installs (2.4.1): from the mod list and the options tree like a click on Install; Enter toggles an option; Space types in the search and outfit name, selects in Filters, presses a focused button, does nothing while Install is disabled; auto-repeat installs once; the footer reads Install [Space] / Health; 2.5.2/2.5.3: a lone Ctrl tap uninstalls in the library and on Installed (not Ctrl+key/click or in the searches), also a replacement in Extra outfit mode; W/S move on Installed", delegate { SpaceInstall(form, f); });
+                        full("footer and inspector fit without overlap in both modes at 1232x640 and 1110x610", delegate { Layout(form, root); });
                         check("install a replacement; Installed page lists it with priority and a read-only external manager row; the Extra / Installed type filter (1.0.1)", delegate { InstallAndList(form, f, fluffy); });
                         check("game-file change banner appears and Reapply clears it", delegate { Banner(form, f); });
-                        check("Reapply notice (1.0.10): the game-file change is a toast on the other pages (not on Installed, where the banner is) with Reapply, Show details and ✕ (back when the notice changes or at Launch); Launch SF6 says so first and starts on a second click; Reapply from the toast clears it and Launch starts at once", delegate { ReapplyNotice(form, f, launcher); });
-                        check("Launch SF6 uses the launcher; the running indicator disables replacement changes", delegate { Launch(form, probe, launcher); });
-                        check("no Test in game in the window (removed in 2.3.0): three footer actions; a leftover test record is kept as a normal install at start-up and deleted", delegate { LeftoverTest(form, f); });
+                        full("Reapply notice (1.0.10): the game-file change is a toast on the other pages (not on Installed, where the banner is) with Reapply, Show details and ✕ (back when the notice changes or at Launch); Launch SF6 says so first and starts on a second click; Reapply from the toast clears it and Launch starts at once", delegate { ReapplyNotice(form, f, launcher); });
+                        full("Launch SF6 uses the launcher; the running indicator disables replacement changes", delegate { Launch(form, probe, launcher); });
                         check("Uninstall from the Installed page restores the clean game folder", delegate { Uninstall(form, f, clean); });
-                        check("leftover PAK row (1.0.11): the fixture's unlisted patch PAK is a 'Leftover PAK' row ('not listed by any mod manager · size · name') with Remove PAK; SF6 running refuses inline; Remove PAK takes it out with no popup and offers Undo; Undo puts it back byte for byte; an Undo that ends unused sends its copy to the Recycle Bin", delegate { LeftoverPakRow(form, f, probe, clean); });
-                        check("library uninstall (2.0.3): right-click and footer offer Uninstall replacement for a source installed as a replacement, disabled with the reason while Fluffy runs, uninstall for good (no copy kept, 1.0.1); extra-outfit entries unchanged", delegate { LibraryReplacementUninstall(form, f, probe, clean); });
-                        check("Settings: Game files & replacements tab shows method, store, Fluffy and tool status without hiding General", delegate { SettingsTab(form, root); });
-                        check("Extra outfit mode warns when Slotsloader is missing (1.0.8: after REFramework, which comes first)", delegate { SlotsLoaderNotice(form, f); });
-                        check("REFramework (1.0.8): build date, commit and upscaler mark read from dinput8.dll; Extra outfit notice for missing, not started and out-of-date builds (an upscaler build is never old; an unknown date is fine); one click downloads the pinned nightly, verified, opened in Replace original; Install puts dinput8.dll in the game, a newer pin updates that record in place, uninstall puts the earlier dinput8.dll back", delegate { ReFrameworkFlow(form, f); });
-                        check("Slotsloader offer (2.3.1, no questions in 2.4.1): only the pinned build: a library copy found by SHA-256 (a renamed SF6_SlotsLoader_v9.9.zip beside it is ignored), else a download (the click is the consent, no dialog) verified into Data\\downloads and opened in Replace original, then the cached copy; a 404 shows the reason and the release page", delegate { LoaderOffer(form, f); });
-                        check("automatic health check (2.0.1): Ready without clicking; Install enables automatically; the button reads Report (1.0.12: nothing in the footer until the result, the check waits for browsing to settle, one static Checking… only for a slow check)", delegate { AutoCheck(form, f, root); });
-                        check("debounce and supersede (2.0.1): rapid changes start one run; a stale run is discarded and the last selection's result applies", delegate { Supersede(form, f); });
+                        full("leftover PAK row (1.0.11): the fixture's unlisted patch PAK is a 'Leftover PAK' row ('not listed by any mod manager · size · name') with Remove PAK; SF6 running refuses inline; Remove PAK takes it out with no popup and offers Undo; Undo puts it back byte for byte; an Undo that ends unused sends its copy to the Recycle Bin", delegate { LeftoverPakRow(form, f, probe, clean); });
+                        full("library uninstall (2.0.3): right-click and footer offer Uninstall replacement for a source installed as a replacement, disabled with the reason while Fluffy runs, uninstall for good (no copy kept, 1.0.1); extra-outfit entries unchanged", delegate { LibraryReplacementUninstall(form, f, probe, clean); });
+                        full("Settings: Game files & replacements tab shows method, store, Fluffy and tool status without hiding General", delegate { SettingsTab(form, root); });
+                        full("Extra outfit mode warns when Slotsloader is missing (1.0.8: after REFramework, which comes first)", delegate { SlotsLoaderNotice(form, f); });
+                        full("REFramework (1.0.8): build date, commit and upscaler mark read from dinput8.dll; Extra outfit notice for missing, not started and out-of-date builds (an upscaler build is never old; an unknown date is fine); one click downloads the pinned nightly, verified, opened in Replace original; Install puts dinput8.dll in the game, a newer pin updates that record in place, uninstall puts the earlier dinput8.dll back", delegate { ReFrameworkFlow(form, f); });
+                        full("Slotsloader offer (2.3.1, no questions in 2.4.1): only the pinned build: a library copy found by SHA-256 (a renamed SF6_SlotsLoader_v9.9.zip beside it is ignored), else a download (the click is the consent, no dialog) verified into Data\\downloads and opened in Replace original, then the cached copy; a 404 shows the reason and the release page", delegate { LoaderOffer(form, f); });
+                        fullRealDelays("automatic health check (2.0.1): Ready without clicking; Install enables automatically; the button reads Report (1.0.12: nothing in the footer until the result, the check waits for browsing to settle, one static Checking… only for a slow check)", delegate { AutoCheck(form, f, root); });
+                        fullRealDelays("debounce and supersede (2.0.1): rapid changes start one run; a stale run is discarded and the last selection's result applies", delegate { Supersede(form, f); });
+                        if (!TestTier.Full) check("lean setup: the mod with an Extra option open, as the skipped Supersede leaves it", delegate { WriteMulti(f); Load(form, f, "modMulti"); WaitReview(form); });
                         check("Install waits for a fresh result after a change; Report opens the current result (waits while checking)", delegate { InstallWaits(form, f); });
-                        check("report dialog (2.0.1): dark title bar attributes, sized to its content, Re-check, conflicts section", delegate { ReportDialog(form, root); });
+                        full("report dialog (2.0.1): dark title bar attributes, sized to its content, Re-check, conflicts section", delegate { ReportDialog(form, root); });
                         check("conflicts (2.0.1): footer and inspector name the installed mod with counts; inline Uninstall link (disabled while Fluffy runs) uninstalls without a dialog, for good (no copy, no Undo line; 1.0.1); reinstalling from the library restores byte for byte", delegate { ConflictLink(form, f, probe, root); });
                         check("installs never remove other mods; opening another mod changes nothing; no dialog opens", delegate { NoAutomaticRemoval(form, f, probe, launcher); });
-                        check("Installed page (2.0.1): shared-files chip opens the details naming who wins; same-outfit stacking on rows (the Has conflicts filter was removed in 1.0.1)", delegate { InstalledConflicts(form, root); });
-                        check("external mods (1.0.1 lockout): the footer gives the reason (1.0.11: 'Replace original is off' and a short line; Extra outfit mode names it above the toggle)", delegate { FluffyFooter(form, f, fluffy); });
-                        check("Fluffy link (2.2.0): a Fluffy install shows on the Installed page by itself within 2 s (watcher); its Uninstall (and the library right-click item for its Mods entry) is disabled with the reason while Fluffy runs, enabled when closed, and removes its file and installed.ini entry; a PAK install says to use Fluffy", delegate { FluffyLink(form, f, fluffy, probe); });
-                        check("other tools' files (2.2.0): the banner names the Fluffy mod that replaced a tool-mod file; Uninstall asks Restore original / Keep current file / Cancel; Cancel changes nothing; Keep current file uninstalls and keeps the file with the original restorable", delegate { DriftDialog(form, f, fluffy, probe); });
-                        check("Extra outfit mode reviews automatically and notes a duplicate install (same source and options)", delegate { DuplicateExtra(form, f); });
-                        check("Settings has no automatic-uninstall option", delegate { NoAutoUninstallSetting(form); });
-                        check("root alternatives: empty initial choice, radio switching, Reset and saved all-five winner without a record rewrite; renders", delegate { RootChoiceUi(form, f, root); });
-                        check("browsing (1.0.12): opening a mod shows no progress bar or status text and keeps the list and options usable; the newest pick wins and stops the read in flight; the shown mod picked again keeps its ticks; the mod being read picked again after another pick still opens; Ctrl/Shift selection changes during a read decide what opens (one row, or the queue); read archives are kept until they change; the footer shows only the result; the health check waits for browsing to settle and StartReviewNow starts it; the next 7Z row is read ahead and opens from it", delegate { Browse(form, f, root); });
-                        check("7Z bundle layout (1.0.16): saved in the Data folder, the open mod shows it at once although the archive and its stamp are unchanged; Edit options with a layout group ticks the same options", delegate { StoredLayoutOpen(form, f, root); });
-                        check("changed on disk (2.4.1): editing the open zip reloads it on F5, on window activation and before Install (selection kept by option id, else by name; mode and Install kept; status says so); a deleted source clears the inspector; the library index re-reads the edited archive; an installed copy shows Source changed and Reinstall applies the edit in place; no \"changed on disk\" problem reaches the user", delegate { SourceReload(form, f); });
-                        check("saved options missing (2.4.2): a click on the footer reviews without them and clears the flag in Replace original and Extra outfit, like Health / Review files", delegate { FooterMissingOptions(form, f); });
-                        check("removed copies (2.4.2): Settings → Game files & replacements says how many (the copies Restore original game files keeps for its Undo), their size and the keep rule (1.0.1: only while their Undo is available) under the store (no '(freed on uninstall)'), fits at 1232x640 and 1110x610; render at the device DPI; a new change ends the Undo and the copy is deleted", delegate { SettingsStoreLine(form, f, root); });
-                        check("copy not saved (2.4.2): Restore original game files (1.0.1: uninstall keeps no copy) with a store file open in another program says the copy wasn't saved (never 'kept'); the refresh retries and keeps it; Undo puts it back", delegate { TrashWarningInline(form, f); });
-                        check("Undo position (2.4.2): after another program installs a mod over the same files, the window's Undo of Restore original game files puts the removed mods back below it", delegate { UndoBelowNewer(form, f); });
-                        check("addon archives (1.0.16): opened from the library, the main mod shows its addon's Barefoot inside Outfit next to Full (choose one, its preview from the addon; the addon alone unchanged; bundle layouts never merged); Install in Replace original makes two records, the addon directly above the main one, the main record valid alone with Full as the fill-in; reopening restores Barefoot ticked and Full unticked; unticking Barefoot removes the addon's record; the footer's Uninstall removes both; Extra outfit adds Barefoot as a part of the outfit and unticking takes it out", delegate { AddonArchives(form, f, Path.Combine(root, "addon-library")); });
+                        full("Installed page (2.0.1): shared-files chip opens the details naming who wins; same-outfit stacking on rows (the Has conflicts filter was removed in 1.0.1)", delegate { InstalledConflicts(form, root); });
+                        full("external mods (1.0.1 lockout): the footer gives the reason (1.0.11: 'Replace original is off' and a short line; Extra outfit mode names it above the toggle)", delegate { FluffyFooter(form, f, fluffy); });
+                        full("Fluffy link (2.2.0): a Fluffy install shows on the Installed page by itself within 2 s (watcher); its Uninstall (and the library right-click item for its Mods entry) is disabled with the reason while Fluffy runs, enabled when closed, and removes its file and installed.ini entry; a PAK install says to use Fluffy", delegate { FluffyLink(form, f, fluffy, probe); });
+                        full("other tools' files (2.2.0): the banner names the Fluffy mod that replaced a tool-mod file; Uninstall asks Restore original / Keep current file / Cancel; Cancel changes nothing; Keep current file uninstalls and keeps the file with the original restorable", delegate { DriftDialog(form, f, fluffy, probe); });
+                        full("Extra outfit mode reviews automatically and notes a duplicate install (same source and options)", delegate { DuplicateExtra(form, f); });
+                        full("root alternatives: empty initial choice, radio switching, Reset and saved all-five winner without a record rewrite; renders", delegate { RootChoiceUi(form, f, root); });
+                        fullRealDelays("browsing (1.0.12): opening a mod shows no progress bar or status text and keeps the list and options usable; the newest pick wins and stops the read in flight; the shown mod picked again keeps its ticks; the mod being read picked again after another pick still opens; Ctrl/Shift selection changes during a read decide what opens (one row, or the queue); read archives are kept until they change; the footer shows only the result; the health check waits for browsing to settle and StartReviewNow starts it; the next 7Z row is read ahead and opens from it", delegate { Browse(form, f, root); });
+                        full("7Z bundle layout (1.0.16): saved in the Data folder, the open mod shows it at once although the archive and its stamp are unchanged; Edit options with a layout group ticks the same options", delegate { StoredLayoutOpen(form, f, root); });
+                        full("changed on disk (2.4.1): editing the open zip reloads it on F5, on window activation and before Install (selection kept by option id, else by name; mode and Install kept; status says so); a deleted source clears the inspector; the library index re-reads the edited archive; an installed copy shows Source changed and Reinstall applies the edit in place; no \"changed on disk\" problem reaches the user", delegate { SourceReload(form, f); });
+                        full("saved options missing (2.4.2): a click on the footer reviews without them and clears the flag in Replace original and Extra outfit, like Health / Review files", delegate { FooterMissingOptions(form, f); });
+                        full("removed copies (2.4.2): Settings → Game files & replacements says how many (the copies Restore original game files keeps for its Undo), their size and the keep rule (1.0.1: only while their Undo is available) under the store (no '(freed on uninstall)'), fits at 1232x640 and 1110x610; render at the device DPI; a new change ends the Undo and the copy is deleted", delegate { SettingsStoreLine(form, f, root); });
+                        full("copy not saved (2.4.2): Restore original game files (1.0.1: uninstall keeps no copy) with a store file open in another program says the copy wasn't saved (never 'kept'); the refresh retries and keeps it; Undo puts it back", delegate { TrashWarningInline(form, f); });
+                        full("Undo position (2.4.2): after another program installs a mod over the same files, the window's Undo of Restore original game files puts the removed mods back below it", delegate { UndoBelowNewer(form, f); });
+                        full("addon archives (1.0.16): opened from the library, the main mod shows its addon's Barefoot inside Outfit next to Full (choose one, its preview from the addon; the addon alone unchanged; bundle layouts never merged); Install in Replace original makes two records, the addon directly above the main one, the main record valid alone with Full as the fill-in; reopening restores Barefoot ticked and Full unticked; unticking Barefoot removes the addon's record; the footer's Uninstall removes both; Extra outfit adds Barefoot as a part of the outfit and unticking takes it out", delegate { AddonArchives(form, f, Path.Combine(root, "addon-library")); });
                         check("addon archives, PR #22 review fixes (1.0.16): an addon record installed first or disabled is shown ticked (a disabled one stays disabled) and only a record shown ticked is uninstalled; a changed addon archive stops the install before the main record, a late failure is named in the status, the addon goes directly above the main record without a Move; addon ticks count in \"already installed\" in both modes; the main record is named after the addon option, not the fill-in; in Extra outfit a part that can't be added leaves the outfit as it was", delegate { AddonReviewFixes(form, f, Path.Combine(root, "addon-review")); });
-                        check("addon all variants (1.0.18): Install all variants of a ZIP mod shown with its addon writes one ZIP, the main ZIP's bytes unchanged up to its directory plus the addon's option folders (its menu and loose files left out, a top-level option in a folder named after the addon), Barefoot inside Outfit when read back; a clash is refused with no file left; a RAR/7Z main, a gone addon and a mod that is no addon are named and left out", delegate { AddonCombine(Path.Combine(root, "addon-combine")); });
-                        check("addon all variants in the window (1.0.18): the button names the addon; the copy has Barefoot and Full, is linked to the main mod with the addon recorded, the addon's library row counts as installed, a reinstall keeps one copy; a preset saves the addon and copies the outfit once the addon is gone; Barefoot's description names the addon file and the options' menu opens the addon (or the main mod) in Explorer", delegate { AddonAllVariants(form, Path.Combine(root, "addon-variants")); });
+                        full("addon all variants (1.0.18): Install all variants of a ZIP mod shown with its addon writes one ZIP, the main ZIP's bytes unchanged up to its directory plus the addon's option folders (its menu and loose files left out, a top-level option in a folder named after the addon), Barefoot inside Outfit when read back; a clash is refused with no file left; a RAR/7Z main, a gone addon and a mod that is no addon are named and left out", delegate { AddonCombine(Path.Combine(root, "addon-combine")); });
+                        full("addon all variants in the window (1.0.18): the button names the addon; the copy has Barefoot and Full, is linked to the main mod with the addon recorded, the addon's library row counts as installed, a reinstall keeps one copy; a preset saves the addon and copies the outfit once the addon is gone; Barefoot's description names the addon file and the options' menu opens the addon (or the main mod) in Explorer", delegate { AddonAllVariants(form, Path.Combine(root, "addon-variants")); });
                         string realAddons = "";
-                        check("addon archives (1.0.16), the user's real zips when tests.local.json names addonMain and addonPart (read only)", delegate { realAddons = RealAddonArchives(); });
+                        full("addon archives (1.0.16), the user's real zips when tests.local.json names addonMain and addonPart (read only)", delegate { realAddons = RealAddonArchives(); });
                         report.Add("    " + realAddons);
                         check("cleanup: Restore original game files leaves no replacement installed (the next suites share Data)", delegate { var e = new ReplaceEngine(f.Game, AppConfig.DataDir, ReplaceSettings.Load()); e.RestoreAll(); Require(e.LoadState().Mods.Count == 0 && !Directory.Exists(Path.Combine(f.Game, "natives")), "cleanup"); });
-                        check("multi-select Uninstall in Mod library and Installed removes both replacements and keeps both sources", delegate { UninstallSelections(form, f, root); });
-                        check("game entries left invalidated and Fluffy PAK installs (2.4.2): the banner says \"2 game entries left invalidated by another tool.\" with Repair (compact row, rendered at the device DPI); SF6 or Fluffy running refuses inline; Repair restores both (the Fluffy-owned entry stays) with the result inline and no popup; both Fluffy instances are watched, also with an unreadable Manager record; an invalidate install uninstalls from the Installed page (entry restored) and Undo zeroes it again", delegate { FluffyPakUiChecks.Run(root, probe); });
-                        check("replacement method (2.4.1): Automatic installs with the Fluffy PAK method while the loose file loader is off (entries zeroed) and loose when it is on, with no question; an explicit loose setting is respected and the banner converts it (Use PAK method; refused while SF6 runs); another variant of an installed mod is a switch (one record, no warning, priority kept), duplicates collapse with no copy kept (1.0.1), a different mod still warns; Fluffy open does not block loose or tool installs", delegate { AutomaticMethod(root, probe); });
+                        full("multi-select Uninstall in Mod library and Installed removes both replacements and keeps both sources", delegate { UninstallSelections(form, f, root); });
+                        full("game entries left invalidated and Fluffy PAK installs (2.4.2): the banner says \"2 game entries left invalidated by another tool.\" with Repair (compact row, rendered at the device DPI); SF6 or Fluffy running refuses inline; Repair restores both (the Fluffy-owned entry stays) with the result inline and no popup; both Fluffy instances are watched, also with an unreadable Manager record; an invalidate install uninstalls from the Installed page (entry restored) and Undo zeroes it again", delegate { FluffyPakUiChecks.Run(root, probe); });
+                        full("replacement method (2.4.1): Automatic installs with the Fluffy PAK method while the loose file loader is off (entries zeroed) and loose when it is on, with no question; an explicit loose setting is respected and the banner converts it (Use PAK method; refused while SF6 runs); another variant of an installed mod is a switch (one record, no warning, priority kept), duplicates collapse with no copy kept (1.0.1), a different mod still warns; Fluffy open does not block loose or tool installs", delegate { AutomaticMethod(root, probe); });
                         form.Close();
                     }
                 }
@@ -120,6 +128,7 @@ namespace SlotsInstaller
             {
                 SynchronizationContext.SetSynchronizationContext(previous); WindowsFormsSynchronizationContext.AutoInstall = previousAutoInstall;
                 Program.Headless = previousHeadless; GameProcesses.Probe = previousProbe; GameProcesses.Launcher = previousLauncher; MainForm.FluffyAutoRefresh = previousAutoRefresh;
+                MainForm.ReviewDelay = previousReviewDelay; MainForm.BrowseReviewDelay = previousBrowseDelay;
                 try { savedSettings.Save(); } catch { }
             }
             report.Add(failures == 0 ? "ALL PASS" : failures + " FAILED");
@@ -180,6 +189,7 @@ namespace SlotsInstaller
                 dialog.Opacity = 0; dialog.Show();
                 var start = Get<FlatButton>(dialog,"action");
                 wait(delegate { return Get<ListBox>(dialog,"rows").Items.Count == 1 && start.Enabled; });
+                if (TestTier.Render)
                 using (var image = new Bitmap(dialog.Width,dialog.Height))
                 {
                     dialog.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));
@@ -220,6 +230,7 @@ namespace SlotsInstaller
 
         private static void Render(MainForm form, string file)
         {
+            if (!TestTier.Render) return;   // 1.0.21: review pictures only with -Full or SLOTSLOADER_RENDER=1
             using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(file, ImageFormat.Png); }
         }
 
@@ -241,6 +252,7 @@ namespace SlotsInstaller
             Action<string> shot = delegate(string name)
             {
                 Control panel = Get<Panel>(form, "modePanel"); form.PerformLayout(); Application.DoEvents();
+                if (TestTier.Render)
                 using (var b = new Bitmap(panel.Width, panel.Height)) { panel.DrawToBitmap(b, new Rectangle(0, 0, panel.Width, panel.Height)); b.Save(Path.Combine(root, "install-as-" + name + ".png"), ImageFormat.Png); }
             };
             Require(toggle.AccessibleName == "Install as" && toggle.AccessibilityObject.Role == AccessibleRole.Grouping && toggle.AccessibilityObject.GetChildCount() == 2 && option(0).Role == AccessibleRole.RadioButton, "toggle accessibility");
@@ -717,22 +729,6 @@ namespace SlotsInstaller
             Require(Get<Label>(form, "gameStateLabel").Text == "Game closed", "closed state");
         }
 
-        private static void LeftoverTest(MainForm form, ReplaceChecks.Fixture f)
-        {
-            Require(typeof(MainForm).GetField("testButton", BindingFlags.NonPublic | BindingFlags.Instance) == null && typeof(MainForm).GetMethod("TestInGame", BindingFlags.NonPublic | BindingFlags.Instance) == null, "Test in game is still in the window");
-            ShowLibrary(form);
-            var actions = Get<FlatButton>(form, "installButton").Parent;
-            Require(actions.Controls.OfType<FlatButton>().Select(b => b.Text).All(t => !t.Contains("Test")) && actions.Controls.Count == 3, "footer actions: " + String.Join(", ", actions.Controls.OfType<FlatButton>().Select(b => b.Text)));
-            var engine = new ReplaceEngine(f.Game, AppConfig.DataDir, ReplaceSettings.Load());
-            ReplaceMod target = engine.LoadState().Mods.First();
-            TestSession.Save(AppConfig.DataDir, new TestSessionRecord { Mode = InstallModes.Replace, ReplaceModId = target.Id, Name = target.Name, Phase = "ended" });
-            var before = ReplaceChecks.Snapshot(f.Game);
-            int forms = Application.OpenForms.Count;
-            Call(form, "FinishLeftoverTest"); WaitIdle(form);
-            Require(TestSession.Load(AppConfig.DataDir) == null && engine.LoadState().Mods.Any(m => m.Id == target.Id && !m.Test && m.Enabled) && Application.OpenForms.Count == forms, "leftover test not kept quietly");
-            ReplaceChecks.SameSnapshot(before, ReplaceChecks.Snapshot(f.Game), "after keeping a leftover test");
-            Require(File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("Test in game (removed in 2.3.0): Kept '" + target.Name + "'"), "leftover not logged");
-        }
         private static void ShowLibrary(MainForm form) { Call(form, "ShowPage", Get<Panel>(form, "libraryPage")); Application.DoEvents(); }
 
         private static void Uninstall(MainForm form, ReplaceChecks.Fixture f, Dictionary<string, string> clean)
@@ -910,6 +906,15 @@ namespace SlotsInstaller
         }
 
         // ---- 2.0.1 checks
+        // 1.0.21: the review delays this suite runs with; RealReviewDelays puts the app's values back for one check.
+        private const int TestReviewDelay = 30, TestBrowseReviewDelay = 50;
+        private static void RealReviewDelays(Action action)
+        {
+            int review = MainForm.ReviewDelay, browse = MainForm.BrowseReviewDelay;
+            MainForm.ReviewDelay = MainForm.DefaultReviewDelay; MainForm.BrowseReviewDelay = MainForm.DefaultBrowseReviewDelay;
+            try { action(); }
+            finally { MainForm.ReviewDelay = review; MainForm.BrowseReviewDelay = browse; }
+        }
         private static void WaitReview(MainForm form)
         {
             DateTime deadline = DateTime.UtcNow.AddSeconds(60);
@@ -1014,9 +1019,12 @@ namespace SlotsInstaller
                 // 5. An installed copy: the edit marks it; Reinstall applies it in place (same record, no warning).
                 Call(form, "InstallCurrent"); WaitIdle(form);
                 ReplaceMod mod = engine.LoadState().Mods.Single(m => String.Equals(m.SourcePath, zip, StringComparison.OrdinalIgnoreCase));
-                DateTime installedAt = LibraryUsage.ParseUtc(mod.InstalledUtc), edited = installedAt.AddSeconds(5);
+                // Just past the 2 s tolerance of SourceNewerThan, so the edit counts as made after the install; the Reinstall
+                // below records its own time, and once that is past edited - 2 s the source no longer reads as changed.
+                // 1.0.21: was installedAt + 5 s and a wait until 1 s past it (about 6 s); now at most 0.5 s of waiting.
+                DateTime installedAt = LibraryUsage.ParseUtc(mod.InstalledUtc), edited = installedAt.AddSeconds(2.25);
                 WriteEditZip(zip, "main v5, edited after install", "Extra v2", "Extra", "extra v5"); File.SetLastWriteTimeUtc(zip, edited);
-                while (DateTime.UtcNow < edited.AddSeconds(1)) { Application.DoEvents(); Thread.Sleep(50); }
+                while (DateTime.UtcNow < edited.AddSeconds(-1.75)) { Application.DoEvents(); Thread.Sleep(10); }
                 Call(form, "ShowPage", Get<Panel>(form, "installedPage")); Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
                 Require(form.SourceChanged(zip), "the installed copy is not marked Source changed");
                 ListView list = Get<ListView>(form, "installedList");
@@ -1262,7 +1270,7 @@ namespace SlotsInstaller
                 Require((string)report.Tag == "fits" && report.ClientSize.Height < DpiMetrics.Px(report, 640) && report.ClientSize.Height >= DpiMetrics.Px(report, 260), "report not sized to its content: " + report.ClientSize + " " + report.Tag);
                 var texts = AllControls(report).OfType<Control>().Select(c => c.Text).ToList();
                 Require(texts.Contains("Re-check") && texts.Contains("Close"), "Re-check/Close missing");
-                using (Bitmap image = (Bitmap)Call(form, "CaptureWindowImage", report)) image.Save(Path.Combine(root, "report-dialog-" + report.DeviceDpi + ".png"), ImageFormat.Png);
+                if (TestTier.Render) using (Bitmap image = (Bitmap)Call(form, "CaptureWindowImage", report)) image.Save(Path.Combine(root, "report-dialog-" + report.DeviceDpi + ".png"), ImageFormat.Png);
                 report.Close();
             }
         }
@@ -1489,12 +1497,6 @@ namespace SlotsInstaller
             Call(form, "InstallCurrent"); WaitReview(form);
             Load(form, f, "modB"); WaitReview(form);
             Require(Details(form).StartsWith("Already installed as 'Alt Extra' for Cammy") && Get<Label>(form, "planDetails").ForeColor == Palette.Accent, "duplicate note: " + Details(form));
-        }
-
-        private static void NoAutoUninstallSetting(MainForm form)
-        {
-            Panel panel = Get<Panel>(form, "settingsReplacePanel");
-            Require(!AllControls(panel).Any(c => (c.Text ?? "").IndexOf("uninstall", StringComparison.OrdinalIgnoreCase) >= 0 && c is CheckBox), "an automatic-uninstall option exists");
         }
 
         private static void LoaderOffer(MainForm form, ReplaceChecks.Fixture f)

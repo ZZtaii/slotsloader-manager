@@ -28,6 +28,7 @@ namespace SlotsInstaller
         }
         private static void Render(MainForm form, string file)
         {
+            if (!TestTier.Render) return;   // 1.0.21: review pictures only with -Full or SLOTSLOADER_RENDER=1
             using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(file, ImageFormat.Png); }
         }
         private static string Status(MainForm form) { return Get<Label>(form, "statusText").Text; }

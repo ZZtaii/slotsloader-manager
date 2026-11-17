@@ -147,6 +147,7 @@ namespace SlotsInstaller
                 // A picture of the options with Barefoot selected, for a look at the tag (addon-variants\options.png).
                 OptionTree tree = Get<OptionTree>(form, "componentTree");
                 tree.SelectedNode = node("Barefoot"); Application.DoEvents();
+                if (TestTier.Render)
                 using (var picture = new System.Drawing.Bitmap(Math.Max(1, tree.Width), Math.Max(1, tree.Height)))
                 {
                     tree.DrawToBitmap(picture, new System.Drawing.Rectangle(0, 0, picture.Width, picture.Height));

@@ -428,6 +428,7 @@ namespace SlotsInstaller
 
         private static void Render(Control c, string file)
         {
+            if (!TestTier.Render) return;   // 1.0.21: review PNGs only in a full run or with SLOTSLOADER_RENDER=1
             using (var bitmap = new Bitmap(Math.Max(1, c.Width), Math.Max(1, c.Height))) { c.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(file, System.Drawing.Imaging.ImageFormat.Png); }
         }
         private static void Put(string root, string path, string contents) { string file = Safety.Under(root, path); Directory.CreateDirectory(Path.GetDirectoryName(file)); File.WriteAllText(file, contents, new UTF8Encoding(false)); }

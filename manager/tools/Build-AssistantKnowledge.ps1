@@ -6,6 +6,11 @@
 # Fails when text about the owned-outfit opt-out (or its Manager-side marker) would end up in the pack.
 param([Parameter(Mandatory = $true)][string]$Project, [Parameter(Mandatory = $true)][string]$Output)
 $ErrorActionPreference = 'Stop'
+# 1.0.21: the size cap of the pack (at 4 characters per token), checked here so the build fails; it was the Assistant
+# check's. 1.0.18: 26,000 to 26,250 tokens for the Help of Outfit order and Turn outfit mods off; to 26,750 for the
+# outfit recipes lines of What changed; 1.0.20: to 27,400 for the Help of Convert RAR and 7Z to ZIP (108,837 characters
+# then). Raise it here, on this one line.
+$maxPackTokens = 27400
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 function Read-Doc([string]$path) { if (-not (Test-Path -LiteralPath $path)) { return $null }; return ([IO.File]::ReadAllText($path, $utf8)).Replace("`r`n", "`n").Replace("`r", "`n") }
 $versionBullet = '^- (\d+\.\d+\.\d+)( |\(|:)'   # 1.0.11: the README writes "- 1.0.11:" (the colon wasn't matched, so no version was ever left out)
@@ -84,6 +89,16 @@ $excluded = 'show_unowned|unowned_slots|opt-out marker|private opt-out|owned-out
 $hits = [regex]::Matches($pack, $excluded, 'IgnoreCase')
 if ($hits.Count -gt 0) { throw ('The Assistant knowledge pack would contain excluded text: ' + (($hits | ForEach-Object { $_.Value } | Sort-Object -Unique) -join ', ')) }
 foreach ($required in @('# Source: Slotsloader Manager README', '# Source: Slotsloader CLI.exe', '## What changed')) { if (-not $pack.Contains($required)) { throw "The Assistant knowledge pack lacks '$required'." } }
+# 1.0.21: the rest of the Assistant check's pack rules, now at build time: every source, no developer-doc text, no
+# hashes, CR, time stamps or local paths, the one to three newest versions in What changed, and the size cap.
+foreach ($required in @('# Source: Slotsloader Manager screens', '# Source: Slotsloader (the loader) README', '# Source: Slotsloader compatibility notes')) { if (-not $pack.Contains($required)) { throw "The Assistant knowledge pack lacks '$required'." } }
+foreach ($banned in @('DEVELOPMENT.md checks', '## 2.4.0 checks', 'Bumping the Slotsloader pin', 'HANDOFF')) { if ($pack.IndexOf($banned, [StringComparison]::OrdinalIgnoreCase) -ge 0) { throw "The Assistant knowledge pack would contain developer text: '$banned'." } }
+if ($pack -match '[0-9A-Fa-f]{64}' -or $pack.Contains("`r") -or $pack -match '\b20\d\d-\d\d-\d\dT\d\d:' -or $pack -match '\b[A-Za-z]:\\') { throw 'The Assistant knowledge pack would contain a hash, a CR, a time stamp or a local path.' }
+$whatChanged = $pack.IndexOf('## What changed'); $nextSection = $pack.IndexOf("`n## ", $whatChanged + 5); if ($nextSection -lt 0) { $nextSection = $pack.Length }
+$changedVersions = [regex]::Matches($pack.Substring($whatChanged, $nextSection - $whatChanged), '(?m)^- \d+\.\d+\.\d+( \(|:)').Count
+if ($changedVersions -lt 1 -or $changedVersions -gt 3) { throw ('What changed in the Assistant knowledge pack has ' + $changedVersions + ' versions; it keeps the newest one to three.') }
+$packTokens = [Math]::Floor($pack.Length / 4)
+if ($pack.Length -le 20000 -or $packTokens -gt $maxPackTokens) { throw ('The Assistant knowledge pack is ' + $pack.Length + ' characters (about ' + $packTokens + ' tokens): more than ' + $maxPackTokens + ' tokens (or under 20,000 characters). Shorten the docs or raise $maxPackTokens.') }
 
 New-Item -ItemType Directory -Path (Split-Path -Parent $Output) -Force | Out-Null
 [IO.File]::WriteAllText($Output, $pack, $utf8)

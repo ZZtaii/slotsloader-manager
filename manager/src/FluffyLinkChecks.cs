@@ -202,23 +202,6 @@ namespace SlotsInstaller
             }
         }
 
-        // ---- Uninstalling Fluffy mods
-        private static void SetUp(ReplaceChecks.Fixture f, FakeFluffy fluffy, out string scripts, out string suite)
-        {
-            scripts = fluffy.Install("Scripts", "Updated scripts + rsz (fixed)", "normal", new Dictionary<string, byte[]> {
-                { "reframework/data/rsz/readme.txt", B("scripts readme") }, { "reframework/autorun/scripts.lua", B("-- scripts") } }, true, null);
-            // The Mod Suite: overwrites the genuine AGS (backed up), a helper renamed to _FMMBACKUP, the shared readme (no backup:
-            // it is Scripts' file), new files in new folders; one line with \ and other case.
-            string helper = G(f, "tools/helper.exe");
-            File.Move(helper, G(f, "tools/helper_FMMBACKUP.exe"));
-            suite = fluffy.Install("SF6_ModSuite_AllInOne", "SF6 Mod Suite", "normal", new Dictionary<string, byte[]> {
-                { "amd_ags_x64.dll", B("suite proxy") }, { "reframework/plugins/Tool.dll", B("suite tool") }, { "reframework/data/rsz/readme.txt", B("suite readme") },
-                { "reframework/autorun/suite/sub/x.lua", B("-- x") }, { "tools/helper.exe", B("suite helper") }, { "SF6 Mini Window - global tab.zip", B("zip in zip") } }, false,
-                new Dictionary<string, string> { { "reframework/plugins/Tool.dll", "reframework\\Plugins\\TOOL.dll" } });
-        }
-
-
-
         // ---- Game files other tools change (the user's 2026-10-14 case)
         internal const string Proxy196 = "slotsloader 1.9.6 proxy", Plugin196 = "slotsloader 1.9.6 plugin";
         internal static void RegisterBuilds()

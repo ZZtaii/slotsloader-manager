@@ -81,6 +81,7 @@ namespace SlotsInstaller
                     Point client = form.PointToScreen(Point.Empty); Size frame = new Size(client.X - form.Left, client.Y - form.Top);
                     top.Offset(frame.Width, frame.Height); bottom.Offset(frame.Width, frame.Height);
                     Rectangle crop = Rectangle.FromLTRB(Math.Max(0, Math.Min(top.Left, bottom.Left) - DpiMetrics.Px(form, 8)), Math.Max(0, top.Top - DpiMetrics.Px(form, 8)), Math.Min(form.ClientSize.Width, Math.Max(top.Right, bottom.Right) + DpiMetrics.Px(form, 8)), Math.Min(form.ClientSize.Height, bottom.Bottom + DpiMetrics.Px(form, 8)));
+                    if (TestTier.Render)
                     using (var full = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                     {
                         form.DrawToBitmap(full, new Rectangle(0, 0, full.Width, full.Height));

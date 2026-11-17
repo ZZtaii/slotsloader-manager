@@ -32,6 +32,8 @@ namespace SlotsInstaller
                 catch (Exception ex) { failures++; report.Add("FAIL " + name + ": " + ex); }
                 Console.WriteLine(report[report.Count - 1]);
             };
+            // 1.0.21: the report-only checks (they write a listing and assert nothing) run with test.ps1 -Full.
+            Action<string, Func<string>> full = delegate(string name, Func<string> action) { if (TestTier.Full) check(name, action); };
             string pakPath = Path.Combine(RealGame, "re_chunk_000.pak");
             string beforeToc = null;
             check("real base PAK parses read-only; known vanilla paths resolve; reference colour file decodes", delegate
@@ -135,7 +137,7 @@ namespace SlotsInstaller
                 File.WriteAllLines(Path.Combine(root, "auto-check-timing.txt"), lines);
                 return String.Join(" | ", lines);
             });
-            check("library costume keys and 'cammy, c1' search on the real libraries (2.0.1, read-only; cold listing and cached rescan timed)", delegate
+            full("library costume keys and 'cammy, c1' search on the real libraries (2.0.1, read-only; cold listing and cached rescan timed)", delegate
             {
                 var dirs = Libraries.Where(Directory.Exists).ToArray();
                 if (dirs.Length == 0) throw new SkipException("libraries not found");
@@ -163,7 +165,7 @@ namespace SlotsInstaller
                 }
                 finally { Library.IdentityCacheDirectory = previous; }
             });
-            check("library tool kinds and 'reframework'/'code' search on the real libraries (2.0.3, read-only; reuses the listing above)", delegate
+            full("library tool kinds and 'reframework'/'code' search on the real libraries (2.0.3, read-only; reuses the listing above)", delegate
             {
                 var dirs = Libraries.Where(Directory.Exists).ToArray();
                 if (dirs.Length == 0) throw new SkipException("libraries not found");
@@ -189,16 +191,24 @@ namespace SlotsInstaller
                 }
                 finally { Library.IdentityCacheDirectory = previous; }
             });
-            check("Fluffy presets map to the real libraries (read-only dry run)", delegate
+            full("Fluffy presets map to the real libraries (read-only dry run)", delegate
             {
                 var files = FluffyPresets.PresetFiles(FluffyRoots);
                 if (files.Count == 0) throw new SkipException("no presets");
-                var library = Library.Scan(Libraries.Where(Directory.Exists), @"C:\Program Files\7-Zip\7z.exe");
-                var lines = new List<string>(); int total = 0, mapped = 0;
-                foreach (string file in files)
+                // 1.0.21: the listing from the identity cache the searches above filled, and one Map call for every preset's
+                // sections, so an archive two presets use is read once (each section maps on its own; the result is split
+                // back per preset). Was a second cold scan and a package cache per preset: about a minute.
+                List<LibraryEntry> library;
+                string previous = Library.IdentityCacheDirectory;
+                try { Library.IdentityCacheDirectory = Path.Combine(root, "costume-identity-cache"); library = Library.Scan(Libraries.Where(Directory.Exists), @"C:\Program Files\7-Zip\7z.exe"); }
+                finally { Library.IdentityCacheDirectory = previous; }
+                var parsed = files.Select(file => FluffyPresets.Parse(File.ReadAllText(file))).ToList();
+                var all = FluffyPresets.Map(parsed.SelectMany(e => e).ToList(), library, @"C:\Program Files\7-Zip\7z.exe");
+                var lines = new List<string>(); int total = 0, mapped = 0, at = 0;
+                for (int i = 0; i < files.Count; i++)
                 {
-                    var entries = FluffyPresets.Parse(File.ReadAllText(file));
-                    var map = FluffyPresets.Map(entries, library, @"C:\Program Files\7-Zip\7z.exe");
+                    string file = files[i];
+                    var map = all.GetRange(at, parsed[i].Count); at += parsed[i].Count;
                     int ok = map.Count(m => m.Entry != null);
                     total += map.Count; mapped += ok;
                     lines.Add(file + ": " + ok + " of " + map.Count + " sections mapped; " + FluffyPresets.Group(map).Count(g => g.Entry != null) + " installs");
@@ -207,7 +217,7 @@ namespace SlotsInstaller
                 File.WriteAllLines(Path.Combine(root, "preset-dry-run.txt"), lines);
                 return mapped + " of " + total + " sections mapped across " + files.Count + " presets (details in preset-dry-run.txt)";
             });
-            check("real game tool status and REFramework loader state are detected (read-only)", delegate
+            full("real game tool status and REFramework loader state are detected (read-only)", delegate
             {
                 if (!Directory.Exists(RealGame)) throw new SkipException("game not found");
                 ToolStatus t = ToolStatus.Detect(RealGame); string detail; LooseLoaderState state = LooseLoader.State(RealGame, out detail);

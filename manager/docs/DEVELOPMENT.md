@@ -32,7 +32,7 @@ This is a personal Windows application, independent of Blender. Preserve both mo
   - reports tool and loader status.
 - The `assistant` suite now has 30 checks; the new one covers `list_game_mods`, `install_replacement` and `change_game_mod` on a fixture game.
 
-`test.ps1` runs `replace` and `replace-ui`; `-RealArchives` adds `replace-real` (`-Only replace,replace-ui,replace-real` for just these).
+`test.ps1` runs `replace` and `replace-ui`; `-RealArchives` adds `replace-real` (`-Only replace,replace-ui,replace-real` for just these). The lean set keeps their data-safety core; `-Full` runs every case listed here.
 
 2.0.1 additions:
 - `replace` (25 checks) adds conflicts (slot/stack/disabled/other-area/unknown loose/external manager text, update-in-place priority, no automatic removal), recoverable uninstall with byte-exact Undo (enabled state and priority), and the check cache (one extraction, identical results, invalidated by a changed archive).
@@ -71,30 +71,37 @@ It writes `Slotsloader Manager.exe` (2.1.0–2.5.8: `SlotsLoader Manager.exe`; 2
 Use a **new** output directory. This runner builds both executables, writes isolated settings, creates fresh fixtures, and stops on failure:
 
 ```powershell
-# From this folder; writes to a new out\tests-<time> unless -OutputDirectory is given:
+# From this folder; writes to a new out\tests-<time> unless -OutputDirectory is given.
+# Lean set (a few minutes): after any change, before a commit.
 .\test.ps1
-# Also read real archives for the existing integration/UI suites:
-.\test.ps1 -RealArchives
-# Only some checks (real ones included), e.g. while iterating:
+# Every check, with the review PNGs:
+.\test.ps1 -Full
+# Release gate: every check plus the real-archive groups (needs tests.local.json):
+.\test.ps1 -Full -RealArchives
+# Only some groups (real ones included), lean unless -Full is given too:
 .\test.ps1 -Only filters,filter-real
 ```
 
-**Which runs (since 2.3.1).**
-- `-Only <names>` (comma-separated or an array) runs just those checks, real ones included; an unknown name stops with the list of known names: `generated`, `outfit-sets`, `outfit-set-ui`, `layout`, `smoke`, `fields`, `ui-polish`, `assistant`, `assistant-ui`, `replace`, `replace-ui`, `filters`, `loader`, `variants`, `slots`, `real-backend`, `bundle-ui`, `bundle-layout`, `replace-real`, `filter-real`, `loader-real`, `bundle-polish`.
+**What runs when (since 17 November 2026).** The app had become stable, so the suite was cut to a lean default (the user's call).
+- **Plain `test.ps1`: the lean set.** Every group below except the real-archive ones, each with its core cases only: install, uninstall and rollback, restoring original game files, journals and crash recovery, saved sets, the Recycle Bin, update and self-update safety, and the main screens. No review PNGs are saved. test.ps1 prints each group's time and the total. On 17 November 2026 the lean set took 140 s and `-Full -RealArchives` 338 s; before the cut they took about 8 and 10.5 minutes.
+- **`-Full`** sets `SLOTSLOADER_TEST_FULL=1` (`TestTier.cs`). Each group then also runs its full-only cases: edge cases of earlier fixes, extra window sizes, timing and performance cases, report-only cases. It also saves the review PNGs. `SLOTSLOADER_RENDER=1` saves the PNGs in a lean run too.
+- **`-RealArchives`** adds the real-archive groups. These read your archives, libraries and game folder and never write to them. A lean real run keeps the cheap ones; the long report-only parts (the external preset dry run, the costume search, the fresh real-library window in `filter-real`) run only with `-Full`.
+- **Release gate:** `test.ps1 -Full -RealArchives` once on the exact release tree, before packaging. While iterating, use `-Only` with the groups that cover the change, adding `-Full` when you touch a risky area (install engine, replace mode, updates).
+- **Groups.** Lean and full: `generated`, `backend`, `outfit-sets`, `outfit-set-ui`, `layout`, `fields`, `ui-polish`, `assistant`, `assistant-ui`, `replace`, `replace-ui`, `filters`, `loader`, `updates`, `history`, `library-delete`, `convert`, `variants`, `slots`, `queue`, `wording`. With `-RealArchives`: `real-backend`, `bundle-layout`, `replace-real`, `filter-real`, `loader-real`, `convert-real`, `history-real`. `-Only` takes any of these, comma-separated or as an array; an unknown name stops with the list. The Linux build's 14 groups are all in this list.
+- **Removed on 17 November 2026:** the `smoke`, `bundle-ui` and `bundle-polish` groups (`--smoke-ui`, `--exercise-ui`), which repeated other groups. Also checks of removed features and long-settled one-off migrations: the leftover test-in-game record (removed in 2.3.0), the removed auto-uninstall setting, the 2.2.0, 2.3.0-test-build and pre-1.0.16 filter migrations, and two 2.4.2 log errors. Duplicate copies went too: the knowledge-pack size check (the cap is now enforced in `Build-AssistantKnowledge.ps1`) and the updates group's copy of the loader group's malformed-list cases. `backend` is new: the generated half of `--self-test` (install lifecycle, rollback, collisions, traversal, the lock, commit races, manifest hashes), which used to run only with `-RealArchives`.
 - 1.0.10 (the user): the visible themed-dialog checks are gone (the `dialog` suite, `--dialog-check`, `-Dialogs`, and `ThemedDialogChecks` inside `ui-polish`), as is the library-delete "no popup" check. They had passed on every run and opened windows on the screen.
-- Policy: while iterating, run only the suites that cover the change through `-Only`; run the full `-RealArchives` once just before packaging a release.
 - Use an output folder outside `scratchpad`-like paths: the library-search regression in `generated` searches fixture paths for word starts such as `scr`, `plu` and `ref`, so a parent folder named "scratchpad", "plugins" or "refw-…" makes it fail.
 
 Generated checks cover required/implicit-root selections, independent main/overlay components, archive CRC/size bounds, library errors/cancellation, loader-result matching, recovery and CLI reports. Restricted tokens may not permit junction creation; that capability check is explicitly skipped. The retained October 13 permitted fixture run exercised junction rejection successfully.
 
-`-RealArchives` adds the original 31 backend checks, six Juri selection checks and preview/layout checks. The existing real-input runner reads these archives without modifying them. Since 2.4.3 their paths, the game folder and the libraries come from `tests.local.json` beside test.ps1 (untracked; copy `tests.local.example.json`; `-LocalConfig <file>` picks another), passed to the checks in `SLOTSLOADER_TEST_CONFIG`; nothing personal is compiled in:
+`-RealArchives` adds the real-archive backend checks (RAR, Goth Juri, Ingrid, real library identity, required options), six Juri selection checks and preview/layout checks. The existing real-input runner reads these archives without modifying them. Since 2.4.3 their paths, the game folder and the libraries come from `tests.local.json` beside test.ps1 (untracked; copy `tests.local.example.json`; `-LocalConfig <file>` picks another), passed to the checks in `SLOTSLOADER_TEST_CONFIG`; nothing personal is compiled in:
 
 - `Archives.juri`: (Goth Juri C1) EA.zip
 - `Archives.ingrid`: Ingrid C.C. Barefoot C1.zip
 - `Archives.viperHair`: Viper - Hair - Manon C4.rar
 - `Archives.numericOutfit`: 01outfit-1385-1-1-1703241589.zip
 
-Individual flags remain `--self-test <workspace root>`, `--self-test-extra <fixture root>`, `--layout-check [Juri archive]`, `--field-check <new output directory>`, `--exercise-ui <Juri archive>`, and `--smoke-ui`. Reports are beside the executable and in its `Data`; field checks save their report and hidden renders to the requested directory. Headless modes bypass window preferences. The old real-input runner remains workspace-restricted; generated checks accept caller-provided fixture roots.
+Individual flags remain `--self-test <workspace root> [generated]`, `--self-test-extra <fixture root>`, `--layout-check [Juri archive]` and `--field-check <new output directory>`. Reports are beside the executable and in its `Data`; field checks save their report and hidden renders to the requested directory. Headless modes bypass window preferences. The old real-input runner remains workspace-restricted; generated checks accept caller-provided fixture roots.
 
 `--set-check <fixture root>` covers full preset and batch-removal lifecycles with generated managed/manual entries, opaque ZIP/RAR/7Z/PAK bytes, conflicts, cancellation and rollback. `--set-ui-check <new output root>` exercises native Ctrl/Shift selection, filter-limited Select all, action gating and the preset/confirmation dialogs with fixture data. Both are included in `test.ps1`. Native ListView test clicks must queue mouse down and up with PostMessage before pumping events: synchronous down alone can wait inside Windows' drag detection for a release that has not yet been queued.
 
@@ -261,7 +268,7 @@ The Extra outfit notice and the REFramework offer use `ReFrameworkRelease.Suppor
 The "install Slotsloader" offer, `loader-fetch` and the update offer use the approved `slots_loader` entry of the repo-root `dependencies.json` (`format` 1, `source` Wael3rd/SF6-ModSuite; `name`, `version`, `release`, `file`, `size`, `sha256`). `build.ps1` checks the file and embeds it as `SlotsInstaller.Dependencies.json` (`LoaderPin.Release`, parsed by `DependencyList` in `src/LoaderRelease.cs`); the running Manager reads the same file from the main branch (`UpdateCheck.ReadList`). The zip itself stays on the upstream release: `https://github.com/Wael3rd/SF6-ModSuite/releases/download/<release>/<file>`, the only place a loader is downloaded from. Since 1.0.19:
 1. When upstream releases, a GitHub Action opens a pull request that changes `dependencies.json`. Merging it is the approval: Managers 1.0.19 and later offer that version at their next start or daily check (an older version after a revert is offered as going back, only over a loader the Manager installed from an approved zip). Unknown packages (`native_core`) and keys are ignored; a malformed entry is refused and logged.
 2. Run `tools\Package-Release.ps1 [-TestReport <test summary>]`. It reads `dependencies.json`, downloads the approved zip from its URL (offline: `-NoLoaderFetch -LoaderZip <the approved zip>`), checks size and SHA-256 against the list, builds (the same file is embedded), and writes `Slotsloader-Manager-<version>-portable.zip` (the 7 release files plus `Slotsloader/<file>`) and `SHA256SUMS.txt` into a new `out\release-<time>` folder. It publishes nothing; it prints the `gh release create` line to run after approval.
-3. Update README/CLI.md/UI-REFERENCE where they name a version, and run `test.ps1 -Only loader,replace-ui,updates,loader-real` while iterating, then the full `-RealArchives` before publishing. Never create `loader-v*` tags again: Managers 1.0.18 and older read them, 1.0.19 ignores them.
+3. Update README/CLI.md/UI-REFERENCE where they name a version, and run `test.ps1 -Only loader,replace-ui,updates,loader-real` while iterating, then `-Full -RealArchives` before publishing. Never create `loader-v*` tags again: Managers 1.0.18 and older read them, 1.0.19 ignores them.
 - Install order at runtime (`LoaderRelease.FindLocal`): the bundled `Slotsloader\<asset>` beside the exe (left alone when it does not verify), a library file by SHA-256, `Data\downloads`, then the download. The self-updater (`AppUpdater`) accepts one `Slotsloader/<name>.zip` in a release zip, replaces the app folder's bundled zips with it, keeps the previous ones for rollback and restores them on failure; a release without one leaves them as they are.
 ## 2.3.0 checks
 

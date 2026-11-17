@@ -1,5 +1,4 @@
 using System;
-using System.Drawing;
 using System.IO;
 using System.Runtime;
 using System.Threading;
@@ -39,7 +38,10 @@ namespace SlotsInstaller
                 {
                     Headless = true;
                     if (args.Length < 2) throw new ArgumentException("--self-test requires a workspace test directory.");
-                    return IntegrationTests.Run(args[1]);
+                    // A third argument `generated` runs the generated-fixture tests (group backend); without it only the
+                    // real-archive tests run (group real-backend, which reads tests.local.json).
+                    if (args.Length > 2 && args[2] != "generated") throw new ArgumentException("--self-test takes `generated` or nothing after the directory.");
+                    return IntegrationTests.Run(args[1], args.Length > 2);
                 }
                 if (args.Length > 0 && args[0] == "--assistant-check")
                 {
@@ -103,22 +105,6 @@ namespace SlotsInstaller
                     if (args.Length < 2) throw new ArgumentException("--set-ui-check requires a fixture output directory.");
                     return InstalledSetUiChecks.Run(args[1]);
                 }
-                if (args.Length > 0 && args[0] == "--smoke-ui")
-                {
-                    Headless = true;
-                    using (MainForm form = new MainForm(AppConfig.Load()))
-                    {
-                        form.CreateControl();
-                        using (Bitmap bitmap = new Bitmap(1460, 920)) form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
-                    }
-                    return 0;
-                }
-                if (args.Length > 0 && args[0] == "--exercise-ui")
-                {
-                    Headless = true;
-                    if (args.Length < 2) throw new ArgumentException("--exercise-ui requires the Goth Juri archive path.");
-                    return MainForm.ExerciseUI(args[1]);
-                }
                 if (args.Length > 0 && args[0] == "--layout-check")
                 {
                     Headless = true;
@@ -127,7 +113,7 @@ namespace SlotsInstaller
                 if (args.Length > 0 && args[0] == "--polish-check")
                 {
                     if (args.Length < 2) throw new ArgumentException("--polish-check requires a fixture output directory.");
-                    return PolishChecks.Run(args[1], args.Length > 2 ? args[2] : null);
+                    return PolishChecks.Run(args[1]);
                 }
                 if (args.Length > 0 && args[0] == "--filter-check")
                 {

@@ -174,7 +174,7 @@ namespace SlotsInstaller
                     string cache = Dir(root, "fail"); LoaderRelease.AllowLoopbackHttp = true;
                     LoaderFetchException missing = Fails(delegate { LoaderRelease.Download(With(pin, server.Base + "/missing.zip"), cache); });
                     Require(missing.Message.StartsWith("Couldn't download Slotsloader " + pin.Version + ": HTTP 404 Not Found from 127.0.0.1 (the release isn't public or no longer exists).") && missing.Message.Contains("Download it from " + pin.ReleasePage + " and drop the zip on the window."), "404: " + missing.Message);
-                    int closed = LoopbackServer.ClosedPort();
+                    int closed = LoopbackServer.ClosedPort();   // a real refused connect (about 2 s on Windows); the other offline cases use RefusedPort
                     LoaderFetchException offline = Fails(delegate { LoaderRelease.Download(With(pin, "http://127.0.0.1:" + closed + "/loader.zip"), cache); });
                     Require(offline.Reason == "could not connect to 127.0.0.1", "offline: " + offline.Reason);
                     server.Routes["/hang.zip"] = new LoopbackServer.Route { HangMs = 5000 };
@@ -381,6 +381,10 @@ namespace SlotsInstaller
                 thread = new Thread(Accept) { IsBackground = true, Name = "loader-check server" }; thread.Start();
             }
             internal static int ClosedPort() { var l = new TcpListener(IPAddress.Loopback, 0); l.Start(); int port = ((IPEndPoint)l.LocalEndpoint).Port; l.Stop(); return port; }
+            // 1.0.21: the offline cases of the other checks: a closed port that SafeHttp refuses at once with the message of a real
+            // refused connection (SafeHttp.RefusedLoopbackPort; the caller sets it back to 0). The loader's "failures" check keeps
+            // one real closed-port connect, so the Windows error mapping stays tested.
+            internal static int RefusedPort() { int port = ClosedPort(); SafeHttp.RefusedLoopbackPort = port; return port; }
             private void Accept()
             {
                 while (!stopping)

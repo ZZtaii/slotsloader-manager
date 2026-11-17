@@ -48,41 +48,41 @@ namespace SlotsInstaller
                 catch (Exception ex) { failures++; Console.WriteLine("FAIL " + name + ": " + ex); report.Add("FAIL " + name + ": " + ex.Message); }
             };
             check("request shape: headers, strict tools, auto tool choice, adaptive summarized thinking, effort, fallbacks, cache control", RequestShape);
-            check("request body per model: fallbacks and beta header only where supported, effort passed through", PerModelShape);
+            if (TestTier.Full) check("request body per model: fallbacks and beta header only where supported, effort passed through", PerModelShape);
             check("tool schemas: strict, additionalProperties false, every property required, deterministic order", ToolSchemas);
-            check("knowledge pack (2.4.0): embedded, user-facing sources only (README, UI reference, CLI, loader README and compatibility), no developer docs and no owned-outfit opt-out text, deterministic (rebuilt from the same docs: same bytes), about 25k tokens or less", KnowledgePack);
-            check("prompt caching (2.4.0): system = stable instructions then the pack with a 1 h breakpoint; the serialized tools + system prefix is byte-identical across new conversations and requests; tool order stable; automatic caching stays on the messages; usage counts logged", CachePrefix);
-            check("get_app_status (2.4.0): read-only app state (version, method, loader, Slotsloader, leftover costume pak, external mod manager, updates, health) without paths or keys", AppStatusTool);
+            // 1.0.21: the knowledge pack's rules (sources, excluded text, size cap) are checked by tools\Build-AssistantKnowledge.ps1 at every build.
+            if (TestTier.Full) check("prompt caching (2.4.0): system = stable instructions then the pack with a 1 h breakpoint; the serialized tools + system prefix is byte-identical across new conversations and requests; tool order stable; automatic caching stays on the messages; usage counts logged", CachePrefix);
+            if (TestTier.Full) check("get_app_status (2.4.0): read-only app state (version, method, loader, Slotsloader, leftover costume pak, external mod manager, updates, health) without paths or keys", AppStatusTool);
             check("multi-step read-only tool loop on the fixture library", ReadOnlyLoop);
-            check("append-only history: assistant content echoed byte-identically including thinking signatures", AppendOnly);
-            check("parallel tool_use blocks are answered in one user message, in order", ParallelTools);
-            check("no images: view_preview is not offered, a call to it is an unknown tool, and no image is ever sent", NoImages);
-            check("invalid or unknown tool inputs return is_error without side effects", InvalidInputs);
+            if (TestTier.Full) check("append-only history: assistant content echoed byte-identically including thinking signatures", AppendOnly);
+            if (TestTier.Full) check("parallel tool_use blocks are answered in one user message, in order", ParallelTools);
+            if (TestTier.Full) check("no images: view_preview is not offered, a call to it is an unknown tool, and no image is ever sent", NoImages);
+            if (TestTier.Full) check("invalid or unknown tool inputs return is_error without side effects", InvalidInputs);
             check("queued actions do not run without approval; collisions and replace rules are enforced", QueueWithoutApproval);
             check("approval runs queued actions against fixtures and the next turn carries the [App] note", ApprovalAndNote);
             check("a failing approved action stops the batch and is reported; discards are reported", FailureStopsBatch);
-            check("auto-apply executes install, preset save, uninstall (no removed set, 1.0.1) and a restore from the saved preset immediately", AutoApply);
+            if (TestTier.Full) check("auto-apply executes install, preset save, uninstall (no removed set, 1.0.1) and a restore from the saved preset immediately", AutoApply);
             check("refusal stops the run without executing that turn's tools", Refusal);
-            check("max_tokens with tool_use stops without running tools; next turn answers them", MaxTokensStops);
-            check("pause_turn stops without sending an assistant-ending request", PauseTurn);
-            check("429 retry-after is honoured", RateLimitRetry);
-            check("500/529 retry with backoff, then give up after three attempts", ServerErrorBackoff);
+            if (TestTier.Full) check("max_tokens with tool_use stops without running tools; next turn answers them", MaxTokensStops);
+            if (TestTier.Full) check("pause_turn stops without sending an assistant-ending request", PauseTurn);
+            if (TestTier.Full) check("429 retry-after is honoured", RateLimitRetry);
+            if (TestTier.Full) check("500/529 retry with backoff, then give up after three attempts", ServerErrorBackoff);
             check("401, 400 and 404 are reported without retry and without the key", ClientErrors);
-            check("network failure retries then reports", NetworkFailure);
-            check("cancellation aborts an in-flight request promptly", Cancellation);
-            check("max model-call guard stops a runaway tool loop", IterationGuard);
-            check("mid-conversation model/effort switch keeps history byte-identical and changes only model/effort", ModelSwitch);
+            if (TestTier.Full) check("network failure retries then reports", NetworkFailure);
+            if (TestTier.Full) check("cancellation aborts an in-flight request promptly", Cancellation);
+            if (TestTier.Full) check("max model-call guard stops a runaway tool loop", IterationGuard);
+            if (TestTier.Full) check("mid-conversation model/effort switch keeps history byte-identical and changes only model/effort", ModelSwitch);
             check("effort and model selection are validated", SelectionValidation);
             check("per-model cost math including the Haiku long-prompt tier", CostMath);
             check("assistant settings file defaults and roundtrip", SettingsRoundtrip);
             check("DPAPI key roundtrip, masked status and environment fallback", KeyRoundtrip);
             check("tool results never contain local absolute paths", NoAbsolutePaths);
-            check("removed-set names are valid folder-safe names (Installed page uninstall regression)", RemovedSetNames);
-            check("replace-original tools: list_game_mods, install_replacement and change_game_mod queue with the mode explicit, run only on approval, restore exactly", ReplaceTools);
-            check("preset scope (2.4.1): save_preset/restore_preset take scope (\"\" | both | extra_outfits | replacements, required like every property); replacements-only and default saves, list_presets scope, a part the preset lacks refused, SF6 running refused, restore installs then skips identical", PresetScopeTools);
-            check("conflicts (2.0.1): install_replacement and list_game_mods report same-outfit shared files and same-outfit stacking; the prompt asks for them in the plan; search_mods matches costume files", ConflictTools);
-            check("tool mods (2.0.3): search_mods kind 'tool', tool words in query ('reframework', 'code mods', 'plugin') match by tool kind, results carry tool_kinds", ToolModSearch);
-            check("search_mods sort (2.4.1): sort (\"\" | added | last_used | installed) and order (\"\" | desc | asc), required like every property; each sort in both directions, ties by name, never-used last/first, the latest use (history, else install/uninstall records) leads, the default order unchanged", SortSearch);
+            if (TestTier.Full) check("removed-set names are valid folder-safe names (Installed page uninstall regression)", RemovedSetNames);
+            if (TestTier.Full) check("replace-original tools: list_game_mods, install_replacement and change_game_mod queue with the mode explicit, run only on approval, restore exactly", ReplaceTools);
+            if (TestTier.Full) check("preset scope (2.4.1): save_preset/restore_preset take scope (\"\" | both | extra_outfits | replacements, required like every property); replacements-only and default saves, list_presets scope, a part the preset lacks refused, SF6 running refused, restore installs then skips identical", PresetScopeTools);
+            if (TestTier.Full) check("conflicts (2.0.1): install_replacement and list_game_mods report same-outfit shared files and same-outfit stacking; the prompt asks for them in the plan; search_mods matches costume files", ConflictTools);
+            if (TestTier.Full) check("tool mods (2.0.3): search_mods kind 'tool', tool words in query ('reframework', 'code mods', 'plugin') match by tool kind, results carry tool_kinds", ToolModSearch);
+            if (TestTier.Full) check("search_mods sort (2.4.1): sort (\"\" | added | last_used | installed) and order (\"\" | desc | asc), required like every property; each sort in both directions, ties by name, never-used last/first, the latest use (history, else install/uninstall records) leads, the default order unchanged", SortSearch);
             check("no written artifact contains the API key", NoKeyInArtifacts);
             Console.WriteLine("Assistant checks: " + (count - failures) + " passed, " + failures + " failed, " + count + " total.");
             File.WriteAllLines(Path.Combine(runRoot, "assistant-check-report.txt"), report.Concat(new[] { "Total " + count + ", failed " + failures }));
@@ -147,40 +147,6 @@ namespace SlotsInstaller
         private static string LastText(MockRequest r) { return AssistantJson.Str(r.LastContent.Last(b => AssistantJson.Str(b, "type") == "text"), "text"); }
 
         // ---------- checks ----------
-        private static void KnowledgePack()
-        {
-            string pack = AssistantPrompt.Knowledge;
-            // 1.0.18: 26,000 to 26,250 tokens (about 105,000 characters) for the Help of Outfit order and Turn outfit mods off.
-            // 1.0.18: to 26,750 tokens for the outfit recipes lines of What changed.
-            // 1.0.20: to 27,400 tokens for the Help of Convert RAR and 7Z to ZIP (108,837 characters then).
-            Require(pack.Length > 20000 && pack.Length / 4 <= 27400, "pack size " + pack.Length + " characters");
-            foreach (string heading in new[] { "# Source: Slotsloader Manager README", "## What changed", "# Source: Slotsloader Manager screens", "# Source: Slotsloader CLI.exe", "# Source: Slotsloader (the loader) README", "# Source: Slotsloader compatibility notes" })
-                Require(pack.Contains(heading), "missing section " + heading);
-            foreach (string banned in new[] { "show_unowned", "unowned_slots", "opt-out marker", "private opt-out", "owned-outfit opt-out", "CostumeSlots_data", "DEVELOPMENT.md checks", "## 2.4.0 checks", "Bumping the Slotsloader pin", "HANDOFF" })
-                Require(pack.IndexOf(banned, StringComparison.OrdinalIgnoreCase) < 0, "excluded text in the pack: " + banned);
-            Require(!System.Text.RegularExpressions.Regex.IsMatch(pack, "[0-9A-Fa-f]{64}") && !pack.Contains("\r") && !System.Text.RegularExpressions.Regex.IsMatch(pack, @"\b20\d\d-\d\d-\d\dT\d\d:"), "hashes, CR or a time stamp in the pack");
-            int whatChanged = pack.IndexOf("## What changed"), next = pack.IndexOf("\n## ", whatChanged + 5);
-            // 1.0.11: the README writes "- 1.0.11:" (older entries "- 2.5.9 (…"); both count.
-            Require(new[] { 1, 2, 3 }.Contains(System.Text.RegularExpressions.Regex.Matches(pack.Substring(whatChanged, next - whatChanged), @"(?m)^- \d+\.\d+\.\d+( \(|:)").Count), "What changed must keep the newest one to three versions");
-            Require(!System.Text.RegularExpressions.Regex.IsMatch(pack, @"\b[A-Za-z]:\\"), "an absolute local path in the pack");
-            // Deterministic: build it again from the same docs into a temp file and compare bytes.
-            string project = Environment.GetEnvironmentVariable("SLOTSLOADER_PROJECT") ?? "";   // set by test.ps1
-            string script = Path.Combine(project, "tools", "Build-AssistantKnowledge.ps1");
-            if (project.Length > 0 && File.Exists(script))
-            {
-                string a = Path.Combine(Path.GetTempPath(), "slm-pack-a-" + Guid.NewGuid().ToString("N") + ".md"), b = a.Replace("-a-", "-b-");
-                try
-                {
-                    foreach (string target in new[] { a, b })
-                        using (var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Project \"" + project + "\" -Output \"" + target + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }))
-                        { p.StandardOutput.ReadToEnd(); p.WaitForExit(120000); Require(p.ExitCode == 0, "the pack builder failed"); }
-                    Require(File.ReadAllBytes(a).SequenceEqual(File.ReadAllBytes(b)), "two builds from the same docs differ");
-                    Require(System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(a)) == pack, "the embedded pack differs from the docs it was built from");
-                }
-                finally { foreach (string x in new[] { a, b }) if (File.Exists(x)) File.Delete(x); }
-            }
-        }
-
         private static void CachePrefix()
         {
             Func<string, string> prefix = delegate(string body) { int i = body.IndexOf(",\"tool_choice\""); return body.Substring(0, i); };
@@ -969,10 +935,23 @@ namespace SlotsInstaller
 
         private static void NetworkFailure()
         {
+            // 1.0.21: a loopback listener that resets every connection fails each attempt at once (a closed port costs
+            // about 2 s per attempt on Windows). ClaudeClient takes every network exception through the same branch; the
+            // loader check keeps one real refused connect.
             var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0); probe.Start();
-            int port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port; probe.Stop();
+            int port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+            var resetter = new Thread(delegate()
+            {
+                while (true)
+                {
+                    System.Net.Sockets.Socket s;
+                    try { s = probe.AcceptSocket(); } catch (System.Net.Sockets.SocketException) { return; } catch (ObjectDisposedException) { return; } catch (InvalidOperationException) { return; }
+                    try { s.LingerState = new System.Net.Sockets.LingerOption(true, 0); s.Close(); } catch (System.Net.Sockets.SocketException) { }
+                }
+            }) { IsBackground = true, Name = "assistant-check reset" };
+            resetter.Start();
             var waits = new List<TimeSpan>();
-            using (var client = new ClaudeClient(FakeKey, "http://127.0.0.1:" + port) { BackoffBaseSeconds = 0.02 })
+            try { using (var client = new ClaudeClient(FakeKey, "http://127.0.0.1:" + port) { BackoffBaseSeconds = 0.02 })
             {
                 client.RetryWaitObserved = delegate(TimeSpan w) { waits.Add(w); };
                 try { client.Send("{}", true, CancellationToken.None); throw new InvalidOperationException("Expected a network failure."); }
@@ -980,7 +959,8 @@ namespace SlotsInstaller
                 {
                     Require(ex.Attempts == 3 && waits.Count == 2 && ex.Message.Contains("Could not reach") && !ex.Message.Contains(FakeKey), "Network failure not retried/reported: " + ex.Message);
                 }
-            }
+            } }
+            finally { probe.Stop(); }
         }
 
         private static void Cancellation()

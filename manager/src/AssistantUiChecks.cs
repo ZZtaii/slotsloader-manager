@@ -41,7 +41,8 @@ namespace SlotsInstaller
                     // 2.4.1: the "Show Assistant tab" option first, while nothing in this process has built a page.
                     TabDefaults(check, root);
                     HiddenTab(check, config, root);
-                    using (var form = new MainForm(config))
+                    // 1.0.21: the Assistant page itself (hidden on a new install) only in a full run.
+                    if (TestTier.Full) using (var form = new MainForm(config))
                     {
                         Set(form, "firstLoad", false); form.ShowInTaskbar = false; form.Opacity = 0; form.MinimumSize = Size.Empty; form.Show(); Application.DoEvents();
                         form.ClientSize = new Size(DpiMetrics.Px(form, 1232), DpiMetrics.Px(form, 640)); Application.DoEvents();
@@ -224,6 +225,7 @@ namespace SlotsInstaller
 
         private static void SaveImage(Control control, string root, string name)
         {
+            if (!TestTier.Render) return;   // 1.0.21: review PNGs only in a full run or with SLOTSLOADER_RENDER=1
             Size size = control is Form ? ((Form)control).ClientSize : control.Size;
             using (var bitmap = new Bitmap(size.Width, size.Height))
             {

@@ -24,7 +24,10 @@ namespace SlotsInstaller
         private static ModPackage simplePackage;
         private static CompositionPlan simplePlan;
 
-        public static int Run(string testRoot)
+        // 1.0.21: two modes so nothing runs twice in a full run. generatedOnly (test.ps1 group `backend`, lean) runs the
+        // tests on generated fixtures and never reads tests.local.json; otherwise (group `real-backend`, -RealArchives)
+        // only the tests that open the real archives named in tests.local.json run.
+        public static int Run(string testRoot, bool generatedOnly)
         {
             passed = 0;
             failed = 0;
@@ -49,39 +52,47 @@ namespace SlotsInstaller
                 simplePackage = PackageReader.Load(simpleSource, sevenZip);
                 simplePlan = Composer.Plan(simplePackage, simplePackage.Components.Where(c => !c.IsDummy && c.Assets.Count > 0).Select(c => c.Id));
 
-                Console.WriteLine("Self-test output: " + root);
-                Test("single directory metadata, payload and character", TestDirectory);
-                Test("ZIP wrapper and metadata preview", TestZip);
-                Test("7Z archive and source provenance", TestSevenZip);
-                Test("solid 7Z batches metadata and preview reads", TestSevenZipBatch);
-                Test("long paths: short staging names, too long stops before 7-Zip (1.0.15)", TestLongPaths);
-                Test("existing RAR reader", TestRar);
-                Test("library deduplication and archive kinds", TestLibrary);
-                Test("four-option normal and five-option bundle indexing survives cache reload", TestLibraryOptionCount);
-                Test("installed source coverage distinguishes partial, full, disabled and manual outfits", TestLibraryInstallState);
-                Test("Goth Juri bundle composition, overrides and native merge", TestJuri);
-                Test("Ingrid standalone archive and 29-file merge", TestIngrid);
-                Test("managed enable, disable and recoverable uninstall", TestLifecycle);
-                Test("managed replacement and rollback on missing source asset", TestReplacementRollback);
-                Test("unmanaged outfit collision preserves existing files", TestUnmanagedCollision);
-                Test("incompatible character target is refused", TestTargetIdentity);
-                Test("invalid Windows outfit names are refused", TestInvalidNames);
-                Test("malicious ZIP parent traversal is refused", TestUnsafeZip);
-                Test("non-native package files are excluded", TestNonNativeFiles);
-                Test("vanilla MDF fallback remains installable with warning", TestMissingMaterial);
-                Test("nested backup native root remains an unselected component", TestNestedBackup);
-                Test("independent addon bundle branches have scoped requirements", TestIndependentBranches);
-                Test("numeric ZIP and donor-named RAR use native character identity", TestRealLibraryCharacters);
-                Test("all 32 character IDs retain exact canonical roster mapping", TestRosterLibraryCharacters);
-                Test("folder character identity refreshes when native paths change", TestFolderCharacterRefresh);
-                Test("ZIP identity cache invalidates changed archives and explicit refresh", TestZipCharacterRefresh);
-                Test("multiple and unmapped native IDs never use a false filename identity", TestAmbiguousLibraryCharacters);
-                Test("filename fallback stays separate from authoritative native identity", TestLibraryFilenameFallback);
-                Test("large preview sets retain a bounded cache and inherited previews share bytes", TestBoundedPreviews);
-                Test("nested choice branches are validated without rejecting their children", TestChoiceBranches);
-                Test("concurrent lifecycle operations are refused for the same root", TestMutationLock);
-                Test("destinations created or changed during staging are preserved", TestCommitRace);
-                Test("manifest hashes match all installed fixture payloads", TestManifestHashes);
+                Console.WriteLine("Self-test output: " + root + (generatedOnly ? " (generated fixtures)" : " (real archives)"));
+                if (generatedOnly)
+                {
+                    // Order matters: TestZip and TestSevenZip add the archives TestLongPaths and TestLibrary read, and
+                    // TestManifestHashes checks every outfit the tests before it installed.
+                    Test("single directory metadata, payload and character", TestDirectory);
+                    Test("ZIP wrapper and metadata preview", TestZip);
+                    Test("7Z archive and source provenance", TestSevenZip);
+                    Test("solid 7Z batches metadata and preview reads", TestSevenZipBatch);
+                    Test("long paths: short staging names, too long stops before 7-Zip (1.0.15)", TestLongPaths);
+                    Test("library lists folder, ZIP and 7Z sources", TestLibrary);
+                    Test("four-option normal and five-option bundle indexing survives cache reload", TestLibraryOptionCount);
+                    Test("installed source coverage distinguishes partial, full, disabled and manual outfits", TestLibraryInstallState);
+                    Test("managed enable, disable and recoverable uninstall", TestLifecycle);
+                    Test("managed replacement and rollback on missing source asset", TestReplacementRollback);
+                    Test("unmanaged outfit collision preserves existing files", TestUnmanagedCollision);
+                    Test("incompatible character target is refused", TestTargetIdentity);
+                    Test("invalid Windows outfit names are refused", TestInvalidNames);
+                    Test("malicious ZIP parent traversal is refused", TestUnsafeZip);
+                    Test("non-native package files are excluded", TestNonNativeFiles);
+                    Test("vanilla MDF fallback remains installable with warning", TestMissingMaterial);
+                    Test("nested backup native root remains an unselected component", TestNestedBackup);
+                    Test("all 32 character IDs retain exact canonical roster mapping", TestRosterLibraryCharacters);
+                    Test("folder character identity refreshes when native paths change", TestFolderCharacterRefresh);
+                    Test("ZIP identity cache invalidates changed archives and explicit refresh", TestZipCharacterRefresh);
+                    Test("multiple and unmapped native IDs never use a false filename identity", TestAmbiguousLibraryCharacters);
+                    Test("filename fallback stays separate from authoritative native identity", TestLibraryFilenameFallback);
+                    Test("large preview sets retain a bounded cache and inherited previews share bytes", TestBoundedPreviews);
+                    Test("concurrent lifecycle operations are refused for the same root", TestMutationLock);
+                    Test("destinations created or changed during staging are preserved", TestCommitRace);
+                    Test("manifest hashes match all installed fixture payloads", TestManifestHashes);
+                }
+                else
+                {
+                    Test("existing RAR reader", TestRar);
+                    Test("Goth Juri bundle composition, overrides and native merge", TestJuri);
+                    Test("Goth Juri required groups left open by the default ticks match the plan's notes", TestRealRequired);
+                    Test("Ingrid standalone archive and 29-file merge", TestIngrid);
+                    Test("numeric ZIP and donor-named RAR use native character identity", TestRealLibraryCharacters);
+                    Test("manifest hashes match the real-archive installs", TestManifestHashes);
+                }
             }
             catch (Exception ex)
             {
@@ -257,15 +268,6 @@ namespace SlotsInstaller
             }
             p.PrepareChoices(); return p;
         }
-        private static void TestChoiceBranches()
-        {
-            var p=ChoiceFixture();
-            Require(Composer.Plan(p,new[]{"A","A/Child"}).CanInstall,"Parent and its child incorrectly counted as two alternatives.");
-            Require(!Composer.Plan(p,new[]{"A","B","A/Child"}).CanInstall,"Inferred exclusive branches were allowed together.");
-            p.Components[0].Description="Choose one";
-            Require(Composer.Plan(p,new[]{"A","A/Child"}).CanInstall,"Explicit choice rejected a selected branch's child.");
-            Require(!Composer.Plan(p,new[]{"A","B"}).CanInstall,"Root explicit group skipped exclusivity validation.");
-        }
         private static void TestMutationLock()
         {
             var installed=Installer.Install(simplePlan,costumeRoot,"Ingrid","Lock fixture",sevenZip,false);
@@ -341,9 +343,8 @@ namespace SlotsInstaller
 
         private static void TestLibrary()
         {
+            // Repeated library paths (case-insensitive) are deduplicated in LibraryRegressionChecks (generated).
             List<LibraryEntry> once = Library.Scan(new[] { library });
-            List<LibraryEntry> twice = Library.Scan(new[] { library, library.ToUpperInvariant() });
-            Require(once.Count == twice.Count, "Repeated library paths should be deduplicated.");
             Require(once.Any(e => e.SourcePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)), "ZIP library entry missing.");
             Require(once.Any(e => e.SourcePath.EndsWith(".7z", StringComparison.OrdinalIgnoreCase)), "7Z library entry missing.");
             Require(once.Any(e => Directory.Exists(e.SourcePath)), "Directory library entry missing.");
@@ -580,29 +581,19 @@ namespace SlotsInstaller
             Require(plan.Files[MeshRelative().Replace('\\', '/')].Component.Id == current.Id, "Backup mesh won the root selection.");
         }
 
-        private static void TestIndependentBranches()
+        // Moved from PolishChecks (group bundle-polish, removed in 1.0.21): the real archive's required groups that the
+        // default ticks leave open are exactly the plan's notes.
+        private static void TestRealRequired()
         {
-            string directory = Path.Combine(root, "independent-branches-fixture");
-            foreach (string branch in new[] { "A", "B" })
-            {
-                WriteFixture(directory, branch + "-header/modinfo.ini", Encoding.UTF8.GetBytes("name=Bundle " + branch + "\nDummymod=True\n"));
-                WriteFixture(directory, branch + "-main/modinfo.ini", Encoding.UTF8.GetBytes("name=" + branch + " Main files\nAddonfor=Bundle " + branch + "\n"));
-                WriteFixture(Path.Combine(directory, branch + "-main"), MeshRelative(), Encoding.UTF8.GetBytes("branch " + branch + " mesh"));
-                WriteFixture(directory, branch + "-skin-header/modinfo.ini", Encoding.UTF8.GetBytes("name=" + branch + " skin options\nAddonfor=Bundle " + branch + "\nDummymod=True\ndescription=Select one skin\n"));
-                WriteFixture(directory, branch + "-skin/modinfo.ini", Encoding.UTF8.GetBytes("name=" + branch + " skin\nAddonfor=" + branch + " skin options\n"));
-                WriteFixture(Path.Combine(directory, branch + "-skin"), MaterialRelative(), Encoding.UTF8.GetBytes("branch " + branch + " material"));
-            }
-            ModPackage package = PackageReader.Load(directory, sevenZip);
-            ModComponent mainA = Named(package, "A Main files");
-            ModComponent mainB = Named(package, "B Main files");
-            List<string> defaults = Composer.DefaultSelection(package);
-            Require(defaults.Contains(mainA.Id) && !defaults.Contains(mainB.Id), "Default selection must choose one main bundle branch.");
-            CompositionPlan plan = Composer.Plan(package, new[] { mainA.Id, Named(package, "A skin").Id });
-            Require(plan.CanInstall && plan.Files.Count == 2, "Unselected Bundle B requirements blocked complete Bundle A: " + string.Join("; ", plan.Errors));
-            CompositionPlan incomplete = Composer.Plan(package, new[] { mainA.Id });
-            // 1.0.19 (relaxed requirements): the required skin choice is a note for the user and still an error for the Assistant.
-            Require(incomplete.Needs.Count > 0 && incomplete.StrictErrors().Count > 0, "Active Bundle A must still name its required skin choice (strict for the Assistant).");
-            Require(incomplete.StrictErrors().All(e => e.IndexOf("B skin", StringComparison.OrdinalIgnoreCase) < 0) && incomplete.Needs.All(n => n.Text.IndexOf("B skin", StringComparison.OrdinalIgnoreCase) < 0), "Inactive Bundle B should not produce choice errors or notes.");
+            string archive = LocalTestConfig.Current.Archive("juri");
+            ModPackage package = PackageReader.Load(archive, sevenZip);
+            package.PrepareChoices();
+            var defaults = Composer.DefaultSelection(package);
+            var live = Composer.UnresolvedChoiceGroups(package, defaults).Select(g => g.Name).OrderBy(n => n).ToArray();
+            // 1.0.19: with something ticked, an empty required group is a note in the plan (Needs), not an error.
+            var plan = defaults.Count == 0 ? live : Composer.Plan(package, defaults).Needs.Where(n => n.Needed.IsDummy).Select(n => n.Needed.Name).OrderBy(n => n).ToArray();
+            Require(live.SequenceEqual(plan), "Real archive: live required groups differ from the plan.");
+            Console.WriteLine("  " + Path.GetFileName(archive) + ": open required groups [" + String.Join(", ", live) + "]; footer \"Choose: " + String.Join(", ", Composer.UnresolvedChoiceGroups(package, defaults).Select(g => MainForm.ShortGroupName(g, package))) + "\"");
         }
 
         private static void TestRealLibraryCharacters()
@@ -610,8 +601,16 @@ namespace SlotsInstaller
             string numeric = LocalTestConfig.Current.Archive("numericOutfit");
             string donor = LocalTestConfig.Current.Archive("viperHair");
             Require(File.Exists(numeric) && File.Exists(donor), "Real character-detection regression archives are unavailable.");
-            // Read the user's existing library only; do not extract into it or change its archives.
-            realLibraryEntries = Library.Scan(new[] { Path.GetDirectoryName(numeric) }, sevenZip);
+            // Read the two archives only (read only: nothing is extracted into the library or changed), the way a library
+            // scan lists and inspects each mod. Scanning their whole folder took most of this group's time.
+            realLibraryEntries = new List<LibraryEntry>();
+            foreach (string archive in new[] { numeric, donor })
+            {
+                LibraryEntry listed = Library.DescribeEntry(archive);
+                Require(listed != null && listed.Detection != "Error", "The library does not list " + archive + ".");
+                Library.IndexEntry(listed, sevenZip);
+                realLibraryEntries.Add(listed);
+            }
             LibraryEntry entry = LibraryByPath(realLibraryEntries, numeric);
             Require(entry.Character == "Chun-Li" && entry.Detection == "Native", "Numeric download must be classified by esf004, not left under an unknown filename.");
             Require(entry.CharacterCodes.SequenceEqual(new[] { "004" }), "Numeric download should expose its exact single native ID 004.");

@@ -275,16 +275,17 @@ namespace SlotsInstaller
                     Require(log.Contains("Update check: refused manager-v" + After), "the refusal was not logged");
                     report.Add("  approved: Slotsloader " + off.Loader.Version + " (" + off.Loader.Asset + "); manager " + off.Manager.Version + " (" + off.Manager.DigestSource + "); refused: " + String.Join("; ", off.Refused));
                 });
-                check("1.0.19 the list read: unknown packages (native_core) and keys ignored and logged; a list that is malformed, has no slots_loader entry, names another source or is over 64 KB is refused and logged, and a missing list or an offline server is a reason, never an exception; the Manager part still works", delegate
+                check("1.0.19 the list read: unknown packages (native_core) and keys ignored and logged; a list the parser refuses (no slots_loader entry; the malformed lists are the loader group's) or one over 64 KB is refused and logged, and a missing list or an offline server is a reason, never an exception; the Manager part still works", delegate
                 {
                     string why;
                     server.Routes["/dependencies.json"] = new LoaderChecks.LoopbackServer.Route { Body = B(LoaderChecks.ListJson("1.9.8", "v1.9.8", "SF6_SlotsLoader_v1.9.8.zip", l198.Length, Sha(l198).ToLowerInvariant(),
                         ",\"native_core\":{\"name\":\"SF6 Native Core\",\"version\":\"0.9.14\",\"release\":\"v1.37.0\",\"file\":\"SF6_NativeCore_0.9.14.zip\",\"size\":684069,\"sha256\":\"" + new string('b', 64) + "\"},\"something_new\":{\"x\":[1]}", ",\"updated\":\"2026-11-16\"")) };
                     ReleaseOffer read = UpdateCheck.ReadList(out why);
                     Require(read != null && read.Version == "1.9.8" && read.Sha256 == Sha(l198) && why == "" && File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("not used here: native_core, something_new"), "unknown packages: " + why);
+                    // 1.0.21: the malformed lists themselves are the loader group's (20 lists through the same DependencyList.Parse);
+                    // here one refused list for the log and the Skipped line, and the 64 KB cap of the read.
                     var bad = new Dictionary<string, string> {
-                        { "malformed", "{\"format\":1,\"packages\":" }, { "no slots_loader", "{\"format\":1,\"source\":\"Wael3rd/SF6-ModSuite\",\"packages\":{\"native_core\":{}}}" },
-                        { "another source", LoaderChecks.ListJson("1.9.8", "v1.9.8", "a.zip", 5, Sha(l198), "", "").Replace("Wael3rd/SF6-ModSuite", "ZZtaii/slotsloader-manager") },
+                        { "no slots_loader", "{\"format\":1,\"source\":\"Wael3rd/SF6-ModSuite\",\"packages\":{\"native_core\":{}}}" },
                         { "too big", LoaderChecks.ListJson("1.9.8", "v1.9.8", "a.zip", 5, Sha(l198), "", ",\"pad\":\"" + new string('x', 70000) + "\"") } };
                     foreach (var b in bad)
                     {
@@ -297,9 +298,9 @@ namespace SlotsInstaller
                     server.Routes.Remove("/dependencies.json");
                     UpdateCheckResult missing = UpdateCheck.Check(false);
                     Require(missing.Ok && missing.Loader == null && missing.ListReason.StartsWith("HTTP 404"), "missing list: " + missing.ListReason);
-                    UpdateCheck.ListUrl = "http://127.0.0.1:" + LoaderChecks.LoopbackServer.ClosedPort() + "/dependencies.json";
+                    UpdateCheck.ListUrl = "http://127.0.0.1:" + LoaderChecks.LoopbackServer.RefusedPort() + "/dependencies.json";
                     Require(UpdateCheck.ReadList(out why) == null && why == "could not connect to 127.0.0.1", "offline list: " + why);
-                    UpdateCheck.ListUrl = server.Base + "/dependencies.json";
+                    UpdateCheck.ListUrl = server.Base + "/dependencies.json"; SafeHttp.RefusedLoopbackPort = 0;
                     Approve(server, "1.9.8", l198);
                 });
                 check("1.0.19 what is offered: the approved Slotsloader over a different recorded version (newer approved: an update, whoever installed the loader; older approved: going back, only over a loader the Manager installed from an approved zip, never over one the user installed); nothing when equal; the Manager only when newer than the running build; the install link: the approved entry, else the pin", delegate
@@ -342,10 +343,10 @@ namespace SlotsInstaller
                     UpdateCheck.ApiUrl = server.Base + "/missing";
                     UpdateCheckResult r404 = UpdateCheck.Check(false);
                     Require(!r404.Ok && r404.Status == 404 && r404.Reason.StartsWith("HTTP 404") && r404.Loader != null, "404: " + r404.Reason + " (the approved list is still read)");
-                    UpdateCheck.ApiUrl = "http://127.0.0.1:" + LoaderChecks.LoopbackServer.ClosedPort() + "/releases";
+                    UpdateCheck.ApiUrl = "http://127.0.0.1:" + LoaderChecks.LoopbackServer.RefusedPort() + "/releases";
                     UpdateCheckResult offline = UpdateCheck.Check(false);
                     Require(!offline.Ok && offline.Reason == "could not connect to 127.0.0.1", "offline: " + offline.Reason);
-                    UpdateCheck.ApiUrl = server.Base + "/releases";
+                    UpdateCheck.ApiUrl = server.Base + "/releases"; SafeHttp.RefusedLoopbackPort = 0;
                     var s = new UpdateSettings { LastCheckUtc = DateTime.UtcNow.AddHours(-2).ToString("o") };
                     Require(!s.Due(DateTime.UtcNow), "checked 2 h ago is not due");
                     s.LastCheckUtc = DateTime.UtcNow.AddHours(-25).ToString("o");
@@ -364,7 +365,7 @@ namespace SlotsInstaller
                 check("Manager self-update on a temporary copy of the app folder: stage (Manager exe, config and README, FileVersion = tag), apply (previous kept, running exes renamed to .old, new files in, 1.0.13: the CLI, CLI.md and VALIDATION.txt of an older install removed), .old cleanup and log at the next start, update-rollback, a failure mid-copy restores every file, a missing folder is refused; nothing else in Data changes", delegate { SelfUpdate(root); });
                 check("1.0.11 bundled 7-Zip in a self-update: the 7-Zip folder is accepted only complete (7z.exe, 7z.dll, License.txt); apply replaces the app's copy (old files as .old, kept in previous); a failure after it puts the old copy back; .old removed at the next start; rollback restores it; a release without 7-Zip leaves the app's copy alone", delegate { SelfUpdateSevenZip(root); });
                 check("1.0.11 which 7-Zip runs: an existing Settings path first, else an installed 7-Zip (with its 7z.dll), else the Manager's own copy beside the exe; with none usable (or only one too old for RAR5) the first RAR/7Z read fetches the pinned 7-Zip (a failed fetch says why in RAR/7Z errors and Settings and waits before trying again; a good one replaces a broken 7-Zip folder and a real 7Z archive is listed through it); an installed 7-Zip older than the Manager's copy gives way to it (same, newer or unknown version keeps its place)", delegate { SevenZipChoice(root, server); });
-                check("window: toasts for both products (bottom-right above the status strip, stacked), keyboard reachable with accessible names, no tooltips; Skip this version is remembered; ✕ comes back at the next check; a 404 background check is silent and logged; Settings → Updates reports up to date and the 404 reason", delegate { Window(root, server, catalogue, l197, l198); });
+                if (TestTier.Full) check("window: toasts for both products (bottom-right above the status strip, stacked), keyboard reachable with accessible names, no tooltips; Skip this version is remembered; ✕ comes back at the next check; a 404 background check is silent and logged; Settings → Updates reports up to date and the 404 reason", delegate { Window(root, server, catalogue, l197, l198); });
                 check("CLI update-check prints both products with source, asset, size and digest", delegate
                 {
                     string text = ReplaceChecks.Cli("update-check", "--include-prereleases");
@@ -374,7 +375,7 @@ namespace SlotsInstaller
             }
             finally
             {
-                UpdateCheck.ApiUrl = previousApi; UpdateCheck.ListUrl = UpdateCheck.DefaultListUrl; DependencyList.TestDownloadBase = null; SafeHttp.AllowLoopbackHttp = previousHttp; UpdateCheck.PinOverride = null; MainForm.AppDirOverride = null; MainForm.NoRelaunch = false; AppUpdater.FailAfterCopies = -1;
+                UpdateCheck.ApiUrl = previousApi; UpdateCheck.ListUrl = UpdateCheck.DefaultListUrl; DependencyList.TestDownloadBase = null; SafeHttp.AllowLoopbackHttp = previousHttp; SafeHttp.RefusedLoopbackPort = 0; UpdateCheck.PinOverride = null; MainForm.AppDirOverride = null; MainForm.NoRelaunch = false; AppUpdater.FailAfterCopies = -1;
                 AppUpdater.FailAfterSevenZip = false; SevenZipTool.AppDirOverride = null; SevenZipTool.InstalledOverride = null; SevenZipTool.ClearCache();
                 SevenZipTool.Pin = SevenZipTool.Supported; SevenZipTool.DownloadDirOverride = null; SevenZipTool.ResetFetch();
                 if (savedSettings != null) File.WriteAllBytes(settingsFile, savedSettings); else if (File.Exists(settingsFile)) File.Delete(settingsFile);
@@ -685,12 +686,12 @@ namespace SlotsInstaller
                     reads = form.ListReadsRun; form.RunListRead(); wait(() => form.ListReadsRun > reads, "the list read (equal)");
                     Require(form.UpdateToast(UpdateProducts.Loader) == null && UpdateSettings.Load().ApprovedLoader().Version == "1.9.8", "equal to the approved version: no offer");
                     // At every start (the 24 h check not due): the list alone, quietly; offline keeps the last approval.
-                    UpdateCheck.ListUrl = "http://127.0.0.1:" + LoaderChecks.LoopbackServer.ClosedPort() + "/dependencies.json";
+                    UpdateCheck.ListUrl = "http://127.0.0.1:" + LoaderChecks.LoopbackServer.RefusedPort() + "/dependencies.json";
                     UpdateSettings started = UpdateSettings.Load(); started.LastCheckUtc = DateTime.UtcNow.ToString("o"); started.AutoCheck = true; started.Save();
                     int startRuns = form.UpdateChecksRun; reads = form.ListReadsRun; asked.Clear();
                     int previousDelay = MainForm.UpdateStartDelayMs; MainForm.UpdateStartDelayMs = 1;
                     try { typeof(MainForm).GetMethod("StartUpdates", Any).Invoke(form, null); wait(() => form.ListReadsRun > reads, "the list read at start"); }
-                    finally { MainForm.UpdateStartDelayMs = previousDelay; UpdateCheck.ListUrl = server.Base + "/dependencies.json"; }
+                    finally { MainForm.UpdateStartDelayMs = previousDelay; UpdateCheck.ListUrl = server.Base + "/dependencies.json"; SafeHttp.RefusedLoopbackPort = 0; }
                     Require(form.UpdateChecksRun == startRuns && asked.Count == 0 && UpdateSettings.Load().ApprovedLoader().Version == "1.9.8" && File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("the approved Slotsloader list could not be read: could not connect to 127.0.0.1"),
                         "at start: the list alone, quiet when offline, the last approval kept");
                     // Skip this version / dismiss on the Manager toast.
@@ -845,6 +846,7 @@ namespace SlotsInstaller
         private static IEnumerable<Control> AllControls(Control root) { foreach (Control c in root.Controls) { yield return c; foreach (Control d in AllControls(c)) yield return d; } }
         private static void Render(Form form, string file)
         {
+            if (!TestTier.Render) return;   // 1.0.21: review PNGs only in a full run or with SLOTSLOADER_RENDER=1
             using (var b = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
             {
                 form.DrawToBitmap(b, new Rectangle(Point.Empty, b.Size));

@@ -41,4 +41,4 @@ Portrait priority is a stable partition after the existing sort. It counts the c
 
 Affected suites cover generated archives, options/CLI/Assistant, queue, replacement lifecycle/recovery, source reload, presets, slots/variants, filters and hidden UI renders. Real-input filter and bundle checks read source archives and write only generated outputs. The Assistant pack builder now has a UTF-8 BOM so Windows PowerShell and PowerShell 7 generate the same embedded text.
 
-This is source work for a draft PR: no version bump, deployment, release or in-game validation. Run the full `test.ps1 -RealArchives` before a later release package. Measurements do not establish a universal speedup or guarantee the absence of every regression.
+This is source work for a draft PR: no version bump, deployment, release or in-game validation. Run `test.ps1 -Full -RealArchives` before a later release package. Measurements do not establish a universal speedup or guarantee the absence of every regression.

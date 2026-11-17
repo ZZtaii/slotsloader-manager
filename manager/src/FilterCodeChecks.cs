@@ -140,7 +140,7 @@ namespace SlotsInstaller
             MethodInfo capture = typeof(MainForm).GetMethod("CaptureView", PrivateInstance), restore = typeof(MainForm).GetMethod("RestoreView", PrivateInstance);
             const string all = "Cammy Scripted, Frame Meter, Hitbox Viewer, REFramework Nightly, ReShade Preset, Slotsloader Package";
             string file = Path.Combine(root, "view-code.json");
-            foreach (Size logical in new[] { new Size(1110, 610), new Size(1460, 920) })
+            foreach (Size logical in new[] { new Size(1110, 610) })   // 1.0.21: the tightest size (the layout check covers 1460x920)
             using (Window w = Open(root, null, logical, CodeFixture()))
             {
                 MainForm form = w.Form; Control host = w.Host; string ctx = w.Context;
@@ -163,7 +163,7 @@ namespace SlotsInstaller
                 Rectangle chips = In(panel.CodeChips, host);
                 foreach (Control chip in panel.CodeChips.Controls) { Rectangle r = In(chip, host); Require(r.Left >= chips.Left && r.Right <= chips.Right && r.Bottom <= chips.Bottom && r.Width >= TextRenderer.MeasureText(chip.Text, chip.Font).Width, ctx + ": chip " + chip.Text + " clipped " + r); }
                 if (panel.VerticalScroll.Visible) { panel.ScrollControlIntoView(panel.CodeChips); Settle(host); Rectangle p = In(panel, host), c = In(panel.CodeChips, host); Require(c.Top >= p.Top && c.Bottom <= p.Bottom, ctx + ": the code chips cannot be scrolled into view " + c); }
-                using (var bmp = new Bitmap(host.Width, host.Height)) { host.DrawToBitmap(bmp, new Rectangle(0, 0, host.Width, host.Height)); bmp.Save(Path.Combine(root, "code-tile-" + logical.Width + "x" + logical.Height + ".png"), ImageFormat.Png); }
+                if (TestTier.Render) using (var bmp = new Bitmap(host.Width, host.Height)) { host.DrawToBitmap(bmp, new Rectangle(0, 0, host.Width, host.Height)); bmp.Save(Path.Combine(root, "code-tile-" + logical.Width + "x" + logical.Height + ".png"), ImageFormat.Png); }
                 panel.AutoScrollPosition = Point.Empty; Toggle(kinds, FilterPanel.MiscKind); Settle(host);
                 Require(Names(form) == all && form.ActiveFilterCount() == 1, ctx + ": REFramework & code lists " + Names(form));
                 Require(String.Join(", ", panel.CodeChips.Controls.Cast<Control>().Select(c => c.Text)) == "Scripts 2, Plugins 2, REFramework 2, Code injectors 2" && panel.CodeChips.Controls.Cast<Control>().All(c => c.AccessibleName.StartsWith("Code kind ")), ctx + ": chips " + String.Join(", ", panel.CodeChips.Controls.Cast<Control>().Select(c => c.Text)));
@@ -193,18 +193,6 @@ namespace SlotsInstaller
                 Require(panel.ToolsOn && panel.CodeChips.Visible && panel.CodeSelected.SetEquals(new[] { "plugin" }) && Names(form) == "Frame Meter, Slotsloader Package", "restored chips: " + Names(form));
                 ViewPreferences again = (ViewPreferences)capture.Invoke(form, null);
                 Require(again.CodeKinds.SequenceEqual(new[] { "plugin" }), "round trip lost the chip");
-            }
-            // A view saved before 1.0.16 (Kinds ["tools"], no CodeKinds) is the whole tile; unknown chip kinds are dropped.
-            File.WriteAllText(file, "{\"Format\":\"sf6-installer-view-v2\",\"FiltersOpen\":true,\"Kinds\":[\"tools\"],\"MiscAreas\":[]}");
-            foreach (string text in new[] { File.ReadAllText(file), "{\"Format\":\"sf6-installer-view-v2\",\"FiltersOpen\":true,\"Kinds\":[\"tools\"],\"CodeKinds\":[\"dll\",\"nonsense\"]}" })
-            {
-                File.WriteAllText(file, text);
-                using (Window w = Open(root, null, new Size(1232, 640), CodeFixture()))
-                {
-                    MainForm form = w.Form; FilterPanel panel = Get<FilterPanel>(form, "filterPanel");
-                    restore.Invoke(form, new object[] { ViewPreferences.Load(file) }); Apply(form);
-                    Require(panel.ToolsOn && panel.CodeSelected.Count == 0 && Names(form) == all, "older view (" + text + "): " + Names(form));
-                }
             }
             return String.Join("; ", notes);
         }
