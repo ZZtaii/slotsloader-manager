@@ -29,7 +29,8 @@ namespace SlotsInstaller
             Check("options follow MenuPriority (higher first), else plain options before groups, then name",delegate { OptionOrder(Path.Combine(run,"option-order")); },ref failures);
             Check("an option named after the game's main menu is not the mod's main files",delegate { MainMenuName(Path.Combine(run,"main-menu-name")); },ref failures);
             Check("'base' in an option's name does not make it main files",delegate { BaseInName(Path.Combine(run,"base-in-name")); },ref failures);
-            Console.WriteLine("Composition regression checks: "+(9-failures)+" passed, "+failures+" failed.");
+            Check("a pack of base textures outside outfit folders points to Replace original",delegate { SharedTextures(Path.Combine(run,"shared-textures")); },ref failures);
+            Console.WriteLine("Composition regression checks: "+(10-failures)+" passed, "+failures+" failed.");
             return failures;
         }
 
@@ -176,6 +177,25 @@ namespace SlotsInstaller
             ModPackage package=Load(Path.Combine(root,"startup"));
             CompositionPlan plan=Composer.Plan(package,new[]{"training"},true);
             Require(plan.CanInstall,"The TRAINING option alone was rejected: "+Errors(plan));
+        }
+        // 17 Nov 2026 (robhal's base texture packs): textures in esf028/C01 alone say "Install this with Replace original";
+        // textures in an outfit folder (001) keep the old message, and Replace original takes the pack as it is.
+        private static void SharedTextures(string root)
+        {
+            string based=Path.Combine(root,"base");
+            Put(based,"!Mai_C1_OriginalTextureFiles/modinfo.ini","name=!BASE: Mai C1 ORIGINAL TEXTURE FILES\n");
+            Put(based,"!Mai_C1_OriginalTextureFiles/natives/STM/Product/Model/esf/esf028/C01/01/esf028_000_01_Body_ALBD.tex.143230113","albd");
+            Put(based,"!Mai_C1_OriginalTextureFiles/natives/STM/Product/Model/esf/esf028/C01/00/esf028_000_00_FacialBlend_UV.gpbf.2","uv");
+            ModPackage pack=Load(based);
+            CompositionPlan extra=Composer.Plan(pack,Composer.DefaultSelection(pack));
+            Require(!extra.CanInstall && extra.Errors.Contains(Composer.SharedTexturesHint),"Base textures as an extra outfit: "+Errors(extra));
+            Require(Composer.Plan(pack,Composer.DefaultSelection(pack),true).CanInstall,"Base textures as Replace original: "+Errors(Composer.Plan(pack,Composer.DefaultSelection(pack),true)));
+            string retex=Path.Combine(root,"retexture");
+            Put(retex,"modinfo.ini","name=Skin retexture\n"); Put(retex,Texture,"skin");
+            ModPackage plain=Load(retex);
+            CompositionPlan other=Composer.Plan(plain,Composer.DefaultSelection(plain));
+            Require(other.Errors.Any(e=>e.StartsWith("The selection has no outfit mesh")) && !other.Errors.Contains(Composer.SharedTexturesHint),"Textures of an outfit folder: "+Errors(other));
+            Require(!Composer.SharedTexturesOnly(new[]{"natives/stm/product/model/esf/esf028/C01/01/x.mdf2.31","natives/stm/product/model/esf/esf028/C01/01/x.tex.241101895"}),"A material counts as base textures.");
         }
         // 13 Nov 2026 (the user, of "Marisa Base Model - Hair and Clean": "why this mod has highlights for this? its a
         // wrong guess", then "I guess we should remove the base as a main files keyword"): two options with "Base" in
