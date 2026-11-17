@@ -119,10 +119,25 @@ namespace SlotsInstaller
             if (p.Components.Sum(x=>x.Assets.Count)==0) p.Warnings.Add("This mod has no loose natives files, so it can't be an extra outfit.");
             Composer.DropTwinMains(p);
             RootOptionChoices.Add(p); // after original package naming and source option ordering
+            MarkOptionalChoiceGroups(p);
             p.PrepareChoices();
             if (readLayout && BundleLayout.IsStored(p.SourcePath) && File.Exists(p.SourcePath)) BundleLayout.ReadStored(p);   // 1.0.16: RAR/7Z, from the Data folder
             else if (readLayout) BundleLayout.Read(p,r.ZipComment);
             return p;
+        }
+        // 1.0.21: a "Choose one" group whose own text never says optional is a required choice, but when every
+        // option in it is named "(Optional)" the author plainly means one or none ("02 Add-ons" holding only
+        // "Painted Nails (Optional)", from Mod Packager builds before 2026-11-18). Only fills in the author's
+        // intent where nothing set it; a rule from the bundle layout still wins.
+        internal static void MarkOptionalChoiceGroups(ModPackage p)
+        {
+            p.RebuildIndexes();
+            foreach (ModComponent group in p.Components.Where(c => c.IsChoiceGroup && c.AuthorChoiceRequired == null && (c.BundleRule == null || c.BundleRule == "Original")))
+            {
+                var options = p.Components.Where(c => c.ParentId != null && String.Equals(c.ParentId, group.Id, StringComparison.OrdinalIgnoreCase) && !c.IsDummy).ToList();
+                if (options.Count > 0 && options.All(o => Regex.IsMatch(o.Name ?? "", @"\boptional\b", RegexOptions.IgnoreCase)))
+                    group.AuthorChoiceRequired = false;
+            }
         }
         internal static ModPackage AuthorPackage(string path)
         {
