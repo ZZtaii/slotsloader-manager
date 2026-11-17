@@ -4,19 +4,19 @@
   "packages": {
     "slots_loader": {
       "name": "SF6 Slots Loader",
-      "version": "1.27.4",
-      "release": "v1.38.0",
-      "file": "SF6_SlotsLoader_v1.27.4.zip",
-      "size": 5140963,
-      "sha256": "8b224d2a1b30b68c1aafe840d82da4e7ddb22296c6560176e50be7ec34fba73d"
+      "version": "1.27.5",
+      "release": "v1.40.0",
+      "file": "SF6_SlotsLoader_v1.27.5.zip",
+      "size": 5143190,
+      "sha256": "14dcbd0418a075967688b2f1a67e9ac98f557e546714d49658e334a61202255b"
     },
     "native_core": {
       "name": "SF6 Native Core",
-      "version": "0.9.16",
-      "release": "v1.38.0",
-      "file": "SF6_NativeCore_0.9.16.zip",
-      "size": 691918,
-      "sha256": "bab7211ab6fff09db8ff5432fb740f45bfd712620f299d65f7de8350f57887fe"
+      "version": "0.9.18",
+      "release": "v1.40.0",
+      "file": "SF6_NativeCore_0.9.18.zip",
+      "size": 691919,
+      "sha256": "515d6fb3d573c98fc35bf8eda0d4a926cd7e3f35ca17f4c29677bb56d9f21067"
     }
   }
 }
