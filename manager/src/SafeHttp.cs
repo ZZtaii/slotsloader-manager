@@ -24,6 +24,9 @@ namespace SlotsInstaller
     internal static class SafeHttp
     {
         internal static bool AllowLoopbackHttp;   // tests only
+        // Tests only (1.0.21): a 127.0.0.1 port that fails at once as a refused connection, mapped by Reason like a real
+        // one (a real refused loopback port costs about 2 s per attempt on Windows). 0, the default, changes nothing.
+        internal static int RefusedLoopbackPort;
         internal static int TimeoutMs = 30000;
         internal const int MaxRedirects = 5;
 
@@ -115,7 +118,11 @@ namespace SlotsInstaller
                 HttpWebResponse response;
                 using (token.Register(request.Abort))
                 {
-                    try { response = (HttpWebResponse)request.GetResponse(); }
+                    try
+                    {
+                        if (RefusedLoopbackPort != 0 && uri.IsLoopback && uri.Port == RefusedLoopbackPort) throw new WebException("Unable to connect to the remote server", WebExceptionStatus.ConnectFailure);
+                        response = (HttpWebResponse)request.GetResponse();
+                    }
                     catch (WebException ex)
                     {
                         token.ThrowIfCancellationRequested();

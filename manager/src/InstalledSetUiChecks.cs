@@ -213,7 +213,8 @@ namespace SlotsInstaller
         private static T Get<T>(object o,string name) {return (T)o.GetType().GetField(name,PrivateInstance).GetValue(o);}
         private static void Set(object o,string name,object value) {o.GetType().GetField(name,PrivateInstance).SetValue(o,value);}
         private static object Call(object o,string name,params object[] args) {return o.GetType().GetMethod(name,PrivateInstance).Invoke(o,args);}
-        private static void Save(Control c,string path,string name) {using(var bitmap=new Bitmap(c.Width,c.Height)){c.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(path,name+"-"+c.DeviceDpi+".png"),ImageFormat.Png);}}
+        // Review PNGs only (nothing reads them back): test.ps1 -Full or SLOTSLOADER_RENDER=1.
+        private static void Save(Control c,string path,string name) {if(!TestTier.Render) return;using(var bitmap=new Bitmap(c.Width,c.Height)){c.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(path,name+"-"+c.DeviceDpi+".png"),ImageFormat.Png);}}
         private static void Require(bool value,string message) {if(!value)throw new InvalidOperationException(message);}
     }
 }

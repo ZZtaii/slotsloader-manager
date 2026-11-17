@@ -1,7 +1,9 @@
-# -Only runs just the named checks (any of those below, real ones included).
+# A plain run is the lean set: core paths and data safety, no review PNGs (a few minutes). -Full adds every check's
+# full-only cases and its PNGs; the release gate is -Full -RealArchives. -Only runs just the named checks (any of those below,
+# real ones included), lean unless -Full is given too.
 # Real-archive checks read your folders from -LocalConfig (default tests.local.json beside this script; untracked,
 # see tests.local.example.json): GameRoot, Libraries, FluffyRoots, Archives.juri and so on. Nothing personal is in the source.
-param([string]$OutputDirectory = '', [switch]$RealArchives, [string[]]$Only, [string]$LocalConfig = '')
+param([string]$OutputDirectory = '', [switch]$RealArchives, [switch]$Full, [string[]]$Only, [string]$LocalConfig = '')
 $ErrorActionPreference = 'Stop'
 $testProject = Split-Path -Parent $PSCommandPath
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $testProject ('out\tests-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
@@ -13,6 +15,7 @@ $testExe = Join-Path $OutputDirectory 'Slotsloader Manager.exe'
 $testFixtures = Join-Path $OutputDirectory 'fixtures'
 if (-not $LocalConfig) { $LocalConfig = Join-Path $testProject 'tests.local.json' }
 $env:SLOTSLOADER_TEST_CONFIG = $LocalConfig; $env:SLOTSLOADER_PROJECT = $testProject; $env:SLOTSLOADER_WORKSPACE = $testWorkspace; $env:SLOTSLOADER_NO_DETECT = '1'
+$env:SLOTSLOADER_TEST_FULL = if ($Full) { '1' } else { '' }
 $local = if (Test-Path -LiteralPath $LocalConfig) { Get-Content -LiteralPath $LocalConfig -Raw | ConvertFrom-Json } else { $null }
 $realGame = if ($local) { $local.GameRoot } else { '<set GameRoot in tests.local.json>' }
 $realJuri = if ($local -and $local.Archives.juri) { $local.Archives.juri } else { '<set Archives.juri in tests.local.json>' }
@@ -22,10 +25,10 @@ New-Item -ItemType Directory -Path (Join-Path $OutputDirectory 'Data') -Force | 
 @{ GameRoot = (Join-Path $testFixtures 'game'); Libraries = @(); SevenZipPath = 'C:\Program Files\7-Zip\7z.exe' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory 'Data\settings.json') -Encoding UTF8
 $testCases = @(
     @{ Name='generated'; Arguments=@('--self-test-extra', ('"' + $testFixtures + '"')) },
+    @{ Name='backend'; Arguments=@('--self-test', ('"' + $testFixtures + '"'), 'generated') },
     @{ Name='outfit-sets'; Arguments=@('--set-check', ('"' + $testFixtures + '"')) },
     @{ Name='outfit-set-ui'; Arguments=@('--set-ui-check', ('"' + $testFixtures + '"')) },
     @{ Name='layout'; Arguments=@('--layout-check') },
-    @{ Name='smoke'; Arguments=@('--smoke-ui') },
     @{ Name='fields'; Arguments=@('--field-check', ('"' + (Join-Path $OutputDirectory 'field-check') + '"')) },
     @{ Name='ui-polish'; Arguments=@('--polish-check', ('"' + $testFixtures + '"')) },
     @{ Name='assistant'; Arguments=@('--assistant-check', ('"' + $testFixtures + '"')) },
@@ -45,14 +48,12 @@ $testCases = @(
 )
 $realCases = @(
     @{Name='real-backend'; Arguments=@('--self-test', ('"' + $testFixtures + '"'))},
-    @{Name='bundle-ui'; Arguments=@('--exercise-ui', ('"' + $realJuri + '"'))},
     @{Name='bundle-layout'; Arguments=@('--layout-check', ('"' + $realJuri + '"'))},
     @{Name='replace-real'; Arguments=@('--replace-real-check', ('"' + (Join-Path $OutputDirectory 'replace-real') + '"'))},
     @{Name='filter-real'; Arguments=@('--filter-real-check', ('"' + (Join-Path $OutputDirectory 'filter-real') + '"'), ('"' + $realGame + '"'))},
     @{Name='loader-real'; Arguments=@('--loader-real-check', ('"' + (Join-Path $OutputDirectory 'loader-real') + '"'))},
     @{Name='convert-real'; Arguments=@('--convert-real-check', ('"' + (Join-Path $OutputDirectory 'convert-real') + '"'), ('"' + $realRar + '"'))},
-    @{Name='history-real'; Arguments=@('--history-real-check', ('"' + (Join-Path $OutputDirectory 'history-real') + '"'), ('"' + $realGame + '"'))},
-    @{Name='bundle-polish'; Arguments=@('--polish-check', ('"' + $testFixtures + '"'), ('"' + $realJuri + '"'))}
+    @{Name='history-real'; Arguments=@('--history-real-check', ('"' + (Join-Path $OutputDirectory 'history-real') + '"'), ('"' + $realGame + '"'))}
 )
 if ($Only) {
     $allCases = $testCases + $realCases
@@ -64,9 +65,11 @@ if ($Only) {
     if ($RealArchives -and -not $local) { throw ('-RealArchives needs ' + $LocalConfig + ': copy tests.local.example.json and fill in your folders.') }
     if ($RealArchives) { $testCases += $realCases }
 }
+$runClock = [Diagnostics.Stopwatch]::StartNew()
 foreach ($testCase in $testCases) {
+    $caseClock = [Diagnostics.Stopwatch]::StartNew()
     $testProcess = Start-Process -FilePath $testExe -ArgumentList $testCase.Arguments -WindowStyle $(if ($testCase.Style) { $testCase.Style } else { 'Hidden' }) -Wait -PassThru -RedirectStandardOutput (Join-Path $OutputDirectory ($testCase.Name + '-stdout.txt')) -RedirectStandardError (Join-Path $OutputDirectory ($testCase.Name + '-stderr.txt'))
-    Write-Output ($testCase.Name + ' exit: ' + $testProcess.ExitCode)
+    Write-Output ($testCase.Name + ' exit: ' + $testProcess.ExitCode + ' (' + [Math]::Round($caseClock.Elapsed.TotalSeconds, 1) + ' s)')
     if ($testProcess.ExitCode -ne 0) { throw ('Check failed: ' + $testCase.Name + '. Read reports and Data/log.txt in ' + $OutputDirectory) }
 }
-Write-Output ('All requested checks passed. Reports and generated fixtures: ' + $OutputDirectory)
+Write-Output ('All requested checks passed (' + $(if ($Full) { 'full' } else { 'lean' }) + ', ' + [Math]::Round($runClock.Elapsed.TotalSeconds) + ' s). Reports and generated fixtures: ' + $OutputDirectory)

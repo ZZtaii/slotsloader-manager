@@ -308,6 +308,7 @@ namespace SlotsInstaller
         private static void Render(MainForm form, string file)
         {
             form.PerformLayout(); Application.DoEvents();
+            if (!TestTier.Render) return;   // 1.0.21: review PNGs only in a full run or with SLOTSLOADER_RENDER=1
             using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(file, ImageFormat.Png); }
         }
         private static void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }

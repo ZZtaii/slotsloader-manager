@@ -87,7 +87,7 @@ else {
         $validation += ("  7-Zip\{0}, {1} bytes, SHA-256 {2}" -f $f, (Get-Item -LiteralPath $to).Length, (Get-Sha256 $to))
     }
 }
-if ($TestReport) { $validation += ''; $validation += 'Tests:'; $validation += Get-Content -LiteralPath $TestReport } else { $validation += 'Tests: none attached (run test.ps1 -RealArchives and pass -TestReport before publishing).' }
+if ($TestReport) { $validation += ''; $validation += 'Tests:'; $validation += Get-Content -LiteralPath $TestReport } else { $validation += 'Tests: none attached (run test.ps1 -Full -RealArchives and pass -TestReport before publishing).' }
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'VALIDATION.txt'), (($validation -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
 
 # Entries with forward slashes, the app files at the root, the loader under Slotsloader/ and 7-Zip under 7-Zip/.

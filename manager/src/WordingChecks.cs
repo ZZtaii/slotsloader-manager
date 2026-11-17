@@ -52,8 +52,8 @@ namespace SlotsInstaller
                     Require(scanned > 500 && found.Count == 0, "old spelling: " + String.Join(" | ", found));
                 });
                 check("CLI: --help has no old name and lists manager-status/-uninstall/-restore; fluffy-* still run as aliases (same output); manager-status output is clean", delegate { CommandLineText(game); });
-                check("Assistant: system prompt + knowledge pack, every tool definition, and get_app_status / list_game_mods / list_history results with an external manager install and preset present", delegate { Assistant(config); });
-                check("window: every page's texts (Mod library, Installed with the external manager's row selected and with the Installed type filter, both Settings tabs, History), menus and combo items while the external manager runs", delegate { Window(config, root); });
+                if (TestTier.Full) check("Assistant: system prompt + knowledge pack, every tool definition, and get_app_status / list_game_mods / list_history results with an external manager install and preset present", delegate { Assistant(config); });
+                if (TestTier.Full) check("window: every page's texts (Mod library, Installed with the external manager's row selected and with the Installed type filter, both Settings tabs, History), menus and combo items while the external manager runs", delegate { Window(config, root); });
             }
             catch (Exception ex) { failures++; report.Add("FAIL setup: " + ex); }
             finally { GameProcesses.Probe = previousProbe; }

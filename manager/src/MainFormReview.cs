@@ -161,12 +161,16 @@ namespace SlotsInstaller
         // reviewGeneration and schedules a background run after a short pause. One run at a time; a
         // finished run applies only when its generation is still current, otherwise the latest request
         // starts. The app-wide busy state is never set, so the window stays usable.
-        internal const int ReviewDelay = 300;
+        // 1.0.21: the two delays are fields so the replace-ui checks can shorten them (and put these values back around
+        // the checks that test the delay itself); the app never changes them.
+        internal const int DefaultReviewDelay = 300, DefaultBrowseReviewDelay = 900;
+        internal static int ReviewDelay = DefaultReviewDelay;
         // 1.0.12 (the user: browse first, check later): the health check of a mod just opened waits until browsing
         // settles. Option previews read meanwhile push it back (PostponeReview); pointing at Install or pressing Space
         // starts it at once (StartReviewNow). While it runs the footer says nothing new; only a check still running after
         // ReviewSlowHint shows "Checking…", without stage or percentage.
-        internal const int BrowseReviewDelay = 900, ReviewSlowHint = 1200;
+        internal static int BrowseReviewDelay = DefaultBrowseReviewDelay;
+        internal const int ReviewSlowHint = 1200;
         internal static int ReviewTestDelay;
         private System.Windows.Forms.Timer reviewTimer, reviewSlowTimer;
         private int reviewGeneration, appliedGeneration = -1, reviewDue;

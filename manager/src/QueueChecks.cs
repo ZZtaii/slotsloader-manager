@@ -54,7 +54,7 @@ namespace SlotsInstaller
                     using (var ui = new WindowsFormsSynchronizationContext())
                     {
                         SynchronizationContext.SetSynchronizationContext(ui);
-                        check("library window (1.0.6): Name · File switch and Ctrl+Shift+N, Deep search box, filter change scrolls to the top, Ctrl+A / several rows open the queue, queue install then delete, Installed Refresh button; renders", delegate { Window(root); });
+                        if (TestTier.Full) check("library window (1.0.6): Name · File switch and Ctrl+Shift+N, Deep search box, filter change scrolls to the top, Ctrl+A / several rows open the queue, queue install then delete, Installed Refresh button; renders", delegate { Window(root); });
                     }
                 }
                 finally
@@ -683,7 +683,7 @@ namespace SlotsInstaller
             {
                 form.ShowInTaskbar = false; form.Opacity = 0; form.StartPosition = FormStartPosition.Manual; form.Location = new Point(0, 0); form.Show(); Application.DoEvents();
                 Require(form.Target != null && form.Target.Name == "Goth Slot", "picker selection: " + (form.Target == null ? "none" : form.Target.Name));
-                using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height)); bitmap.Save(Path.Combine(root, "add-to-outfit-window.png"), ImageFormat.Png); }
+                if (TestTier.Render) using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height)); bitmap.Save(Path.Combine(root, "add-to-outfit-window.png"), ImageFormat.Png); }
                 form.Close();
             }
         }
@@ -903,6 +903,7 @@ namespace SlotsInstaller
         private static void Render(MainForm form, string file)
         {
             form.PerformLayout(); Application.DoEvents();
+            if (!TestTier.Render) return;   // 1.0.21: review PNGs only in a full run or with SLOTSLOADER_RENDER=1
             using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(file, ImageFormat.Png); }
         }
         private static void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }

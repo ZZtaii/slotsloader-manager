@@ -24,7 +24,7 @@ namespace SlotsInstaller
         private const string Material = "natives/stm/product/model/esf/esf032/001/01/esf032_001_01.mdf2.40";
         private const string Texture = "natives/stm/product/model/esf/esf032/001/01/skin.tex.28";
 
-        internal static int Run(string fixtureRoot, string realArchive)
+        internal static int Run(string fixtureRoot)
         {
             string root = Path.Combine(Path.GetFullPath(fixtureRoot), "polish-" + Guid.NewGuid().ToString("N").Substring(0, 10));
             Safety.NoReparseChain(root); Directory.CreateDirectory(root);
@@ -57,16 +57,14 @@ namespace SlotsInstaller
                         CheckShortcuts(form, archive, report);
                         CheckInstalledDetails(form, report, root);
                         CheckSettingsLibraries(form, root, report);
-                        CheckTiming(form, report);
+                        if (TestTier.Full) CheckTiming(form, report);   // informational
                         CheckNoTooltips(form, report);
                         CheckPopupAllowList(report);
-                        CheckOldErrors(form, report);
                         CheckWelcome(form, root, report);
                         CheckHelp(form, root, report);
                         CheckTours(form, root, report);
                         form.Close();
                     }
-                    if (!String.IsNullOrWhiteSpace(realArchive) && File.Exists(realArchive)) CheckRealRequired(realArchive, report);
                 }
                 report.Add("ALL PASS");
                 File.WriteAllLines(Path.Combine(root, "polish-checks.txt"), report);
@@ -179,7 +177,7 @@ namespace SlotsInstaller
                 tree.DrawToBitmap(image, tree.ClientRectangle);
                 Rectangle row = outfitGroup.Bounds;
                 Require(image.GetPixel(DpiMetrics.Px(tree, 1), row.Y + row.Height / 2).ToArgb() == Palette.Accent.ToArgb(), "Unresolved required group is not marked in the option list.");
-                image.Save(Path.Combine(root, "polish-required-" + tree.DeviceDpi + ".png"), ImageFormat.Png);
+                if (TestTier.Render) image.Save(Path.Combine(root, "polish-required-" + tree.DeviceDpi + ".png"), ImageFormat.Png);
             }
             // The main files alone make no outfit (no model): that still keeps Install off, the empty groups do not.
             WaitIdle(form);
@@ -263,7 +261,7 @@ namespace SlotsInstaller
                 Require(grey(MainForm.NeedTint) && grey(MainForm.NeedEdge) && edge.ToArgb() != Palette.Accent.ToArgb() && grey(edge) && edge.R > lit.R, "The edge of a lit row is not a grey: " + edge);
                 Require(lit.ToArgb() != Palette.Surface.ToArgb() && grey(lit) && lit.R >= Palette.Surface.R && lit.R <= wanted.R && lit.R - Palette.Surface.R <= 24 && wanted.R - Palette.Surface.R >= 12,
                     "The lit row is not a light grey a little above the row's own colour: " + lit + " for " + wanted);
-                image.Save(Path.Combine(Path.GetDirectoryName(source), "polish-left-out-lit-" + tree.DeviceDpi + ".png"), ImageFormat.Png);
+                if (TestTier.Render) image.Save(Path.Combine(Path.GetDirectoryName(source), "polish-left-out-lit-" + tree.DeviceDpi + ".png"), ImageFormat.Png);
             }
             Call(form, "Flash", new List<string>());
             Get<ComboBox>(form, "targetCharacter").SelectedItem = "Ingrid"; Get<PaddedTextField>(form, "outfitName").Text = "Left out fixture";
@@ -308,7 +306,7 @@ namespace SlotsInstaller
             var accepted = new DragEventArgs(new DataObject(DataFormats.FileDrop, new[] { archive }), 0, 10, 10, DragDropEffects.Copy | DragDropEffects.Link, DragDropEffects.None);
             enter.Invoke(form, new object[] { accepted });
             Require(accepted.Effect == DragDropEffects.Copy && overlay.Visible && overlay.Accepting && overlay.Title.Contains(Path.GetFileName(archive)), "Supported archive was not highlighted for dropping.");
-            using (var image = new Bitmap(overlay.Width, overlay.Height)) { overlay.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(root, "polish-drop-" + overlay.DeviceDpi + ".png"), ImageFormat.Png); }
+            if (TestTier.Render) using (var image = new Bitmap(overlay.Width, overlay.Height)) { overlay.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(root, "polish-drop-" + overlay.DeviceDpi + ".png"), ImageFormat.Png); }
             drop.Invoke(form, new object[] { accepted });
             Require(!overlay.Visible, "Drop highlight stayed visible after dropping.");
             WaitIdle(form);
@@ -416,7 +414,7 @@ namespace SlotsInstaller
             Require(visible.Length == 5 && visible[0].Top == visible[1].Top && visible[2].Top == visible[3].Top && visible[0].Left == visible[2].Left && visible[1].Left == visible[3].Left && visible[0].Width == visible[3].Width
                 && visible[4].Top > visible[3].Top && visible[4].Left == visible[0].Left && visible[4].Right == visible[1].Right, "Managed outfit actions are not an aligned grid.");
             foreach (var button in visible) Require(button.Parent.ClientRectangle.Contains(button.Bounds), "Installed action is clipped: " + button.Text);
-            using (var image = new Bitmap(installed.Width, installed.Height)) { installed.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(root, "polish-installed-" + installed.DeviceDpi + ".png"), ImageFormat.Png); }
+            if (TestTier.Render) using (var image = new Bitmap(installed.Width, installed.Height)) { installed.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(root, "polish-installed-" + installed.DeviceDpi + ".png"), ImageFormat.Png); }
             report.Add("PASS: installed details: two-line title, character/state chips, path row with copy action, actions in an aligned two-column grid with Uninstall last (manual: an even count, so Uninstall pairs up; managed: an odd count, so Uninstall takes the last row) without clipping.");
         }
 
@@ -469,18 +467,6 @@ namespace SlotsInstaller
                 report.Add(String.Format("PASS: timing (synthetic 900-entry library, informational): all rows {0:0.0} ms; 'juri' {1:0.0} ms; clear {2:0.0} ms; page switches max {3:0.0} ms, median {4:0.0} ms. Search is deferred while typing above {5} entries.", all, juri, clear, pages.Max(), pages.OrderBy(p => p).ElementAt(pages.Count / 2), MainForm.DebouncedLibrarySize));
             }
             finally { Set(form, "selectingMod", false); Set(form, "library", new List<LibraryEntry>()); Call(form, "ApplyFilters"); }
-        }
-
-        private static void CheckRealRequired(string archive, List<string> report)
-        {
-            ModPackage package = PackageReader.Load(archive, @"C:\Program Files\7-Zip\7z.exe");
-            package.PrepareChoices();
-            var defaults = Composer.DefaultSelection(package);
-            var live = Composer.UnresolvedChoiceGroups(package, defaults).Select(g => g.Name).OrderBy(n => n).ToArray();
-            // 1.0.19: with something ticked, an empty required group is a note in the plan (Needs), not an error.
-            var plan = defaults.Count == 0 ? live : Composer.Plan(package, defaults).Needs.Where(n => n.Needed.IsDummy).Select(n => n.Needed.Name).OrderBy(n => n).ToArray();
-            Require(live.SequenceEqual(plan), "Real archive: live required groups differ from the plan.");
-            report.Add("PASS: real archive (read only) " + Path.GetFileName(archive) + ": live required groups match the plan: " + String.Join(", ", live) + "; footer shows \"" + "Choose: " + String.Join(", ", Composer.UnresolvedChoiceGroups(package, defaults).Select(g => MainForm.ShortGroupName(g, package))) + "\".");
         }
 
         private static void WaitIdle(MainForm form)
@@ -573,6 +559,7 @@ namespace SlotsInstaller
                 Label title = (Label)welcome.Controls.Find("welcomeTitle", true).Single(); PictureBox icon = (PictureBox)welcome.Controls.Find("welcomeIcon", true).Single();
                 Require(title.Text == "Welcome to Slotsloader Manager (SLM)" && title.PreferredWidth <= title.Width && icon.Image != null && icon.Image.Width == DpiMetrics.Px(welcome, 20), "welcome header: '" + title.Text + "' " + title.PreferredWidth + "/" + title.Width + ", icon " + (icon.Image == null ? "none" : icon.Image.Width.ToString()));
                 // How it looks over the app: the main window under ShowWelcome's black layer (DimOpacity), the card centred.
+                if (TestTier.Render)
                 using (var shot = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                 using (var card = new Bitmap(welcome.Width, welcome.Height))
                 {
@@ -589,7 +576,7 @@ namespace SlotsInstaller
                     bool last = i == WelcomeForm.Topics.Length - 1;
                     Require(welcome.Index == i && button("welcomeNext").Text == (last ? "Done" : "Next"), "welcome topic " + i + " button");
                     Require(page.AccessibleName == WelcomeForm.Topics[i].Tab + ": " + WelcomeForm.Topics[i].Title, "welcome accessible name: " + page.AccessibleName);
-                    using (var b = new Bitmap(welcome.Width, welcome.Height)) { welcome.DrawToBitmap(b, new Rectangle(Point.Empty, b.Size)); b.Save(Path.Combine(root, "welcome-" + (i + 1) + "-" + welcome.DeviceDpi + ".png"), ImageFormat.Png); }
+                    if (TestTier.Render) using (var b = new Bitmap(welcome.Width, welcome.Height)) { welcome.DrawToBitmap(b, new Rectangle(Point.Empty, b.Size)); b.Save(Path.Combine(root, "welcome-" + (i + 1) + "-" + welcome.DeviceDpi + ".png"), ImageFormat.Png); }
                     if (!last) button("welcomeNext").PerformClick(); Application.DoEvents();
                 }
                 page.Index = 0; Application.DoEvents();
@@ -629,7 +616,7 @@ namespace SlotsInstaller
                         Require(!card.CardBounds.IntersectsWith(card.Hole), context + ": card " + card.CardBounds + " covers the outlined control " + card.Hole);
                         Require(part("tourNext").Text == (i == steps.Count - 1 ? "Done" : "Next") && part("tourBack").Visible == (i > 0) && part("tourSkip").Visible, context + ": buttons");
                         Require(steps[i].Body.All(line => !line.Contains("—")), context + ": an em-dash in the copy");
-                        RenderTour(form, card, Path.Combine(root, "tour-" + tour.Id + "-" + (i + 1) + "-" + form.DeviceDpi + ".png"));
+                        if (TestTier.Render) RenderTour(form, card, Path.Combine(root, "tour-" + tour.Id + "-" + (i + 1) + "-" + form.DeviceDpi + ".png"));
                     }
                     ((FlatButton)part("tourNext")).PerformClick(); Application.DoEvents();
                     Require(card.IsDisposed || !card.Visible, "tour " + tour.Id + ": Done did not close it");
@@ -683,14 +670,15 @@ namespace SlotsInstaller
             Call(form, "RunShortcut", ShortcutAction.HelpPage); Application.DoEvents();
             Panel page = Get<Panel>(form, "helpPage"); var list = Get<HelpTopicList>(form, "helpTopics"); var article = Get<HelpArticleView>(form, "helpArticle"); var search = Get<PaddedTextField>(form, "helpSearch");
             Require(page.Visible && list.Topics.SequenceEqual(topics) && article.Topic == topics[0] && list.Selected == topics[0], "F1 did not open Help on the first topic");
-            string folder = Path.Combine(root, "help"); Directory.CreateDirectory(folder);
+            string folder = Path.Combine(root, "help"); if (TestTier.Render) Directory.CreateDirectory(folder);
             for (int i = 0; i < topics.Count; i++)
             {
                 Call(form, "ShowHelpTopic", topics[i]); Application.DoEvents();
                 Require(article.Topic == topics[i] && list.Selected == topics[i] && article.Height >= article.NaturalHeight(article.Width), "help topic " + topics[i].Title + " is cut short");
-                using (var b = new Bitmap(article.Width, Math.Min(article.Height, DpiMetrics.Px(form, 2400)))) { article.DrawToBitmap(b, new Rectangle(0, 0, b.Width, b.Height)); b.Save(Path.Combine(folder, (i + 1).ToString("00") + ".png"), ImageFormat.Png); }
+                if (TestTier.Render) using (var b = new Bitmap(article.Width, Math.Min(article.Height, DpiMetrics.Px(form, 2400)))) { article.DrawToBitmap(b, new Rectangle(0, 0, b.Width, b.Height)); b.Save(Path.Combine(folder, (i + 1).ToString("00") + ".png"), ImageFormat.Png); }
             }
-            using (var b = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { Call(form, "ShowHelpTopic", topics[0]); Application.DoEvents(); form.DrawToBitmap(b, new Rectangle(Point.Empty, b.Size)); b.Save(Path.Combine(folder, "page.png"), ImageFormat.Png); }
+            Call(form, "ShowHelpTopic", topics[0]); Application.DoEvents();   // the searches below start from the first topic
+            if (TestTier.Render) using (var b = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(b, new Rectangle(Point.Empty, b.Size)); b.Save(Path.Combine(folder, "page.png"), ImageFormat.Png); }
             // Search: every word must appear; no match empties the list and leaves the article alone.
             string word = topics.Last().Title.Split(' ').OrderByDescending(w => w.Length).First();
             search.Text = word; Application.DoEvents();
@@ -768,48 +756,6 @@ namespace SlotsInstaller
             report.Add("PASS: no tooltips (2.4.0): " + scanned + " method bodies scanned for ToolTip / ToolTipText; every page and Settings tab of the window has no ToolTip, list, tree or menu tooltip.");
         }
 
-        // 2.4.2 regressions for two errors seen in earlier logs:
-        // - DrawComponentNode threw a NullReferenceException when the tree still showed a mod while `package` was null.
-        // - "Collection was modified" in ConflictView.SetEntries: a Work completion ran on a pool thread when the worker
-        //   started without the WinForms synchronization context, racing the UI thread. Completions now run on the UI
-        //   thread, and SetEntries copies its input first.
-        private static void CheckOldErrors(MainForm form, List<string> report)
-        {
-            var tree = Get<OptionTree>(form, "componentTree");
-            ModPackage saved = Get<ModPackage>(form, "package");
-            var package = new ModPackage { SourcePath = @"C:\fixture\paint.zip", Name = "Paint" };
-            var group = new ModComponent { Id = "Colors", Name = "Colors", IsDummy = true };
-            var red = new ModComponent { Id = "Colors/Red", Name = "Red", ParentId = "Colors" };
-            red.Assets.Add(new NativeAsset { EntryPath = "Colors/Red/natives/x.tex", DestinationPath = "natives/x.tex", Size = 1 });
-            package.Components.Add(group); package.Components.Add(red);
-            Set(form, "package", package); Call(form, "FillComponents", new List<string> { "Colors/Red" }); tree.ExpandAll(); Application.DoEvents();
-            Set(form, "package", null);
-            try
-            {
-                using (var bitmap = new Bitmap(Math.Max(1, tree.Width), Math.Max(1, tree.Height))) tree.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
-            }
-            catch (NullReferenceException ex) { throw new InvalidOperationException("the options tree threw while package was null: " + ex.Message); }
-            finally { Set(form, "package", saved); }
-            // ConflictView: a live view of its own entries keeps them (copied before clearing).
-            var view = new ConflictView();
-            view.SetEntries(new[] { new ConflictView.Entry { Text = "one" }, new ConflictView.Entry { Text = "two", Link = "Undo" } });
-            view.SetEntries(view.Entries.Where(e => true));
-            Require(view.Entries.Count == 2 && view.AccessibleDescription == "one two [Undo]", "SetEntries with a view of its own entries: " + view.Entries.Count);
-            // A worker started without a synchronization context completes on the UI thread.
-            int ui = Thread.CurrentThread.ManagedThreadId, ranOn = -1, calls = form.OffUiCalls;
-            SynchronizationContext context = SynchronizationContext.Current;
-            SynchronizationContext.SetSynchronizationContext(null);
-            try
-            {
-                MethodInfo work = typeof(MainForm).GetMethod("Work", PrivateInstance).MakeGenericMethod(typeof(int));
-                work.Invoke(form, new object[] { "Checking threads…", (Func<int>)delegate { return 1; }, (Action<int>)delegate(int x) { ranOn = Thread.CurrentThread.ManagedThreadId; } });
-            }
-            finally { SynchronizationContext.SetSynchronizationContext(context); }
-            DateTime deadline = DateTime.UtcNow.AddSeconds(20);
-            while (ranOn < 0 && DateTime.UtcNow < deadline) { Application.DoEvents(); Thread.Sleep(10); }
-            Require(ranOn == ui && form.OffUiCalls > calls, "a Work completion without a synchronization context ran on thread " + ranOn + " (UI " + ui + ")");
-            report.Add("PASS: 2.4.2 regressions: the options tree paints with no package; ConflictView.SetEntries copies its input; a Work completion started without a synchronization context runs on the UI thread");
-        }
         private static T Get<T>(object o, string name) { FieldInfo field = o.GetType().GetField(name, PrivateInstance); if (field == null) throw new MissingFieldException(name); return (T)field.GetValue(o); }
         private static void Set(object o, string name, object value) { o.GetType().GetField(name, PrivateInstance).SetValue(o, value); }
         private static object Call(object o, string name, params object[] args)

@@ -65,6 +65,7 @@ namespace SlotsInstaller
                 }
             }
             finally { Library.IdentityCacheDirectory = previous; }
+            if (!TestTier.Full) return;   // 1.0.21: the window half (9 package opens) only in a full run
 
             // The real LoadPackage completion overwrites the library row's identity. Keep that UI boundary
             // under test so a future separate assignment cannot undo the shared path rules.

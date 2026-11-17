@@ -566,7 +566,7 @@ For headless checks, install an explicit `WindowsFormsSynchronizationContext` an
 | Assistant | [AssistantPage.cs](../src/AssistantPage.cs) (UI), [AssistantAgent.cs](../src/AssistantAgent.cs) / [AssistantTools.cs](../src/AssistantTools.cs) (engine); checks in [AssistantUiChecks.cs](../src/AssistantUiChecks.cs) and [AssistantChecks.cs](../src/AssistantChecks.cs) |
 | Installed variants (2.5.0) | [MainFormVariants.cs](../src/MainFormVariants.cs): `VariantList`, `BuildVariantsPanel`, `ShowVariants`, `ToggleVariant`; data in [VariantChoices.cs](../src/VariantChoices.cs); checks in [VariantChecks.cs](../src/VariantChecks.cs) |
 | Rendered captures | `ConfigureScreenshot`, `CaptureScreenshot`; command parsing in [Program.cs](../src/Program.cs) |
-| UI regression coverage | [LayoutChecks.cs](../src/LayoutChecks.cs), `MainForm.ExerciseUI`; backend coverage in [IntegrationTests.cs](../src/IntegrationTests.cs) |
+| UI regression coverage | [LayoutChecks.cs](../src/LayoutChecks.cs) (`CheckSelectionRepairs`); backend coverage in [IntegrationTests.cs](../src/IntegrationTests.cs) |
 
 Build and run UI checks from this folder into a separate review output directory. The normal [build.ps1](../build.ps1) uses Windows' C# compiler; the `.exe.config` must stay beside the executable. A typical PowerShell check is:
 
@@ -575,7 +575,6 @@ Build and run UI checks from this folder into a separate review output directory
 $uiCheckExe = Join-Path (Get-Location) 'out\ui-check\Slotsloader Manager.exe'
 $juriArchive = '"<library>\(Goth Juri C1) EA.zip"'
 Start-Process -FilePath $uiCheckExe -ArgumentList '--layout-check', $juriArchive -WindowStyle Hidden -Wait
-Start-Process -FilePath $uiCheckExe -ArgumentList '--exercise-ui', $juriArchive -WindowStyle Hidden -Wait
 ```
 
 `--layout-check` with this real Juri bundle verifies:
@@ -586,6 +585,6 @@ Start-Process -FilePath $uiCheckExe -ArgumentList '--exercise-ui', $juriArchive 
 
 The recorded passing option areas were **601×309**, **799×589**, and **479×279**, with **32-pixel rows/10.5-point font**. The hover branch needs a source with at least four pictured real components; passing geometry alone without such a source does not exercise those image races.
 
-`--exercise-ui` separately protects main/skin/outfit/independent-extra selection, choose-one sibling replacement, unchecked dummy categories, hierarchy, and restored precedence. `--smoke-ui` is only basic construction/rendering coverage. For a pure layout or tooltip change, use these relevant UI checks and visual review; run backend checks when composition, scanning, or installation behavior changes.
+Selection rules (main/skin/outfit/independent extras, choose-one siblings, unchecked dummy categories, hierarchy, restored precedence) are covered by `LayoutChecks.CheckSelectionRepairs` and the `generated` and `real-backend` groups (`--exercise-ui` and `--smoke-ui` were removed on 17 November 2026 as duplicates). Usually `test.ps1 -Only layout,ui-polish` is simpler than these manual runs. For a pure layout or tooltip change, use these relevant UI checks and visual review; run backend checks when composition, scanning, or installation behavior changes.
 
 Reports and logs are written to `Data` beside the executable used for the check. Layout checks read installed-outfit metadata and source images, but do not click Save settings, folder-opening, install, disable, or uninstall actions. Use a separate review build so reports remain separate from the user's installed app settings. Screenshots and passing copying/composition checks do not establish in-game costume compatibility.

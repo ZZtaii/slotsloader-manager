@@ -99,7 +99,7 @@ namespace SlotsInstaller
                 call(form, "ApplyCustomDraft", null);
                 Require(Names(form) == "Cammy Barefoot, Hatless Cammy" && editor.Status.Text == "2 mods listed", "preview: " + Names(form) + " / " + editor.Status.Text);
                 ClosePanelCheck(form, panel);
-                using (var bmp = new Bitmap(panel.Width, panel.Height)) { panel.DrawToBitmap(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(Path.Combine(root, "custom-filter-editor.png"), ImageFormat.Png); }
+                if (TestTier.Render) using (var bmp = new Bitmap(panel.Width, panel.Height)) { panel.DrawToBitmap(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(Path.Combine(root, "custom-filter-editor.png"), ImageFormat.Png); }
                 // Keys in the editor: Tab moves between its fields (INSTALL AS stays), Esc cancels without closing the panel.
                 form.FocusOverride = editor.NameField.Editor;
                 bool replaceBefore = form.IsReplaceMode;

@@ -462,40 +462,6 @@ namespace SlotsInstaller
             Opacity = 0;
         }
 
-        internal static int ExerciseUI(string source)
-        {
-            AppConfig settings = AppConfig.Load();
-            using (MainForm form = new MainForm(settings))
-            {
-                form.CreateControl(); form.componentTree.CreateControl();
-                form.package = PackageReader.Load(source, settings.SevenZipPath);
-                form.FillComponents(Composer.DefaultSelection(form.package));
-                string[] names = { "1) Main files", "Default", "Regular full outfit barefoot", "hide shirt" };
-                List<ModComponent> required = names.Select(name => form.package.Components.First(c => String.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase))).ToList();
-                foreach (ModComponent c in required) form.componentNodes[c.Id].Checked = true;
-                if (required.Any(c => !form.componentNodes[c.Id].Checked)) throw new InvalidOperationException("UI regression: selecting an independent optional component deselected another required component.");
-                if (required.Any(c => !form.selectedOrder.Contains(c.Id))) throw new InvalidOperationException("UI regression: checked components were missing from the composition order.");
-                CompositionPlan combined = Composer.Plan(form.package, form.selectedOrder);
-                if (!combined.CanInstall) throw new InvalidOperationException("UI regression: complete bundle failed: " + String.Join("; ", combined.Errors));
-                ModComponent alternative = form.package.Components.First(c => String.Equals(c.Name, "oily", StringComparison.OrdinalIgnoreCase));
-                form.componentNodes[alternative.Id].Checked = true;
-                if (form.componentNodes[required[1].Id].Checked || !form.componentNodes[alternative.Id].Checked) throw new InvalidOperationException("UI regression: choosing another skin did not replace the previous skin choice.");
-                if (!form.componentNodes[required[0].Id].Checked || !form.componentNodes[required[2].Id].Checked || !form.componentNodes[required[3].Id].Checked) throw new InvalidOperationException("UI regression: choose-one skin affected independent selections.");
-                form.componentNodes[required[1].Id].Checked = true;
-                ModComponent dummy = form.package.Components.First(c => c.IsDummy && c.ParentId == null);
-                form.componentNodes[dummy.Id].Checked = true;
-                if (form.componentNodes[dummy.Id].Checked) throw new InvalidOperationException("UI regression: a dummy group became installable.");
-                if (required.Any(c => !form.componentNodes[c.Id].Checked)) throw new InvalidOperationException("UI regression: dummy group click modified selected files.");
-                if (form.componentNodes[required[0].Id].Parent == null) throw new InvalidOperationException("UI regression: empty root component ID did not resolve as the main component's parent.");
-                List<string> restored = new List<string> { required[0].Id, required[1].Id, required[3].Id, required[2].Id };
-                form.FillComponents(restored);
-                if (!form.selectedOrder.SequenceEqual(restored)) throw new InvalidOperationException("UI regression: restoring a saved outfit changed its component precedence.");
-                Directory.CreateDirectory(AppConfig.DataDir);
-                File.WriteAllText(Path.Combine(AppConfig.DataDir, "ui-exercise.txt"), "PASS: main + skin + outfit + hide-shirt remain selected\r\nPASS: choose-one skin replaces only its sibling\r\nPASS: dummy categories remain unchecked\r\nPASS: Addonfor hierarchy resolves\r\nPASS: saved option precedence restores unchanged\r\nPASS: complete selection plans " + combined.Files.Count + " merged files without game writes\r\n");
-                return 0;
-            }
-        }
-
         private void BuildWindow()
         {
             Panel status = new Panel { Dock = DockStyle.Bottom, Height = 30, BackColor = Palette.Sidebar, Padding = new Padding(18, 0, 18, 0) };

@@ -155,7 +155,8 @@ namespace SlotsInstaller
         private static FieldInfo Field(string name) {return typeof(MainForm).GetField(name,PrivateInstance);}
         private static T Get<T>(MainForm form,string name) {return (T)Field(name).GetValue(form);}
         private static void Show(MainForm form,string page) {typeof(MainForm).GetMethod("ShowPage",PrivateInstance).Invoke(form,new object[]{Get<Panel>(form,page)});Application.DoEvents();}
-        private static void Save(Control control,string directory,string name) {using(var image=new Bitmap(control.Width,control.Height)) {control.DrawToBitmap(image,new Rectangle(Point.Empty,image.Size));image.Save(Path.Combine(directory,name+"-"+control.DeviceDpi+".png"),ImageFormat.Png);}}
+        // Review PNGs only (nothing reads them back): test.ps1 -Full or SLOTSLOADER_RENDER=1.
+        private static void Save(Control control,string directory,string name) {if(!TestTier.Render) return;using(var image=new Bitmap(control.Width,control.Height)) {control.DrawToBitmap(image,new Rectangle(Point.Empty,image.Size));image.Save(Path.Combine(directory,name+"-"+control.DeviceDpi+".png"),ImageFormat.Png);}}
         private static void Require(bool condition,string message) {if(!condition)throw new InvalidOperationException("Text field regression: "+message);}
     }
 }

@@ -251,7 +251,9 @@ namespace SlotsInstaller
                 string fresh = Path.Combine(output, "fresh-index-" + Guid.NewGuid().ToString("N").Substring(0, 6));
                 try
                 {
-                    foreach (string pass in new[] { "fresh", "cached" })
+                    // 1.0.21: the fresh pass (a real full scan into a throwaway index, about 18 s) only in a full run; a lean run
+                    // loads from the index the classify check wrote into this run's Data.
+                    foreach (string pass in TestTier.Full ? new[] { "fresh", "cached" } : new[] { "cached" })
                     {
                         if (pass == "fresh") Library.IdentityCacheDirectory = fresh;
                         int misses = Library.CacheMisses; var clock = Stopwatch.StartNew();
@@ -274,7 +276,8 @@ namespace SlotsInstaller
                 Require(panel.Grid.PortraitCount >= Characters.ByCode.Count, "portraits did not arrive in the grid: " + panel.Grid.PortraitCount);
                 Require(panel.Kinds.ItemCount == 5, "library tiles missing: " + String.Join(", ", panel.Kinds.Cards.Select(c => c.Name)));
                 statusLines.Add("tiles: " + String.Join(", ", panel.Kinds.Cards.Select(c => c.Name + " " + c.Count)));
-                var shots = new[] { "filters-fighters.png", "filters-misc-ui.png", "filters-code-tools.png", "filters-installed.png", "filters-library.png" };
+                // 1.0.21: a lean run draws only the fighters view for the portrait band rows and saves no PNG.
+                var shots = TestTier.Full ? new[] { "filters-fighters.png", "filters-misc-ui.png", "filters-code-tools.png", "filters-installed.png", "filters-library.png" } : new[] { "filters-fighters.png" };
                 MethodInfo clear = typeof(MainForm).GetMethod("ClearLibraryFilters", PrivateInstance);
                 foreach (string shot in shots)
                 {
@@ -296,12 +299,13 @@ namespace SlotsInstaller
                     finally { Field("selectingMod").SetValue(form, false); }
                     LayoutAll(canvas); Application.DoEvents(); LayoutAll(canvas); canvas.Refresh();
                     // 1.0.15: no "fits" requirement here any more: at the 330 library the panel may scroll (accepted by the
-                    // user); the filters suite checks it fits with a 250 library. The status line still says which.
+                    // user). The status line still says which.
                     statusLines.Add(shot + ": " + list.Items.Count + " mods listed, status \"" + status.Text + "\", panel " + (panel.VerticalScroll.Visible ? "scrolls" : "fits"));
                     string file = Path.Combine(output, shot);
                     using (var full = new Bitmap(canvas.Width, canvas.Height))
                     {
                         canvas.DrawToBitmap(full, new Rectangle(0, 0, canvas.Width, canvas.Height));
+                        if (TestTier.Render)
                         using (var half = new Bitmap(full.Width / 2, full.Height / 2))
                         using (Graphics g = Graphics.FromImage(half)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(full, new Rectangle(0, 0, half.Width, half.Height)); half.Save(file, ImageFormat.Png); }
                         if (shot == "filters-fighters.png")
@@ -313,6 +317,7 @@ namespace SlotsInstaller
                             var crop = new Rectangle(origin.X + card.Left, origin.Y + bandTop - DpiMetrics.Px(form, 16), third.Right - card.Left, DpiMetrics.Px(form, 32));
                             crop.Intersect(new Rectangle(Point.Empty, full.Size));
                             string zoomFile = Path.Combine(output, "filters-portrait-band-2x.png");
+                            if (TestTier.Render)
                             using (var zoom = new Bitmap(crop.Width * 2, crop.Height * 2))
                             using (Graphics g = Graphics.FromImage(zoom)) { g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half; g.DrawImage(full, new Rectangle(0, 0, zoom.Width, zoom.Height), crop, GraphicsUnit.Pixel); zoom.Save(zoomFile, ImageFormat.Png); }
                             // The row at the band top must not be darker than both neighbours (the 2.3.0 seam).
@@ -320,10 +325,10 @@ namespace SlotsInstaller
                             double above = luminance(bandTop - 1), at = luminance(bandTop), below = luminance(bandTop + 1);
                             statusLines.Add("portrait band (Ryu, " + form.DeviceDpi + " DPI): rows above/at/below the band top " + above.ToString("0.0") + " / " + at.ToString("0.0") + " / " + below.ToString("0.0"));
                             Require(!(at + 8 < above && at + 8 < below), "dark seam at the band top: " + above.ToString("0.0") + " / " + at.ToString("0.0") + " / " + below.ToString("0.0"));
-                            files.Add(zoomFile);
+                            if (TestTier.Render) files.Add(zoomFile);
                         }
                     }
-                    files.Add(file);
+                    if (TestTier.Render) files.Add(file);
                 }
                 // 2.3.1: a click on a mod (real Windows messages to the list) closes the panel and shows its options.
                 {
@@ -340,13 +345,16 @@ namespace SlotsInstaller
                     Require(!form.FiltersOpen && picked != null && ((Control)Field("componentTree").GetValue(form)).Visible, "the click did not close the panel / open the mod (open " + form.FiltersOpen + ")");
                     statusLines.Add("filters-mod-picked.png: clicked \"" + picked.Name + "\" (Cammy/Juri selected): panel closed, " + picked.Components.Count + " options shown; reopening keeps " + String.Join("+", panel.Grid.Selected.OrderBy(s => s)));
                     string file = Path.Combine(output, "filters-mod-picked.png");
-                    using (var full = new Bitmap(canvas.Width, canvas.Height))
+                    if (TestTier.Render)
                     {
-                        canvas.DrawToBitmap(full, new Rectangle(0, 0, canvas.Width, canvas.Height));
-                        using (var half = new Bitmap(full.Width / 2, full.Height / 2))
-                        using (Graphics g = Graphics.FromImage(half)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(full, new Rectangle(0, 0, half.Width, half.Height)); half.Save(file, ImageFormat.Png); }
+                        using (var full = new Bitmap(canvas.Width, canvas.Height))
+                        {
+                            canvas.DrawToBitmap(full, new Rectangle(0, 0, canvas.Width, canvas.Height));
+                            using (var half = new Bitmap(full.Width / 2, full.Height / 2))
+                            using (Graphics g = Graphics.FromImage(half)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(full, new Rectangle(0, 0, half.Width, half.Height)); half.Save(file, ImageFormat.Png); }
+                        }
+                        files.Add(file);
                     }
-                    files.Add(file);
                 }
                 form.Close();
             }

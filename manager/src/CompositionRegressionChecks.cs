@@ -245,6 +245,8 @@ namespace SlotsInstaller
             CompositionPlan missing=Plan(package,"A-main");
             // 1.0.19: the empty required group of the branch in use is a note; nothing of Bundle B is named.
             Require(missing.CanInstall && missing.Needs.Single().Needed.Name=="A skin options" && missing.Warnings.All(w=>!w.Contains("B skin")),"Independent branch requirements escaped their scope: "+Errors(missing)+" / "+String.Join(" ",missing.Warnings));
+            // The Assistant keeps the strict rule for the branch in use only (from IntegrationTests, removed there in 1.0.21).
+            Require(missing.StrictErrors().Count>0 && missing.StrictErrors().All(e=>e.IndexOf("B skin",StringComparison.OrdinalIgnoreCase)<0),"Strict errors for the Assistant: "+String.Join(" | ",missing.StrictErrors()));
             // 1.0.18: A's required skin group gets its option ticked too; nothing of Bundle B.
             Require(Composer.DefaultSelection(package).SequenceEqual(new[]{"A-main","A-skin"}),"Default selection crossed bundle branches: "+String.Join(",",Composer.DefaultSelection(package)));
         }

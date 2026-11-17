@@ -40,7 +40,9 @@ namespace SlotsInstaller
                     CheckCancellableWork(report,uiContext);
                     SynchronizationContext.SetSynchronizationContext(uiContext);
                     CheckAtSize(settings, package, new Size(1232, 640), 300, 430, report);
-                    CheckAtSize(settings, package, new Size(1460, 920), 500, 550, report);
+                    // 1.0.21: the lean run (no archive) keeps 1232 (context menu, rail scroll) and the smallest size; 1460
+                    // (a canvas on most screens) runs with test.ps1 -Full or with an archive (bundle-layout).
+                    if (TestTier.Full || package != null) CheckAtSize(settings, package, new Size(1460, 920), 500, 550, report);
                     CheckAtSize(settings, package, new Size(1110, 610), 270, 370, report);
                 }
                 finally { SynchronizationContext.SetSynchronizationContext(previous); WindowsFormsSynchronizationContext.AutoInstall = previousAutoInstall; }
@@ -605,7 +607,7 @@ namespace SlotsInstaller
                 {
                     tree.DrawToBitmap(frameImage,tree.ClientRectangle);
                     Require(frameImage.GetPixel(row.X+DpiMetrics.Px(tree,7),row.Y+DpiMetrics.Px(tree,15)).ToArgb()==Palette.Accent.ToArgb(),context+": orange indicator vanished in native hover frame "+frame);
-                    if(frame==23) {Directory.CreateDirectory(AppConfig.DataDir);frameImage.Save(Path.Combine(AppConfig.DataDir,"option-frame-"+tree.DeviceDpi+"-"+tree.Width+"x"+tree.Height+".png"),ImageFormat.Png);}
+                    if(frame==23 && TestTier.Render) {Directory.CreateDirectory(AppConfig.DataDir);frameImage.Save(Path.Combine(AppConfig.DataDir,"option-frame-"+tree.DeviceDpi+"-"+tree.Width+"x"+tree.Height+".png"),ImageFormat.Png);}
                 }
             }
             Require(AllNodes(tree.Nodes).Where(n=>n.Checked).Select(n=>((ModComponent)n.Tag).Id).SequenceEqual(checkedBefore),context+": native hover changed checked state.");

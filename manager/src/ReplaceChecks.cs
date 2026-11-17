@@ -42,26 +42,28 @@ namespace SlotsInstaller
                 catch (Exception ex) { failures++; Console.WriteLine("FAIL " + name + ": " + ex); report.Add("FAIL " + name + ": " + ex.Message); }
                 finally { ReplaceEngine.CrashAfterStep = -1; }
             };
+            // 1.0.21: a plain test.ps1 runs the checks that guard game files and records; test.ps1 -Full runs every check.
+            Action<string, Action> full = delegate(string name, Action action) { if (TestTier.Full) check(name, action); };
             try
             {
                 check("migration: verified handoff, saved plan, original priority, rollback and idempotent resume", delegate { ModMigrationChecks.Run(Path.Combine(run,"migration"),probe); });
-                check("migration: compatibility before uninstall and restoring REFramework with loose outfits", delegate { ModMigrationChecks.Compatibility(Path.Combine(run,"migration-ready")); });
-                check("migration (1.0.15 review): renamed old suffixes and repaired files match their download; a kept path goes to the migrated winner", delegate { ModMigrationChecks.Recorded(Path.Combine(run,"migration-recorded")); });
-                check("loader contract (1.0.14): upstream contract 2+ accepted without an extension; missing, old or malformed contracts refused; fork unchanged", delegate { LoaderContractChecks.Run(Path.Combine(run, "loader-contract")); });
-                check("loader settings (1.0.19): a suite-line Slots Loader or Native Core gets no update check and no added menus unless chosen; only the keys change; uninstall leaves nothing", delegate { LoaderFlagChecks.Run(Path.Combine(run, "loader-flags")); });
-                check("swap repairs (automatic for recognized files, including the Slotsloader marker): typed Alex scene signatures, fingerprinted physics recipes, malformed/customized refusals, idempotence and game-aware preparation cache", delegate { SwapRepairChecks.Run(Path.Combine(run, "swap-repairs")); });
-                check("murmur3 path hash matches the game's index (two real vanilla paths)", HashVectors);
+                full("migration: compatibility before uninstall and restoring REFramework with loose outfits", delegate { ModMigrationChecks.Compatibility(Path.Combine(run,"migration-ready")); });
+                full("migration (1.0.15 review): renamed old suffixes and repaired files match their download; a kept path goes to the migrated winner", delegate { ModMigrationChecks.Recorded(Path.Combine(run,"migration-recorded")); });
+                full("loader contract (1.0.14): upstream contract 2+ accepted without an extension; missing, old or malformed contracts refused; fork unchanged", delegate { LoaderContractChecks.Run(Path.Combine(run, "loader-contract")); });
+                full("loader settings (1.0.19): a suite-line Slots Loader or Native Core gets no update check and no added menus unless chosen; only the keys change; uninstall leaves nothing", delegate { LoaderFlagChecks.Run(Path.Combine(run, "loader-flags")); });
+                full("swap repairs (automatic for recognized files, including the Slotsloader marker): typed Alex scene signatures, fingerprinted physics recipes, malformed/customized refusals, idempotence and game-aware preparation cache", delegate { SwapRepairChecks.Run(Path.Combine(run, "swap-repairs")); });
+                full("murmur3 path hash matches the game's index (two real vanilla paths)", HashVectors);
                 check("KPKA TOC parse, lookups, zero/restore rows with verification, refusal of features != 0 and wrong expected bytes", delegate { PakBasics(Path.Combine(run, "pak")); });
-                check("fixers: allow-listed CRC upgrade, stale types reported, mip pitch repair, old tex suffix and path normalization", delegate { Fixers(); });
+                full("fixers: allow-listed CRC upgrade, stale types reported, mip pitch repair, old tex suffix and path normalization", delegate { Fixers(); });
                 // 1.0.16: install/uninstall speed-ups (SpeedShortcutChecks.cs)
-                check("PAK lookups (1.0.16): repeated hashes give every row in table order and a new list per call; zeroed rows, Contains; the blocked layout hash equals the row-by-row one across full and partial blocks, ignores hash fields and follows every other change", delegate { SpeedShortcutChecks.PakTable(Path.Combine(run, "speed-pak")); });
+                full("PAK lookups (1.0.16): repeated hashes give every row in table order and a new list per call; zeroed rows, Contains; the blocked layout hash equals the row-by-row one across full and partial blocks, ignores hash fields and follows every other change", delegate { SpeedShortcutChecks.PakTable(Path.Combine(run, "speed-pak")); });
                 check("link checks per pass (1.0.16): folders checked once per pass; a link not checked before in the pass is refused every time and never remembered; a game folder made a link after install refuses the change with nothing committed", delegate { SpeedShortcutChecks.ReparseFolders(Path.Combine(run, "speed-links")); SpeedShortcutChecks.ReconcileLink(Path.Combine(run, "speed-reconcile-link")); });
                 check("rollback copy (1.0.16): an archive mod's game file changed after Reconcile hashed it is not stored (the archive gives the installed version), the uninstall is refused as before, recovery and a later uninstall work", delegate { SpeedShortcutChecks.HydrateAfterChange(Path.Combine(run, "speed-hydrate")); });
-                check("PAK stamps (1.0.16): the base PAK stamp and BaseAtInstall after a change match a fresh read of the PAK; status reports no change", delegate { SpeedShortcutChecks.Stamps(Path.Combine(run, "speed-stamps")); });
-                check("Extra outfit health previews repairs and flags unpatched files, then checks the installed bytes", delegate { ExtraPatchHealth(Path.Combine(run, "outfit-health")); });
-                check("swatch repair (2.5.5): an old select-screen swatch file is rebuilt from the game's current one with the mod's colours per ID (extra current IDs kept); current files, other paths and unknown layouts untouched; another outfit, a missing ID or no game file leave it as it is with a warning; extra outfit installs rebuild the copy and its hash", delegate { Swatches(); });
+                full("PAK stamps (1.0.16): the base PAK stamp and BaseAtInstall after a change match a fresh read of the PAK; status reports no change", delegate { SpeedShortcutChecks.Stamps(Path.Combine(run, "speed-stamps")); });
+                full("Extra outfit health previews repairs and flags unpatched files, then checks the installed bytes", delegate { ExtraPatchHealth(Path.Combine(run, "outfit-health")); });
+                full("swatch repair (2.5.5): an old select-screen swatch file is rebuilt from the game's current one with the mod's colours per ID (extra current IDs kept); current files, other paths and unknown layouts untouched; another outfit, a missing ID or no game file leave it as it is with a warning; extra outfit installs rebuild the copy and its hash", delegate { Swatches(); });
                 check("install -> conflict/priority -> disable -> uninstall restores every PAK and loose file byte for byte (PAK method)", delegate { Lifecycle(Path.Combine(run, "lifecycle")); });
-                check("outfit recipe as replacements (1.0.18): the base goes in first and each part above it, so the last part is on top; one record per mod, also when installed again; a mod used twice is one step; a missing mod installs nothing", delegate {
+                full("outfit recipe as replacements (1.0.18): the base goes in first and each part above it, so the last part is on top; one record per mod, also when installed again; a mod used twice is one step; a missing mod installs nothing", delegate {
                     var f = Create(Path.Combine(run, "recipe-replace"), false, ReplaceMethods.Pak);
                     var recipe = new OutfitRecipe { Name = "Cammy Mix", Character = "Cammy", Base = new RecipeLayer { SourcePath = f.Mod("modA"), Mod = "Cammy Colors" } };
                     recipe.Parts.Add(new RecipeLayer { SourcePath = f.Mod("modB"), Mod = "Cammy Alt" });
@@ -123,85 +125,83 @@ namespace SlotsInstaller
                     f.Engine.UninstallForGood(a.Id, DriftChoice.Refuse, null);
                     SameSnapshot(clean, Snapshot(f.Game), "after selected replacements");
                 });
-                check("priority (1.0.18): an install with other options goes to the top, the same options from an edited source keep their place, SetOrder saves several moves in one change", delegate { InstallImprovementChecks.PriorityOrder(Create(Path.Combine(run, "priority-order"), false, ReplaceMethods.Pak)); });
+                full("priority (1.0.18): an install with other options goes to the top, the same options from an edited source keep their place, SetOrder saves several moves in one change", delegate { InstallImprovementChecks.PriorityOrder(Create(Path.Combine(run, "priority-order"), false, ReplaceMethods.Pak)); });
                 check("DLC PAK entries are invalidated and restored too", delegate { DlcRows(Path.Combine(run, "dlc")); });
                 check("a path inside a patch PAK is refused with the PAK method; no change is made", delegate { PatchBlock(Path.Combine(run, "patch")); });
-                check("an unchanged Sakura replacement covered by a later patch PAK allows an unrelated Ingrid install and uninstall", delegate { ExistingPatchedReplacement(Path.Combine(run, "existing-patch")); });
+                full("an unchanged Sakura replacement covered by a later patch PAK allows an unrelated Ingrid install and uninstall", delegate { ExistingPatchedReplacement(Path.Combine(run, "existing-patch")); });
                 check("refresh defers recovery of a live uninstall", delegate { PakOwnershipChecks.LiveJournal(Path.Combine(run, "live-journal")); });
                 check("two game roots sharing Data cannot take over each other's replacement journal", delegate { PakOwnershipChecks.JournalGame(Path.Combine(run, "journal-game")); });
                 check("a reassigned PAK row stays with its new asset", delegate { PakOwnershipChecks.ReassignedRow(Path.Combine(run, "reassigned-row")); });
                 check("a reused patch filename never proves ownership", delegate { PakOwnershipChecks.ReusedName(Path.Combine(run, "foreign-pak")); });
-                check("separately staged PAKs receive distinct numbers at commit", delegate { PakOwnershipChecks.NumberAllocation(Path.Combine(run, "staged-paks")); });
-                check("addon PAKs retain load order above an expanded main mod", delegate { PakOwnershipChecks.AddonOrder(Path.Combine(run, "addon-pak-order")); });
+                full("separately staged PAKs receive distinct numbers at commit", delegate { PakOwnershipChecks.NumberAllocation(Path.Combine(run, "staged-paks")); });
+                full("addon PAKs retain load order above an expanded main mod", delegate { PakOwnershipChecks.AddonOrder(Path.Combine(run, "addon-pak-order")); });
                 check("a refused install cleans only its own temporary backups", delegate { PakOwnershipChecks.FailedBackups(Path.Combine(run, "failed-backups")); });
-                check("preset reimport verifies PAK ownership against the installed deployment", delegate { PakOwnershipChecks.PresetReimport(Path.Combine(run, "preset-reimport")); });
+                full("preset reimport verifies PAK ownership against the installed deployment", delegate { PakOwnershipChecks.PresetReimport(Path.Combine(run, "preset-reimport")); });
                 check("an unsuccessful preset journal write keeps its prior journal and drops unclaimed backups", delegate { PakOwnershipChecks.PresetBackups(Path.Combine(run, "preset-backups")); });
                 check("PAK mods (2.5.6): a mod's .pak is added as the next patch PAK (a pre-numbered name too); removing or disabling one below another PAK leaves an empty placeholder, at the top it is deleted; Undo and re-enabling fill the placeholder; a number another PAK took meanwhile is never overwritten; the other mod's patch PAK never changes", delegate { PakMods(Path.Combine(run, "pak-mods")); });
                 check("leftover patch PAKs (1.0.11): a patch PAK nothing claims is a leftover; the Manager's PAK mod (enabled or disabled), PAKs either external-manager root lists, the empty placeholder, Slotsloader's costume pak and an unreadable PAK are not; an unreadable installed.ini means none; status details and replace-status say so; Remove refuses while SF6 or the external manager runs and for a PAK that isn't a leftover; a middle one leaves the empty placeholder, the top one is deleted (no other PAK changes or is renumbered); Undo restores byte for byte, refuses while either runs and once the number holds another PAK; an ended Undo's copy goes to the Recycle Bin", delegate { LeftoverPakChecks.Engine(Path.Combine(run, "leftover-paks"), probe); });
-                check("PAK mods with the loose file loader on (2.5.9): the .pak is still added as the next patch PAK (the method only affects natives files) and uninstalls cleanly", delegate { PakModsLoose(Path.Combine(run, "pak-mods-loose")); });
-                check("installs list (1.0.9): manager_installs.json beside the costume loader's data lists every replacement in priority order (enabled, loose files, patch PAKs; path, sha256, size), leaves out kept files, is rewritten only when it changes, empty when nothing is installed, never where no costume loader keeps data", delegate { InstallsList(Path.Combine(run, "installs-list")); });
+                full("PAK mods with the loose file loader on (2.5.9): the .pak is still added as the next patch PAK (the method only affects natives files) and uninstalls cleanly", delegate { PakModsLoose(Path.Combine(run, "pak-mods-loose")); });
+                full("installs list (1.0.9): manager_installs.json beside the costume loader's data lists every replacement in priority order (enabled, loose files, patch PAKs; path, sha256, size), leaves out kept files, is rewritten only when it changes, empty when nothing is installed, never where no costume loader keeps data", delegate { InstallsList(Path.Combine(run, "installs-list")); });
                 check("files owned by an installed Fluffy mod are refused; a missing installed.ini means no Fluffy mods", delegate { FluffyOwnership(Path.Combine(run, "fluffy")); });
                 check("running SF6 or Fluffy blocks every game-file change", delegate { RunningBlocks(Path.Combine(run, "running"), probe); });
                 check("journal recovery after a simulated crash at every step of an install and an uninstall", delegate { CrashRecovery(Path.Combine(run, "crash")); });
                 check("game update detection, dropped stale rows and Reapply; restore-all after an update", delegate { GameUpdate(Path.Combine(run, "update")); });
-                check("rows restored by another tool are detected and re-invalidated by Reapply; a file another tool changed is replaced with no copy kept after the change (1.0.1)", delegate { RowsRestored(Path.Combine(run, "rows")); });
+                full("rows restored by another tool are detected and re-invalidated by Reapply; a file another tool changed is replaced with no copy kept after the change (1.0.1)", delegate { RowsRestored(Path.Combine(run, "rows")); });
                 check("tool/root mods: genuine files backed up and restored exactly, previews/readme skipped, protected paths refused", delegate { ToolMods(Path.Combine(run, "tools")); });
                 check("Slotsloader costume pak (2.4.0): uninstalling Slotsloader removes its generated pak (the sole patch pak), clears the registry stamp (slots kept), leaves costume_mods and the opt-out file; a reinstall finds no pak and an empty stamp", delegate { LoaderPakChecks.SolePak(Path.Combine(run, "loaderpak-sole")); });
-                check("Slotsloader costume pak (2.4.0): with another mod's pak above it, a marker-only placeholder keeps the patch row unbroken; foreign and stage paks stay byte-identical", delegate { LoaderPakChecks.Placeholder(Path.Combine(run, "loaderpak-placeholder")); });
-                check("Slotsloader costume pak (1.0.18): an outfit's copy of a shared path (new or vanilla) in it never refuses a PAK-method install, update, disable, enable or uninstall; the health check says what the game reads (older loader: a warning); the pak never changes; a slot table it rewrites is refused with that reason; without the loader, a stage pak and a Manager PAK mod carrying the marker keep the old rules", delegate { LoaderPakChecks.SharedPaths(Path.Combine(run, "loaderpak-shared")); });
+                full("Slotsloader costume pak (2.4.0): with another mod's pak above it, a marker-only placeholder keeps the patch row unbroken; foreign and stage paks stay byte-identical", delegate { LoaderPakChecks.Placeholder(Path.Combine(run, "loaderpak-placeholder")); });
+                full("Slotsloader costume pak (1.0.18): an outfit's copy of a shared path (new or vanilla) in it never refuses a PAK-method install, update, disable, enable or uninstall; the health check says what the game reads (older loader: a warning); the pak never changes; a slot table it rewrites is refused with that reason; without the loader, a stage pak and a Manager PAK mod carrying the marker keep the old rules", delegate { LoaderPakChecks.SharedPaths(Path.Combine(run, "loaderpak-shared")); });
                 check("Slotsloader costume pak (2.4.0): restore-all removes it, a Fluffy-style pak below it never changes, uninstalling another mod leaves it", delegate { LoaderPakChecks.ForeignUntouched(Path.Combine(run, "loaderpak-foreign")); });
-                check("Slotsloader costume pak (2.4.0): Slotsloader not installed but its pak present: status and replace-status say so, loader-pak-remove removes it", delegate { LoaderPakChecks.Orphan(Path.Combine(run, "loaderpak-orphan")); });
-                check("owned-outfit marker (2.4.0): the file named in Data\\show_unowned_slots.txt is restored after a loader install and Reapply, never deleted by an uninstall nor recorded as deployed, logged without its name; invalid names do nothing", delegate { LoaderPakChecks.OwnedOutfitMarker(Path.Combine(run, "owned-marker")); });
+                full("Slotsloader costume pak (2.4.0): Slotsloader not installed but its pak present: status and replace-status say so, loader-pak-remove removes it", delegate { LoaderPakChecks.Orphan(Path.Combine(run, "loaderpak-orphan")); });
+                full("owned-outfit marker (2.4.0): the file named in Data\\show_unowned_slots.txt is restored after a loader install and Reapply, never deleted by an uninstall nor recorded as deployed, logged without its name; invalid names do nothing", delegate { LoaderPakChecks.OwnedOutfitMarker(Path.Combine(run, "owned-marker")); });
                 check("loose-file-loader method: no PAK change; switching to PAK and back converts byte-exactly", delegate { LooseMethod(Path.Combine(run, "loose")); });
-                check("loose method allows natives-only changes while SF6 runs (Fluffy's re-copy); PAK edits and tool files still wait", delegate { LooseWhileRunning(Path.Combine(run, "loose-running"), probe); });
-                check("REFramework config edits change one key only, keep CRLF/BOM/order, back up first, refuse while the game runs", delegate { ConfigEdits(Path.Combine(run, "config"), probe); });
-                check("REFramework loose-file log parsing matches test files", LogParsing);
-                check("health check: affected outfit, fixes, streaming twin, unknown folder, conflicts, outdated suffix", delegate { Health(Path.Combine(run, "health")); });
-                check("leftover Test in game record (feature removed in 2.3.0): kept as a normal install, logging keys restored, record deleted, game files unchanged", delegate { LeftoverTest(Path.Combine(run, "testgame"), probe); });
-                check("crash reporter is renamed while replacements are installed and restored after (PR #22 review: also when the exe came back beside its renamed copy, a crash at any step rolls back)", delegate { CrashReporterRename(Path.Combine(run, "crashreporter")); });
+                full("loose method allows natives-only changes while SF6 runs (Fluffy's re-copy); PAK edits and tool files still wait", delegate { LooseWhileRunning(Path.Combine(run, "loose-running"), probe); });
+                full("REFramework config edits change one key only, keep CRLF/BOM/order, back up first, refuse while the game runs", delegate { ConfigEdits(Path.Combine(run, "config"), probe); });
+                full("REFramework loose-file log parsing matches test files", LogParsing);
+                full("health check: affected outfit, fixes, streaming twin, unknown folder, conflicts, outdated suffix", delegate { Health(Path.Combine(run, "health")); });
+                check("crash reporter is renamed while replacements are installed and restored after (PR #22 review: also when the exe came back beside its renamed copy; a crash during a change is CrashRecovery's)", delegate { CrashReporterRename(Path.Combine(run, "crashreporter")); });
                 check("TOC backup fallback restores only zeroed rows when the PAK layout still matches", delegate { TocFallback(Path.Combine(run, "tocfallback")); });
-                check("Ordered preset import, reimport, rollback, uninstall and ambiguous sources", delegate {
+                full("Ordered preset import, reimport, rollback, uninstall and ambiguous sources", delegate {
                     OrderedPatchPaks(Path.Combine(run, "ordered-paks"));
                     foreach (string method in new[] { ReplaceMethods.Loose, ReplaceMethods.Pak }) OrderedPresetImport(Path.Combine(run, "ordered-" + method), method);
                 });
-                check("Fluffy preset files parse and map to library entries and options", delegate { PresetImport(Path.Combine(run, "preset")); });
+                full("Fluffy preset files parse and map to library entries and options", delegate { PresetImport(Path.Combine(run, "preset")); });
                 check("CLI: replace-plan, replace-install (PAK and loose), replace-status, replace-method, replace-uninstall and replace-restore-all on a fixture game", delegate { CommandLineFlow(Path.Combine(run, "cli")); });
-                check("conflicts (2.0.1): same outfit with shared files names the mod with counts, same outfit without shared files stacks, disabled mods, other-area overrides, unknown loose files, an external mod blocks with the lockout (1.0.1); installs never remove other mods", delegate { Conflicts(Path.Combine(run, "conflicts")); });
+                full("conflicts (2.0.1): same outfit with shared files names the mod with counts, same outfit without shared files stacks, disabled mods, other-area overrides, unknown loose files, an external mod blocks with the lockout (1.0.1); installs never remove other mods", delegate { Conflicts(Path.Combine(run, "conflicts")); });
                 check("recoverable uninstall (2.0.1): the removed replacement is kept and Undo restores files, enabled state and priority byte for byte; test reverts keep nothing", delegate { RecoverableUninstall(Path.Combine(run, "removed")); });
-                check("Source archive deleted: intact files kept as the copy, notice names the mod; covered, moved, twin, locked, same-name and disabled cases (1.0.18)", delegate { SourceGone(Path.Combine(run, "source-gone")); });
+                full("Source archive deleted: intact files kept as the copy, notice names the mod; covered, moved, twin, locked, same-name and disabled cases (1.0.18)", delegate { SourceGone(Path.Combine(run, "source-gone")); });
                 check("Archive storage: compaction, rename, library move, ambiguous copies, impostor, recovery, disable, undo and uninstall", delegate { ArchiveStorage(Path.Combine(run, "archive-storage")); });
-                check("automatic-check cache (2.0.1): a re-check of an archive reuses extracted and fixed files, results identical; a changed archive is read again", delegate { CheckCache(Path.Combine(run, "cache")); });
+                full("automatic-check cache (2.0.1): a re-check of an archive reuses extracted and fixed files, results identical; a changed archive is read again", delegate { CheckCache(Path.Combine(run, "cache")); });
                 // 2.4.2: the 2.0.1 code-review follow-ups (ReviewFollowupChecks.cs)
-                check("state reads (2.4.2): a reader sharing ReadWrite|Delete never blocks a commit; the 2.4.1 read (Read sharing only) held across a commit fails it and rolls back cleanly; 4 threads reading the state, store roots and Recovery during 42 commits never fail", delegate { ReviewFollowupChecks.SharedStateReads(Path.Combine(run, "shared-reads")); });
+                full("state reads (2.4.2): a reader sharing ReadWrite|Delete never blocks a commit; the 2.4.1 read (Read sharing only) held across a commit fails it and rolls back cleanly; 4 threads reading the state, store roots and Recovery during 42 commits never fail", delegate { ReviewFollowupChecks.SharedStateReads(Path.Combine(run, "shared-reads")); });
                 check("recoverable copy not saved (2.4.2): a store file open in another program makes the move into .removed fail after the commit: the result says so (no 'kept'), nothing incomplete is listed, the move is retried at the next start and before the next change, then listed and restorable; a stale pending record never moves an installed mod's folder", delegate { ReviewFollowupChecks.TrashFailure(Path.Combine(run, "trash-fail")); });
-                check("pruning rules (2.4.2): older than 30 days, then the oldest above 5 GB; never each mod's newest copy (same source, any case; else same record), a copy under a day old or one an Undo needs; folder-name time fallback", delegate { ReviewFollowupChecks.PruneRules(Path.Combine(run, "prune-rules")); });
-                check("pruning on disk (2.4.2): only the rule's copies are deleted and logged; an Undo's copy and each mod's newest stay; nothing is pruned while another task holds the game lock", delegate { ReviewFollowupChecks.PruneOnDisk(Path.Combine(run, "prune-disk")); });
-                check("earlier store roots (2.4.2): after moving the store, the old store's copies stay in Recovery, Last used and Undo (ReplaceState.PreviousStoreRoots, three moves); a copy from an old store restores into the current one", delegate { ReviewFollowupChecks.OldStoreRoots(Path.Combine(run, "old-roots")); });
-                check("check cache per file (2.4.2): a folder source is copied once and an edited file (same size, new time) alone; a 7-Zip batch cancelled after two files keeps them (listed size and CRC; no CRC, a wrong CRC and a half file are extracted again) and the re-check asks 7-Zip only for the rest", delegate { ReviewFollowupChecks.IncrementalCache(Path.Combine(run, "cache-incremental")); });
-                check("Undo position (2.4.2): a removed mod returns below replacements installed after it was removed (the newer one keeps the files it won) and otherwise at its old place; a record without a time keeps its index", delegate { ReviewFollowupChecks.RestorePosition(Path.Combine(run, "undo-position")); });
-                check("Fluffy open (2.1.0): loose and tool-mod installs/uninstalls and REFramework config edits go ahead (installed.ini re-read at each change, crash reporter left for later); PAK-method row changes and a conversion to PAK refuse with the same-PAK reason; a PAK-method tool mod (no rows) installs", delegate { FluffyOpen(Path.Combine(run, "fluffy-open"), probe); });
-                check("first-start detection (2.4.3): the SF6 folder from Steam's libraryfolders.vdf and appmanifest_1364780.acf (installdir), else steamapps\\common\\Street Fighter 6; nothing found is empty; Fluffy libraries are real <Fluffy>\\Games\\SF6\\Mods folders; compiled defaults are empty", delegate { DetectionChecks.Run(Path.Combine(run, "detection")); });
-                check("CLI same source (2.4.1): replace-install of an installed mod, or of Slotsloader from another zip, updates the record in place (one record at the same priority, no stacking), the INFO line says so, and uninstall still restores the game's own amd_ags_x64.dll", delegate { CliSameSource(Path.Combine(run, "cli-same")); });
+                full("pruning rules (2.4.2): older than 30 days, then the oldest above 5 GB; never each mod's newest copy (same source, any case; else same record), a copy under a day old or one an Undo needs; folder-name time fallback", delegate { ReviewFollowupChecks.PruneRules(Path.Combine(run, "prune-rules")); });
+                full("pruning on disk (2.4.2): only the rule's copies are deleted and logged; an Undo's copy and each mod's newest stay; nothing is pruned while another task holds the game lock", delegate { ReviewFollowupChecks.PruneOnDisk(Path.Combine(run, "prune-disk")); });
+                full("earlier store roots (2.4.2): after moving the store, the old store's copies stay in Recovery, Last used and Undo (ReplaceState.PreviousStoreRoots, three moves); a copy from an old store restores into the current one", delegate { ReviewFollowupChecks.OldStoreRoots(Path.Combine(run, "old-roots")); });
+                full("check cache per file (2.4.2): a folder source is copied once and an edited file (same size, new time) alone; a 7-Zip batch cancelled after two files keeps them (listed size and CRC; no CRC, a wrong CRC and a half file are extracted again) and the re-check asks 7-Zip only for the rest", delegate { ReviewFollowupChecks.IncrementalCache(Path.Combine(run, "cache-incremental")); });
+                full("Undo position (2.4.2): a removed mod returns below replacements installed after it was removed (the newer one keeps the files it won) and otherwise at its old place; a record without a time keeps its index", delegate { ReviewFollowupChecks.RestorePosition(Path.Combine(run, "undo-position")); });
+                full("Fluffy open (2.1.0): loose and tool-mod installs/uninstalls and REFramework config edits go ahead (installed.ini re-read at each change, crash reporter left for later); PAK-method row changes and a conversion to PAK refuse with the same-PAK reason; a PAK-method tool mod (no rows) installs", delegate { FluffyOpen(Path.Combine(run, "fluffy-open"), probe); });
+                full("first-start detection (2.4.3): the SF6 folder from Steam's libraryfolders.vdf and appmanifest_1364780.acf (installdir), else steamapps\\common\\Street Fighter 6; nothing found is empty; Fluffy libraries are real <Fluffy>\\Games\\SF6\\Mods folders; compiled defaults are empty", delegate { DetectionChecks.Run(Path.Combine(run, "detection")); });
+                full("CLI same source (2.4.1): replace-install of an installed mod, or of Slotsloader from another zip, updates the record in place (one record at the same priority, no stacking), the INFO line says so, and uninstall still restores the game's own amd_ags_x64.dll", delegate { CliSameSource(Path.Combine(run, "cli-same")); });
                 check("outfit mods off (1.0.18): one switch disables every enabled replacement and the Manager's Slotsloader (game files and the game's own amd_ags_x64.dll back), records exactly those, says so in the status, and turning back on enables only those; a mod the user had disabled stays disabled; off twice or on twice is refused", delegate { ModsOff(Path.Combine(run, "mods-off")); });
-                check("CLI loose loader (2.1.0): tool-only replace-install needs neither --yes nor --no-loader; natives files fail without one; --no-loader installs with the loader off and leaves the config; --yes with --no-loader is refused", delegate { LooseLoaderCli(Path.Combine(run, "cli-loader")); });
-                check("relocation rules (2.1.0): only missing paths under another Data root are rebased (case/trailing separators tolerated); existing, outside-Data, game-folder and custom-store paths are left; a copied folder is reported", delegate { RelocationRules(Path.Combine(run, "reloc-rules")); });
+                full("CLI loose loader (2.1.0): tool-only replace-install needs neither --yes nor --no-loader; natives files fail without one; --no-loader installs with the loader off and leaves the config; --yes with --no-loader is refused", delegate { LooseLoaderCli(Path.Combine(run, "cli-loader")); });
+                full("relocation rules (2.1.0): only missing paths under another Data root are rebased (case/trailing separators tolerated); existing, outside-Data, game-folder and custom-store paths are left; a copied folder is reported", delegate { RelocationRules(Path.Combine(run, "reloc-rules")); });
                 check("relocation (2.1.0): the whole app folder (CLI exe + Data) moved to a new path and the old one deleted: status OK, 0 missing backups, rebase logged once; uninstall from the new folder restores the genuine file and the PAK index byte-exact; Recovery lists the removed copies; the state file names only the new folder", delegate { RelocationMove(Path.Combine(run, "reloc")); });
-                check("relocation (2.1.0): a backup that is really missing after a move is reported (status + replace-status) and kept as recorded; the other mod uninstalls normally and the failing uninstall changes nothing", delegate { RelocationMissingBackup(Path.Combine(run, "reloc-missing")); });
+                full("relocation (2.1.0): a backup that is really missing after a move is reported (status + replace-status) and kept as recorded; the other mod uninstalls normally and the failing uninstall changes nothing", delegate { RelocationMissingBackup(Path.Combine(run, "reloc-missing")); });
                 check("relocation (2.1.0): a change interrupted at every step before the move is recovered from the new folder (rolled back or completed, recoverable copy finished there, old folder never recreated)", delegate { RelocationJournal(Path.Combine(run, "reloc-journal")); });
-                check("Fluffy link (2.2.0): installed.ini sections, ModID, mixed / and \\ and case, shared owners (the later section's copy is in place); an absent or briefly locked installed.ini; the watcher reports an install and a removal within 2 s", delegate { FluffyLinkChecks.ParseAndWatch(Path.Combine(run, "fluffy-watch")); });
+                full("Fluffy link (2.2.0): installed.ini sections, ModID, mixed / and \\ and case, shared owners (the later section's copy is in place); an absent or briefly locked installed.ini; the watcher reports an install and a removal within 2 s", delegate { FluffyLinkChecks.ParseAndWatch(Path.Combine(run, "fluffy-watch")); });
                 check("other tools' files (2.2.0, the user's case): Fluffy's Mod Suite overwrote the Slotsloader proxy and plugin installed here: status, refusals and the uninstall question name the Fluffy mod and the 1.9.6 build; Keep current file keeps them (the genuine AGS stays restorable and is restored later; the file it replaces is not kept, 1.0.1), Restore original brings the genuine file back and removes the Suite's files (no copy kept after the change, 1.0.1); the shared amd_ags_x64_real.dll stays for Fluffy; no PAK change", delegate { FluffyLinkChecks.ForeignOverwrite(Path.Combine(run, "drift")); });
                 check("missing files (2.2.0): uninstall asks about a missing file with a backed-up original; Restore original restores it; Keep current file keeps it missing with the original restorable; restore-all asks about kept files and restores them", delegate { FluffyLinkChecks.MissingFiles(Path.Combine(run, "drift-missing")); });
                 check("priority stack (2.2.0): two tool mods over amd_ags_x64.dll + amd_ags_x64_real.dll restore correctly in every uninstall order and after a priority change (one genuine backup, clean game at the end)", delegate { FluffyLinkChecks.PriorityStack(Path.Combine(run, "stack")); });
-                check("CLI (2.2.0): replace-status names the changer; fluffy-status; replace-uninstall lists the changed files without --restore-originals/--keep-current (exit 1, nothing changes), refuses both, keeps with --keep-current; 1.0.1: replace-install refused during the lockout and fluffy-uninstall refused (the external manager uninstalls its own mods); replace-restore-original", delegate { FluffyLinkChecks.CommandLine(Path.Combine(run, "cli-fluffy")); });
+                full("CLI (2.2.0): replace-status names the changer; fluffy-status; replace-uninstall lists the changed files without --restore-originals/--keep-current (exit 1, nothing changes), refuses both, keeps with --keep-current; 1.0.1: replace-install refused during the lockout and fluffy-uninstall refused (the external manager uninstalls its own mods); replace-restore-original", delegate { FluffyLinkChecks.CommandLine(Path.Combine(run, "cli-fluffy")); });
                 // 2.4.2 (FluffyPakChecks.cs): Fluffy PAK installs and game entries another tool left invalidated.
-                check("orphaned game entries (2.4.2, the live evidence): rows 11886 and 244293 of a 286 816-row table sorted by hash (the A.K.I outfit's real mesh and mdf2 hashes) left zeroed: status and replace-status say \"2 game entries left invalidated by another tool\" (no Status: OK); nothing proves them → refused, nothing written; the game's own index proves both by hash(path) (pak-repair dry run lists each proof, --yes repairs byte-exact); the Manager's TOC backup; Fluffy's Log.txt paths", delegate { FluffyPakChecks.OrphanedEvidence(Path.Combine(run, "pak-orphans")); });
+                full("orphaned game entries (2.4.2, the live evidence): rows 11886 and 244293 of a 286 816-row table sorted by hash (the A.K.I outfit's real mesh and mdf2 hashes) left zeroed: status and replace-status say \"2 game entries left invalidated by another tool\" (no Status: OK); nothing proves them → refused, nothing written; the game's own index proves both by hash(path) (pak-repair dry run lists each proof, --yes repairs byte-exact); the Manager's TOC backup; Fluffy's Log.txt paths", delegate { FluffyPakChecks.OrphanedEvidence(Path.Combine(run, "pak-orphans")); });
                 check("proof sources (2.4.2): Fluffy's archive list (a stale one is not used), installed.ini history, two known paths in one gap refused (nothing written), a .mesh path over TEX data refused, a run of three adjacent rows assigned in order, an unsorted table proven only by the TOC backup", delegate { FluffyPakChecks.ProofSources(Path.Combine(run, "pak-proofs")); });
                 check("owned rows (2.4.2): the Manager's zeroed rows and rows a Fluffy installed.ini owns (two Fluffy instances) are never repaired; the one orphaned row is; Repair refuses while Fluffy or SF6 runs; 1.0.1: uninstalling an external mod here is refused and the Manager's own uninstall gives back only its own rows", delegate { FluffyPakChecks.OwnedRows(Path.Combine(run, "pak-owned"), probe); });
                 check("external-manager lockout (1.0.1): while installed.ini lists a mod, a replacement, a PAK mod and a tool mod are refused (health check and engine; nothing in the game folder changes), so are enabling, moving and Reapply; Slotsloader installs; disabling and uninstalling the Manager's own mods work; uninstalling the external mod is refused; once installed.ini is empty a replacement installs", delegate { FluffyLinkChecks.Lockout(Path.Combine(run, "lockout"), probe); });
                 check("Restore game to vanilla (1.0.11): replacements here and the external manager's mods go, so do every patch PAK and natives; this Manager's REFramework and Slotsloader stay (records and files)", delegate { FluffyLinkChecks.VanillaKeepsTools(Path.Combine(run, "vanilla")); });
-                check("colour reference (1.0.16): Ryu's Outfit 1 colours turned off by Fluffy are read from their row; missing, another fighter's give the signatures without the 2023 layout template (an unreadable turned-off row does not stop that, PR #22 review); present, as before", delegate { FluffyPakChecks.ReferenceTurnedOff(Path.Combine(run, "pak-reference")); });
-                check("parallel hashing (1.0.16): the same installs, refusal of a changed file and uninstall on a hard drive (one thread) and an SSD (game files hashed by several threads first) give the same files, records and message; the drive query never throws", delegate { SpeedShortcutChecks.ParallelHashing(Path.Combine(run, "speed-parallel")); });
-                check("Fluffy watcher (2.4.2): both instances' installed.ini watched (installs and removals seen within 2 s in each); a root missing at start makes the watcher restart once it appears; the stamp covers both", delegate { FluffyPakChecks.WatchBothRoots(Path.Combine(run, "pak-watch")); });
+                full("parallel hashing (1.0.16): the same installs, refusal of a changed file and uninstall on a hard drive (one thread) and an SSD (game files hashed by several threads first) give the same files, records and message; the drive query never throws", delegate { SpeedShortcutChecks.ParallelHashing(Path.Combine(run, "speed-parallel")); });
+                full("Fluffy watcher (2.4.2): both instances' installed.ini watched (installs and removals seen within 2 s in each); a root missing at start makes the watcher restart once it appears; the stamp covers both", delegate { FluffyPakChecks.WatchBothRoots(Path.Combine(run, "pak-watch")); });
             }
             finally { GameProcesses.Probe = previousProbe; GameProcesses.Launcher = previousLauncher; }
             Console.WriteLine("Replace checks: " + (count - failures) + " passed, " + failures + " failed.");
@@ -1360,8 +1360,17 @@ namespace SlotsInstaller
 
         private static void RelocationJournal(string root)
         {
-            int clean = -1;
-            for (int k = 0; k < 40 && clean < 0; k++)
+            // 1.0.21: test.ps1 -Full crashes at every step; the lean run at the first, a middle one and the last that
+            // crashes (the first crash's journal gives the count: one per operation, then before and after the commit),
+            // then the clean run after it.
+            int clean = -1, last = -1;
+            Func<int, int> next = delegate(int k)
+            {
+                if (TestTier.Full || last < 0) return k + 1;
+                if (k < last / 2) return Math.Max(k + 1, last / 2);
+                return k < last ? last : k + 1;
+            };
+            for (int k = 0; k < 40 && clean < 0; k = next(k))
             {
                 Fixture f = Create(Path.Combine(root, "u" + k, "fixture"), false, ReplaceMethods.Pak);
                 var original = Snapshot(f.Game);
@@ -1376,6 +1385,7 @@ namespace SlotsInstaller
                 ReplaceEngine.CrashAfterStep = -1;
                 if (!crashed) { clean = k; break; }
                 Require(f.Engine.JournalPending, "no journal after a crash at step " + k);
+                if (last < 0) last = Json.Read<ReplaceJournal>(f.Engine.JournalPath).Ops.Count + 1;
                 MoveApp(oldApp, newApp);
                 ReplaceEngine moved = AppEngine(f, newData);
                 string message = moved.Recover();
@@ -1395,6 +1405,7 @@ namespace SlotsInstaller
                 Require(!Directory.Exists(oldApp), "restore recreated the old app folder at step " + k);
             }
             Require(clean > 3, "the crash loop did not reach a clean run");
+            Require(clean == last + 1, "the last crashing step from the journal (" + last + ") is not the one before the clean run (" + clean + ")");
             // An interrupted install: the backup and store copy it created are removed from the new folder.
             for (int k = 0; k < 3; k++)
             {
@@ -1711,35 +1722,6 @@ namespace SlotsInstaller
             }
         }
 
-        // 2.3.0: "Test in game" is gone; a test left by an older version is kept as a normal install, its REFramework
-        // logging keys restored and its record deleted (no prompt). The game folder is otherwise untouched.
-        private static void LeftoverTest(string root, FakeProcessProbe probe)
-        {
-            Fixture f = Create(root, true, ReplaceMethods.Loose);
-            ReplacePlan plan;
-            ReplaceMod a = Install(f, "modA", "Test A", true, null, out plan);
-            var before = Snapshot(f.Game);
-            string accessed = LooseLoader.Read(f.Game, LooseLoader.LogAccessedKey), loose = LooseLoader.Read(f.Game, LooseLoader.LogLooseKey);
-            var record = new TestSessionRecord { Mode = InstallModes.Replace, ReplaceModId = a.Id, Name = a.Name, Phase = "running", LaunchedUtc = DateTime.UtcNow.ToString("o"), Files = a.Files.Select(x => x.Path).ToList() };
-            // What the old Test in game did before launching: turn on the access logs and remember the old values.
-            record.RestoreConfig[LooseLoader.LogAccessedKey] = accessed ?? "false"; record.RestoreConfig[LooseLoader.LogLooseKey] = loose ?? "false";
-            LooseLoader.Write(f.Game, LooseLoader.LogAccessedKey, "true", f.Engine.ConfigBackupDir); LooseLoader.Write(f.Game, LooseLoader.LogLooseKey, "true", f.Engine.ConfigBackupDir);
-            TestSession.Save(f.Data, record);
-            Require(TestSession.Load(f.Data) != null && f.Engine.LoadState().Find(a.Id).Test, "fixture");
-            string message = TestSession.FinishLeftover(f.Engine, TestSession.Load(f.Data));
-            Require(TestSession.Load(f.Data) == null && !File.Exists(TestSession.FilePath(f.Data)), "the record was not deleted");
-            Require(!f.Engine.LoadState().Find(a.Id).Test && f.Engine.LoadState().Find(a.Id).Enabled, "the replacement was not kept as a normal install");
-            Require(LooseLoader.Read(f.Game, LooseLoader.LogAccessedKey) == (accessed ?? "false") && LooseLoader.Read(f.Game, LooseLoader.LogLooseKey) == (loose ?? "false"), "logging keys not restored");
-            var after = Snapshot(f.Game); after.Remove(LooseLoader.ConfigName); before.Remove(LooseLoader.ConfigName);
-            SameSnapshot(before, after, "after keeping the leftover test");
-            Require(message.Contains("Kept 'Test A'") && message.Contains("logging"), "message: " + message);
-            // An extra-outfit test and a record whose replacement is already gone are just cleared.
-            TestSession.Save(f.Data, new TestSessionRecord { Mode = InstallModes.Slot, Name = "Alt (test)" });
-            Require(TestSession.FinishLeftover(f.Engine, TestSession.Load(f.Data)).Contains("extra outfit") && TestSession.Load(f.Data) == null, "slot leftover");
-            TestSession.Save(f.Data, new TestSessionRecord { Mode = InstallModes.Replace, ReplaceModId = "gone", Name = "Gone" });
-            Require(TestSession.FinishLeftover(f.Engine, TestSession.Load(f.Data)).Contains("already gone") && TestSession.Load(f.Data) == null, "missing replacement leftover");
-        }
-
         private static void CrashReporterRename(string root)
         {
             Fixture f = Create(root, false, ReplaceMethods.Pak);
@@ -1781,25 +1763,6 @@ namespace SlotsInstaller
             File.WriteAllBytes(crash, fresh);
             v.Engine.SetEnabled(g1.Id, false);
             Require(!File.Exists(crash) && File.ReadAllBytes(renamed).SequenceEqual(fresh) && !File.Exists(renamed + ".old2"), "the same bytes: the exe stays beside its copy, or a second .old was made");
-            // A crash at any step of that change rolls back to both files as they were (or, once committed, the rename).
-            int clean = -1;
-            for (int n = 0; n < 40 && clean < 0; n++)
-            {
-                Fixture w = Create(Path.Combine(root, "verified-crash-" + n), false, ReplaceMethods.Pak);
-                Install(w, "modA", "H1");
-                string cCrash = GameFile(w, CrashReporter.Name), cRenamed = GameFile(w, CrashReporter.RenamedName);
-                byte[] cStale = File.ReadAllBytes(cRenamed);
-                File.WriteAllBytes(cCrash, fresh);
-                var before = Snapshot(w.Game);
-                ReplaceEngine.CrashAfterStep = n; bool crashed = false;
-                try { Install(w, "modB", "H2"); } catch (ReplaceEngine.SimulatedCrashException) { crashed = true; }
-                finally { ReplaceEngine.CrashAfterStep = -1; }
-                if (!crashed) { clean = n; break; }
-                w.Engine.Recover();
-                if (w.Engine.LoadState().Mods.Count == 1) SameSnapshot(before, Snapshot(w.Game), "crash reporter rollback after a crash at step " + n);
-                else Require(!File.Exists(cCrash) && File.ReadAllBytes(cRenamed).SequenceEqual(fresh) && File.ReadAllBytes(cRenamed + ".old").SequenceEqual(cStale), "committed crash at step " + n + " lost a copy");
-            }
-            Require(clean > 3, "the crash loop did not reach a clean run: " + clean);
         }
 
         private static void TocFallback(string root)
