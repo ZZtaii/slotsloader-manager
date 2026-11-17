@@ -356,8 +356,18 @@ namespace SlotsInstaller
             RecipesChanged();
             OutfitRecipe now = Recipes().FirstOrDefault(r => String.Equals(r.Name, edited.Name, StringComparison.OrdinalIgnoreCase) && String.Equals(r.Character, edited.Character, StringComparison.OrdinalIgnoreCase));
             if (wasOpen && now != null && currentPage == libraryPage) OpenRecipe(now);
-            if (installNow && now != null) InstallRecipe(now);
+            if (installNow && now != null) InstallEditedRecipe(now);
             else SetPageStatus(currentPage, "✓ Saved the recipe " + edited.Name + ".", Palette.Green);
+        }
+        // 17 Nov 2026 (the user: Juri Harley's hair only in "Reina Cosplay C1", saved and installed again, made "Reina Cosplay
+        // C1 2" and left the first outfit with the whole Harley mod): Save and install of an edited recipe rebuilds the extra
+        // outfit installed from it, in place and under its name, as Update does. A new outfit only when none is installed.
+        private void InstallEditedRecipe(OutfitRecipe recipe)
+        {
+            RecipeInstall made = InstalledRecipe(recipe);
+            if (made.ChangedOutfits.Count > 0) { UpdateInstalledRecipe(recipe, made); return; }
+            if (made.Outfits.Count > 0) { SetPageStatus(currentPage, "✓ Saved the recipe " + recipe.Name + ". " + made.Outfits[0].Name + " is already installed as it says.", Palette.Green); return; }
+            InstallRecipe(recipe);
         }
 
         // ---- A recipe open in the Mod library's inspector (no mod is open then) ----

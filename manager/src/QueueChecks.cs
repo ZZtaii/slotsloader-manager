@@ -744,6 +744,20 @@ namespace SlotsInstaller
                     form.InstallRecipe(windowRecipe); WaitIdle(form);
                     MainForm.RecipeInstall madeRecipe = form.InstalledRecipe(windowRecipe);
                     Require(madeRecipe.Outfits.Count == 1 && madeRecipe.Replacements.Count == 0 && madeRecipe.Badge == "Extra", "an installed recipe is not shown as installed: " + madeRecipe.Outfits.Count + " / " + madeRecipe.Badge);
+                    // 17 Nov 2026: Save and install of an edited recipe rebuilds its installed outfit in place (no "Window Recipe 2");
+                    // saved again unchanged, it installs nothing.
+                    ModPackage bundlePack = PackageReader.Load(Path.Combine(lib, "Juri Bundle.zip"), "");
+                    windowRecipe.Base.SelectedIds = bundlePack.Components.Where(c => c.Name == "Main" || c.Name == "Barefoot").Select(c => c.Id).ToList();
+                    windowRecipe = OutfitRecipes.Save(AppConfig.DataDir, windowRecipe); Call(form, "RecipesChanged"); Application.DoEvents();
+                    Require(form.InstalledRecipe(windowRecipe).Changed, "the edited recipe does not read changed");
+                    Call(form, "InstallEditedRecipe", windowRecipe); WaitIdle(form);
+                    string juriFolder = Path.Combine(game, "reframework", "costume_mods", "Juri");
+                    MainForm.RecipeInstall edited = form.InstalledRecipe(windowRecipe);
+                    Require(edited.Outfits.Count == 1 && !edited.Changed && Directory.GetDirectories(juriFolder).Count(d => Path.GetFileName(d).StartsWith("Window Recipe")) == 1
+                        && File.Exists(Path.Combine(edited.Outfits[0].Folder, "natives", "stm", "product", "model", "esf", "esf016", "001", "03", "esf016_001_03.mesh.230110883")),
+                        "Save and install of an edited recipe: " + String.Join(", ", Directory.GetDirectories(juriFolder).Select(Path.GetFileName)) + " / changed " + edited.Changed);
+                    Call(form, "InstallEditedRecipe", windowRecipe); WaitIdle(form);
+                    Require(Directory.GetDirectories(juriFolder).Count(d => Path.GetFileName(d).StartsWith("Window Recipe")) == 1, "an unchanged recipe was installed again: " + String.Join(", ", Directory.GetDirectories(juriFolder).Select(Path.GetFileName)));
                     if (form.OpenRecipeForTest == null) form.OpenRecipe(windowRecipe);
                     Call(form, "UpdateLibraryUninstall"); Application.DoEvents();
                     Require(recipeUninstall.Enabled && recipeUninstall.Text == "Uninstall" && Get<Label>(form, "planDetails").Text.StartsWith("Installed now as an extra outfit."), "the open installed recipe: " + recipeUninstall.Text + " / " + recipeUninstall.Enabled + " / " + Get<Label>(form, "planDetails").Text);

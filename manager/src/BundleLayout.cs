@@ -216,11 +216,7 @@ namespace SlotsInstaller
                     byte[] old = ZipIntegrity.EndComment(input);
                     int start = LayoutStart(old);
                     byte[] comment = old.Take(start < 0 ? old.Length : start).ToArray();
-                    if (options != null)
-                    {
-                        var text = Encoding.UTF8.GetBytes(Heading + new JavaScriptSerializer().Serialize(options));
-                        comment = comment.Concat(text).Concat(Encoding.ASCII.GetBytes(text.Length.ToString("X8", CultureInfo.InvariantCulture))).Concat(TextMarker).ToArray();
-                    }
+                    if (options != null) comment = comment.Concat(CommentFor(options)).ToArray();
                     if (comment.Length > UInt16.MaxValue) throw new IOException("This bundle layout is too large for a ZIP comment. Shorten option names or use fewer groups.");
                     using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                     {
@@ -238,6 +234,16 @@ namespace SlotsInstaller
                 }
             }
             finally { DurableFile.Discard(temp, path, complete); }
+        }
+
+        // The layout trailer of a ZIP comment (format 2). 1.0.20: also the whole comment of a ZIP converted from a RAR/7Z
+        // with a stored layout (ArchiveConvert).
+        internal static byte[] CommentFor(List<BundleOption> options)
+        {
+            var text = Encoding.UTF8.GetBytes(Heading + new JavaScriptSerializer().Serialize(options));
+            byte[] comment = text.Concat(Encoding.ASCII.GetBytes(text.Length.ToString("X8", CultureInfo.InvariantCulture))).Concat(TextMarker).ToArray();
+            if (comment.Length > UInt16.MaxValue) throw new IOException("This bundle layout is too large for a ZIP comment. Shorten option names or use fewer groups.");
+            return comment;
         }
 
         private static void CopyPrefix(Stream input, Stream output, long length)

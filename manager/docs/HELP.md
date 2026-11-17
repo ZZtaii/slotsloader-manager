@@ -185,6 +185,25 @@ Presets live in `reframework\.slotsloader-installer-presets` in the game folder.
 
 !! OLDER PRESETS: Presets saved before 1.0.8 are full copies and show "full copy" with their size. Save a new preset and delete the old one to free the space.
 
+## Convert RAR and 7Z to ZIP
+> Make RAR and 7Z mods open and preview as fast as ZIP mods.
+
+RAR and 7Z mods are read through 7-Zip, so a large one is slow to show its preview and options. **Settings → General → Convert RAR to ZIP** turns them into ZIPs once.
+
+### Before it starts
+The first question says how many mods convert, the space they take, and what is left out. The ZIPs need about as much space again until you remove the originals. Nothing happens until you click **Convert**. Left out:
+- Mods your external mod manager has installed (it knows its mods by file name). Uninstall it there first to convert it.
+- A mod with a ZIP of the same name beside it. That ZIP is never replaced.
+- A mod whose ZIP path would be too long (see [[A path is too long]]).
+
+### While it converts
+The window shows the mod, its number, a progress bar and the time left. Each mod gets a ZIP of the same name beside it, with the same files and folders, each checked against the original (size and CRC). The ZIP keeps the original's dates (the **Added** sort stays) and its saved bundle layout. **Cancel** stops after the mod being converted. A mod that needs a password, is damaged, or doesn't fit on the drive is skipped and listed with the reason.
+
+Installed extra outfits and their added parts, replacements, Install all variants copies, recipes, presets, a typed name and the history all switch to the ZIP. Nothing needs reinstalling.
+
+### The originals
+**Move originals to Recycle Bin** asks once more, then moves the converted mods' RAR and 7Z files to the Recycle Bin, never deleting them for good. If you keep them, each mod shows twice in the Mod library.
+
 ## Updates
 > How the Manager and Slotsloader stay up to date.
 
@@ -326,6 +345,7 @@ ZIP files and folders work without 7-Zip. RAR and 7Z archives are read with 7-Zi
 ### Other cases
 - An archive that needs a password can't be opened. Extract it yourself and put the folder in one of your mod libraries.
 - While the library is being read, a row shows **Reading…**. Search `is:unreadable` to list the mods the Manager couldn't read.
+- RAR and 7Z mods open slowly: convert them once with [[Convert RAR and 7Z to ZIP]].
 
 ## A path is too long
 > Windows limits file paths to 259 characters until long paths are turned on.

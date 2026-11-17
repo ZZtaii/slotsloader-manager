@@ -51,6 +51,12 @@ namespace SlotsInstaller
                 Require(Get<bool>(form, "busy") && form.PackageLoading, "the read did not start");
                 Require(!Get<ProgressBar>(form, "statusProgress").Visible && Get<Label>(form, "statusText").Text == status && !((BufferedModList)list).InputLocked && Get<OptionTree>(form, "componentTree").Enabled,
                     "opening a mod showed the busy look: progress " + Get<ProgressBar>(form, "statusProgress").Visible + ", status '" + Get<Label>(form, "statusText").Text + "'");
+                // 17 Nov 2026: a read still going after a quarter second says so and locks the shown mod's options; a ZIP gets
+                // no RAR hint, and the list still takes picks.
+                DateTime slow = DateTime.UtcNow.AddMilliseconds(MainForm.ReadingDelay + 300); while (DateTime.UtcNow < slow) { Application.DoEvents(); Thread.Sleep(5); }
+                string readingText = Get<Label>(form, "statusText").Text;
+                Require(readingText.StartsWith("Reading ") && !readingText.Contains(MainForm.SlowArchiveHint) && Get<ProgressBar>(form, "statusProgress").Visible && !Get<OptionTree>(form, "componentTree").Enabled && !((BufferedModList)list).InputLocked,
+                    "a slow read: status '" + readingText + "', options enabled " + Get<OptionTree>(form, "componentTree").Enabled);
                 // The newest pick wins; the read in flight stops before it reads anything (three is the shown mod: picked
                 // and left again, it changes nothing).
                 int reads = form.PackageReads;

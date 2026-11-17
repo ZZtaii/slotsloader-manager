@@ -39,7 +39,7 @@ namespace SlotsInstaller
             List<int> outfit = Library.CountFileMix(new[] { body + "esf016_001_01.mesh.230110883", body + "esf016_001_01_v00.mdf2.31", body + "body_albd.tex.241101895", "natives/stm/streaming/product/model/esf/esf016/001/01/body_albd.tex.241101895",
                 Cmd("016", "001", 1), Cmd("016", "001", 2), "natives/stm/product/model/esf/esf016/001/esf016_001_cmd_ex_001.user.2", "natives/stm/product/gui/data/x.tex.241101895", "reframework/data/colours/esf016_c1.json" });
             List<int> back = Library.CountFileMix(new[] { @"Mod\natives\stm\product\model\esf\esf016\001\esf016_001_cmd_003.user.2" });
-            Require(String.Join(",", pack) == "10,10,0" && String.Join(",", outfit) == "7,3,1" && String.Join(",", back) == "1,1,0" && String.Join(",", Library.CountFileMix(new[] { "reframework/autorun/x.lua" })) == "0,0,0",
+            Require(String.Join(",", pack) == "10,10,0,0" && String.Join(",", outfit) == "7,3,1,0" && String.Join(",", back) == "1,1,0,0" && String.Join(",", Library.CountFileMix(new[] { "reframework/autorun/x.lua" })) == "0,0,0,0",
                 "file mix: " + String.Join(",", pack) + " / " + String.Join(",", outfit) + " / " + String.Join(",", back));
             // A colour pack: colour files, no model, and the colour files are at least half of its outfit files.
             Func<int, int, int, LibraryEntry> mix = delegate(int files, int colours, int models) { return ColourEntry("x", "Juri", "016", "001", files, colours, models); };
@@ -63,6 +63,54 @@ namespace SlotsInstaller
             Require(MainForm.LibraryRowLabel(lib.Single(e => e.Name == "Juri Palette Set"), null) == "C1 \u00b7 Colour pack" && MainForm.LibraryRowLabel(lib.Single(e => e.Name == "Juri Jacket"), null) == "C1", "row label: " + MainForm.LibraryRowLabel(lib.Single(e => e.Name == "Juri Palette Set"), null));
         }
 
+        // 17 Nov 2026: hair is a model's part folder 02 (an outfit's or the shared one's), whatever the file; "hair" finds
+        // the mods with hair files OR-ed with the name, those first; a record of three counts (1.0.19) is read again.
+        private static void CheckHairSearch(string root)
+        {
+            const string esf = "natives/stm/product/model/esf/esf016/";
+            List<int> hair = Library.CountFileMix(new[] { "Hair/" + esf + "001/02/esf016_001_02.mesh.230110883", "Hair/" + esf + "001/02/esf016_001_02_v00.mdf2.31", "Hair/natives/stm/streaming/product/model/esf/esf016/001/02/hair_albd.tex.241101895",
+                esf + "000/02/esf016_000_02_hair_albd.tex.241101895", esf + "001/01/esf016_001_01.mesh.230110883", esf + "001/20/esf016_001_20.mesh.230110883" });
+            Require(String.Join(",", hair) == "6,0,3,4", "hair count: " + String.Join(",", hair));
+            foreach (string word in new[] { "hair", "Hairs", "hairstyle", "hairstyles", "custom hair", "Custom  Hairs" }) Require(LibrarySearch.ColourKeyword(word) == LibrarySearch.HairKeyword, "not a hair word: " + word);
+            foreach (string word in new[] { "hai", "haircut", "chair", "hair pack" }) Require(LibrarySearch.ColourKeyword(word) != LibrarySearch.HairKeyword, "a hair word: " + word);
+            var lib = ColourFixture();
+            lib.Single(e => e.Name == "Juri Jacket").FileMix = new List<int> { 30, 10, 1, 0 };
+            LibraryEntry ponytail = ColourEntry("Juri Ponytail", "Juri", "016", "001", 20, 0, 2); ponytail.FileMix.Add(20);
+            LibraryEntry harley = ColourEntry("Juri Harley", "Juri", "016", "001", 66, 11, 3); harley.FileMix.Add(21);
+            LibraryEntry named = ColourEntry("Juri Hair Notes", "Juri", "016", "001", 3, 0, 1); named.FileMix.Add(0);
+            LibraryEntry old = ColourEntry("Cammy Braid", "Cammy", "009", "001", 9, 0, 1);   // a 1.0.19 record: hair not known yet
+            lib.AddRange(new[] { ponytail, harley, named, old });
+            Require(Find(lib, "hair") == "Juri Hair Notes, Juri Harley, Juri Ponytail" && Find(lib, "juri hair") == Find(lib, "hair") && Find(lib, "juri, hairstyles") == "Juri Harley, Juri Ponytail" && Find(lib, "cammy hair") == "",
+                "hair: " + Find(lib, "hair") + " / " + Find(lib, "juri hair") + " / " + Find(lib, "juri, hairstyles") + " / " + Find(lib, "cammy hair"));
+            Require(LibrarySearch.ColourRank(ponytail, LibrarySearch.HairKeyword) == 0 && LibrarySearch.ColourRank(named, LibrarySearch.HairKeyword) == 2 && LibrarySearch.ColourRank(old, LibrarySearch.HairKeyword) == 2
+                && LibrarySearch.ColourRank(harley, LibrarySearch.ColourCmd) == 1 && !LibrarySearch.IsColourPack(ponytail), "hair rank");
+            Require(Find(lib, "cmd").Contains("Juri Harley") && !Find(lib, "color pack").Contains("Ponytail"), "the colour words changed: " + Find(lib, "cmd"));
+            // The index: records of three counts are read again (the hair count), one without outfit files gets zeros.
+            string dir = Path.Combine(root, "hair-index"); Directory.CreateDirectory(dir);
+            string hairZip = Path.Combine(dir, "Juri Ponytail.zip"), script = Path.Combine(dir, "Hitbox Viewer.zip");
+            Zip(hairZip, "P/" + esf + "001/02/esf016_001_02.mesh.230110883", "P/" + esf + "001/02/hair_albd.tex.241101895", "P/modinfo.ini");
+            Zip(script, "reframework/autorun/hitbox.lua");
+            string previous = Library.IdentityCacheDirectory, cache = Path.Combine(root, "hair-index-cache");
+            try
+            {
+                Library.IdentityCacheDirectory = cache;
+                List<LibraryEntry> scanned = Library.Scan(new[] { dir }, "");
+                Func<List<LibraryEntry>, string, LibraryEntry> at = delegate(List<LibraryEntry> list, string path) { return list.Single(e => String.Equals(e.SourcePath, path, StringComparison.OrdinalIgnoreCase)); };
+                Func<LibraryEntry, string> text = delegate(LibraryEntry e) { return e.FileMix == null ? "null" : String.Join(",", e.FileMix); };
+                Require(text(at(scanned, hairZip)) == "2,0,1,2" && LibrarySearch.HasHairFiles(at(scanned, hairZip)), "fresh scan: " + text(at(scanned, hairZip)));
+                string file = Path.Combine(cache, Library.CacheFilename);
+                LibraryIdentityCache records = Json.Read<LibraryIdentityCache>(file);
+                foreach (LibraryIdentityRecord r in records.Records) r.FileMix = r.FileMix.Take(3).ToList();   // as 1.0.19 wrote them
+                Json.Write(file, records);
+                Library.IdentityCacheDirectory = Path.Combine(root, "hair-index-other"); Library.IdentityCacheDirectory = cache;
+                List<LibraryEntry> pending, names;
+                List<LibraryEntry> quick = Library.ScanQuick(new[] { dir }, "", out pending, out names);
+                Require(at(quick, hairZip).FileMix == null && pending.Contains(at(quick, hairZip)) && text(at(quick, script)) == "0,0,0,0" && !pending.Contains(at(quick, script)),
+                    "1.0.19 records: " + text(at(quick, hairZip)) + " / " + text(at(quick, script)) + ", " + pending.Count + " queued");
+            }
+            finally { Library.IdentityCacheDirectory = previous; }
+        }
+
         // The index: a scan stores the file mix; an index from before it keeps every identity, gives a record without
         // outfit files its zeros without a read, queues the others for the background read, and the next start queues none.
         private static void CheckColourIndex(string root)
@@ -79,11 +127,11 @@ namespace SlotsInstaller
                 List<LibraryEntry> scanned = Library.Scan(new[] { lib }, "");
                 Func<List<LibraryEntry>, string, LibraryEntry> at = delegate(List<LibraryEntry> list, string path) { return list.Single(e => String.Equals(e.SourcePath, path, StringComparison.OrdinalIgnoreCase)); };
                 Func<LibraryEntry, string> text = delegate(LibraryEntry e) { return e.FileMix == null ? "null" : String.Join(",", e.FileMix); };
-                Require(text(at(scanned, pack)) == "10,10,0" && text(at(scanned, outfit)) == "3,2,1" && text(at(scanned, script)) == "0,0,0" && LibrarySearch.IsColourPack(at(scanned, pack)) && !LibrarySearch.IsColourPack(at(scanned, outfit)) && LibrarySearch.HasColourFiles(at(scanned, outfit)),
+                Require(text(at(scanned, pack)) == "10,10,0,0" && text(at(scanned, outfit)) == "3,2,1,0" && text(at(scanned, script)) == "0,0,0,0" && LibrarySearch.IsColourPack(at(scanned, pack)) && !LibrarySearch.IsColourPack(at(scanned, outfit)) && LibrarySearch.HasColourFiles(at(scanned, outfit)),
                     "fresh scan: " + String.Join("; ", scanned.Select(e => e.Name + "=" + text(e))));
                 string file = Path.Combine(cache, Library.CacheFilename);
                 LibraryIdentityCache records = Json.Read<LibraryIdentityCache>(file);
-                Require(records.Records.All(r => r.FileMix != null && r.FileMix.Count == 3), "the file mix is not stored in the index");
+                Require(records.Records.All(r => r.FileMix != null && r.FileMix.Count == 4), "the file mix is not stored in the index");
                 // The records as an older Manager wrote them, read as on a restart; the archives are locked.
                 foreach (LibraryIdentityRecord r in records.Records) r.FileMix = null;
                 Json.Write(file, records);
@@ -94,14 +142,14 @@ namespace SlotsInstaller
                 finally { foreach (FileStream s in locks) s.Dispose(); }
                 LibraryEntry qPack = at(quick, pack), qOutfit = at(quick, outfit), qScript = at(quick, script);
                 Require(Library.CacheMisses == misses && quick.All(e => !e.Pending && e.Detection != "Error" && e.OptionCount >= 0), "the quick listing lost identity: " + String.Join("; ", quick.Select(e => e.Name + " " + e.Detection)));
-                Require(qPack.FileMix == null && qOutfit.FileMix == null && pending.Contains(qPack) && pending.Contains(qOutfit) && text(qScript) == "0,0,0" && !pending.Contains(qScript), "old records: " + text(qPack) + " / " + text(qOutfit) + " / " + text(qScript) + ", " + pending.Count + " queued");
+                Require(qPack.FileMix == null && qOutfit.FileMix == null && pending.Contains(qPack) && pending.Contains(qOutfit) && text(qScript) == "0,0,0,0" && !pending.Contains(qScript), "old records: " + text(qPack) + " / " + text(qOutfit) + " / " + text(qScript) + ", " + pending.Count + " queued");
                 Require(!LibrarySearch.IsColourPack(qPack) && !LibrarySearch.HasColourFiles(qOutfit), "a mod whose files are not known yet was called a colour pack");
                 foreach (LibraryEntry e in new[] { qPack, qOutfit }) { LibraryEntry c = Library.IndexCopy(e); Library.IndexEntry(c, ""); Library.TakeIdentity(e, c); }
                 Library.SaveIndex();
-                Require(text(qPack) == "10,10,0" && text(qOutfit) == "3,2,1" && Library.CacheMisses == misses, "background read: " + text(qPack) + " / " + text(qOutfit) + ", misses " + (Library.CacheMisses - misses));
+                Require(text(qPack) == "10,10,0,0" && text(qOutfit) == "3,2,1,0" && Library.CacheMisses == misses, "background read: " + text(qPack) + " / " + text(qOutfit) + ", misses " + (Library.CacheMisses - misses));
                 Library.IdentityCacheDirectory = Path.Combine(root, "colour-index-other"); Library.IdentityCacheDirectory = cache;
                 quick = Library.ScanQuick(new[] { lib }, "", out pending, out names);
-                Require(pending.Count == 0 && text(at(quick, pack)) == "10,10,0" && text(at(quick, outfit)) == "3,2,1", "after the background read: " + pending.Count + " queued");
+                Require(pending.Count == 0 && text(at(quick, pack)) == "10,10,0,0" && text(at(quick, outfit)) == "3,2,1,0", "after the background read: " + pending.Count + " queued");
             }
             finally { Library.IdentityCacheDirectory = previous; }
         }

@@ -515,6 +515,8 @@ namespace SlotsInstaller
             "RecoveryForm.DeleteSelected",  // a recoverable copy is deleted for good (no Undo)
             "MainForm.ConfirmVanilla",      // 1.0.1: Restore game to vanilla removes every mod for good (no Undo)
             "MainForm.ConfirmLostParts",    // 1.0.18 Added parts Save: asked only when added parts are lost for good (their mods are gone); otherwise no question, Undo puts the list back
+            "MainForm.ConvertArchives",     // 1.0.20 Convert RAR and 7Z to ZIP: what converts, the space, what is left out, before any file is written (the user's design: "offers to convert")
+            "ConvertForm.AskRecycle",       // 1.0.20 the second question before the originals go to the Recycle Bin (the user: "offer the user to delete the original RARs")
         };
         // 2.4.1: modal windows (Form.ShowDialog). Each is opened by the user's own click to view or edit something,
         // except OutfitSetsForm.Confirm (a saved copy deleted for good, no Undo). Only the welcome opens on its own, once.
@@ -537,6 +539,7 @@ namespace SlotsInstaller
             "MainForm.InspectOrToggleInstalled", // 1.0.15 Installed → Health: the read-only file report (Close)
             "MainForm.ShowCurrentReport",   // Health (Replace original): the full report; the inspector shows the summary inline
             "MainForm.ShowPresetsWindow",   // Presets…
+            "MainForm.ConvertArchives",     // 1.0.20 Convert RAR and 7Z to ZIP: the progress window (Cancel stops after the mod being converted)
             "OutfitSetsForm.Confirm",       // Delete saved copy: permanent (no Undo)
             "OutfitSetsForm.ShowPresets",   // Presets… (older entry point kept for callers without the replace engine)
             "RecoveryForm.ShowRecovery",    // Recover…

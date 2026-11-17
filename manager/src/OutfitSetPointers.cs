@@ -541,6 +541,49 @@ namespace SlotsInstaller
                 catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
             }
         }
+        // 1.0.20 Convert RAR and 7Z to ZIP (ArchiveConvert): the presets name the ZIP. Besides RenameSource's pointers:
+        // all_variants add-ons, the copied replacements' source, and the archive identity a replacement pointer is matched
+        // by (a ZIP has its own hash and size). A pointer's stamp takes the ZIP's when it still had the archive's (so no
+        // "the mod changed since the preset was saved" note). Logs, never throws: the conversion is already done.
+        internal static void ConvertSource(string costumeRoot, string from, string to, string fromStamp, string toStamp, string toSha, long toSize)
+        {
+            if (String.IsNullOrEmpty(from) || String.IsNullOrEmpty(to)) return;
+            string root, container;
+            try { root = Root(costumeRoot); container = Container(root, OutfitSetKind.Preset); if (!System.IO.Directory.Exists(container)) return; }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); return; }
+            foreach (string folder in System.IO.Directory.EnumerateDirectories(container))
+            {
+                try
+                {
+                    string text; OutfitSetRecord record = Read(root, folder, OutfitSetKind.Preset, false, out text);
+                    bool changed = false;
+                    Func<string, bool> same = delegate(string path) { return !String.IsNullOrEmpty(path) && String.Equals(path.TrimEnd('\\'), from.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase); };
+                    Func<string, string> stamp = delegate(string old) { return !String.IsNullOrEmpty(fromStamp) && old == fromStamp && toStamp != null ? toStamp : old; };
+                    if (record.Pointers != null)
+                    {
+                        foreach (PresetOutfitPointer p in record.Pointers.Outfits)
+                        {
+                            if (same(p.SourcePath)) { p.SourcePath = to; p.SourceStamp = stamp(p.SourceStamp); changed = true; }
+                            foreach (PresetPartPointer part in p.Parts) if (same(part.SourcePath)) { part.SourcePath = to; part.SourceStamp = stamp(part.SourceStamp); changed = true; }
+                            for (int i = 0; p.AddonSources != null && i < p.AddonSources.Count; i++) if (same(p.AddonSources[i])) { p.AddonSources[i] = to; changed = true; }
+                        }
+                        foreach (PresetReplacementPointer p in record.Pointers.Replacements)
+                        {
+                            if (!same(p.SourcePath)) continue;
+                            p.SourcePath = to; p.SourceStamp = stamp(p.SourceStamp); changed = true;
+                            if (p.ArchiveSha != null) { p.ArchiveSha = toSha; p.ArchiveSize = toSize; }   // null sha: restore falls back to the path
+                        }
+                    }
+                    if (record.Replacements != null && record.Replacements.Mods != null)
+                        foreach (OutfitSetReplacement r in record.Replacements.Mods) if (r != null && r.Mod != null && same(r.Mod.SourcePath)) { r.Mod.SourcePath = to; changed = true; }
+                    if (!changed) continue;
+                    string file = System.IO.Path.Combine(folder, RecordName), temp = file + ".tmp";
+                    Json.Write(temp, record);
+                    DurableFile.Publish(temp, file);
+                }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            }
+        }
         // The path with `from` (a file or folder) replaced by `to`; the path itself, or one inside the folder.
         private static string Moved(string path, string from, string to)
         {

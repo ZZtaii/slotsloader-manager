@@ -234,6 +234,7 @@ namespace SlotsInstaller
             if (bodies.Count==0)
             {
                 if (p.Files.Keys.Any(x=>Regex.IsMatch(x,@"/esf/esf\d{3}/\d{3}/\d{2}/[^/]+\.mesh\.230110883$",RegexOptions.IgnoreCase))) p.Warnings.Add("Partial outfit with no body mesh: Slotsloader may combine it with vanilla parts. Check it in game.");
+                else if (SharedTexturesOnly(p.Files.Keys)) p.Errors.Add(SharedTexturesHint);
                 else p.Errors.Add("The selection has no outfit mesh. Add the main mesh option; textures alone don't make an outfit.");
             }
             foreach (string body in bodies) if (!materials.Contains(body)) p.Warnings.Add("The mod has no body material for esf"+body+": Slotsloader may use the vanilla one. Check it in game after restarting SF6.");
@@ -355,6 +356,17 @@ namespace SlotsInstaller
                     layers.Add(item);
                     yield return item;
                 }
+        }
+        // 17 Nov 2026 (the user, robhal's "!BASE: Mai C1 ORIGINAL TEXTURE FILES" for swaps such as "Mai Fix Me Nurse (to JP
+        // C1)"): a pack of textures in a fighter folder that is no outfit folder (esf028/C01) is what other outfits'
+        // materials point at, not an outfit. As an extra outfit Slotsloader ignores it; installed with Replace original
+        // (loose files, old texture suffixes renamed) every extra outfit that names those paths finds it.
+        internal const string SharedTexturesHint = "Install this with Replace original: these are base textures other outfits use (swap mods), not an outfit of their own.";
+        private static readonly Regex FixedModelPath = new Regex(@"^natives/stm/(?:streaming/)?product/model/esf/esf\d{3}/(?!\d{3}/)[^/]+/", RegexOptions.IgnoreCase);
+        internal static bool SharedTexturesOnly(IEnumerable<string> paths)
+        {
+            var list = paths.ToList();
+            return list.Count > 0 && list.All(x => FixedModelPath.IsMatch(x) && !Regex.IsMatch(x, @"\.(mesh|mdf2)\.\d+$", RegexOptions.IgnoreCase)) && list.Any(x => Regex.IsMatch(x, @"\.tex\.\d+$", RegexOptions.IgnoreCase));
         }
         private static bool KnownLoaderRoute(string path)
         {

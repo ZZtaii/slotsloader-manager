@@ -1058,6 +1058,8 @@ namespace SlotsInstaller
             actions.Controls.Add(Button("Save settings", true, 154, delegate { SaveSettings(); }));
             actions.Controls.Add(Button("Open Data folder", false, 168, delegate { OpenPath(AppConfig.DataDir); }));
             actions.Controls.Add(Button("Show welcome", false, 150, delegate { WelcomeForm.ShowWelcome(this, ShowHelp); }));   // 1.0.11 (the user): here, not in the gear menu
+            // 1.0.20 (MainFormConvert.cs): RAR and 7Z both; the short label keeps the row to one line at the usual window size.
+            actions.Controls.Add(Button("Convert RAR to ZIP", false, 168, delegate { ConvertArchives(); }));
             fields.Controls.Add(actions); fields.Controls.Add(layout);
             layout.BringToFront();
             Panel settingsGap = new Panel { Dock = DockStyle.Right, Width = 24 }; Panel claudeCard = BuildClaudeSettings();
@@ -1797,7 +1799,7 @@ namespace SlotsInstaller
                 // 1.0.19: a colour word in the search ("color pack", "cmd") lists the colour packs first, then the other mods
                 // with colour files, then the rest, each group in the order above (LibrarySearch.ColourRank). Before the
                 // recipes are put in front, so a recipe word still lists them first.
-                if (query.Colour != null) rows = rows.OrderBy(x => LibrarySearch.ColourRank(x)).ToList();
+                if (query.Colour != null) rows = rows.OrderBy(x => LibrarySearch.ColourRank(x, query.Colour)).ToList();
                 if (recipesFirst) rows = SortLibraryRows(recipeRows.Select(x => new KeyValuePair<LibraryEntry, int>(x, LibrarySearch.Direct)).ToList()).Concat(rows).ToList();
             }
             finally { recipeInstallPass = null; }

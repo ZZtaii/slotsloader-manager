@@ -669,7 +669,7 @@ namespace SlotsInstaller
             // files) whatever their name, the colour packs first (LibrarySearch.ColourKeyword).
             string colour = LibrarySearch.ColourKeyword(text);
             shown = (narrowed && !showAll ? fitting : all).Where(e => text.Length == 0 || Shown(e).IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0 || LibrarySearch.MatchesColour(e, colour))
-                .OrderBy(e => colour == null ? 0 : LibrarySearch.ColourRank(e)).ThenBy(Shown, StringComparer.OrdinalIgnoreCase).ToList();
+                .OrderBy(e => colour == null ? 0 : LibrarySearch.ColourRank(e, colour)).ThenBy(Shown, StringComparer.OrdinalIgnoreCase).ToList();
             mods.SetRows(shown.Select(Shown));
         }
         private void ToggleShowAll() { LibraryEntry kept = SelectedMod; showAll = !showAll; FillMods(); SelectMod(kept); }
