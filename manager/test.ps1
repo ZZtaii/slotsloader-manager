@@ -16,7 +16,8 @@ $env:SLOTSLOADER_TEST_CONFIG = $LocalConfig; $env:SLOTSLOADER_PROJECT = $testPro
 $local = if (Test-Path -LiteralPath $LocalConfig) { Get-Content -LiteralPath $LocalConfig -Raw | ConvertFrom-Json } else { $null }
 $realGame = if ($local) { $local.GameRoot } else { '<set GameRoot in tests.local.json>' }
 $realJuri = if ($local -and $local.Archives.juri) { $local.Archives.juri } else { '<set Archives.juri in tests.local.json>' }
-$realRar = if ($local -and $local.Archives.viperHair) { $local.Archives.viperHair } else { '<set Archives.viperHair in tests.local.json>' }
+# 1.0.20: convert-real needs a real RAR outside the libraries once these hold none (Convert RAR to ZIP): Archives.convertRar, else viperHair.
+$realRar = if ($local -and $local.Archives.convertRar) { $local.Archives.convertRar } elseif ($local -and $local.Archives.viperHair) { $local.Archives.viperHair } else { '<set Archives.convertRar in tests.local.json>' }
 New-Item -ItemType Directory -Path (Join-Path $OutputDirectory 'Data') -Force | Out-Null
 @{ GameRoot = (Join-Path $testFixtures 'game'); Libraries = @(); SevenZipPath = 'C:\Program Files\7-Zip\7z.exe' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory 'Data\settings.json') -Encoding UTF8
 $testCases = @(

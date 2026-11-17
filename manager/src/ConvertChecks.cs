@@ -80,7 +80,7 @@ namespace SlotsInstaller
             string previousBundle = BundleStore.DataDirOverride; BundleStore.DataDirOverride = Path.Combine(root, "Data");
             try
             {
-                Require(File.Exists(archive), "set Archives.viperHair (a RAR) in tests.local.json: " + archive);
+                Require(File.Exists(archive), "set Archives.convertRar (a real RAR) in tests.local.json: " + archive);
                 string tool = SevenZipTool.ResolveOrFetch("");
                 string lib = Path.Combine(root, "library"); Directory.CreateDirectory(lib);
                 string copy = Path.Combine(lib, Path.GetFileName(archive));
