@@ -309,6 +309,25 @@ namespace SlotsInstaller
             var hairs = PackageReader.Load(menu, "");
             var hairPick = Composer.DefaultSelection(hairs, true).Select(id => hairs.Find(id).Name).ToList();
             Require(hairPick.SequenceEqual(new[] { "Hair long" }) && Composer.Plan(hairs, Composer.DefaultSelection(hairs, true), true).CanInstall, "required menu: " + String.Join(", ", hairPick));
+            // 1.0.21: a "Choose ONE" group whose only options are named "(Optional)" is one or none, not required
+            // (Ingrid C1 Barefoot Stockings from the Mod Packager: "02 Add-ons" holding only "Painted Nails (Optional)").
+            string nails = Path.Combine(root, "..", "optional-choose-one");
+            ReplaceChecks.Put(nails, "00 Menu/modinfo.ini", Encoding.UTF8.GetBytes("name=Stockings\r\nDummyMod=true\r\n"));
+            ReplaceChecks.Put(nails, "01 Base/modinfo.ini", Encoding.UTF8.GetBytes("name=Base\r\nAddonFor=Stockings\r\n"));
+            ReplaceChecks.Put(nails, "01 Base/" + model + "01/body.mesh.230110883", Encoding.ASCII.GetBytes("base"));
+            ReplaceChecks.Put(nails, "02 Add-ons/modinfo.ini", Encoding.UTF8.GetBytes("name=02 Add-ons\r\nAddonFor=Stockings\r\nDummyMod=true\r\ndescription=Choose ONE. Disable the previous choice before switching.\r\n"));
+            ReplaceChecks.Put(nails, "02A Nails/modinfo.ini", Encoding.UTF8.GetBytes("name=Painted Nails (Optional)\r\nAddonFor=02 Add-ons\r\n"));
+            ReplaceChecks.Put(nails, "02A Nails/" + model + "01/nails_albd.tex.241101895", Encoding.ASCII.GetBytes("nails"));
+            var optional = PackageReader.Load(nails, "");
+            var addons = optional.Components.First(c => c.Name == "02 Add-ons");
+            Require(optional.IsChoice(addons) && !addons.RequiresChoice, "(Optional) options: the group should be choose-one but not required");
+            var baseOnly = optional.Components.Where(c => c.Name == "Base").Select(c => c.Id).ToList();
+            Require(Composer.Plan(optional, baseOnly, true).CanInstall, "(Optional) options: Base alone can't install");
+            // One option without "(Optional)" keeps the group required.
+            ReplaceChecks.Put(nails, "02B Toes/modinfo.ini", Encoding.UTF8.GetBytes("name=Painted Toes\r\nAddonFor=02 Add-ons\r\n"));
+            ReplaceChecks.Put(nails, "02B Toes/" + model + "01/nails_albd.tex.241101895", Encoding.ASCII.GetBytes("toes"));
+            var mixed = PackageReader.Load(nails, "");
+            Require(mixed.Components.First(c => c.Name == "02 Add-ons").RequiresChoice, "mixed options: the group should stay required");
         }
         // 1.0.18: an install of an installed mod with other options goes to the top like a new install; the same options
         // from an edited source (keepPlace) stay; SetOrder saves several Move clicks as one change.
