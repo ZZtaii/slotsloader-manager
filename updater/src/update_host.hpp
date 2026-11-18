@@ -20,12 +20,21 @@
 
 namespace sf6up::host {
 
-constexpr uint32_t kUpdaterVersion = 4;          // raise when the updater's behaviour changes: the newest copy runs
+constexpr uint32_t kUpdaterVersion = 5;          // raise when the updater's behaviour changes: the newest copy runs
 constexpr uint32_t kRoleCore = 2, kRolePlugin = 1;
 
 struct HostInfo {
     uint32_t role = 0;                           // kRoleCore or kRolePlugin
     void (*log)(const char* line) = nullptr;     // the host's log (game thread)
+    // The update box's Details key (T / pad Y), when the host has a changelog page (the Native Core's News tab); all or none.
+    // notes: any thread, the latest release's manifest text (its "notes"); the others on the game thread.
+    void (*notes)(const char* manifest) = nullptr;
+    bool (*details_open)(const char* version) = nullptr;   // the page for that release; false: not opened
+    bool (*details_busy)() = nullptr;                      // asked or up
+    bool (*details_shown)() = nullptr;                     // up
+    void (*details_give_up)() = nullptr;                   // it never came up
+    bool (*details_key)() = nullptr;                       // T or the pad's top button held
+    bool (*text_guid)(const char* utf8, unsigned char out16[16]) = nullptr;   // a GUID text of the game's message tables
 };
 // From reframework_plugin_initialize, once REFramework's API is initialised
 void init(const HostInfo& info);

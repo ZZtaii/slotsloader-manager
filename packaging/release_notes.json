@@ -1,0 +1,206 @@
+{
+  "format": "sf6suite-notes-1",
+  "releases": [
+    {
+      "version": "1.43.0",
+      "date": "2026-11-18",
+      "new": [
+        "[Custom Combos] Doctor's Office (Fighting Ground > Special Match). A patient pauses one of their replays (Multi Menu > Replays) and chooses Send Symptoms: that moment becomes a case, open to everyone for 24 hours.",
+        "[Custom Combos] A doctor picks a case in Doctor's Office: its replay opens on that very frame, Press Start, and you play the patient from there. The most damage for the fewest Drive and Super Art bars; Reset Battle starts again; one prescription per case, final.",
+        "[Custom Combos] Doctor's Office > Results: your place while a case is open, the podium once it is closed, and Watch replays a prescription from the case's moment."
+      ],
+      "fixed": [],
+      "modified": [
+        "[Suite] Doctor's Office needs the Recording Manager's community link (Steam verification) and an internet connection."
+      ]
+    },
+    {
+      "version": "1.42.1",
+      "date": "2026-11-18",
+      "new": [],
+      "fixed": [],
+      "modified": [
+        "[Suite] The OverDrive Changelog news show the Slots Loader's cover picture (needs an internet connection).",
+        "[Slots Loader] Its zip carries a cover picture for Fluffy Mod Manager and the Slotsloader Manager."
+      ]
+    },
+    {
+      "version": "1.42.0",
+      "date": "2026-11-18",
+      "new": [
+        "[Suite] News has a new tab, OverDrive Changelog: what each release of the suite brought, since 1.30.0.",
+        "[Suite] The update offer has a Details key (T / pad Y): what's new in every release since the one you have."
+      ],
+      "fixed": [],
+      "modified": []
+    },
+    {
+      "version": "1.41.0",
+      "date": "2026-11-17",
+      "new": [],
+      "fixed": [
+        "[Custom Combos] A custom trial is now marked cleared only when you clear that trial."
+      ],
+      "modified": [
+        "[Custom Combos] Clear marks show in the trial list, the pause menu and Uncleared only; official clears stay untouched."
+      ]
+    },
+    {
+      "version": "1.40.0",
+      "date": "2026-11-17",
+      "new": [
+        "[Profile Mod] The Battle Hub Player List shows each player's MR, or League Points if they have no MR.",
+        "[Profile Mod] The Player List SORT menu has a new MR row, ascending or descending."
+      ],
+      "fixed": [],
+      "modified": [
+        "[Profile Mod] The Player List keeps your chosen sort, even after a restart.",
+        "[Profile Mod] hub_rating=0 in profile_mod.ini turns off the MR column and sort.",
+        "[Profile Mod] Zen Mode does not hide the new MR column yet."
+      ]
+    },
+    {
+      "version": "1.39.0",
+      "date": "2026-11-17",
+      "new": [],
+      "fixed": [
+        "[Slots Loader] Random outfit in Arcade, Training and Versus now gives a real random outfit and colour.",
+        "[Custom Combos] Lists show only combos of their own control type (Classic or Modern)."
+      ],
+      "modified": [
+        "[Custom Combos] A fighter with no Modern combo shows only the [REC] row in Modern."
+      ]
+    },
+    {
+      "version": "1.38.0",
+      "date": "2026-11-16",
+      "new": [],
+      "fixed": [
+        "[Custom Combos] 34 Ryu combos start again on the Counter or Punish Counter they were recorded with."
+      ],
+      "modified": [
+        "[Custom Combos] 553 community combos for 31 fighters, 52 more, each validated by the game.",
+        "[Custom Combos] A dash, jump, parry or Drive Rush after the last hit is no longer judged.",
+        "[Suite] The title screen shows the suite's version."
+      ]
+    },
+    {
+      "version": "1.37.0",
+      "date": "2026-11-15",
+      "new": [
+        "[Custom Combos] New mod: your own combo trials in Fighting Ground > Practice > Custom Combos.",
+        "[Custom Combos] Record a combo with the [REC] row, or from a replay with Start Combo Recording.",
+        "[Custom Combos] 501 community combos for 31 fighters come with it, credited to their authors.",
+        "[Custom Combos] Rename, move or delete a trial with T (pad Y) in the list.",
+        "[Custom Combos] Auto Reset On Fail and the Frame Meter can be used inside a trial.",
+        "[Suite] SF6_CrashReport.bat gathers a crash into a zip and can send it to the mods' team."
+      ],
+      "fixed": [
+        "[Suite] Title screen left on Random could go black when the background changed; this is fixed.",
+        "[Custom Combos] Examples now play the same at Game Speed 50 percent and 100 percent.",
+        "[Custom Combos] Dash and jump steps are no longer wrongly judged as must-hit."
+      ],
+      "modified": [
+        "[Suite] The updater now also updates Custom Combos.",
+        "[Slots Loader] Better support for installs made with ZZtaii's Slotsloader Manager.",
+        "[Custom Combos] Trials that end on a Critical Art now start you at 20 percent life."
+      ]
+    },
+    {
+      "version": "1.36.0",
+      "date": "2026-11-12",
+      "new": [
+        "[Suite] The update box has a Show zip button that opens the folder with the downloaded zips."
+      ],
+      "fixed": [],
+      "modified": [
+        "[Suite] Updates keep the downloaded zips, so Fluffy Mod Manager users can replace them there."
+      ]
+    },
+    {
+      "version": "1.35.0",
+      "date": "2026-11-11",
+      "new": [
+        "[Slots Loader] Title screen packs shipped as a .pak file are now read."
+      ],
+      "fixed": [],
+      "modified": [
+        "[Slots Loader] Outfit names from archive files no longer show .rar, .zip or .7z.",
+        "[Mod Sorter] Recognizes title packs shipped as a .pak file."
+      ]
+    },
+    {
+      "version": "1.34.0",
+      "date": "2026-11-11",
+      "new": [
+        "[Mod Sorter] The tool now updates itself from its Options tab.",
+        "[Suite] The game's side message shows the download percentage during an update."
+      ],
+      "fixed": [],
+      "modified": []
+    },
+    {
+      "version": "1.33.0",
+      "date": "2026-11-11",
+      "new": [
+        "[Mod Sorter] New tool: drop downloaded mods on it and it installs each one where the game reads it.",
+        "[Mod Sorter] It checks for new suite releases and installs them with the game closed.",
+        "[Mod Sorter] An Installed tab lists your mods with pictures and can mark costumes as NSFW."
+      ],
+      "fixed": [],
+      "modified": []
+    },
+    {
+      "version": "1.32.0",
+      "date": "2026-11-11",
+      "new": [
+        "[Suite] The game now offers new suite releases at the main menu: Yes, No or Ignore.",
+        "[Suite] Updates are checked and installed all at once, then the game offers to restart."
+      ],
+      "fixed": [],
+      "modified": [
+        "[Suite] The update check can be turned off (check_for_updates false in its state.json)."
+      ]
+    },
+    {
+      "version": "1.31.0",
+      "date": "2026-11-11",
+      "new": [
+        "[Profile Mod] Zen Mode hides ranks, League Points / MR, win streaks, player names and player details.",
+        "[Profile Mod] A new Zen Mode tab in Battle Settings turns each group Hidden or Shown."
+      ],
+      "fixed": [],
+      "modified": [
+        "[Profile Mod] Zen Mode replaces ZenMode.lua and needs a recent REFramework nightly build."
+      ]
+    },
+    {
+      "version": "1.30.1",
+      "date": "2026-11-10",
+      "new": [],
+      "fixed": [
+        "[Color Mod] The Random value is back in Battle Settings > Fighter Settings.",
+        "[Color Mod] Each character keeps its own Random colour in Fighter Settings.",
+        "[Slots Loader] Every character set to Random keeps its Random colour in battle.",
+        "[Slots Loader] Confirming Random in the Training popup draws a colour at once."
+      ],
+      "modified": []
+    },
+    {
+      "version": "1.30.0",
+      "date": "2026-11-10",
+      "new": [
+        "[Slots Loader] Random colour at the end of every Color row, never repeating before all were worn.",
+        "[Slots Loader] Random outfit and Random colour in Replays > Settings.",
+        "[Slots Loader] In ranked matches, Random only draws outfits you really own."
+      ],
+      "fixed": [
+        "[Slots Loader] Tab back on Recommended Replays now opens Settings."
+      ],
+      "modified": [
+        "[Slots Loader] The Random outfit now draws RW and MC colours too.",
+        "[Slots Loader] Random is no longer offered in Opponent Outfit Settings."
+      ]
+    }
+  ]
+}

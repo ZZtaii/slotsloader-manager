@@ -89,21 +89,30 @@ Obj* new_string(const std::string& s) {
 }
 
 Obj* g_box = nullptr;
-std::string g_third;                // the third button's word, still to be written on the box (empty: nothing to write)
-int g_third_tries = 0;
+std::string g_labels[3];            // each button's word, still to be written on the box (empty: the game's own word)
+int g_label_tries = 0;
 
-// The third button of the game's three-button box reads the game's "Cancel": our word instead. The box's handle holds its Param, whose
-// SimpleList_3 has one item per button, each with a text that carries a message id; the id is emptied and the word written, once.
-// False while the buttons are not built yet.
-bool label_third(Obj* box, const std::string& word) {
+// A button of the game's box with our word instead of the game's (Yes, No, Cancel). The box's handle holds its Param, whose
+// SimpleList_3 (three buttons) and SimpleList_2 (two: seen in game 18/11, a two-button box kept "Yes" / "No" while only
+// SimpleList_3 was written) have one item per button, each with a text that carries a message id; the id is emptied and the word
+// written, once. False while the buttons are not built yet.
+bool label_in_list(Obj* list, int idx, const std::string& word);
+bool label_button(Obj* box, int idx, const std::string& word) {
     Obj* param = field_obj(box, "<Param>k__BackingField");
-    Obj* list = param ? field_obj(param, "SimpleList_3") : nullptr;
-    if (!list) return false;
+    if (!param) return false;
+    bool any = false;
+    for (const char* name : { "SimpleList_2", "SimpleList_3" }) {
+        Obj* list = field_obj(param, name);
+        try { if (list && label_in_list(list, idx, word)) any = true; } catch (...) {}
+    }
+    return any;
+}
+bool label_in_list(Obj* list, int idx, const std::string& word) {
     reframework::InvokeRet r{};
     if (!call_named(list, "get_Items", 0, {}, &r)) return false;
     Obj* items = static_cast<Obj*>(r.ptr);
-    if (!call_named(items, "get_Count", 0, {}, &r) || (int32_t)r.dword < 3) return false;
-    if (!call_named(items, "get_Item", 1, { arg_i32(2) }, &r)) return false;
+    if (!call_named(items, "get_Count", 0, {}, &r) || (int32_t)r.dword <= idx) return false;
+    if (!call_named(items, "get_Item", 1, { arg_i32(idx) }, &r)) return false;
     Obj* node = static_cast<Obj*>(r.ptr);
     if (!call_named(node, "get_Child", 0, {}, &r)) return false;
     node = static_cast<Obj*>(r.ptr);
@@ -122,6 +131,101 @@ bool label_third(Obj* box, const std::string& word) {
     return false;
 }
 
+// ---- the Details key (read in the game's code 17/11): MessageBoxMain.OnEnter builds the box's guide line (Confirm, Cancel)
+// and registers it with UIWidgetCtrl_InputGuide (its id kept in the Param's GuideId). In the post of that OnEnter, for our box,
+// one entry more is added there (AddData), made as Custom Combos' pause-menu keys are: Type 0, DigitalConfigId UI_Y 93 (the game
+// draws T or the pad's top button), MessageId a GUID text. The key itself is read by the host (T, the pad's top button); when it is
+// pressed the box is closed by its own EventCancel, and box_poll answers 3.
+DetailsKey g_details;                // this box's (word empty: none)
+bool g_details_hooked = false, g_details_hook_failed = false;
+Obj* g_main = nullptr;               // the box's MessageBoxMain, from its OnEnter
+bool g_expect = false;               // a box of ours is being opened: its OnEnter is the next one
+bool g_key_was = true;               // (held when the box came: not a press)
+bool g_details_hit = false;
+uint8_t g_word_guid[16] = {};
+std::string g_word_done;
+Obj* g_entry = nullptr;              // our guide entry, rooted for the process
+thread_local Obj* tl_main = nullptr;
+
+Obj* param_of_box(Obj* box) { return box ? field_obj(box, "<Param>k__BackingField") : nullptr; }
+
+int pre_box_enter(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_main = nullptr;
+    try {
+        if (g_details.word.empty() || !g_expect) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        Obj* main = reinterpret_cast<Obj*>(argv[1]);
+        reframework::InvokeRet r{};
+        if (!call_named(main, "get_Param", 0, {}, &r)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        Obj* param = static_cast<Obj*>(r.ptr);
+        if (g_box && param != param_of_box(g_box)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        tl_main = main;
+    } catch (...) {}
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
+bool add_guide_entry(Obj* main) {
+    reframework::InvokeRet r{};
+    if (!call_named(main, "get_Param", 0, {}, &r)) return false;
+    Obj* param = static_cast<Obj*>(r.ptr);
+    void* gid = field_ptr(param, "GuideId");
+    if (!gid) return false;
+    const int32_t guide = *reinterpret_cast<int32_t*>(gid);
+    if (g_word_done != g_details.word) {
+        if (!g_details.guid || !g_details.guid(g_details.word.c_str(), g_word_guid)) return false;
+        g_word_done = g_details.word;
+    }
+    if (!g_entry) {
+        TD* td = type("app.InputGuideData");
+        Obj* e = nullptr;
+        try { e = td ? td->create_instance(0) : nullptr; } catch (...) { e = nullptr; }
+        if (!e) return false;
+        e->add_ref();
+        g_entry = e;
+    }
+    void* f_type = field_ptr(g_entry, "<Type>k__BackingField");
+    void* f_cfg = field_ptr(g_entry, "<DigitalConfigId>k__BackingField");
+    void* f_id = field_ptr(g_entry, "<DigitalId>k__BackingField");
+    void* f_msg = field_ptr(g_entry, "<MessageId>k__BackingField");
+    if (!f_type || !f_cfg || !f_id || !f_msg) return false;
+    *reinterpret_cast<int32_t*>(f_type) = 0;
+    *reinterpret_cast<int32_t*>(f_cfg) = 93;           // app.InputAssign.Digital.ConfigId UI_Y
+    *reinterpret_cast<int32_t*>(f_id) = -1;
+    std::memcpy(f_msg, g_word_guid, 16);
+    Method* add = method_of(type("app.UIWidgetCtrl_InputGuide"), "AddData", 2);
+    reframework::InvokeRet v{};
+    return add && call(add, nullptr, { arg_i32(guide), g_entry }, &v);
+}
+
+void post_box_enter(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    Obj* main = tl_main;
+    tl_main = nullptr;
+    if (!main) return;
+    try {
+        g_expect = false;
+        main->add_ref();
+        if (g_main) g_main->release();
+        g_main = main;
+        if (!add_guide_entry(main)) g_details.word.clear();   // no line entry: no key either
+    } catch (...) { g_details.word.clear(); }
+}
+
+bool hook_details() {
+    if (g_details_hooked) return true;
+    if (g_details_hook_failed) return false;
+    Method* m = method_of(type("app.UIFlowDialog.MessageBoxMain"), "OnEnter", 0);
+    if (!m || !m->add_hook(pre_box_enter, post_box_enter, false)) { g_details_hook_failed = true; return false; }
+    g_details_hooked = true;
+    return true;
+}
+
+void details_reset() {
+    g_details = {};
+    g_expect = false;
+    g_details_hit = false;
+    try { if (g_main) g_main->release(); } catch (...) {}
+    g_main = nullptr;
+}
+
 Obj* flow_map() {
     auto& a = API::get();
     Obj* fm = a ? a->get_managed_singleton("app.bFlowManager") : nullptr;
@@ -131,25 +235,38 @@ Obj* flow_map() {
 
 }  // namespace
 
-bool box_open(const std::string& text, const std::string& title, Buttons buttons, const std::string& third) {
+bool box_open(const std::string& text, const std::string& title, Buttons buttons, const std::string& third, const DetailsKey& details) {
+    // The cursor starts on No, Back answers No (OK: the only button)
+    const int no = buttons == Buttons::Ok ? 0 : 1;
+    const std::string labels[3] = { {}, {}, buttons == Buttons::YesNoThird ? third : std::string() };
+    return box_open_ex(text, title, buttons, labels, no, no, details);
+}
+
+bool box_open_ex(const std::string& text, const std::string& title, Buttons buttons, const std::string labels[3], int start, int cancel,
+                 const DetailsKey& details) {
     try {
         if (g_box) return false;
+        details_reset();
+        if (!details.word.empty() && details.key && details.guid && hook_details()) {
+            g_details = details;
+            g_expect = true;
+            g_key_was = true;
+        }
         Method* m = method_of(type("app.UIFlowDialog.MessageBox"), "Start", 7);
         if (!m) return false;
         Obj* msg = new_string(text);
         Obj* ttl = new_string(title);
         if (!msg || !ttl) return false;
-        // app.DialogButtonStyle: OK 1, YesNo 4, YesNoCancel 5. The cursor starts on No, Back answers No (OK: the only button).
+        // app.DialogButtonStyle: OK 1, YesNo 4, YesNoCancel 5; start: the button the cursor starts on, cancel: the one Back answers
         const int32_t style = buttons == Buttons::Ok ? 1 : buttons == Buttons::YesNoThird ? 5 : 4;
-        const int32_t no = buttons == Buttons::Ok ? 0 : 1;
         reframework::InvokeRet r{};
-        if (!call(m, nullptr, { msg, ttl, arg_i32(no), arg_i32(no), arg_i32(style), arg_i32(-1), arg_i32(1) }, &r)) return false;
+        if (!call(m, nullptr, { msg, ttl, arg_i32(start), arg_i32(cancel), arg_i32(style), arg_i32(-1), arg_i32(1) }, &r)) { details_reset(); return false; }
         Obj* box = static_cast<Obj*>(r.ptr);
-        if (!is_managed(box)) return false;
+        if (!is_managed(box)) { details_reset(); return false; }
         box->add_ref();
         g_box = box;
-        g_third = buttons == Buttons::YesNoThird ? third : std::string();
-        g_third_tries = 0;
+        for (int i = 0; i < 3; ++i) g_labels[i] = labels ? labels[i] : std::string();
+        g_label_tries = 0;
         return true;
     } catch (...) {
         return false;
@@ -162,15 +279,29 @@ int box_poll() {
         reframework::InvokeRet r{};
         const bool read = call_named(g_box, "get_IsEnd", 0, {}, &r);
         if (read && !(r.byte & 1)) {
-            if (!g_third.empty()) {                 // the buttons are built a frame or two after Start
-                bool done = false;
-                try { done = label_third(g_box, g_third); } catch (...) {}
-                if (done || ++g_third_tries >= 120) g_third.clear();
+            if (g_main && !g_details.word.empty() && !g_details_hit) {     // the Details key: a press, not a key held when the box came
+                const bool down = g_details.key();
+                if (down && !g_key_was) {
+                    Method* cancel = method_of(type("app.UIFlowDialog.MessageBoxMain"), "EventCancel", 0);
+                    reframework::InvokeRet c{};
+                    if (cancel && call(cancel, g_main, {}, &c)) g_details_hit = true;
+                }
+                g_key_was = down;
+            }
+            if (!g_labels[0].empty() || !g_labels[1].empty() || !g_labels[2].empty()) {   // the buttons are built a frame or two after Start
+                for (int i = 0; i < 3; ++i) {
+                    if (g_labels[i].empty()) continue;
+                    bool done = false;
+                    try { done = label_button(g_box, i, g_labels[i]); } catch (...) {}
+                    if (done) g_labels[i].clear();
+                }
+                if (++g_label_tries >= 120) for (auto& l : g_labels) l.clear();
             }
             return -1;
         }
         int answer = -2;                // unreadable: the box is lost, no answer
-        if (read) {
+        if (read && g_details_hit) answer = 3;
+        else if (read) {
             reframework::InvokeRet v{};
             if (call(method_of(type("app.UIFlowDialog.MessageBox"), "GetSelectValue", 1), nullptr, { g_box }, &v)) {
                 const int32_t sel = (int32_t)v.dword;        // the button's place: 0 Yes (OK), 1 No, 2 the third
@@ -179,11 +310,14 @@ int box_poll() {
         }
         g_box->release();
         g_box = nullptr;
-        g_third.clear();
+        for (auto& l : g_labels) l.clear();
+        details_reset();
         return answer;
     } catch (...) {
         g_box = nullptr;            // not released: the object may be gone
-        g_third.clear();
+        for (auto& l : g_labels) l.clear();
+        g_details = {};
+        g_main = nullptr;
         return -2;
     }
 }
@@ -191,7 +325,8 @@ int box_poll() {
 void box_drop() {
     try { if (g_box) g_box->release(); } catch (...) {}
     g_box = nullptr;
-    g_third.clear();
+    for (auto& l : g_labels) l.clear();
+    details_reset();
 }
 
 bool box_is_open() { return g_box != nullptr; }
