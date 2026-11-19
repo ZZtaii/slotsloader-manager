@@ -13,7 +13,13 @@ pre-releases). It then:
   3. fetches the release's commit and replaces every path in .github/upstream-paths.txt with that
      commit's copy (index and work tree), then checks each path's tree hash against the commit,
   4. rewrites dependencies.json and the "Synced to" line of UPSTREAM.md,
-  5. writes title.txt, body.md and branch.txt into --out (default: .sync-out) for the pull request.
+  5. writes title.txt, body.md and branch.txt into --out (default: .sync-out) for the pull request,
+  6. (Manager 1.0.21) builds the Manager's slim copy of the Slots Loader zip: Wael's zip, downloaded and checked
+     against its SHA-256, without the files of .github/loader-slim-skip.txt (every other entry byte for byte the
+     same content, same names and times). It is published as a pre-release `slotsloader-v<version>` of this
+     repository (never Latest) by the workflow, and named in dependencies.json as slots_loader.slim. Managers
+     1.0.21 and later download it; older ones keep using the full zip of the same entry. An existing asset of that
+     release is reused when its entries match (a rebuild may compress differently), never replaced.
 
 Prints "changed=true|false" (and writes changed/branch to $GITHUB_OUTPUT when set). Exits non-zero
 on anything that needs a person: a missing digest, a path gone upstream, a tree hash mismatch, an
@@ -21,16 +27,21 @@ older release or package without --allow-older (with --scheduled an older latest
 notice and exits 0).
 """
 import argparse
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import zipfile
 
 ROOT = os.getcwd()
 DEPS = os.path.join(ROOT, "dependencies.json")
 PATHS = os.path.join(ROOT, ".github", "upstream-paths.txt")
+SLIM_SKIP = os.path.join(ROOT, ".github", "loader-slim-skip.txt")
+REPO = os.environ.get("GITHUB_REPOSITORY") or "ZZtaii/slotsloader-manager"
 UPSTREAM_MD = os.path.join(ROOT, "UPSTREAM.md")
 STARTER = ("Slotsloader from this fork and the Mod Suite are now one, with combined fixes and "
            "improvements. Latest releases are now synced.")
@@ -148,6 +159,92 @@ def sync_source(source, tag, paths):
     return commit
 
 
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def slim_skip():
+    out = []
+    for line in read_text(SLIM_SKIP).splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            out.append(line.replace("\\", "/").lstrip("/"))
+    if not out:
+        sys.exit("loader-slim-skip.txt lists nothing")
+    return out
+
+
+def skipped(name, skip):
+    n = name.replace("\\", "/").lstrip("/")
+    return any(n.lower().startswith(s.lower()) if s.endswith("/") else n.lower() == s.lower() for s in skip)
+
+
+def kept_entries(path, skip):
+    """(name, CRC, size) of the entries the slim zip keeps, in order: what a slim zip must hold."""
+    with zipfile.ZipFile(path) as z:
+        return [(i.filename, i.CRC, i.file_size) for i in z.infolist() if not skipped(i.filename, skip)]
+
+
+def build_slim(full, dest, skip):
+    with zipfile.ZipFile(full) as src, zipfile.ZipFile(dest, "w") as out:
+        for info in src.infolist():
+            if skipped(info.filename, skip):
+                continue
+            copy = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+            copy.external_attr = info.external_attr
+            copy.create_system = info.create_system
+            if info.is_dir():
+                out.writestr(copy, b"")
+            else:
+                copy.compress_type = zipfile.ZIP_DEFLATED
+                out.writestr(copy, src.read(info), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+        if src.testzip() is not None:
+            sys.exit("%s fails its own CRC check" % full)
+
+
+def slim_package(source, entry, old_entry, out_dir):
+    """The slim block for the slots_loader entry, the zip to upload (or None when the release already has it)."""
+    skip = slim_skip()
+    tag = "slotsloader-v" + entry["version"]
+    name = entry["file"][:-4] + "-manager.zip"
+    old_slim = (old_entry or {}).get("slim")
+    if (old_slim and old_slim.get("from_sha256", "").lower() == entry["sha256"].lower()
+            and old_slim.get("skip") == skip and old_slim.get("release") == tag):
+        return old_slim, None, False
+    work = tempfile.mkdtemp(prefix="slim-")
+    run("gh", "release", "download", entry["release"], "--repo", source, "--pattern", entry["file"], "--dir", work)
+    full = os.path.join(work, entry["file"])
+    if os.path.getsize(full) != entry["size"] or sha256_of(full) != entry["sha256"].lower():
+        sys.exit("%s downloaded from %s %s does not match its size and SHA-256" % (entry["file"], source, entry["release"]))
+    want = kept_entries(full, skip)
+    dropped = [i for i in zipfile.ZipFile(full).namelist() if skipped(i, skip)]
+    os.makedirs(out_dir, exist_ok=True)
+    slim = os.path.join(out_dir, name)
+    upload = True
+    # The release may already hold the asset (a rerun, or the same loader in a later suite release): reuse it when
+    # its entries are the ones wanted, refuse to go on when they differ (never replace an approved file).
+    assets = subprocess.run(["gh", "release", "view", tag, "--repo", REPO, "--json", "assets", "--jq", ".assets[].name"],
+                            cwd=ROOT, text=True, capture_output=True)
+    if assets.returncode == 0 and name in assets.stdout.split():
+        run("gh", "release", "download", tag, "--repo", REPO, "--pattern", name, "--dir", out_dir, "--clobber")
+        if kept_entries(slim, skip) != want:
+            sys.exit("%s on %s %s holds other files than the ones wanted now: check it by hand" % (name, REPO, tag))
+        upload = False
+    else:
+        build_slim(full, slim, skip)
+        if kept_entries(slim, []) != want:
+            sys.exit("the slim zip does not hold the kept entries")
+    block = {"repository": REPO, "release": tag, "file": name, "size": os.path.getsize(slim), "sha256": sha256_of(slim),
+             "from_sha256": entry["sha256"].lower(), "skip": skip}
+    shutil.rmtree(work, ignore_errors=True)
+    print("slim zip %s: %d bytes (full %d), %d entries left out: %s" % (name, block["size"], entry["size"], len(dropped), ", ".join(dropped)))
+    return block, slim, upload
+
+
 def changed_folders(paths):
     names = [p.rstrip("/") for p in paths]
     stat = run("git", "diff", "--cached", "--name-only", "--", *names)
@@ -219,6 +316,19 @@ def main():
         else:
             lines.append("- `dependencies.json`: %s %s → %s, new SHA-256" % (short, old["version"] if old else "none", info["version"]))
 
+    # 6. The Manager's slim zip (Manager 1.0.21): rebuilt when the loader zip or the skip list changed.
+    slim_path, slim_upload = None, False
+    loader_entry = new_packages.get("slots_loader")
+    if loader_entry:
+        old_loader = deps["packages"].get("slots_loader") or {}
+        block, slim_path, slim_upload = slim_package(source, loader_entry, old_loader, a.out)
+        loader_entry["slim"] = block
+        if block != old_loader.get("slim"):
+            packages_changed = True
+            lines.append("- `dependencies.json`: the Manager's slim zip `%s`, %.2f MB instead of %.2f MB (%d files left out), "
+                         "on the pre-release `%s` of this repository" % (block["file"], block["size"] / 1048576.0,
+                         loader_entry["size"] / 1048576.0, len(block["skip"]), block["release"]))
+
     paths = read_paths()
     commit = sync_source(source, tag, paths)
     folders = changed_folders(paths)
@@ -242,6 +352,8 @@ def main():
         title = "Slots Loader %s (SF6 Mod Suite %s)" % (loader["version"], tag)
     elif moved:
         title = "Native Core %s (SF6 Mod Suite %s)" % (new_packages["native_core"]["version"], tag)
+    elif any("slim zip" in l for l in lines):
+        title = "Slim Slots Loader zip for the Manager (%s)" % loader.get("version", "")
     else:
         title = "Source sync (SF6 Mod Suite %s)" % tag
 
@@ -260,11 +372,16 @@ def main():
                  else "Merging keeps the code in step; nothing new is offered to Managers."]
 
     branch = "suite-sync/%s-%s-%s" % (tag, commit[:7], loader.get("sha256", "0" * 7)[:7])
+    if (loader.get("slim") or {}).get("sha256"):
+        branch += "-" + loader["slim"]["sha256"][:7]   # Manager 1.0.21: a new slim zip alone is a new sync
     os.makedirs(a.out, exist_ok=True)
     write_text(os.path.join(a.out, "title.txt"), title + "\n")
     write_text(os.path.join(a.out, "body.md"), "\n".join(body) + "\n")
     write_text(os.path.join(a.out, "branch.txt"), branch + "\n")
-    output(changed="true", branch=branch)
+    slim = loader.get("slim") or {}
+    output(changed="true", branch=branch, slim_upload="true" if slim_upload else "false",
+           slim_path=slim_path or "", slim_tag=slim.get("release", ""), slim_version=loader.get("version", ""),
+           slim_from=loader.get("file", ""), slim_source_release=loader.get("release", ""))
     print(title)
 
 

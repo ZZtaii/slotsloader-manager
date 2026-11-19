@@ -136,7 +136,7 @@ namespace SlotsInstaller
                 if (chosen.ContainsKey(dest)) { plan.Items.Add(new HealthItem("warn", "Two selected files map to " + dest + "; the later option wins.")); }
                 chosen[dest] = new PlannedFile { Component = f.Component, Asset = new NativeAsset { EntryPath = f.Asset.EntryPath, DestinationPath = dest, Size = f.Asset.Size } };
             }
-            if (skippedLoader > 0) plan.Items.Add(new HealthItem("info", "Skipped " + N(skippedLoader, "file") + " the game doesn't need (cover picture, Report a bug, clean-up and audit tools)."));
+            if (skippedLoader > 0) plan.Items.Add(new HealthItem("info", "Skipped " + N(skippedLoader, "file") + " the game doesn't need (cover and title screen pictures, Report a bug, clean-up and audit tools)."));
             if (refusedLoader.Count > 0) plan.Items.Add(new HealthItem("info", "Skipped " + String.Join(", ", refusedLoader.Take(5)) + (refusedLoader.Count > 5 ? " and " + N(refusedLoader.Count - 5, "more file") : "") + ": the Manager doesn't install " + (refusedLoader.Count == 1 ? "this file" : "these files") + " into the game folder; the rest of Slotsloader installs."));
             // 2.5.6: each .pak becomes the next patch PAK, after every patch number in use (the game reads them in order).
             if (modPaks.Count > 0)

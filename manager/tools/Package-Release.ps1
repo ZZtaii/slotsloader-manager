@@ -49,9 +49,16 @@ $list = [IO.File]::ReadAllText($listFile) | ConvertFrom-Json
 $entry = $list.packages.slots_loader
 if ($list.format -ne 1 -or $list.source -ne 'Wael3rd/SF6-ModSuite' -or -not $entry) { throw 'dependencies.json: expected format 1, source Wael3rd/SF6-ModSuite and a slots_loader entry.' }
 if (-not $entry.version -or [string]$entry.release -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$' -or [string]$entry.file -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.zip$' -or [string]$entry.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or -not ([long]$entry.size -gt 0)) { throw 'dependencies.json: the slots_loader entry is malformed.' }
-$pin = [ordered]@{ version = [string]$entry.version; release = [string]$entry.release; asset = [string]$entry.file; size = [long]$entry.size; sha256 = ([string]$entry.sha256).ToUpperInvariant() }
-$url = 'https://github.com/' + $list.source + '/releases/download/' + [uri]::EscapeDataString($pin.release) + '/' + [uri]::EscapeDataString($pin.asset)
-Write-Output ("Approved Slots Loader: {0} ({1} release {2}), {3}, {4} bytes, SHA-256 {5}" -f $pin.version, $list.source, $pin.release, $pin.asset, $pin.size, $pin.sha256)
+$pin = [ordered]@{ version = [string]$entry.version; release = [string]$entry.release; asset = [string]$entry.file; size = [long]$entry.size; sha256 = ([string]$entry.sha256).ToUpperInvariant(); host = [string]$list.source }
+# 1.0.21: the Manager's slim zip (slots_loader.slim, made by the sync Action from the full zip) is bundled when the list has it.
+$slim = $entry.slim
+if ($slim) {
+    if ([string]$slim.repository -ne $repo -or [string]$slim.release -notmatch '^slotsloader-v[A-Za-z0-9._+-]{1,90}$' -or [string]$slim.file -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.zip$' -or [string]$slim.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or -not ([long]$slim.size -gt 0) -or ([string]$slim.from_sha256).ToUpperInvariant() -ne $pin.sha256) { throw 'dependencies.json: slots_loader.slim is malformed or made from another zip.' }
+    Write-Output ("Full zip of the entry: {0}, {1} bytes, SHA-256 {2} ({3} release {4})" -f $pin.asset, $pin.size, $pin.sha256, $list.source, $pin.release)
+    $pin.release = [string]$slim.release; $pin.asset = [string]$slim.file; $pin.size = [long]$slim.size; $pin.sha256 = ([string]$slim.sha256).ToUpperInvariant(); $pin.host = $repo
+}
+$url = 'https://github.com/' + $pin.host + '/releases/download/' + [uri]::EscapeDataString($pin.release) + '/' + [uri]::EscapeDataString($pin.asset)
+Write-Output ("Approved Slots Loader: {0} ({1} release {2}), {3}, {4} bytes, SHA-256 {5}" -f $pin.version, $pin.host, $pin.release, $pin.asset, $pin.size, $pin.sha256)
 
 # 2. The zip, verified against the list.
 $zipPath = Join-Path $cache $pin.asset
@@ -77,7 +84,7 @@ foreach ($f in @('Slotsloader Manager.exe', 'Slotsloader Manager.exe.config')) {
 }
 Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination $stage
 Copy-Item -LiteralPath $zipPath -Destination (Join-Path $stage 'Slotsloader')
-$validation = @("Slotsloader Manager $version", "Built $(Get-Date -Format 'yyyy-MM-dd HH:mm') by tools\Package-Release.ps1.", "Bundled Slots Loader $($pin.version): $($list.source) release $($pin.release), Slotsloader\$($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256) (dependencies.json)")
+$validation = @("Slotsloader Manager $version", "Built $(Get-Date -Format 'yyyy-MM-dd HH:mm') by tools\Package-Release.ps1.", "Bundled Slots Loader $($pin.version): $($pin.host) release $($pin.release), Slotsloader\$($pin.asset), $($pin.size) bytes, SHA-256 $($pin.sha256) (dependencies.json)")
 if (-not $BundleSevenZip) { $validation += "7-Zip: not in this zip; the Manager downloads its pinned 7-Zip release tool-7zip-26.00 when no usable 7-Zip is installed." }
 else {
     New-Item -ItemType Directory -Path (Join-Path $stage '7-Zip') -Force | Out-Null

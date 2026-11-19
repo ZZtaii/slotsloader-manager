@@ -32,10 +32,17 @@ It includes the Manager-mode work merged there from this side (pull requests #3,
 
 ## What the Manager installs
 
-The Manager installs the official zips from the suite's releases, unchanged. [dependencies.json](dependencies.json)
-names the approved version of each, its release, file name, size and SHA-256. The Manager reads that file from this
-repository's `main` branch, downloads the file from the suite's release page and refuses it unless size and SHA-256
+[dependencies.json](dependencies.json) names the approved version of each zip, its release, file name, size and
+SHA-256. The Manager reads that file from this repository's `main` branch and refuses a file unless size and SHA-256
 match. A new version reaches users only once this file names it.
+
+Since Manager 1.0.21 the Slots Loader comes as a slim copy of the official zip: the same files, byte for byte the same
+content, without the ones the game doesn't need (listed in [.github/loader-slim-skip.txt](.github/loader-slim-skip.txt):
+the cover picture, the game title screen's preview picture, Report a bug, `SF6_SlotsClean.exe`, the audit script). The sync workflow builds it from the official
+zip (checked against its SHA-256), publishes it as a pre-release `slotsloader-v<version>` of this repository (never
+Latest) and names it in `slots_loader.slim`, beside the official entry. Managers 1.0.21 and later download the slim
+copy; older ones keep downloading the official zip of the same entry. A copy of the official zip in a mod library is
+still used, and installing it leaves out the same files.
 
 ## Building
 

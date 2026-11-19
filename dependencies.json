@@ -8,7 +8,25 @@
       "release": "v1.46.0",
       "file": "SF6_SlotsLoader_v1.27.5.zip",
       "size": 5835918,
-      "sha256": "a8502b1e661c1d16d691698c7b8db10e5dee979fe672fceeb4a42a298d9be3ce"
+      "sha256": "a8502b1e661c1d16d691698c7b8db10e5dee979fe672fceeb4a42a298d9be3ce",
+      "slim": {
+        "repository": "ZZtaii/slotsloader-manager",
+        "release": "slotsloader-v1.27.5",
+        "file": "SF6_SlotsLoader_v1.27.5-manager.zip",
+        "size": 3204916,
+        "sha256": "4903a157cb3b8aa2317f3295607b29b5f3a411a8f9248f1079b149a85cee92e1",
+        "from_sha256": "a8502b1e661c1d16d691698c7b8db10e5dee979fe672fceeb4a42a298d9be3ce",
+        "skip": [
+          "SF6_SlotsClean.exe",
+          "reframework/data/SF6_CostumeSlots_data/slots_loader_cover.jpg",
+          "reframework/plugins/report_mod.dll",
+          "reframework/data/SF6_ReportMod_data/",
+          "reframework/costume_mods/SF6_CostumeAudit.ps1",
+          "reframework/costume_mods/SF6_CostumeAudit.bat",
+          "reframework/costume_mods/LISEZMOI.txt",
+          "reframework/data/SF6_TitleSlots_Data/game_title.jpg"
+        ]
+      }
     },
     "native_core": {
       "name": "SF6 Native Core",

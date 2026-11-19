@@ -42,9 +42,12 @@ namespace SlotsInstaller
                     LoaderPin r = LoaderPin.Release;
                     string repoList = Path.Combine(Path.GetDirectoryName(Environment.GetEnvironmentVariable("SLOTSLOADER_PROJECT") ?? ""), "dependencies.json");
                     Require(r.Asset.EndsWith(".zip") && r.Size > 0 && r.Sha256.Length == 64 && r.Sha256 == r.Sha256.ToUpperInvariant() && UpdateCheck.ParseVersion(r.Version) != null && r.Tag.Length > 0, "pin values: " + r.Tag + " " + r.Asset + " " + r.Size + " " + r.Sha256);
-                    Require(r.Url == "https://github.com/Wael3rd/SF6-ModSuite/releases/download/" + r.Tag + "/" + r.Asset && r.ReleasePage == "https://github.com/Wael3rd/SF6-ModSuite/releases/tag/" + r.Tag && LoaderPin.DownloadRefusal(r.Url) == null, "URLs: " + r.Url);
+                    // 1.0.21: with a slim block, the pin is the Manager's slim zip on its slotsloader-v* release; the release page stays the suite's.
+                    bool slim = r.FullSha256.Length > 0;
+                    string host = slim ? "ZZtaii/slotsloader-manager" : "Wael3rd/SF6-ModSuite";
+                    Require(r.Url == "https://github.com/" + host + "/releases/download/" + r.Tag + "/" + r.Asset && r.ReleasePage.StartsWith("https://github.com/Wael3rd/SF6-ModSuite/releases/tag/") && LoaderPin.DownloadRefusal(r.Url) == null && (!slim || (r.Tag == LoaderPin.SlimTagPrefix + r.Version && r.Size < r.FullSize && r.FullAsset.Length > 0)), "URLs: " + r.Url);
                     Require(LoaderRelease.Pin == r && !LoaderRelease.AllowLoopbackHttp, "default pin");
-                    Require(LoaderRelease.Description(r) == r.Asset + " (" + Utilities.FriendlyBytes(r.Size) + ") from github.com/Wael3rd/SF6-ModSuite", "description: " + LoaderRelease.Description(r));
+                    Require(LoaderRelease.Description(r) == r.Asset + " (" + Utilities.FriendlyBytes(r.Size) + ") from github.com/" + host, "description: " + LoaderRelease.Description(r));
                     if (File.Exists(repoList))
                     {
                         LoaderPin file = LoaderPin.FromList(File.ReadAllText(repoList));
@@ -98,6 +101,47 @@ namespace SlotsInstaller
                     }
                     Require(server.Requests == requests, "a refused address was requested");
                     report.Add("  refused: " + LoaderPin.DownloadRefusal(refused[0]));
+                });
+                check("1.0.21 slim zip: slots_loader.slim of dependencies.json is used in place of the full zip (on this repository's slotsloader-v* release, a library or cached copy of the full zip still found); a slim block that is not sound is left out with the reason and the full zip stays approved; the skip list the sync Action uses is ReplaceEngine.SkippedLoaderFiles", delegate
+                {
+                    string sha = new string('a', 64), slimSha = new string('b', 64);
+                    Func<string, string> slimList = delegate(string slimJson) { return ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, "", "").Replace("\"sha256\":\"" + sha + "\"", "\"sha256\":\"" + sha + "\",\"slim\":" + slimJson); };
+                    string goodSlim = "{\"repository\":\"ZZtaii/slotsloader-manager\",\"release\":\"slotsloader-v1.27.7\",\"file\":\"SF6_SlotsLoader_v1.27.7-manager.zip\",\"size\":1000000,\"sha256\":\"" + slimSha + "\",\"from_sha256\":\"" + sha + "\",\"skip\":[\"x\"]}";
+                    DependencyList list = DependencyList.Parse(slimList(goodSlim));
+                    LoaderPin p = list.Loader;
+                    Require(list.SlimIgnored == null && p.Asset == "SF6_SlotsLoader_v1.27.7-manager.zip" && p.Size == 1000000 && p.Sha256 == slimSha.ToUpperInvariant() && p.Tag == "slotsloader-v1.27.7"
+                        && p.Url == "https://github.com/ZZtaii/slotsloader-manager/releases/download/slotsloader-v1.27.7/SF6_SlotsLoader_v1.27.7-manager.zip" && LoaderPin.DownloadRefusal(p.Url) == null
+                        && p.FullAsset == "SF6_SlotsLoader_v1.27.7.zip" && p.FullSize == 1400000 && p.FullSha256 == sha.ToUpperInvariant() && p.ReleasePage == "https://github.com/Wael3rd/SF6-ModSuite/releases/tag/v1.40.0" && p.Origin == "github.com/ZZtaii/slotsloader-manager", "slim pin: " + p.Url);
+                    ReleaseOffer offer = ReleaseOffer.Approved(p); LoaderPin back = offer.AsPin();
+                    Require(offer.IsApproval && back.Url == p.Url && back.FullSha256 == p.FullSha256 && back.FullSize == p.FullSize && back.FullAsset == p.FullAsset && back.Origin == p.Origin, "the approval keeps the slim and full zips");
+                    var badSlim = new Dictionary<string, string>
+                    {
+                        { "another repository", goodSlim.Replace("ZZtaii/slotsloader-manager", "Someone/Else") }, { "a manager-v tag", goodSlim.Replace("slotsloader-v1.27.7\"", "manager-v1.0.21\"") },
+                        { "made from another zip", goodSlim.Replace("\"from_sha256\":\"" + sha, "\"from_sha256\":\"" + new string('c', 64)) }, { "larger than the full zip", goodSlim.Replace("1000000", "2000000") },
+                        { "file with a path", goodSlim.Replace("\"SF6_SlotsLoader_v1.27.7-manager.zip\"", "\"../x.zip\"") }, { "no sha256", goodSlim.Replace(",\"sha256\":\"" + slimSha + "\"", "") }
+                    };
+                    foreach (var b in badSlim)
+                    {
+                        DependencyList l = DependencyList.Parse(slimList(b.Value));
+                        Require(l.SlimIgnored != null && l.SlimIgnored.StartsWith("dependencies.json: slots_loader.slim") && l.Loader.Asset == "SF6_SlotsLoader_v1.27.7.zip" && l.Loader.Sha256 == sha.ToUpperInvariant() && l.Loader.FullSha256 == "", "a bad slim block (" + b.Key + ") was used: " + l.SlimIgnored);
+                    }
+                    Require(LoaderPin.DownloadRefusal("https://github.com/ZZtaii/slotsloader-manager/releases/download/manager-v1.0.20/Slotsloader-Manager-1.0.20-portable.zip") != null && LoaderPin.DownloadRefusal("https://github.com/ZZtaii/slotsloader-manager/releases/download/loader-v1.10.9/x.zip") != null, "a manager-v or loader-v asset of this repository was allowed");
+                    // A library copy of the full zip serves a slim pin (the install leaves out the same files).
+                    string lib = Dir(root, "slim-lib"), cache = Dir(root, "slim-cache");
+                    File.WriteAllBytes(Path.Combine(lib, "SF6_SlotsLoader_full.zip"), good);
+                    LoaderPin full = Pin(good, server.Base + "/release/loader.zip");
+                    var slimPin = new LoaderPin { Version = full.Version, Asset = "slim.zip", Size = good.Length - 1, Sha256 = new string('d', 64), Url = full.Url, ReleasePage = full.ReleasePage, Origin = "fixture", FullAsset = full.Asset, FullSize = full.Size, FullSha256 = full.Sha256 };
+                    LoaderFile hit = LoaderRelease.FindLocal(slimPin, new[] { lib }, cache);
+                    Require(hit != null && hit.Source == LoaderSource.Library && hit.Sha256 == full.Sha256, "the full zip in a library was not used for the slim pin");
+                    // The sync Action's skip list is the install's.
+                    string skipFile = Path.Combine(Path.GetDirectoryName(Environment.GetEnvironmentVariable("SLOTSLOADER_PROJECT") ?? ""), ".github", "loader-slim-skip.txt");
+                    if (File.Exists(skipFile))
+                    {
+                        var listed = File.ReadAllLines(skipFile).Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith("#")).ToList();
+                        Require(listed.SequenceEqual(ReplaceEngine.SkippedLoaderFiles), ".github/loader-slim-skip.txt is not ReplaceEngine.SkippedLoaderFiles: " + String.Join(", ", listed));
+                        report.Add("  skip list: " + listed.Count + " paths, the same in .github/loader-slim-skip.txt and ReplaceEngine.SkippedLoaderFiles");
+                    }
+                    else report.Add("  skip list file not found (SLOTSLOADER_PROJECT unset): not compared");
                 });
                 check("2.5.9: the zip bundled in the app folder's Slotsloader\\ is used first (no library hashing, no request); a bundled file that does not verify is skipped and left alone", delegate
                 {

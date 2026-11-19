@@ -48,6 +48,26 @@ jobs:
           if [ -n "$RELEASE" ]; then args+=(--release "$RELEASE" --allow-older); else args+=(--scheduled); fi
           python3 .github/scripts/sync_suite.py "${args[@]}"
 
+      # Manager 1.0.21: the slim Slots Loader zip the pull request names, on a pre-release of this repository (never
+      # Latest; the Manager's own update check reads manager-v* releases only). Before the pull request, so the list it
+      # proposes never names a file that is not there. Nothing reaches users until the pull request is merged.
+      - name: Publish the Manager's slim Slots Loader zip
+        if: steps.sync.outputs.changed == 'true' && steps.sync.outputs.slim_upload == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.sync.outputs.slim_tag }}
+          FILE: ${{ steps.sync.outputs.slim_path }}
+          VERSION: ${{ steps.sync.outputs.slim_version }}
+          FROM: ${{ steps.sync.outputs.slim_from }}
+          FROM_RELEASE: ${{ steps.sync.outputs.slim_source_release }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$FILE"
+          else
+            notes="The Slots Loader $VERSION as the Slotsloader Manager installs it: Wael3rd's $FROM (SF6 Mod Suite $FROM_RELEASE, https://github.com/Wael3rd/SF6-ModSuite/releases/tag/$FROM_RELEASE) without the files the game doesn't need (.github/loader-slim-skip.txt). The Manager downloads it by itself; players don't need it. MIT, by Wael3rd."
+            gh release create "$TAG" "$FILE" --prerelease --latest=false --target main --title "Slots Loader $VERSION for the Manager" --notes "$notes"
+          fi
+
       - name: Open the pull request
         if: steps.sync.outputs.changed == 'true'
         env:

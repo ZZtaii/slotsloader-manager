@@ -17,6 +17,12 @@ namespace SlotsInstaller
     {
         internal string Tag, Version, Asset, Sha256, Url, ReleasePage, Origin, Name = "";
         internal long Size;
+        // 1.0.21: when Asset is the Manager's slim zip (slots_loader.slim of dependencies.json, on a slotsloader-v* release
+        // of Repo), the suite's full zip of the same entry: a library copy of it is used too (the install leaves out the same
+        // files, ReplaceEngine.SkippedLoaderFiles). Empty when the pin is the full zip itself.
+        internal string FullAsset = "", FullSha256 = "";
+        internal long FullSize;
+        internal const string SlimTagPrefix = "slotsloader-v";
 
         // Repo: this Manager's repository (manager-v* releases and the approved list). Source: where the approved Slots
         // Loader zips are published.
@@ -44,9 +50,12 @@ namespace SlotsInstaller
             if (!Uri.TryCreate(url ?? "", UriKind.Absolute, out u)) return "the download address is not valid";
             if (u.Scheme != Uri.UriSchemeHttps) return null;
             string[] parts = u.AbsolutePath.Split('/');
-            bool ok = u.IsDefaultPort && u.UserInfo.Length == 0 && u.Query.Length == 0 && u.Fragment.Length == 0 && u.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
-                && u.AbsolutePath.StartsWith("/" + Source + "/releases/download/", StringComparison.OrdinalIgnoreCase) && parts.Length == 7 && parts.Skip(1).All(p => p.Length > 0 && p != "." && p != "..");
-            return ok ? null : "only release downloads of " + Source + " on github.com are allowed, not " + u.Host + u.AbsolutePath;
+            bool shape = u.IsDefaultPort && u.UserInfo.Length == 0 && u.Query.Length == 0 && u.Fragment.Length == 0 && u.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+                && parts.Length == 7 && parts.Skip(1).All(p => p.Length > 0 && p != "." && p != "..");
+            // 1.0.21: or the Manager's slim zip, on a slotsloader-v* release of this repository (never a manager-v* asset).
+            bool ok = shape && (u.AbsolutePath.StartsWith("/" + Source + "/releases/download/", StringComparison.OrdinalIgnoreCase)
+                || u.AbsolutePath.StartsWith("/" + Repo + "/releases/download/" + SlimTagPrefix, StringComparison.OrdinalIgnoreCase));
+            return ok ? null : "only release downloads of " + Source + " on github.com are allowed (and the Manager's own " + SlimTagPrefix + "* releases), not " + u.Host + u.AbsolutePath;
         }
     }
 
@@ -98,7 +107,36 @@ namespace SlotsInstaller
                 ReleasePage = "https://github.com/" + LoaderPin.Source + "/releases/tag/" + Uri.EscapeDataString(release),
                 Origin = "github.com/" + LoaderPin.Source
             };
+            // 1.0.21: slots_loader.slim, the same loader without the files the game doesn't need (the sync Action builds and
+            // publishes it). Used in place of the full zip when it is sound; a slim block that isn't is left out (logged by
+            // the caller through SlimIgnored), the full zip stays approved. Managers before 1.0.21 never read it.
+            object slimValue;
+            var s = e.TryGetValue("slim", out slimValue) ? slimValue as Dictionary<string, object> : null;
+            if (s != null)
+            {
+                try { UseSlim(list.Loader, s); }
+                catch (InvalidDataException ex) { list.SlimIgnored = ex.Message; }
+            }
             return list;
+        }
+        internal string SlimIgnored;   // why slots_loader.slim was not used (null: used, or none)
+        private static void UseSlim(LoaderPin pin, Dictionary<string, object> s)
+        {
+            string repo = Text(s, "repository", "slots_loader.slim."), release = Text(s, "release", "slots_loader.slim."), file = Text(s, "file", "slots_loader.slim.");
+            string sha = Text(s, "sha256", "slots_loader.slim.").ToUpperInvariant(), from = Text(s, "from_sha256", "slots_loader.slim.").ToUpperInvariant();
+            if (!repo.Equals(LoaderPin.Repo, StringComparison.OrdinalIgnoreCase)) throw Bad("slots_loader.slim.repository '" + repo + "' is not " + LoaderPin.Repo);
+            if (!release.StartsWith(LoaderPin.SlimTagPrefix, StringComparison.Ordinal) || !TagPattern.IsMatch(release) || release.Contains("..")) throw Bad("slots_loader.slim.release '" + release + "' is not a " + LoaderPin.SlimTagPrefix + "* tag");
+            if (!FilePattern.IsMatch(file) || file.Contains("..")) throw Bad("slots_loader.slim.file '" + file + "' is not a .zip file name");
+            if (sha.Length != 64 || sha.Any(c => !Uri.IsHexDigit(c))) throw Bad("slots_loader.slim.sha256 is not a SHA-256");
+            if (from != pin.Sha256) throw Bad("slots_loader.slim was made from another zip than slots_loader's");
+            object sizeValue; long size = 0;
+            if (s.TryGetValue("size", out sizeValue) && (sizeValue is int || sizeValue is long)) size = Convert.ToInt64(sizeValue, System.Globalization.CultureInfo.InvariantCulture);
+            if (size <= 0 || size > pin.Size) throw Bad("slots_loader.slim.size is not a size in bytes no larger than the full zip");
+            pin.FullAsset = pin.Asset; pin.FullSha256 = pin.Sha256; pin.FullSize = pin.Size;
+            pin.Tag = release; pin.Asset = file; pin.Sha256 = sha; pin.Size = size;
+            pin.Url = (TestDownloadBase != null ? TestDownloadBase.TrimEnd('/') + "/" : "https://github.com/" + LoaderPin.Repo + "/releases/download/") + Uri.EscapeDataString(release) + "/" + Uri.EscapeDataString(file);
+            pin.Origin = "github.com/" + LoaderPin.Repo;
+            // ReleasePage stays the suite's release: a failed download points there, and its full zip is accepted when dropped.
         }
         private static string Text(Dictionary<string, object> d, string key, string prefix)
         {
@@ -152,6 +190,15 @@ namespace SlotsInstaller
         // of the pinned size are hashed), then (b) the copy kept in Data\downloads. A cached copy that no longer
         // verifies is deleted (a bundled one is left alone). Null: nothing local.
         internal static LoaderFile FindLocal(LoaderPin pin, IEnumerable<string> libraries, string downloadDir)
+        {
+            LoaderFile found = FindLocalOne(pin, libraries, downloadDir);
+            // 1.0.21: the pin is the Manager's slim zip: the suite's full zip of the same entry, found the same way, does too
+            // (dropped in a library, bundled by an older package, or downloaded by an older Manager).
+            if (found == null && !String.IsNullOrEmpty(pin.FullSha256) && pin.FullSize > 0)
+                found = FindLocalOne(new LoaderPin { Version = pin.Version, Asset = pin.FullAsset, Size = pin.FullSize, Sha256 = pin.FullSha256 }, libraries, downloadDir);
+            return found;
+        }
+        private static LoaderFile FindLocalOne(LoaderPin pin, IEnumerable<string> libraries, string downloadDir)
         {
             string bundled = System.IO.Path.Combine(BundledDir, pin.Asset);
             try

@@ -1,0 +1,11 @@
+# Files of the Slots Loader zip the Manager never installs (1.0.21). One path per line; a trailing slash marks a folder.
+# Read by .github/scripts/sync_suite.py to build the Manager's slim zip, and checked against
+# ReplaceEngine.SkippedLoaderFiles (manager/src/ReplaceEngine.cs) by the Manager's loader checks: keep both the same.
+SF6_SlotsClean.exe
+reframework/data/SF6_CostumeSlots_data/slots_loader_cover.jpg
+reframework/plugins/report_mod.dll
+reframework/data/SF6_ReportMod_data/
+reframework/costume_mods/SF6_CostumeAudit.ps1
+reframework/costume_mods/SF6_CostumeAudit.bat
+reframework/costume_mods/LISEZMOI.txt
+reframework/data/SF6_TitleSlots_Data/game_title.jpg

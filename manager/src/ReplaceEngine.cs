@@ -1583,6 +1583,8 @@ namespace SlotsInstaller
             "reframework/costume_mods/SF6_CostumeAudit.ps1",                 // audit script run by hand
             "reframework/costume_mods/SF6_CostumeAudit.bat",
             "reframework/costume_mods/LISEZMOI.txt",                         // French readme beside the audit script
+            "reframework/data/SF6_TitleSlots_Data/game_title.jpg",           // the user: preview of the game's own title in Title Screen
+                                                                             // Selection; without it that row shows no picture (stage_loader.cpp)
         };
         internal static bool SkippedLoaderFile(string path)
         {

@@ -13,7 +13,7 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 - 1.0.21:
   - Slotsloader 1.27.5: Random outfit in Arcade, Training and Versus now gives a real random outfit and colour.
   - Install Slotsloader no longer refuses the loader when SF6_SlotsClean.exe is already in the game folder.
-  - Slotsloader installs without the files the game doesn't need (its cover picture, Report a bug, the clean-up and audit tools), also from a zip downloaded by hand. A file the Manager never puts in the game folder is left out with a note instead of stopping the install.
+  - Slotsloader is a smaller download (3.1 MB instead of 5.6 MB) and installs without the files the game doesn't need (its cover picture, the preview picture of the game's own title screen, Report a bug, the clean-up and audit tools), also from a zip downloaded by hand. A file the Manager never puts in the game folder is left out with a note instead of stopping the install.
 
 - 1.0.20:
   - Settings > General > Convert RAR to ZIP: turns RAR and 7Z mods into ZIPs, which open and preview much faster. Each ZIP is checked file by file, installed copies, recipes and presets switch to it, and the originals can go to the Recycle Bin at the end. Mods your external mod manager has installed are left out.

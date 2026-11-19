@@ -21,13 +21,16 @@ namespace SlotsInstaller
         public string Product = "", Tag = "", Version = "", Name = "", HtmlUrl = "", Asset = "", Url = "", Sha256 = "", DigestSource = "";
         public long Size;
         public bool Prerelease;
+        // 1.0.21: when the offer is the Manager's slim zip, the suite's full zip of the same entry (also accepted from a library).
+        public string FullAsset = "", FullSha256 = "", Origin = "";
+        public long FullSize;
         internal Version Parsed { get { return UpdateCheck.ParseVersion(Version); } }
-        internal LoaderPin AsPin() { return new LoaderPin { Tag = Tag, Name = Name, Version = Version, Asset = Asset, Size = Size, Sha256 = Sha256, Url = Url, ReleasePage = HtmlUrl, Origin = "github.com/" + LoaderPin.Source }; }
+        internal LoaderPin AsPin() { return new LoaderPin { Tag = Tag, Name = Name, Version = Version, Asset = Asset, Size = Size, Sha256 = Sha256, Url = Url, ReleasePage = HtmlUrl, Origin = String.IsNullOrEmpty(Origin) ? "github.com/" + LoaderPin.Source : Origin, FullAsset = FullAsset ?? "", FullSha256 = FullSha256 ?? "", FullSize = FullSize }; }
         // 1.0.19: the approved Slots Loader as an offer (DigestSource names the list, so an offer an older Manager saved
         // from a loader-v* release is never taken for an approval).
         internal static ReleaseOffer Approved(LoaderPin pin)
         {
-            return new ReleaseOffer { Product = UpdateProducts.Loader, Tag = pin.Tag, Version = pin.Version, Name = pin.Name, HtmlUrl = pin.ReleasePage, Asset = pin.Asset, Url = pin.Url, Size = pin.Size, Sha256 = pin.Sha256, DigestSource = UpdateCheck.ListMarker };
+            return new ReleaseOffer { Product = UpdateProducts.Loader, Tag = pin.Tag, Version = pin.Version, Name = pin.Name, HtmlUrl = pin.ReleasePage, Asset = pin.Asset, Url = pin.Url, Size = pin.Size, Sha256 = pin.Sha256, DigestSource = UpdateCheck.ListMarker, FullAsset = pin.FullAsset, FullSha256 = pin.FullSha256, FullSize = pin.FullSize, Origin = pin.Origin };
         }
         internal bool IsApproval { get { return Product == UpdateProducts.Loader && DigestSource == UpdateCheck.ListMarker && Parsed != null && LoaderPin.DownloadRefusal(Url) == null; } }
     }
@@ -146,6 +149,7 @@ namespace SlotsInstaller
             {
                 DependencyList list = DependencyList.Parse(json);
                 if (list.IgnoredPackages.Count > 0) Program.LogLine("Update check: approved Slotsloader " + list.Loader.Version + " (" + list.Loader.Asset + "); not used here: " + String.Join(", ", list.IgnoredPackages) + ".");
+                if (list.SlimIgnored != null) Program.LogLine("Update check: the full Slotsloader zip is used, the slim one was left out: " + list.SlimIgnored);   // 1.0.21
                 return ReleaseOffer.Approved(list.Loader);
             }
             catch (InvalidDataException ex) { reason = ex.Message.TrimEnd('.'); Program.LogLine("Update check: refused the approved Slotsloader list: " + ex.Message); return null; }
