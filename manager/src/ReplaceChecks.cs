@@ -865,6 +865,40 @@ namespace SlotsInstaller
             Require(exePlan.Items.Any(i => i.Level == "info" && i.Text.StartsWith("Skipped SF6_SlotsClean.exe")) && exeTool.Files.Count == 1, "loose program not skipped with a note");
             Require(!File.Exists(GameFile(f, "SF6_SlotsClean.exe")) && File.Exists(GameFile(f, "reframework/plugins/exe_tool.dll")), "loose program skip deployed the wrong files");
             f.Engine.Uninstall(exeTool.Id);
+            // 1.0.21 (the user): the Slots Loader's cover picture, Report a bug and audit script stay out of the game folder;
+            // the loader's own files install. The same paths in a package without the loader's plugin install as before.
+            string[] extras = { "reframework/data/SF6_CostumeSlots_data/slots_loader_cover.jpg", "reframework/plugins/report_mod.dll", "reframework/data/SF6_ReportMod_data/locale.json", "reframework/data/SF6_ReportMod_data/config.json", "reframework/costume_mods/SF6_CostumeAudit.ps1", "reframework/costume_mods/SF6_CostumeAudit.bat", "reframework/costume_mods/LISEZMOI.txt" };
+            Put(f.Mods, "loaderExtras/Loader/modinfo.ini", Bytes("name=SF6 Slots Loader\r\nversion=1.27.5\r\nSlotsloaderContract=2\r\n"));
+            Put(f.Mods, "loaderExtras/Loader/amd_ags_x64.dll", Bytes("slotsloader proxy"));
+            Put(f.Mods, "loaderExtras/Loader/amd_ags_x64_real.dll", Bytes("genuine AMD AGS library"));
+            Put(f.Mods, "loaderExtras/Loader/reframework/plugins/SF6_CostumeSlotsNative.dll", Bytes("plugin"));
+            Put(f.Mods, "loaderExtras/Loader/reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv", Bytes("index"));
+            Put(f.Mods, "loaderExtras/Loader/reframework/data/SF6_CostumeSlots_data/keep.json", Bytes("{}"));
+            Put(f.Mods, "otherReport/Other/reframework/plugins/report_mod.dll", Bytes("another mod's dll"));
+            foreach (string x in extras) Put(f.Mods, "loaderExtras/Loader/" + x, Bytes("extra"));
+            // Wael, 19 Nov 2026: 1.0.20 refused the loader zip ("SF6_SlotsClean.exe: programs (.exe) are never installed into the
+            // game folder") when a copy was already in the game folder. It is skipped now, and that copy is left as it was.
+            Put(f.Mods, "loaderExtras/Loader/SF6_SlotsClean.exe", Bytes("clean-up tool"));
+            File.WriteAllText(GameFile(f, "SF6_SlotsClean.exe"), "a copy put there by hand");
+            Require(extras.All(ReplaceEngine.SkippedLoaderFile) && ReplaceEngine.SkippedLoaderFile("SF6_SlotsClean.exe") && !ReplaceEngine.SkippedLoaderFile("reframework/data/SF6_CostumeSlots_data/keep.json") && !ReplaceEngine.SkippedLoaderFile("reframework/plugins/SF6_CostumeSlotsNative.dll") && !ReplaceEngine.SkippedLoaderFile("reframework/data/SF6_ReportMod_dataX/a") && !ReplaceEngine.SkippedLoaderFile("StreetFighter6.exe"), "skip list matching");
+            // An install made before 1.0.21 (Report a bug included), then updated in place with the loader: report_mod.dll goes.
+            Put(f.Mods, "loaderOld/Loader/amd_ags_x64.dll", Bytes("older slotsloader proxy"));
+            Put(f.Mods, "loaderOld/Loader/reframework/plugins/report_mod.dll", Bytes("older report mod"));
+            ReplacePlan loaderPlan;
+            ReplaceMod old = Install(f, "loaderOld", "SF6 Slots Loader", false, null, out loaderPlan);
+            Require(File.Exists(GameFile(f, "reframework/plugins/report_mod.dll")), "older install fixture");
+            ReplaceMod loader = Install(f, "loaderExtras", "SF6 Slots Loader", false, old.Id, out loaderPlan);
+            Require(loaderPlan.CanInstall && loaderPlan.Items.Any(i => i.Level == "info" && i.Text.StartsWith("Skipped 8 files the game doesn't need")) && !loaderPlan.Items.Any(i => i.Level == "error"), "loader plan: " + String.Join(" / ", loaderPlan.Items.Select(i => i.Level + " " + i.Text)));
+            Require(extras.All(x => !File.Exists(GameFile(f, x))) && !loader.Files.Any(x => ReplaceEngine.SkippedLoaderFile(x.Path)), "skipped loader files deployed: " + String.Join(", ", loader.Files.Select(x => x.Path)));
+            Require(File.ReadAllText(GameFile(f, "SF6_SlotsClean.exe")) == "a copy put there by hand", "the game folder's SF6_SlotsClean.exe was changed");
+            foreach (string keep in new[] { "amd_ags_x64.dll", "amd_ags_x64_real.dll", "reframework/plugins/SF6_CostumeSlotsNative.dll", "reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv", "reframework/data/SF6_CostumeSlots_data/keep.json" })
+                Require(File.Exists(GameFile(f, keep)), "loader file not deployed: " + keep);
+            f.Engine.Uninstall(loader.Id);
+            Require(File.ReadAllText(GameFile(f, "SF6_SlotsClean.exe")) == "a copy put there by hand", "uninstall touched the game folder's SF6_SlotsClean.exe");
+            File.Delete(GameFile(f, "SF6_SlotsClean.exe"));
+            ReplaceMod other = Install(f, "otherReport", "Other", false, null, out loaderPlan);
+            Require(File.Exists(GameFile(f, "reframework/plugins/report_mod.dll")) && !loaderPlan.Items.Any(i => i.Text.Contains("the game doesn't need")), "a package without the loader lost report_mod.dll");
+            f.Engine.Uninstall(other.Id);
         }
 
         private static void LooseMethod(string root)

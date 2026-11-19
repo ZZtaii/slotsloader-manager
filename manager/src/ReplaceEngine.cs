@@ -1568,6 +1568,30 @@ namespace SlotsInstaller
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; return false; }
         }
 
+        // 1.0.21 (the user): files of the Slots Loader zip that are not installed into the game folder. The zip stays the
+        // suite's own file (size and SHA-256 checked against dependencies.json), so it is still downloaded whole; only these
+        // are left out when it is unpacked. A trailing slash marks a folder. Applies to any package that ships the Slots Loader's
+        // plugin (the approved zip, one downloaded by hand from the suite's releases, the all-in-one), whatever its SHA-256.
+        internal static readonly string[] SkippedLoaderFiles =
+        {
+            "SF6_SlotsClean.exe",                                            // clean-up tool run by hand (the loader never starts it);
+                                                                             // skipped even when a copy is in the game folder, which
+                                                                             // used to refuse the install; that copy is left alone
+            "reframework/data/SF6_CostumeSlots_data/slots_loader_cover.jpg", // cover picture for mod managers; the game never reads it
+            "reframework/plugins/report_mod.dll",                            // Report a bug: Manager mode keeps it off
+            "reframework/data/SF6_ReportMod_data/",                          // Report a bug's texts and settings
+            "reframework/costume_mods/SF6_CostumeAudit.ps1",                 // audit script run by hand
+            "reframework/costume_mods/SF6_CostumeAudit.bat",
+            "reframework/costume_mods/LISEZMOI.txt",                         // French readme beside the audit script
+        };
+        internal static bool SkippedLoaderFile(string path)
+        {
+            string p = PakHash.Normalize(path ?? "").TrimStart('/');
+            foreach (string s in SkippedLoaderFiles)
+                if (s.EndsWith("/") ? p.StartsWith(s, StringComparison.OrdinalIgnoreCase) : p.Equals(s, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
         // 1.0.1 (user decision): while an external mod manager has any mod installed, the Manager doesn't change game
         // files beside it: only Extra outfits (costume_mods) and the Slotsloader Fork install. Replacements, PAK mods
         // and other tool mods wait until that manager is empty; uninstalling the Manager's own mods still works.

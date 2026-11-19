@@ -104,6 +104,7 @@ namespace SlotsInstaller
             var renamed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             HashSet<string> suppliedPaths = null;
             var modPaks = new List<PlannedFile>();   // 2.5.6: PAK mods (ReplacePakMods.cs)
+            int skippedLoader = 0;                   // 1.0.21: Slots Loader files the game doesn't need (ReplaceEngine.SkippedLoaderFiles)
             foreach (PlannedFile f in composition.Files.Values)
             {
                 if (ReplaceEngine.IsModPak(f.Asset.DestinationPath)) { modPaks.Add(f); continue; }
@@ -118,12 +119,14 @@ namespace SlotsInstaller
                     if (suppliedPaths.Contains(upgraded)) { plan.Items.Add(new HealthItem("info", "Skipped " + Path.GetFileName(dest) + ": the mod also ships the current-version file.")); continue; }
                     renamed[upgraded] = dest; dest = upgraded;
                 }
+                if (plugin != null && ReplaceEngine.SkippedLoaderFile(dest)) { skippedLoader++; continue; }   // 1.0.21, before the program rule
                 if (ReplaceEngine.SkippedProgram(dest, engine.GameRoot)) { plan.Items.Add(new HealthItem("info", "Skipped " + dest + ": programs aren't installed into the game folder.")); continue; }
                 try { ReplaceEngine.ValidateDestination(dest); }
                 catch (IOException ex) { plan.Items.Add(new HealthItem("error", ex.Message)); continue; }
                 if (chosen.ContainsKey(dest)) { plan.Items.Add(new HealthItem("warn", "Two selected files map to " + dest + "; the later option wins.")); }
                 chosen[dest] = new PlannedFile { Component = f.Component, Asset = new NativeAsset { EntryPath = f.Asset.EntryPath, DestinationPath = dest, Size = f.Asset.Size } };
             }
+            if (skippedLoader > 0) plan.Items.Add(new HealthItem("info", "Skipped " + N(skippedLoader, "file") + " the game doesn't need (cover picture, Report a bug, clean-up and audit tools)."));
             // 2.5.6: each .pak becomes the next patch PAK, after every patch number in use (the game reads them in order).
             if (modPaks.Count > 0)
             {

@@ -131,10 +131,11 @@ namespace SlotsInstaller
             ReplaceState state = engine.LoadState();
             var reference = GameReference.FromCmd(null);
             var affects = new List<string>();
+            bool loader = plan.Files.Keys.Any(p => String.Equals(PakHash.Normalize(p).TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase));
             foreach (string path in plan.Files.Keys)
             {
                 string dest = path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) ? ModFixes.NormalizeNativePath(path) : PakHash.Normalize(path).TrimStart('/');
-                if (ReplaceEngine.SkippedProgram(dest, engine.GameRoot)) continue;
+                if ((loader && ReplaceEngine.SkippedLoaderFile(dest)) || ReplaceEngine.SkippedProgram(dest, engine.GameRoot)) continue;   // 1.0.21: as ReplacePlanner
                 try { ReplaceEngine.ValidateDestination(dest); } catch (IOException ex) { errors.Add(ex.Message); }
                 FluffyMod owner = fluffy.Owner(dest);
                 if (owner != null && state.Deployment(dest) == null) errors.Add(dest + " is installed by an external mod manager (" + owner.Name + "). Disable that mod there first.");
