@@ -1,5 +1,13 @@
 # Development history
 
+## 1.0.21: Slots Loader 1.27.5, loader files the game doesn't need left out, the loader zip never refused for a file
+
+- `dependencies.json` approves Slots Loader 1.27.5 (SF6 Mod Suite v1.46.0, PR ZZtaii/slotsloader-manager#38): Random outfit on the select screens of Arcade, Training and Versus gives a real random outfit and colour; the zip carries a cover picture.
+- `ReplaceEngine.SkippedLoaderFiles`: a package that ships the loader's plugin (`LoaderCostumePak.PluginPath`: the approved zip, one downloaded by hand from the suite's releases, the all-in-one, whatever its SHA-256) installs without the cover picture, Report a bug (`report_mod.dll` and `SF6_ReportMod_data/`, kept off in Manager mode anyway), `SF6_SlotsClean.exe` and the audit script with its readme. One info line counts them. The zip stays the suite's own file: it is still downloaded whole and checked against its size and SHA-256. An update in place over an older install removes the `report_mod.dll` it had.
+- Wael, 19 Nov 2026: 1.0.20 refused its own bundled loader ("SF6_SlotsClean.exe: programs (.exe) are never installed into the game folder") when a copy of the exe was already in the game folder; the 1.0.1 rule skipped it only when the game folder had none. Now always skipped, and the copy in the game folder is left as it was. The loader never starts that exe (a tool to run by hand).
+- The user: a later loader zip with more files is never refused for one of them. A loader file `ValidateDestination` refuses (a program, a game file such as `steam_api64.dll`) or a `.pak` (the loader makes its own PAK at run time) is left out with one info line naming it; the rest installs. Other mods keep the refusals. The Assistant's install check (`AssistantActions`) follows the same rules.
+- Checks: `replace` tool/root mods (the list, an exe already in the game folder, files the Manager never installs, an update over an older install with Report a bug, the same paths in a mod without the loader still installed). By hand: `replace-plan` of the real 1.27.4, 1.27.5 and all-in-one v1.46.0 zips on a fake game folder that has `SF6_SlotsClean.exe`: all ready to install.
+
 ## 1.0.20: Convert RAR to ZIP, faster mod opening, hair search, recipe updates in place, base texture packs
 
 - Convert RAR to ZIP (Settings > General): see the 1.0.20 notes of `ArchiveConvert.cs`, `ConvertForm.cs`, `ConvertRecords.cs` and `MainFormConvert.cs`. Each entry is checked against the source; install records, Replace original records, recipes and presets follow the new path; mods an external mod manager installed are left out; the originals go to the Recycle Bin only after a second question. Checks: `ConvertChecks.cs`.

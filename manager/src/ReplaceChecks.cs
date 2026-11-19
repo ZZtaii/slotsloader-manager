@@ -880,6 +880,10 @@ namespace SlotsInstaller
             // game folder") when a copy was already in the game folder. It is skipped now, and that copy is left as it was.
             Put(f.Mods, "loaderExtras/Loader/SF6_SlotsClean.exe", Bytes("clean-up tool"));
             File.WriteAllText(GameFile(f, "SF6_SlotsClean.exe"), "a copy put there by hand");
+            // The user: a later loader zip with more files is never refused; what the Manager never installs is left out.
+            string[] never = { "StreetFighter6.exe", "steam_api64.dll", "re_chunk_000.pak.patch_009.pak" };
+            foreach (string x in never) Put(f.Mods, "loaderExtras/Loader/" + x, Bytes("not for the game folder"));
+            var gameBefore = never.ToDictionary(x => x, x => File.Exists(GameFile(f, x)) ? File.ReadAllText(GameFile(f, x)) : null);
             Require(extras.All(ReplaceEngine.SkippedLoaderFile) && ReplaceEngine.SkippedLoaderFile("SF6_SlotsClean.exe") && !ReplaceEngine.SkippedLoaderFile("reframework/data/SF6_CostumeSlots_data/keep.json") && !ReplaceEngine.SkippedLoaderFile("reframework/plugins/SF6_CostumeSlotsNative.dll") && !ReplaceEngine.SkippedLoaderFile("reframework/data/SF6_ReportMod_dataX/a") && !ReplaceEngine.SkippedLoaderFile("StreetFighter6.exe"), "skip list matching");
             // An install made before 1.0.21 (Report a bug included), then updated in place with the loader: report_mod.dll goes.
             Put(f.Mods, "loaderOld/Loader/amd_ags_x64.dll", Bytes("older slotsloader proxy"));
@@ -891,6 +895,10 @@ namespace SlotsInstaller
             Require(loaderPlan.CanInstall && loaderPlan.Items.Any(i => i.Level == "info" && i.Text.StartsWith("Skipped 8 files the game doesn't need")) && !loaderPlan.Items.Any(i => i.Level == "error"), "loader plan: " + String.Join(" / ", loaderPlan.Items.Select(i => i.Level + " " + i.Text)));
             Require(extras.All(x => !File.Exists(GameFile(f, x))) && !loader.Files.Any(x => ReplaceEngine.SkippedLoaderFile(x.Path)), "skipped loader files deployed: " + String.Join(", ", loader.Files.Select(x => x.Path)));
             Require(File.ReadAllText(GameFile(f, "SF6_SlotsClean.exe")) == "a copy put there by hand", "the game folder's SF6_SlotsClean.exe was changed");
+            Require(loaderPlan.Items.Any(i => i.Level == "info" && i.Text.Contains("StreetFighter6.exe") && i.Text.Contains("steam_api64.dll") && i.Text.Contains("re_chunk_000.pak.patch_009.pak") && i.Text.EndsWith("the rest of Slotsloader installs.")), "no note for the files left out");
+            foreach (string x in never)
+                Require((File.Exists(GameFile(f, x)) ? File.ReadAllText(GameFile(f, x)) : null) == gameBefore[x] && !loader.Files.Any(m => m.Path.Equals(x, StringComparison.OrdinalIgnoreCase)), "a file the Manager never installs was written: " + x);
+            Require(!ReplaceEngine.SkippedLoaderFile("steam_api64.dll"), "steam_api64.dll is left out by the refusal rule, not the list");
             foreach (string keep in new[] { "amd_ags_x64.dll", "amd_ags_x64_real.dll", "reframework/plugins/SF6_CostumeSlotsNative.dll", "reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv", "reframework/data/SF6_CostumeSlots_data/keep.json" })
                 Require(File.Exists(GameFile(f, keep)), "loader file not deployed: " + keep);
             f.Engine.Uninstall(loader.Id);

@@ -136,7 +136,8 @@ namespace SlotsInstaller
             {
                 string dest = path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) ? ModFixes.NormalizeNativePath(path) : PakHash.Normalize(path).TrimStart('/');
                 if ((loader && ReplaceEngine.SkippedLoaderFile(dest)) || ReplaceEngine.SkippedProgram(dest, engine.GameRoot)) continue;   // 1.0.21: as ReplacePlanner
-                try { ReplaceEngine.ValidateDestination(dest); } catch (IOException ex) { errors.Add(ex.Message); }
+                if (loader && ReplaceEngine.IsModPak(dest)) continue;
+                try { ReplaceEngine.ValidateDestination(dest); } catch (IOException ex) { if (loader) continue; errors.Add(ex.Message); }
                 FluffyMod owner = fluffy.Owner(dest);
                 if (owner != null && state.Deployment(dest) == null) errors.Add(dest + " is installed by an external mod manager (" + owner.Name + "). Disable that mod there first.");
                 var m = System.Text.RegularExpressions.Regex.Match(dest, @"^natives/stm/(?:streaming/)?product/model/esf/esf(\d{3})/(\d{3})/");
