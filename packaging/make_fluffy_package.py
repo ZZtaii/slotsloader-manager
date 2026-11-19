@@ -329,13 +329,16 @@ def main():
         files.append((os.path.join(REPO, "report_mod", "data", "SF6_ReportMod_data", "locale.json"), "reframework/data/SF6_ReportMod_data/locale.json"))
     for src, _ in files:
         if not os.path.exists(src): sys.exit("manquant : " + src)
+    COVER_SRC = os.path.join(REPO, "packaging", "art", "slots_loader_cover.jpg")
+    COVER_DST = "reframework/data/SF6_CostumeSlots_data/slots_loader_cover.jpg"
     modinfo = (
         "name=SF6 Slots Loader\n"
         "version=%s\n"
         "description=Turns installed costume mods (Fluffy paks) into EXTRA outfit slots at game launch, keeping the original outfit. Costume mods can also be dropped as downloaded (.zip, .7z, .rar) in reframework/costume_mods/<Character>/. Experimental: stage mods dropped in reframework/stage_mods/ become variants of their stage, UP / DOWN on the stage select screen. Install once; then install mods as usual and restart the game.\n"
         "author=Wael\n"
         "NameAsBundle=SF6 Slots Loader\n"
-        "SlotsloaderContract=%d\n" % (a.version, manager_contract()))
+        "screenshot=%s\n"
+        "SlotsloaderContract=%d\n" % (a.version, COVER_DST, manager_contract()))
     readme = README_TXT % a.version
     if report_cfg:
         readme += REPORT_TXT
@@ -345,6 +348,11 @@ def main():
         for src, dst in files:
             z.write(src, dst)
             print("  %-70s %10d  %s" % (dst, os.path.getsize(src), sha(src)))
+        # the cover Fluffy Mod Manager shows (modinfo.ini "screenshot"): not at the zip's root, where every in-game updater
+        # since 1.32.0 refuses a file it does not know (update_logic.cpp classify_entry): in the loader's data folder
+        if not os.path.exists(COVER_SRC): sys.exit("manquant : " + COVER_SRC)
+        z.write(COVER_SRC, COVER_DST)
+        print("  %-70s %10d  %s" % (COVER_DST, os.path.getsize(COVER_SRC), sha(COVER_SRC)))
         if report_cfg:
             z.writestr(G_REPORT_CONFIG, report_cfg)
             print("  %-70s %10d  %s" % (G_REPORT_CONFIG, len(report_cfg), "the address alone"))

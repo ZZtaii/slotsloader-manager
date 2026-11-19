@@ -122,7 +122,7 @@ typedef enum SF6CoreWidgetState {
  * flow_ids         : array of flow IDs where the widget may be visible.
  *                    NULL or n_flow_ids == 0 means "visible in all flows".
  * n_flow_ids       : number of entries in flow_ids.
- * initial_x/y      : initial GUI position (EXPERIMENTAL — see docs).
+ * initial_x/y      : initial GUI position (EXPERIMENTAL â€” see docs).
  * initially_visible: 1 = visible (subject to flow context), 0 = hidden.
  */
 typedef struct SF6CoreWidgetDesc {
@@ -897,6 +897,19 @@ typedef struct SF6CoreAPI {
     /* Write 16 bytes into a System.Guid field of a managed object, with the obj_set_* guards (the field must be a
      * System.Guid; the same value is not written again). Any GUID: one of text_new's, or a value read before to put back. */
     SF6CoreStatus (SF6CORE_CALL *obj_set_guid)(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]);
+
+    /* -- Increment 16: a draw observer on every REFramework (append-only) --
+     *
+     * Probe with SF6CORE_HAS(api, gui_draw_observe) (core >= 0.9.25). REFramework's plugin callback
+     * on_pre_gui_draw_element only exists from plugin API 1.14 on (1.5.8 and older have 1.10); every REFramework
+     * has a Lua one, paused online. The core holds the one callback and calls the observers from it, through the plugin
+     * API when it has it, else through its own native hook of the game's GUI draw (the call REFramework itself hooks for
+     * that callback; online as offline). An observer: the
+     * rendering thread, for every GUI element about to be drawn (element: its via.gui.GUI component; context: the game's primitive context); it returns
+     * 0 when that element must not be drawn this frame. Every observer sees every element. out_route (may be null): 1 = the plugin
+     * API, 2 = the core's own hook, 0 = asked before the core's own start (kept: called once the core chose its route). ERR_DISABLED: neither route (the game's GUI draw not found); ERR_INVALID_ARG: no fn, or 8 observers already. The
+     * observer stays until the client unregisters. */
+    SF6CoreStatus (SF6CORE_CALL *gui_draw_observe)(SF6CoreClient* client, int32_t (*fn)(void* element, void* context), int32_t* out_route);
 
 } SF6CoreAPI;
 

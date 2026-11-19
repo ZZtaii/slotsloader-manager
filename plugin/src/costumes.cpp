@@ -2037,6 +2037,110 @@ void rand_on_unload(int fid, void** argv) {
     }
 }
 
+
+// ---- Random on a select screen (Arcade, Training, Versus): the draw where the screen loads its fighters ----
+// The local modes load a fighter's files on the character select, as its cursor shows them (app.menu.SelectedFighterCtrl:
+// SetFighterSetting(no, fid, costume, color) feeds the player's LoadCtrl, which loads that outfit), and the battle builds
+// from those files: no requestNotManagedFighterAssetLoad comes before setupFighterAsset (Training, read in game 17/11:
+// "requests so far 0"), so the draw of rand_on_load never ran there and the game built the Random outfit itself: Outfit 1's
+// copy in colour 1 (a tester's report, 17/11: "Random always results in C1"). Writing the draw into the description later
+// fails both ways (tried 17/11): at setupFighterAsset the drawn outfit's files are not there (the fighter is not built), at
+// the select's end the load waits for ever. So the draw is made here, when the cursor lands on Random: the screen loads the
+// drawn outfit (its preview shows it: Wael's choice, 17/11), and the description the select writes gets the same draw
+// (post_select_desc). A new landing on Random draws again.
+struct SelDraw { int fid = 0; rnd::Draw d; };
+std::map<int, SelDraw> g_sel_draw;     // select player number -> its draw (under g_alias_mx)
+
+int pre_sel_setting(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || argc < 6 || g_random_no.empty()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    try {
+        const int no = arg_int(argv[2]), fid = arg_int(argv[3]), cos = arg_int(argv[4]);
+        std::lock_guard lk(g_alias_mx);
+        if (online_now() || !is_random(fid, cos)) { g_sel_draw.erase(no); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+        // the screen calls this on many frames (every frame while a choice is confirmed, seen 17/11): one draw per landing
+        // on Random, kept while the cursor stays there (a new draw each call made the screen load again and again)
+        auto had = g_sel_draw.find(no);
+        rnd::Draw d;
+        if (had != g_sel_draw.end() && had->second.fid == fid) d = had->second.d;
+        else {
+            d = rand_draw(fid, "picked on a select screen: the screen loads it");
+            if (!d.valid()) { g_sel_draw.erase(no); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+            g_sel_draw[no] = SelDraw{ fid, d };
+        }
+        argv[4] = arg_i32(d.costume);
+        argv[5] = arg_i32(rnd::worn_colour(d.color));
+        if (wjournal::on()) wjournal::log("RANDOM_SELECT no=%d F%d c%d -> c%d/%d", no, fid, cos, d.costume, d.color);
+    } catch (...) {}
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+// The Color row moved while the outfit is Random (one colour, "Random"): the screen keeps the drawn colour
+int pre_sel_colour(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || argc < 4) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    try {
+        std::lock_guard lk(g_alias_mx);
+        auto it = g_sel_draw.find(arg_int(argv[2]));
+        if (it != g_sel_draw.end()) argv[3] = arg_i32(rnd::worn_colour(it->second.d.color));
+    } catch (...) {}
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+// The choice confirmed, the screen dresses its model again with SelectedFighterCtrl.GetColorIndex(TeamNum), which reads the
+// Color row: "Random", the game's colour 1 (seen 17/11: the drawn outfit went back to colour 1 when both players had
+// confirmed, the VS screen right). A player whose screen loaded a draw gets the drawn colour.
+thread_local int tl_colour_team = -1;
+int pre_sel_colour_index(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_colour_team = argc >= 3 ? arg_int(argv[2]) : -1;
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_sel_colour_index(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    const int team = tl_colour_team;
+    tl_colour_team = -1;
+    if (team < 0 || !ret_val || g_closing.load(std::memory_order_relaxed)) return;
+    try {
+        std::lock_guard lk(g_alias_mx);
+        auto it = g_sel_draw.find(team);
+        if (it == g_sel_draw.end()) return;
+        const int was = static_cast<int>(reinterpret_cast<uintptr_t>(*ret_val) & 0xFFFFFFFFu);
+        const int col = rnd::worn_colour(it->second.d.color);
+        if (was == col) return;
+        *ret_val = reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint32_t>(col)));
+        static int s_logged = 0;
+        if (s_logged++ < 20) logf("[F%d] Random: the select's colour of P%d is the draw's: %d (the row gave %d)", it->second.fid, team + 1, col, was);
+    } catch (...) {}
+}
+// The select wrote the battle's description (bBattleFighterSelectFlow.setupFighterDesc): a fighter in the Random outfit
+// whose player's screen loaded a draw wears that draw (the files loaded are the drawn outfit's); the later requests of the
+// battle (rand_on_load), if any come, find it done
+void post_select_desc(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed)) return;
+    try {
+        std::lock_guard lk(g_alias_mx);
+        if (g_sel_draw.empty()) return;
+        Obj* desc = battle_desc();
+        bool net = false;
+        if (!desc || (get_bool(desc, "IsNetwork", net) && net)) return;
+        Obj* teams = get_obj(desc, "Teams");
+        for (int t = 0, nt = list_count(teams); t < nt; ++t) {
+            auto it = g_sel_draw.find(t);
+            if (it == g_sel_draw.end()) continue;
+            Obj* fs = get_obj(list_item(teams, t), "Fighters");
+            for (int i = 0, nf = list_count(fs); i < nf; ++i) {
+                Obj* f = list_item(fs, i);
+                int32_t fid = 0, cos = -1;
+                if (!f || !get_i32(f, "FighterId", fid) || !get_i32(f, "Costume", cos) || fid != it->second.fid || !is_random(fid, cos)) continue;
+                const rnd::Draw& d = it->second.d;
+                set_i32(f, "Costume", d.costume);
+                set_i32(f, "Color", rnd::worn_colour(d.color));
+                g_rand_done.insert(f);
+                g_rand_last[fid] = d.costume;
+                rand_wear_entry(t + 1, fid, d.costume, d.color, "picked on a select screen: this battle");
+                logf("[F%d] Random: P%d wears %s colour %d (drawn when the select screen loaded it)", fid, t + 1, rand_name(fid, d.costume).c_str(), d.color);
+            }
+        }
+        // (kept until the next character select: the screen sets its colours once more when both players have confirmed,
+        // seen 17/11: the preview went back to colour 1 for a moment when the draw was forgotten here)
+    } catch (...) {}
+}
+
 int pre_asset_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 6) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     g_fighter_requests.fetch_add(1, std::memory_order_relaxed);
@@ -2601,6 +2705,15 @@ void install_hooks() {
     auto* fs = tdb->find_type("app.battle.bBattleFighterSelectFlow");
     hook_all(fs, "start", pre_select_start<perf::HkCosFlowStart>, nullptr);
     hook_all(fs, "onDestroy", pre_select_end<perf::HkCosFlowOnDestroy>, nullptr);
+    hook_all(fs, "setupFighterDesc", nullptr, post_select_desc);           // Random: the select's draw in the description
+    // Arcade's select is its own flow (bBattleArcadeFighterSelectFlow.setupBattleDesc writes the description; seen 17/11:
+    // without it the description kept the Random outfit while the select had loaded the draw: a black screen for ever)
+    if (auto* afs = tdb->find_type("app.battle.bBattleArcadeFighterSelectFlow")) hook_all(afs, "setupBattleDesc", nullptr, post_select_desc);
+    if (auto* sfc = tdb->find_type("app.menu.SelectedFighterCtrl")) {       // Random: the draw where the select loads it
+        hook_all(sfc, "SetFighterSetting", pre_sel_setting, nullptr);
+        hook_all(sfc, "SetFighterSetting_Color", pre_sel_colour, nullptr);
+        hook_all(sfc, "GetColorIndex", pre_sel_colour_index, post_sel_colour_index);
+    }
     auto* ui = tdb->find_type("app.UIFlowUI10501");
     hook_all(ui, "Start", pre_select_start<perf::HkCosUI10501Start>, nullptr);
     hook_all(ui, "End", pre_select_end<perf::HkCosUI10501End>, nullptr);
@@ -2670,6 +2783,7 @@ void tick(uint32_t ev) {
     // ---- ownership back after the title screen (login clears it, 1 slot seen 30/09), and at every
     // screen that lists outfits. (UIFlowTitle is also destroyed when a battle loads: one pass then.)
     // From there on, a slot whose outfit the game does not count as the player's is hidden.
+    if (ev & EV_SELECT_START) { std::lock_guard lk(g_alias_mx); g_sel_draw.clear(); }   // Random: a new select draws anew
     if (ev & (EV_TITLE_END | EV_SELECT_START | EV_MENU_OPEN)) {
         g_after_title = true;
         const char* why = (ev & EV_SELECT_START) ? "character select" : (ev & EV_MENU_OPEN) ? "Battle Settings" : "title screen left";

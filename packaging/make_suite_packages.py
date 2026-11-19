@@ -214,9 +214,16 @@ PROFILE_README = CRLF.join([
     "If you used the ZenMode.lua script: its settings are taken at the first start (Zen Mode then starts On); remove",
     "reframework/autorun/ZenMode.lua, the two together do the same work twice.",
     "",
+    "Battle Hub Player List (since 1.2.0): each player's Master Rate after the character icon, or their League Points when",
+    "they have no MR; nothing for a player not ranked yet. The values come with the list the server already sends (no",
+    "request), for the player's favourite character, the one whose icon the row shows. A long name scrolls in its place.",
+    "The list's SORT menu has a MR row (high to low or low to high), and the list opens on the sort you chose last, also",
+    "after a restart (kept in reframework/data/profile_mod_hub.txt).",
+    "",
     "Switches (reframework/data/profile_mod.ini, read at start; the file is not shipped, create it to use them):",
     "  full_profile=0   keeps the game's limited profile",
     "  steam_name=0     no Steam name key, no request",
+    "  hub_rating=0     no MR / LP in the Battle Hub Player List, no MR sort, the sort not kept",
     "",
     "REQUIRES the SF6 Native Core package (%s or newer) from the same release. Without it the mod does nothing",
     "(REFramework's log says: profile_mod: off).",
@@ -245,6 +252,8 @@ CC_README = CRLF.join([
     "THE LIST: T (pad Y) on a trial: Rename, Move to another tab, Delete. Names of any length scroll.",
     "IN A TRIAL: in its pause menu, T (pad Y) turns Auto Reset On Fail on or off (a dropped combo starts again by itself),",
     "R (pad X) shows Training's Frame Meter. Both are kept in reframework/data/SF6_CustomTrials_data/config.json.",
+    "CLEARS: a custom trial is marked cleared only when you clear that trial (kept in _cleared.json of that folder); the",
+    "official Combo Trials' clears stay apart and the game's save is never written for custom trials.",
     "",
     "THE COMBOS THAT COME WITH THE MOD: community combos from the SF6CM site, each credited to its author in its file",
     "(and in its title when the name has Latin letters). Only combos the game itself validated: it replayed each",
@@ -572,7 +581,9 @@ def main():
                # The crash report script, so that an update made in game brings it: under reframework/data/sf6core/ and
                # not at the game's root, because the updaters already installed refuse a root file they do not know
                # (update_logic.cpp kRootFiles) and would stop the whole update.
-               (os.path.join(REPO, "tools", "crash_report", "SF6_CrashReport.bat"), "reframework/data/sf6core/SF6_CrashReport.bat")])
+               (os.path.join(REPO, "tools", "crash_report", "SF6_CrashReport.bat"), "reframework/data/sf6core/SF6_CrashReport.bat"),
+               # The players' release notes: the News screen's OverDrive Changelog tab (core/src/news.cpp)
+               (os.path.join(REPO, "packaging", "release_notes.json"), "reframework/data/sf6core/changelog.json")])
 
     print("== SF6 Color Mod %s" % cm_v)
     cm_zip = os.path.join(a.out, "SF6_ColorMod_%s.zip" % cm_v)
@@ -588,7 +599,7 @@ def main():
     print("== SF6 Profile Mod %s" % pm_v)
     pm_zip = os.path.join(a.out, "SF6_ProfileMod_%s.zip" % pm_v)
     write_zip(pm_zip,
-              "name=SF6 Profile Mod\nversion=%s\ndescription=Opens the full Fighter Profile where the game opens the limited one (only what the server sent), swaps a shown Steam ID for the player's Steam name on a key press, and adds Zen Mode (a Battle Settings tab hiding ranks, points, win streaks and player details; needs a REFramework nightly build). Requires SF6 Native Core %s or newer.\nauthor=Wael\nNameAsBundle=SF6 Profile Mod\n" % (pm_v, PROFILE_MIN_CORE),
+              "name=SF6 Profile Mod\nversion=%s\ndescription=Opens the full Fighter Profile where the game opens the limited one (only what the server sent), swaps a shown Steam ID for the player's Steam name on a key press, shows each player's MR or LP in the Battle Hub Player List (with a MR sort, the chosen sort kept), and adds Zen Mode (a Battle Settings tab hiding ranks, points, win streaks and player details; needs a REFramework nightly build). Requires SF6 Native Core %s or newer.\nauthor=Wael\nNameAsBundle=SF6 Profile Mod\n" % (pm_v, PROFILE_MIN_CORE),
               PROFILE_README % (pm_v, PROFILE_MIN_CORE),
               [(os.path.join(REPO, "build", "profile_mod", "profile_mod.dll"), "reframework/plugins/profile_mod.dll")])
 

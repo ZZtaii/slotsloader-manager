@@ -71,7 +71,7 @@ Functions we have run into:
 |---|---|---|
 | `get_module` | 1.11 | not used |
 | `create_managed_array` | 1.13 | call the game's own `System.Array.CreateInstance(System.Type, System.Int32)` |
-| `on_pre_gui_draw_element` | 1.14 | registered only on 1.14+; below that, element hiding is off and logged |
+| `on_pre_gui_draw_element` | 1.14 | registered only on 1.14+; below that the Native Core hooks the game's GUI draw call itself (`core/src/gui_draw_hook.cpp`, core 0.9.25) and plugins ask the core for a draw observer (`gui_draw_observe`) |
 
 ---
 

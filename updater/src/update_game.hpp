@@ -24,8 +24,17 @@ namespace sf6up::game {
 
 enum class Buttons { Ok, YesNo, YesNoThird };
 // third: the word of the third button (YesNoThird), after the game's Yes and No
-bool box_open(const std::string& text, const std::string& title, Buttons buttons = Buttons::YesNo, const std::string& third = {});
-// -1 still up, 1 Yes (OK too), 0 No (Back too: the box's cancel is its No), 2 the third button, -2 lost (unreadable: no answer)
+// details: a key of the guide line (T / pad Y) with this word, read by key() each frame, closes the box answering 3; empty: none.
+// Its text comes from guid() (a GUID text): without it or key, no Details key.
+struct DetailsKey { std::string word; bool (*key)() = nullptr; bool (*guid)(const char*, unsigned char*) = nullptr; };
+bool box_open(const std::string& text, const std::string& title, Buttons buttons = Buttons::YesNo, const std::string& third = {},
+              const DetailsKey& details = {});
+// Any box: labels[i] = the i-th button's word in place of the game's (empty: the game's word); start = the button the cursor starts on,
+// cancel = the one Back answers (box_poll then answers that button as if chosen)
+bool box_open_ex(const std::string& text, const std::string& title, Buttons buttons, const std::string labels[3], int start, int cancel,
+                 const DetailsKey& details = {});
+// -1 still up, 1 Yes (OK too), 0 No (Back too: the box's cancel is its No), 2 the third button, 3 the Details key,
+// -2 lost (unreadable: no answer)
 int box_poll();
 void box_drop();
 bool box_is_open();

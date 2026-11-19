@@ -28,7 +28,7 @@ namespace sf6up::host {
 
 namespace {
 
-enum class St : int { Idle, Dormant, Checking, Offer, AskInstall, Installing, AskRestart, WaitRestart, AskFailed, WaitFailed, Done };
+enum class St : int { Idle, Dormant, Checking, Offer, AskInstall, Details, Installing, AskRestart, WaitRestart, AskFailed, WaitFailed, Done };
 
 constexpr uint64_t kPollEvery = 30;              // frames between two looks at the screen
 constexpr uint64_t kStableFrames = 300;          // a screen held 5 s: the player is in a menu
@@ -114,6 +114,7 @@ void check_worker() {
     if (std::string off; !check_allowed(s, managed, &off)) { log(off); set_state(St::Done); return; }
     std::string text, why;
     if (!fetch_manifest(&text, &why)) { log("no manifest from the latest release: " + why); set_state(St::Done); return; }
+    if (g_info.notes) { try { g_info.notes(text.c_str()); } catch (...) {} }
     const std::wstring root = p.root;
     CheckResult r = run_check(p, [root](const KnownPackage& k) { return game::package_version(k, root); }, text, s.ignored);
     if (!r.ok) { log("the latest release's manifest was refused: " + r.why); set_state(St::Done); return; }
@@ -255,9 +256,17 @@ std::string failure_text(const std::string& lang) {
     return text::failed(lang, g_result.fail, g_result.what);
 }
 
+// The update box's Details key: the host gives a changelog page (all of its functions)
+bool details_on() {
+    return g_info.details_open && g_info.details_busy && g_info.details_shown && g_info.details_give_up && g_info.details_key && g_info.text_guid;
+}
+uint64_t g_details_at = 0;
+
 bool open_box(const std::string& body, const std::string& lang, const char* what, game::Buttons buttons = game::Buttons::YesNo,
-              const std::string& third = {}) {
-    if (game::box_open(body, text::title(lang), buttons, third)) { log(std::string("box shown: ") + what); return true; }
+              const std::string& third = {}, bool details = false) {
+    game::DetailsKey dk;
+    if (details && details_on()) { dk.word = "Details"; dk.key = g_info.details_key; dk.guid = g_info.text_guid; }
+    if (game::box_open(body, text::title(lang), buttons, third, dk)) { log(std::string("box shown: ") + what); return true; }
     log(std::string("the game's message box could not be opened (") + what + "): nothing done");
     return false;
 }
@@ -305,18 +314,41 @@ void frame() {
             if (!g_menu_idle) break;
             const std::string lang = game::language();
             g_lang = lang;
-            set_state(open_box(offer_text(lang), lang, "offer", game::Buttons::YesNoThird, text::ignore(lang)) ? St::AskInstall : St::Done);
+            set_state(open_box(offer_text(lang), lang, "offer", game::Buttons::YesNoThird, text::ignore(lang), true) ? St::AskInstall : St::Done);
             break;
         }
         case St::AskInstall: {
             const int a = game::box_poll();
             if (a == -1) break;
+            if (a == 3) {                            // Details: the changelog page, then the box again
+                std::string suite;
+                {
+                    std::lock_guard lk(g_mx);
+                    suite = g_plan.suite;
+                }
+                g_details_at = g_frames;
+                if (details_on() && g_info.details_open(suite.c_str())) { log("Details chosen: the changelog of " + suite); set_state(St::Details); }
+                else { log("Details chosen, but the changelog page did not open: the box comes back"); set_state(St::Offer); }
+                break;
+            }
             if (a == 1) { log("Install chosen"); set_state(St::Installing); spawn(install_worker); }
             else if (a == 2) { log("Ignore chosen"); set_state(St::Done); spawn(ignore_worker); }
             else if (a == 0) { log("No chosen: asked again at the next start"); set_state(St::Done); }
             else { log("the box went away without an answer: asked again at the next start"); set_state(St::Done); }
             break;
         }
+        case St::Details:                            // the page up: the box comes back once it is closed
+            if (g_info.details_busy()) {
+                if (!g_info.details_shown() && g_frames - g_details_at > 600) {
+                    g_info.details_give_up();
+                    log("the changelog page never came up: the box comes back");
+                    set_state(St::Offer);
+                }
+                break;
+            }
+            log("the changelog page is closed: the box comes back");
+            set_state(St::Offer);
+            break;
         case St::Installing:
             show_progress();
             break;

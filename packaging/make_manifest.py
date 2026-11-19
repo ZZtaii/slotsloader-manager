@@ -24,6 +24,10 @@ BUNDLE_PREFIX = "SF6_ModSuite_AllInOne_"
 TOOLS = [("SF6_ModSorter_", "mod_sorter", "SF6_ModSorter.exe")]
 TOOL_PREFIXES = tuple(t[0] for t in TOOLS)
 FORMAT = "sf6suite-manifest-1"
+# The players' release notes (packaging/release_notes.json): the manifest carries them under "notes" (the updater gives them to
+# the Native Core's News tab and the update box's Details page; older updaters ignore the key). This release must have its own.
+NOTES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "release_notes.json")
+NOTES_FORMAT = "sf6suite-notes-1"
 # id, the file that proves the package is installed: the same table as updater/src/update_logic.cpp known_packages()
 KNOWN = [
     ("slots_loader", "reframework/plugins/SF6_CostumeSlotsNative.dll"),
@@ -129,7 +133,25 @@ def build_manifest(release, version):
     tools = build_tools(release)
     if tools:
         m["tools"] = tools
+    m["notes"] = build_notes(version)
     return m
+
+
+def build_notes(version):
+    """release_notes.json as the manifest carries it; the release's own version must be there."""
+    with open(NOTES, encoding="utf-8") as f:
+        n = json.load(f)
+    if n.get("format") != NOTES_FORMAT or not isinstance(n.get("releases"), list):
+        sys.exit("make_manifest: %s: not %s" % (NOTES, NOTES_FORMAT))
+    rels = n["releases"]
+    if not any(r.get("version") == version for r in rels):
+        sys.exit("make_manifest: release_notes.json has no entry for %s: write the players' notes first" % version)
+    for r in rels:
+        for k in ("new", "fixed", "modified"):
+            for line in r.get(k, []):
+                if not isinstance(line, str) or len(line) > 300 or any(ord(c) > 126 for c in line):
+                    sys.exit("make_manifest: release_notes.json %s %s: a line too long or not plain ASCII: %r" % (r.get("version"), k, line))
+    return {"format": NOTES_FORMAT, "releases": rels}
 
 
 def build_tools(release):
