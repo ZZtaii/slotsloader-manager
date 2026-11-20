@@ -68,6 +68,7 @@ namespace SlotsInstaller
         private FlatButton bannerRemovePak;   // 2.4.0
         private FlatButton bannerShowMod;     // 1.0.18: selects the mod a missing-copy notice names
         private Label gameBannerText;
+        private FlatButton bannerKeep;   // 1.0.22: Keep changes (ReplaceEngine.KeepsChanges)
         private FlatButton bannerReapply, bannerRestore, bannerLoader, bannerPak, moveUpButton, moveDownButton;
         private List<GameModRow> gameRows = new List<GameModRow>();
         private GameFilesStatus gameStatus = new GameFilesStatus();
@@ -720,6 +721,7 @@ namespace SlotsInstaller
             gameBanner = banner;
             bannerRestore = banner.Add(Button("Restore original game files", false, 196, delegate { RestoreOriginalGameFiles(); })); bannerRestore.Danger = true;
             bannerReapply = banner.Add(Button("Reapply", false, 84, delegate { ReapplyAll(); }));
+            bannerKeep = banner.Add(Button("Keep changes", false, 116, delegate { KeepChangedFiles(); })); bannerKeep.AccessibleName = KeepChangesName;   // 1.0.22
             bannerPak = banner.Add(Button("Use PAK method", false, 130, delegate { UsePakMethod(); })); bannerPak.AccessibleName = "Use the PAK method for the installed replacements";
             bannerLoader = banner.Add(Button("Turn loose file loader on", false, 190, delegate { SetLooseLoader(true); }));
             bannerRemovePak = banner.Add(Button("Remove it", false, 90, delegate { RemoveOrphanedCostumePak(); })); bannerRemovePak.AccessibleName = "Remove the leftover Slotsloader costume pak";
@@ -758,6 +760,7 @@ namespace SlotsInstaller
             bannerRestore.Visible = gameStatus != null && (gameStatus.NeedsReapply || gameStatus.BaseChanged) && (gameRows ?? new List<GameModRow>()).Any(r => r.Mod != null);
             bannerLoader.Enabled = idle;
             bannerReapply.Enabled = bannerRestore.Enabled = idle && !FluffyBlocksPak;
+            bannerKeep.Visible = CanKeepChangedFiles; bannerKeep.Enabled = !busy;
             UpdateGameFilesToast();   // 1.0.10: the same notice on the other pages (MainFormGameNotice.cs)
         }
 
@@ -939,6 +942,27 @@ namespace SlotsInstaller
                 + (LoaderCostumePak.IsLoaderMod(mod) ? " Slotsloader's costume pak is removed too, so its extra outfits stop loading." : "");
         }
         private void ReapplyAll() { string game = config.GameRoot; ChangeGameRow("Reapplying replacements", delegate(ReplaceEngine e) { string r = e.Reapply(); UnownedSlotsFlag.Ensure(game); return r; }, "Reapplied all replacements."); }
+        // 1.0.22 (the user: "ignore the message ... move the new detected files to unmanaged"): the notice's Keep changes.
+        // Shown when a changed file may be kept (a script, a plugin, a game-folder file of a mod; never a natives file
+        // or one of Slotsloader's). Every such file changed right now is left as it is and no longer reported; it stays
+        // the mod's file. No popup: Undo checks them again. Nothing in the game folder changes, so SF6 may be running.
+        internal const string KeepChangesName = "Keep the changed files as they are and stop reporting them";
+        private bool CanKeepChangedFiles { get { return gameStatus != null && gameStatus.KeepableChanged.Count > 0; } }
+        private void KeepChangedFiles()
+        {
+            if (busy || !CanKeepChangedFiles) return;
+            ReplaceEngine engine = Engine();
+            var kept = new List<string>();
+            Work("Keeping the changed files…", delegate
+            {
+                kept.AddRange(engine.KeepAllChanged());
+                return kept.Count == 0 ? "" : "Reapply leaves " + (kept.Count == 1 ? "it" : "them") + " alone: " + String.Join(", ", kept.Take(3).Select(Path.GetFileName)) + (kept.Count > 3 ? ", …" : "") + ".";
+            }, delegate(string message)
+            {
+                string done = kept.Count == 0 ? "No changed file to keep." : "Kept " + ReplacePlanner.N(kept.Count, "changed file") + ".";
+                Finished(done, message, kept.Count == 0 ? (Func<ReplaceEngine, string>)null : delegate(ReplaceEngine e) { e.CheckAgain(kept); return ""; });
+            });
+        }
         // 2.4.0: SlotsLoader is gone but its costume pak is not (Installed page banner, "Remove it").
         private void RemoveOrphanedCostumePak()
         {

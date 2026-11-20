@@ -170,6 +170,7 @@ namespace SlotsInstaller
             if (s == null || s.Format != "sf6-replace-state-v1") throw new IOException("replace-state.json is unreadable. Move it aside only if you know the game files are clean.");
             if (s.Mods == null) s.Mods = new List<ReplaceMod>(); if (s.Deployed == null) s.Deployed = new List<DeployedFile>();
             if (s.Originals == null) s.Originals = new List<OriginalBackup>(); if (s.Paks == null) s.Paks = new List<PakStamp>(); if (s.CreatedDirs == null) s.CreatedDirs = new List<string>();
+            if (s.KeptChanged == null) s.KeptChanged = new List<string>();
             if (s.Released == null) s.Released = new List<ReleasedFile>(); if (s.ForeignCopies == null) s.ForeignCopies = new List<ForeignCopy>();
             if (s.PreviousStoreRoots == null) s.PreviousStoreRoots = new List<string>();
             if ((s.Mods.Count > 0 || s.Deployed.Count > 0) && !String.Equals(Path.GetFullPath(s.GameRoot ?? "").TrimEnd(Path.DirectorySeparatorChar), GameRoot, StringComparison.OrdinalIgnoreCase))
@@ -903,6 +904,25 @@ namespace SlotsInstaller
                             }
                         }
                     }
+                    else if (rel == null && LeftAsChanged(current, was))
+                    {
+                        // 1.0.22: the mod rewrote its own data file (IsModData), or the user chose Keep changes for this
+                        // file or mod (KeepsChanges). The same shipped file wanted again (Reapply,
+                        // a reinstall, another change, another record shipping the same bytes): the mod's version stays.
+                        if (wanted && want.Value.Sha256 == was.Sha256)
+                        {
+                            deployed.Add(String.Equals(was.Owner, want.Key.Id, StringComparison.OrdinalIgnoreCase) ? was : new DeployedFile { Path = path, Owner = want.Key.Id, Sha256 = was.Sha256, Size = was.Size, Zeroed = was.Zeroed });
+                            continue;
+                        }
+                        // Removed (uninstall, disable) or replaced by another shipped file: no question. The copy only
+                        // serves a rollback of this change (PurgeForeignCopies), as for any uninstalled file.
+                        string keep = Path.Combine(BackupDir, "changed-" + Guid.NewGuid().ToString("N") + ".bin");
+                        journal.CreatedPaths.Add(keep);
+                        Directory.CreateDirectory(BackupDir); File.Copy(full, keep);
+                        if (Sha(keep) != actual) throw new IOException("Could not keep an exact copy of " + path + ".");
+                        foreignCopies.Add(new ForeignCopy { Path = path, Copy = keep, Sha256 = actual, Size = new FileInfo(keep).Length, Changer = OwnDataChanger, KeptUtc = DateTime.UtcNow.ToString("o") });
+                        beforeSource = keep;
+                    }
                     else
                     {
                         // Changed by another tool after this app installed it.
@@ -1046,6 +1066,8 @@ namespace SlotsInstaller
             if (takenOver > 0) Program.LogLine("Slotsloader taken over: " + ReplacePlanner.N(takenOver, "file") + " of a Slotsloader installed outside the Manager replaced, not kept as originals.");
             if (staleDropped > 0) messages.Add("Dropped " + ReplacePlanner.N(staleDropped, "PAK invalidation") + " because the archive layout or entry ownership changed.");
             next.Deployed = deployed;
+            // 1.0.22: a Keep changes choice ends when no installed mod ships that path any more.
+            if (next.KeptChanged.Count > 0) next.KeptChanged = next.KeptChanged.Where(k => next.Mods.Any(m => m.Files.Any(x => String.Equals(x.Path, k, StringComparison.OrdinalIgnoreCase)))).ToList();
             next.Originals = originals;
             next.Released = keptReleased;
             next.ForeignCopies = foreignCopies;
@@ -1103,6 +1125,102 @@ namespace SlotsInstaller
             }
             ops.Add(new JournalOp { Kind = "file", Path = CrashReporter.Name, BeforeSha = crashSha, BeforeSource = renamed, AfterSha = null });
             return ops;
+        }
+
+        // 1.0.22 (the user, 20 Nov 2026: MMDK rewrites its shipped "<fighter> Names.json" at every fighter load, so the
+        // banner asked for Reapply after every session and Reapply put the shipped copy back): reframework/data/ is the
+        // folder REFramework lets scripts write to (json.dump_file, io.open), so a file a mod ships there is that mod's
+        // working data. A changed one is expected: Status does not count it, no change is refused or asks about it, and
+        // it stays as the mod wrote it while the same shipped file is wanted there. It leaves with the mod (uninstall,
+        // disable) and gives way to another shipped file (an update that ships new data, another mod winning the path).
+        // A missing one is still reported and put back by Reapply. Everything else keeps the strict check: natives/,
+        // reframework/autorun/ and plugins/, game-folder files, PAKs, and all of Slotsloader's own files.
+        internal const string ModDataRoot = "reframework/data/";
+        internal const string OwnDataChanger = "the mod itself";
+        internal static bool IsModData(string path) { return PakHash.Normalize(path ?? "").TrimStart('/').StartsWith(ModDataRoot, StringComparison.OrdinalIgnoreCase); }
+        internal static bool WritesOwnData(ReplaceState state, DeployedFile d)
+        {
+            if (state == null || d == null || !IsModData(d.Path)) return false;
+            ReplaceMod owner = state.Find(d.Owner);
+            return owner != null && !LoaderCostumePak.IsLoaderMod(owner);
+        }
+
+        // 1.0.22 (the user: "ignore the message ... move the new detected files to unmanaged"): the manual way for what
+        // the rule above misses. "Keep changes" marks a changed file (ReplaceState.KeptChanged, by path) or every file
+        // of a mod (ReplaceMod.KeepChanges) as left the way it is now: from then on it is treated exactly like a mod's
+        // own data file. It stays the mod's file (unlike "Keep current file", which lets go of the path and leaves the
+        // file behind): Reapply keeps it, uninstall and disable remove it, a different shipped file replaces it. The
+        // choice follows the path through an update or reinstall and ends when no installed mod ships that path.
+        // Never offered for natives/ files (the game's own files: a change there is a conflict, and their PAK entries
+        // must follow the file), patch PAKs, or Slotsloader's files.
+        internal static bool CanKeepChanges(ReplaceState state, DeployedFile d)
+        {
+            if (state == null || d == null || String.IsNullOrEmpty(d.Path)) return false;
+            string p = PakHash.Normalize(d.Path).TrimStart('/');
+            if (p.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) || IsPatchPakPath(p)) return false;
+            ReplaceMod owner = state.Find(d.Owner);
+            return owner != null && !LoaderCostumePak.IsLoaderMod(owner);
+        }
+        internal static bool KeepsChanges(ReplaceState state, DeployedFile d)
+        {
+            if (!CanKeepChanges(state, d)) return false;
+            return state.Find(d.Owner).KeepChanges || (state.KeptChanged != null && state.KeptChanged.Contains(d.Path, StringComparer.OrdinalIgnoreCase));
+        }
+        internal static bool LeftAsChanged(ReplaceState state, DeployedFile d) { return WritesOwnData(state, d) || KeepsChanges(state, d); }
+
+        // A record edit with no game file change (like PurgeForeignCopies), under the game lock.
+        private T EditState<T>(Func<ReplaceState, T> edit)
+        {
+            using (Lock())
+            {
+                if (JournalPending) throw new IOException("An interrupted change has to finish first. Refresh and try again.");
+                ReplaceState s = LoadState();
+                T result = edit(s);
+                s.Generation++; DurableFile.WriteJson(StatePath, s);
+                return result;
+            }
+        }
+        // Keeps these installed files as they are now. Returns the paths newly marked.
+        internal List<string> KeepChanges(IEnumerable<string> paths)
+        {
+            List<string> wanted = (paths ?? new string[0]).Select(p => PakHash.Normalize(p ?? "").TrimStart('/')).Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            return EditState(delegate(ReplaceState s)
+            {
+                var added = new List<string>();
+                foreach (string p in wanted)
+                {
+                    DeployedFile d = s.Deployment(p);
+                    if (d == null) throw new IOException(p + " is not a file the Manager installed (see replace-status).");
+                    if (!CanKeepChanges(s, d)) throw new IOException(p + " is always checked: " + (LoaderCostumePak.IsLoaderMod(s.Find(d.Owner)) ? "it is one of Slotsloader's files." : "it replaces a game file. Reapply, or uninstall the mod."));
+                    if (s.KeptChanged.Contains(d.Path, StringComparer.OrdinalIgnoreCase)) continue;
+                    s.KeptChanged.Add(d.Path); added.Add(d.Path);
+                }
+                return added;
+            });
+        }
+        // Every file the status reports as changed that may be kept (the notice's Keep changes).
+        internal List<string> KeepAllChanged() { return KeepChanges(GameStatus().KeepableChanged); }
+        // Checks these files again (the Undo of Keep changes, replace-keep-changes --check-again). Returns the paths unmarked.
+        internal List<string> CheckAgain(IEnumerable<string> paths)
+        {
+            List<string> wanted = (paths ?? new string[0]).Select(p => PakHash.Normalize(p ?? "").TrimStart('/')).ToList();
+            return EditState(delegate(ReplaceState s)
+            {
+                List<string> gone = s.KeptChanged.Where(k => wanted.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList();
+                s.KeptChanged.RemoveAll(k => wanted.Contains(k, StringComparer.OrdinalIgnoreCase));
+                return gone;
+            });
+        }
+        // A whole mod: every file of it that may be kept, now and after an update of it.
+        internal ReplaceMod SetKeepChanges(string id, bool keep)
+        {
+            return EditState(delegate(ReplaceState s)
+            {
+                ReplaceMod mod = Need(s, id);
+                if (keep && LoaderCostumePak.IsLoaderMod(mod)) throw new IOException("Slotsloader's own files are always checked.");
+                mod.KeepChanges = keep;
+                return mod;
+            });
         }
 
         // How one change treats files other tools changed (2.2.0) and which kept files it restores.
@@ -1248,7 +1366,7 @@ namespace SlotsInstaller
                     if (existing != null)
                     {
                         if (LoaderCostumePak.IsLoaderMod(existing) && LoaderCostumePak.IsLoaderMod(mod)) options.LoaderSwitchFrom = existing.Id;
-                        int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer;
+                        int at = state.Mods.IndexOf(existing); mod.Enabled = existing.Enabled; mod.PresetLayer = existing.PresetLayer; mod.KeepChanges = existing.KeepChanges && !LoaderCostumePak.IsLoaderMod(mod);
                         if (keepPlace || existing.PresetLayer) state.Mods[at] = mod;
                         else { state.Mods.RemoveAt(at); state.Mods.Insert(0, mod); historySwitched = existing.Id; }   // still an Update in History
                     }
@@ -1667,6 +1785,8 @@ namespace SlotsInstaller
             int matches = 0, overridden = 0, done = 0;
             // Files a higher mod supplies, by that mod (the one that wins them in the game).
             var winners = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var ownData = new List<string>();   // 1.0.22: data files the mod rewrote itself (IsModData)
+            var keptChanged = new List<string>();   // 1.0.22: changed files the user keeps (KeepsChanges)
             foreach (ModFile file in mod.Files)
             {
                 OperationContext.ThrowIfCancellationRequested();
@@ -1691,7 +1811,11 @@ namespace SlotsInstaller
                 {
                     string full = GamePath(deployed.Path);
                     if (new FileInfo(full).Length != deployed.Size || !String.Equals(Sha(full), deployed.Sha256, StringComparison.OrdinalIgnoreCase))
-                        rows.Add(new HealthItem("error", "Changed · " + file.Path));
+                    {
+                        if (WritesOwnData(state, deployed)) { matches++; ownData.Add(file.Path); }   // 1.0.22
+                        else if (KeepsChanges(state, deployed)) { matches++; keptChanged.Add(file.Path); }
+                        else rows.Add(new HealthItem("error", "Changed · " + file.Path));
+                    }
                     else matches++;
                 }
                 catch (FileNotFoundException) { rows.Add(new HealthItem("error", "Missing · " + file.Path)); }
@@ -1705,6 +1829,10 @@ namespace SlotsInstaller
             foreach (var winner in winners.OrderByDescending(w => w.Value.Count))
                 rows.Add(new HealthItem("info", "Supplied by " + winner.Key + " (higher on the Installed page) · " + ReplacePlanner.N(winner.Value.Count, "file") +
                     " · " + String.Join(", ", winner.Value.Take(3).Select(Path.GetFileName)) + (winner.Value.Count > 3 ? ", …" : "")));
+            if (ownData.Count > 0)
+                rows.Add(new HealthItem("info", "Updated by the mod · " + ReplacePlanner.N(ownData.Count, "data file") + " · " + String.Join(", ", ownData.Take(3).Select(Path.GetFileName)) + (ownData.Count > 3 ? ", …" : "")));
+            if (keptChanged.Count > 0)
+                rows.Add(new HealthItem("info", "Changed, kept as it is · " + ReplacePlanner.N(keptChanged.Count, "file") + " · " + String.Join(", ", keptChanged.Take(3).Select(Path.GetFileName)) + (keptChanged.Count > 3 ? ", …" : "")));
             foreach (var fix in mod.Files.Where(f => !String.IsNullOrWhiteSpace(f.Fixes)).GroupBy(f => f.Fixes))
                 rows.Add(new HealthItem("info", "Patched at install · " + ReplacePlanner.N(fix.Count(), "file") + " · " + fix.Key));
             foreach (string note in mod.Notes) rows.Add(new HealthItem("info", note));
@@ -1752,6 +1880,9 @@ namespace SlotsInstaller
                     // Game-folder tool files (not natives) are small: compared by content, so a same-size build counts too.
                     bool changed = length != d.Size || (!d.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) && length < 64L * 1024 * 1024 && Sha(full) != d.Sha256);
                     if (!changed) continue;
+                    if (WritesOwnData(state, d)) { status.OwnDataChanged++; continue; }   // 1.0.22: the mod's own data, rewritten by the mod
+                    if (KeepsChanges(state, d)) { status.KeptChanged.Add(d.Path); continue; }   // 1.0.22: the user's Keep changes
+                    if (CanKeepChanges(state, d)) status.KeepableChanged.Add(d.Path);
                     status.FilesChanged++;
                     if (status.ChangedBy.Count < 6)
                     {

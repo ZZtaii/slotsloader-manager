@@ -76,6 +76,7 @@ namespace SlotsInstaller
         public string UpdatedUtc = "";
         public List<string> PreviousStoreRoots = new List<string>();     // 2.4.2: earlier store roots (their .removed copies stay listed)
         public ModsOffRecord ModsOff;                                    // 1.0.18: outfit mods are switched off (ReplaceEngineModsOff.cs); null = on
+        public List<string> KeptChanged = new List<string>();            // 1.0.22: installed files the user keeps as changed ("Keep changes"; ReplaceEngine.KeepsChanges)
 
         internal ReplaceMod Find(string id) { return Mods.FirstOrDefault(m => String.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)); }
         internal DeployedFile Deployment(string path) { return Deployed.FirstOrDefault(d => String.Equals(d.Path, path, StringComparison.OrdinalIgnoreCase)); }
@@ -140,6 +141,7 @@ namespace SlotsInstaller
         // mod). Empty = all. A reinstall and a preset keep them.
         public List<string> OnlyParts = new List<string>();
         public bool Enabled = true, Test, PresetLayer;
+        public bool KeepChanges;   // 1.0.22: every file of this mod that may be kept is left as changed (ReplaceEngine.KeepsChanges)
         public string ArchiveSha, ArchiveStamp;
         public long ArchiveSize;
         public List<ModFile> Files = new List<ModFile>();
@@ -347,6 +349,9 @@ namespace SlotsInstaller
     {
         internal bool PakChanged, BaseChanged, LooseLoaderOff, JournalPending;
         internal int RowsNotZero, FilesMissing, FilesChanged;
+        internal int OwnDataChanged;                                     // 1.0.22: data files a mod rewrote itself (ReplaceEngine.IsModData); never a reason to reapply
+        internal List<string> KeptChanged = new List<string>();          // 1.0.22: changed files the user keeps (not counted in FilesChanged)
+        internal List<string> KeepableChanged = new List<string>();      // 1.0.22: counted in FilesChanged; Keep changes may take them
         internal int BackupsRecorded, BackupsMissing, StoredMissing;     // 2.1.0: backups in Data checked on disk
         internal string FirstMissingBackup, FirstMissingStored;
         internal List<MissingCopies> StoredMissingMods = new List<MissingCopies>();   // 1.0.18: which mods, and why

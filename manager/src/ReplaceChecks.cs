@@ -148,6 +148,8 @@ namespace SlotsInstaller
                 check("game update detection, dropped stale rows and Reapply; restore-all after an update", delegate { GameUpdate(Path.Combine(run, "update")); });
                 full("rows restored by another tool are detected and re-invalidated by Reapply; a file another tool changed is replaced with no copy kept after the change (1.0.1)", delegate { RowsRestored(Path.Combine(run, "rows")); });
                 check("tool/root mods: genuine files backed up and restored exactly, previews/readme skipped, protected paths refused", delegate { ToolMods(Path.Combine(run, "tools")); });
+                check("a mod's own data (1.0.22): a file under reframework/data that its mod rewrote is not a changed game file (status, health check, replace-status), blocks no other change and stays through Reapply and a reinstall; it leaves on disable and uninstall without a question and gives way to a new shipped file; a missing one, a changed script, a changed natives file and Slotsloader's own data are still reported", delegate { ModData(Path.Combine(run, "mod-data")); });
+                check("Keep changes (1.0.22): a changed script the user keeps is no longer reported, stays through Reapply and a reinstall, and is still removed with its mod; per file, all changed files, or a whole mod; Check again undoes it; never a natives file or a Slotsloader file; replace-keep-changes", delegate { KeepChanges(Path.Combine(run, "keep-changes")); });
                 check("Slotsloader costume pak (2.4.0): uninstalling Slotsloader removes its generated pak (the sole patch pak), clears the registry stamp (slots kept), leaves costume_mods and the opt-out file; a reinstall finds no pak and an empty stamp", delegate { LoaderPakChecks.SolePak(Path.Combine(run, "loaderpak-sole")); });
                 full("Slotsloader costume pak (2.4.0): with another mod's pak above it, a marker-only placeholder keeps the patch row unbroken; foreign and stage paks stay byte-identical", delegate { LoaderPakChecks.Placeholder(Path.Combine(run, "loaderpak-placeholder")); });
                 full("Slotsloader costume pak (1.0.18): an outfit's copy of a shared path (new or vanilla) in it never refuses a PAK-method install, update, disable, enable or uninstall; the health check says what the game reads (older loader: a warning); the pak never changes; a slot table it rewrites is refused with that reason; without the loader, a stage pak and a Manager PAK mod carrying the marker keep the old rules", delegate { LoaderPakChecks.SharedPaths(Path.Combine(run, "loaderpak-shared")); });
@@ -907,6 +909,222 @@ namespace SlotsInstaller
             ReplaceMod other = Install(f, "otherReport", "Other", false, null, out loaderPlan);
             Require(File.Exists(GameFile(f, "reframework/plugins/report_mod.dll")) && !loaderPlan.Items.Any(i => i.Text.Contains("the game doesn't need")), "a package without the loader lost report_mod.dll");
             f.Engine.Uninstall(other.Id);
+        }
+
+        // 1.0.22 (the user, 20 Nov 2026): MMDK ships reframework/data/MMDK/PlayerData/<fighter>/<fighter> Names.json and its
+        // script rewrites it at every fighter load. The Manager asked for Reapply after every session and Reapply put
+        // the shipped copy back. ReplaceEngine.IsModData.
+        private static void ModData(string root)
+        {
+            Fixture f = Create(root, false, ReplaceMethods.Pak);
+            var clean = Snapshot(f.Game);
+            const string names = "reframework/data/DataTool/PlayerData/Chun-Li/Chun-Li Names.json", script = "reframework/autorun/data_tool.lua";
+            Put(f.Mods, "dataTool/Data Tool/modinfo.ini", Bytes("name=Data Tool\r\n"));
+            Put(f.Mods, "dataTool/Data Tool/" + script, Bytes("-- writes its names file"));
+            Put(f.Mods, "dataTool/Data Tool/" + names, Bytes("{\"shipped\":1}"));
+            Require(ReplaceEngine.IsModData(names) && ReplaceEngine.IsModData("REFramework\\Data\\x.json") && !ReplaceEngine.IsModData(script) && !ReplaceEngine.IsModData("reframework/plugins/x.dll") && !ReplaceEngine.IsModData(V1) && !ReplaceEngine.IsModData("reframework/database.json") && !ReplaceEngine.IsModData("amd_ags_x64.dll"), "which paths are a mod's own data");
+            ReplacePlan plan;
+            ReplaceMod tool = Install(f, "dataTool", "Data Tool", false, null, out plan);
+            ReplaceMod a = Install(f, "modA", "A");
+            Require(plan.Kind == "Tool" && !f.Engine.Status().NeedsReapply && f.Engine.Status().OwnDataChanged == 0, "fresh install: " + f.Engine.Status().Summary);
+            Action<string> learn = delegate(string text) { File.WriteAllText(GameFile(f, names), text); };
+            Func<string> current = delegate { return File.Exists(GameFile(f, names)) ? File.ReadAllText(GameFile(f, names)) : null; };
+
+            // The mod rewrote its data file: not a changed game file anywhere.
+            learn("{\"shipped\":1,\"learned\":[\"Hyakuretsukyaku\"]}");
+            GameFilesStatus status = f.Engine.Status();
+            Require(!status.NeedsReapply && status.FilesChanged == 0 && status.OwnDataChanged == 1 && status.Summary == "" && status.Details.Count == 0, "a rewritten data file was reported: " + status.Summary + " / " + String.Join(" | ", status.Details));
+            List<HealthItem> health = f.Engine.CheckInstalledFiles(tool.Id);
+            Require(!health.Any(h => h.Level == "error" || h.Level == "warn") && health[0].Text.StartsWith("Verified 2 of 2") && health.Any(h => h.Level == "info" && h.Text == "Updated by the mod · 1 data file · Chun-Li Names.json"), "health check: " + String.Join(" / ", health.Select(h => h.Level + " " + h.Text)));
+            // Other changes go ahead and leave it alone.
+            f.Engine.SetEnabled(a.Id, false); f.Engine.SetEnabled(a.Id, true);
+            Require(current().Contains("learned"), "another mod's change touched the data file");
+            // Reapply keeps the mod's version; nothing is copied aside.
+            string reapplied = f.Engine.Reapply();
+            ReplaceState s = f.Engine.LoadState();
+            Require(current().Contains("learned") && !reapplied.Contains("Names.json") && s.ForeignCopies.Count == 0 && FluffyLinkChecks.ChangedCopies(f.Data) == 0 && !f.Engine.Status().NeedsReapply, "Reapply replaced the data file or kept a copy: " + reapplied);
+            // The same files installed again (a new record): still the mod's version, now under the new record.
+            ReplaceMod again = Install(f, "dataTool", "Data Tool", false, tool.Id, out plan);
+            s = f.Engine.LoadState();
+            Require(again.Id != tool.Id && current().Contains("learned") && s.Deployment(names).Owner == again.Id && !f.Engine.Status().NeedsReapply, "a reinstall of the same files replaced the data file");
+            tool = again;
+            // An update that ships another data file: the shipped file wins, no question, no copy kept.
+            Put(f.Mods, "dataTool/Data Tool/" + names, Bytes("{\"shipped\":2}"));
+            tool = Install(f, "dataTool", "Data Tool", false, tool.Id, out plan);
+            s = f.Engine.LoadState();
+            Require(current() == "{\"shipped\":2}" && s.ForeignCopies.Count == 0 && FluffyLinkChecks.ChangedCopies(f.Data) == 0 && !f.Engine.Status().NeedsReapply, "an update with new data did not install it: " + current());
+
+            // Still strict: the mod's script.
+            learn("{\"shipped\":2,\"learned\":[\"Kikoken\"]}");
+            string shippedScript = File.ReadAllText(GameFile(f, script));
+            File.WriteAllText(GameFile(f, script), "-- changed by something else");
+            status = f.Engine.Status();
+            Require(status.NeedsReapply && status.FilesChanged == 1 && status.OwnDataChanged == 1 && status.ChangedBy.Count == 1 && status.ChangedBy[0].StartsWith(script + " (by ") && status.Summary.StartsWith("Game files changed. Reapply your replacements") && !status.Summary.Contains("Names.json"), "a changed script must still be reported, alone: " + status.Summary);
+            Require(f.Engine.CheckInstalledFiles(tool.Id).Any(h => h.Level == "error" && h.Text == "Changed · " + script), "health check must still flag the script");
+            Refused(delegate { f.Engine.SetEnabled(a.Id, false); }, script + " was replaced by another tool");
+            DriftException drift = null;
+            try { f.Engine.Uninstall(tool.Id); } catch (DriftException ex) { drift = ex; }
+            Require(drift != null && drift.Items.Count == 1 && drift.Items[0].Path == script, "the uninstall question must list the script only: " + (drift == null ? "no question" : drift.Message));
+            reapplied = f.Engine.Reapply();
+            Require(File.ReadAllText(GameFile(f, script)) == shippedScript && reapplied.Contains(script + " had been replaced by") && current().Contains("Kikoken") && !f.Engine.Status().NeedsReapply, "Reapply must restore the script and keep the data file: " + reapplied);
+            // Still strict: a natives file (compared by size).
+            string v1 = File.ReadAllText(GameFile(f, V1));
+            File.WriteAllText(GameFile(f, V1), "user edited");
+            status = f.Engine.Status();
+            Require(status.NeedsReapply && status.FilesChanged == 1 && status.ChangedBy.Count == 1 && status.ChangedBy[0].IndexOf("esf009_002_cmd_000.user.2 (by ", StringComparison.OrdinalIgnoreCase) > 0, "a changed natives file must still be reported: " + status.Summary);
+            f.Engine.Reapply();
+            Require(File.ReadAllText(GameFile(f, V1)) == v1 && current().Contains("Kikoken") && !f.Engine.Status().NeedsReapply, "Reapply must restore the natives file and keep the data file");
+            // Still reported: a data file that is gone. Reapply puts the shipped one back.
+            File.Delete(GameFile(f, names));
+            status = f.Engine.Status();
+            Require(status.NeedsReapply && status.FilesMissing == 1 && status.FilesChanged == 0, "a missing data file must be reported: " + status.Summary);
+            f.Engine.Reapply();
+            Require(current() == "{\"shipped\":2}" && !f.Engine.Status().NeedsReapply, "Reapply must put a missing data file back");
+
+            // Disable and uninstall take the mod's version out with the mod: no question, no copy kept.
+            learn("{\"shipped\":2,\"learned\":[\"Spinning Bird Kick\"]}");
+            f.Engine.SetEnabled(tool.Id, false);
+            Require(current() == null && !File.Exists(GameFile(f, script)) && FluffyLinkChecks.ChangedCopies(f.Data) == 0, "disable left the data file or a copy of it");
+            f.Engine.SetEnabled(tool.Id, true);
+            Require(current() == "{\"shipped\":2}", "enable must install the shipped data file");
+            learn("{\"shipped\":2,\"learned\":[\"Hazanshu\"]}");
+            // A crash in the middle of the uninstall rolls back to the mod's version, not the shipped one.
+            ReplaceEngine.CrashAfterStep = 1;
+            try { f.Engine.Uninstall(tool.Id); } catch (Exception ex) { if (ex is DriftException) throw; }
+            ReplaceEngine.CrashAfterStep = -1;
+            f.Engine.Recover();
+            if (f.Engine.LoadState().Find(tool.Id) != null)
+            {
+                Require(current() != null && current().Contains("Hazanshu"), "a rolled-back uninstall did not bring the mod's data file back: " + current());
+                f.Engine.Uninstall(tool.Id);
+            }
+            s = f.Engine.LoadState();
+            Require(current() == null && s.Find(tool.Id) == null && s.Released.Count == 0 && s.ForeignCopies.Count == 0 && FluffyLinkChecks.ChangedCopies(f.Data) == 0, "uninstall must remove the data file with no question and no copy");
+            f.Engine.Uninstall(a.Id);
+            SameSnapshot(clean, Snapshot(f.Game), "after uninstalling the data tool");
+
+            // replace-status and replace-reapply (the app's own Data folder, as the other CLI checks).
+            string install = Cli("replace-install", f.Mod("dataTool"), "--game", f.Game, "--name", "Data Tool");
+            Require(install.StartsWith("0\n"), "replace-install: " + install);
+            learn("{\"shipped\":2,\"learned\":[\"Tensho Kicks\"]}");
+            string cli = Cli("replace-status", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && cli.Contains("Status: OK") && cli.Contains("Data files updated by their own mod: 1 (left as they are)") && !cli.Contains("Game files changed"), "replace-status: " + cli);
+            cli = Cli("replace-reapply", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && current().Contains("Tensho Kicks"), "replace-reapply: " + cli);
+            cli = Cli("replace-uninstall", "Data Tool", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && current() == null, "replace-uninstall: " + cli);
+            SameSnapshot(clean, Snapshot(f.Game), "after the CLI uninstall");
+
+            // Slotsloader's own data keeps the strict check.
+            Put(f.Mods, "dataLoader/Loader/modinfo.ini", Bytes("name=SF6 Slots Loader\r\nversion=1.27.5\r\nSlotsloaderContract=2\r\n"));
+            Put(f.Mods, "dataLoader/Loader/amd_ags_x64.dll", Bytes("slotsloader proxy"));
+            Put(f.Mods, "dataLoader/Loader/amd_ags_x64_real.dll", Bytes("genuine AMD AGS library"));
+            Put(f.Mods, "dataLoader/Loader/reframework/plugins/SF6_CostumeSlotsNative.dll", Bytes("plugin"));
+            Put(f.Mods, "dataLoader/Loader/reframework/data/SF6_CostumeSlots_data/keep.json", Bytes("{}"));
+            ReplaceMod loader = Install(f, "dataLoader", "SF6 Slots Loader", false, null, out plan);
+            File.WriteAllText(GameFile(f, "reframework/data/SF6_CostumeSlots_data/keep.json"), "{\"changed\":true}");
+            status = f.Engine.Status();
+            Require(status.NeedsReapply && status.FilesChanged == 1 && status.OwnDataChanged == 0, "Slotsloader's data must keep the strict check: " + status.Summary);
+            f.Engine.Reapply();
+            Require(File.ReadAllText(GameFile(f, "reframework/data/SF6_CostumeSlots_data/keep.json")) == "{}", "Reapply must restore Slotsloader's data file");
+            f.Engine.Uninstall(loader.Id);
+        }
+
+        // 1.0.22 (the user: "ignore the message ... move the new detected files to unmanaged"): Keep changes, the manual
+        // way for a changed file the own-data rule does not cover. ReplaceEngine.KeepsChanges.
+        private static void KeepChanges(string root)
+        {
+            Fixture f = Create(root, false, ReplaceMethods.Pak);
+            var clean = Snapshot(f.Game);
+            const string a1 = "reframework/autorun/keep_a.lua", b1 = "reframework/autorun/keep_b.lua";
+            Put(f.Mods, "keepTool/Keep Tool/modinfo.ini", Bytes("name=Keep Tool\r\n"));
+            Put(f.Mods, "keepTool/Keep Tool/" + a1, Bytes("-- a"));
+            Put(f.Mods, "keepTool/Keep Tool/" + b1, Bytes("-- b"));
+            ReplacePlan plan;
+            ReplaceMod tool = Install(f, "keepTool", "Keep Tool", false, null, out plan);
+            ReplaceMod a = Install(f, "modA", "A");
+            string v1 = File.ReadAllText(GameFile(f, V1));
+            Func<string, string> read = delegate(string rel) { return File.Exists(GameFile(f, rel)) ? File.ReadAllText(GameFile(f, rel)) : null; };
+            File.WriteAllText(GameFile(f, a1), "-- a, edited by hand");
+            File.WriteAllText(GameFile(f, V1), "user edited");
+            GameFilesStatus status = f.Engine.Status();
+            Require(status.FilesChanged == 2 && status.KeepableChanged.SequenceEqual(new[] { a1 }) && status.KeptChanged.Count == 0, "what can be kept: " + String.Join(", ", status.KeepableChanged) + " of " + status.FilesChanged);
+            // Never a natives file, never a path the Manager did not install.
+            int generation = f.Engine.LoadState().Generation;
+            Refused(delegate { f.Engine.KeepChanges(new[] { V1 }); }, "is always checked");
+            Refused(delegate { f.Engine.KeepChanges(new[] { a1, "reframework/autorun/unknown.lua" }); }, "is not a file the Manager installed");
+            Require(f.Engine.LoadState().Generation == generation && f.Engine.LoadState().KeptChanged.Count == 0, "a refused Keep changes changed the record");
+            // Keep changes: the script is no longer reported; the natives file still is. No game file changes.
+            var before = Snapshot(f.Game);
+            List<string> kept = f.Engine.KeepAllChanged();
+            SameSnapshot(before, Snapshot(f.Game), "Keep changes");
+            status = f.Engine.Status();
+            Require(kept.SequenceEqual(new[] { a1 }) && status.NeedsReapply && status.FilesChanged == 1 && status.KeepableChanged.Count == 0 && status.KeptChanged.SequenceEqual(new[] { a1 }) && !status.Summary.Contains("keep_a.lua"), "after Keep changes: " + status.Summary);
+            Require(f.Engine.KeepAllChanged().Count == 0, "Keep changes again must add nothing");
+            f.Engine.Reapply();
+            Require(read(a1) == "-- a, edited by hand" && read(V1) == v1 && !f.Engine.Status().NeedsReapply && FluffyLinkChecks.ChangedCopies(f.Data) == 0, "Reapply must keep the kept file and restore the natives file");
+            List<HealthItem> health = f.Engine.CheckInstalledFiles(tool.Id);
+            Require(!health.Any(h => h.Level == "error") && health.Any(h => h.Level == "info" && h.Text == "Changed, kept as it is · 1 file · keep_a.lua"), "health check: " + String.Join(" / ", health.Select(h => h.Level + " " + h.Text)));
+            f.Engine.SetEnabled(a.Id, false); f.Engine.SetEnabled(a.Id, true);   // other changes are not refused
+            // The choice follows the path through a reinstall; another file of the mod is still checked.
+            tool = Install(f, "keepTool", "Keep Tool", false, tool.Id, out plan);
+            Require(read(a1) == "-- a, edited by hand" && f.Engine.LoadState().KeptChanged.SequenceEqual(new[] { a1 }) && !f.Engine.Status().NeedsReapply, "a reinstall lost the kept file or the choice");
+            File.WriteAllText(GameFile(f, b1), "-- b, edited");
+            status = f.Engine.Status();
+            Require(status.FilesChanged == 1 && status.KeepableChanged.SequenceEqual(new[] { b1 }), "another file of the mod must still be checked");
+            // Check again: reported as before, and Reapply restores both.
+            Require(f.Engine.CheckAgain(new[] { a1 }).SequenceEqual(new[] { a1 }) && f.Engine.Status().FilesChanged == 2 && f.Engine.LoadState().KeptChanged.Count == 0, "Check again");
+            f.Engine.Reapply();
+            Require(read(a1) == "-- a" && read(b1) == "-- b", "Reapply after Check again must restore the files");
+            // The whole mod: every file of it, also after an update of it.
+            tool = f.Engine.SetKeepChanges(tool.Id, true);
+            File.WriteAllText(GameFile(f, a1), "-- a2"); File.WriteAllText(GameFile(f, b1), "-- b2");
+            status = f.Engine.Status();
+            Require(!status.NeedsReapply && status.KeptChanged.Count == 2, "a whole mod kept: " + status.Summary);
+            tool = Install(f, "keepTool", "Keep Tool", false, tool.Id, out plan);
+            f.Engine.Reapply();
+            Require(tool.KeepChanges && f.Engine.LoadState().Find(tool.Id).KeepChanges && read(a1) == "-- a2" && read(b1) == "-- b2", "the whole-mod choice must survive a reinstall and Reapply");
+            // The kept file is still the mod's: it leaves with it, no question, no copy; the per-file choice ends there.
+            f.Engine.SetKeepChanges(tool.Id, false); f.Engine.KeepChanges(new[] { a1 }); f.Engine.Reapply();
+            Require(read(a1) == "-- a2" && read(b1) == "-- b", "per-file choice after the whole-mod one");
+            f.Engine.Uninstall(tool.Id);
+            ReplaceState s = f.Engine.LoadState();
+            Require(read(a1) == null && s.KeptChanged.Count == 0 && s.Released.Count == 0 && s.ForeignCopies.Count == 0 && FluffyLinkChecks.ChangedCopies(f.Data) == 0, "uninstall must remove a kept file and end the choice");
+            f.Engine.Uninstall(a.Id);
+            SameSnapshot(clean, Snapshot(f.Game), "after uninstalling the kept tool");
+            // Slotsloader's files are never kept.
+            ReplaceMod loader = Install(f, "tool", "SF6 Slots Loader");
+            Refused(delegate { f.Engine.SetKeepChanges(loader.Id, true); }, "always checked");
+            Refused(delegate { f.Engine.KeepChanges(new[] { "reframework/autorun/test.lua" }); }, "one of Slotsloader's files");
+            File.WriteAllText(GameFile(f, "reframework/autorun/test.lua"), "edited");
+            status = f.Engine.Status();
+            Require(status.FilesChanged == 1 && status.KeepableChanged.Count == 0 && f.Engine.KeepAllChanged().Count == 0, "a Slotsloader file was offered for Keep changes");
+            f.Engine.Reapply(); f.Engine.Uninstall(loader.Id);
+            SameSnapshot(clean, Snapshot(f.Game), "after the loader");
+
+            // CLI.
+            string cli = Cli("replace-install", f.Mod("keepTool"), "--game", f.Game, "--name", "Keep Tool");
+            Require(cli.StartsWith("0\n"), "replace-install: " + cli);
+            File.WriteAllText(GameFile(f, a1), "-- a, edited by hand");
+            cli = Cli("replace-keep-changes", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && cli.Contains("Changed files that can be kept: " + a1) && cli.Contains("Nothing was changed.") && cli.Contains("Status: Game files changed"), "replace-keep-changes (list): " + cli);
+            cli = Cli("replace-keep-changes", a1.Replace('/', '\\'), "--game", f.Game);
+            Require(cli.StartsWith("0\n") && cli.Contains("Kept as changed: " + a1) && cli.Contains("Status: OK") && cli.Contains("Kept as changed (replace-keep-changes): " + a1 + " · changed now: 1"), "replace-keep-changes <path>: " + cli);
+            cli = Cli("replace-keep-changes", a1, "--check-again", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && cli.Contains("Checked again: " + a1) && cli.Contains("Status: Game files changed"), "replace-keep-changes --check-again: " + cli);
+            cli = Cli("replace-keep-changes", "--all", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && cli.Contains("Kept as changed: " + a1) && cli.Contains("Status: OK"), "replace-keep-changes --all: " + cli);
+            cli = Cli("replace-keep-changes", "--all", "--check-again", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && cli.Contains("Checked again: " + a1), "replace-keep-changes --all --check-again: " + cli);
+            cli = Cli("replace-keep-changes", "--mod", "Keep Tool", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && cli.Contains("Changed files of 'Keep Tool' are kept as they are") && cli.Contains("Changed files kept for the whole mod: Keep Tool") && cli.Contains("Status: OK"), "replace-keep-changes --mod: " + cli);
+            cli = Cli("replace-keep-changes", a1, "--all", "--game", f.Game);
+            Require(cli.StartsWith("2\n"), "two targets must be refused: " + cli);
+            cli = Cli("replace-reapply", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && read(a1) == "-- a, edited by hand", "replace-reapply: " + cli);
+            cli = Cli("replace-uninstall", "Keep Tool", "--game", f.Game);
+            Require(cli.StartsWith("0\n") && read(a1) == null, "replace-uninstall: " + cli);
+            SameSnapshot(clean, Snapshot(f.Game), "after the CLI uninstall");
         }
 
         private static void LooseMethod(string root)

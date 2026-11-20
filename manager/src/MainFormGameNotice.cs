@@ -32,10 +32,12 @@ namespace SlotsInstaller
             }
             string text = GameFilesToastText();
             bool idle = !busy && !gameRunning && !FluffyBlocksPak;
-            if (old != null && old.AccessibleName == text)
+            FlatButton existingKeep = old == null ? null : old.Controls.Find("toastKeep", true).OfType<FlatButton>().FirstOrDefault();
+            if (old != null && old.AccessibleName == text && (existingKeep != null) == CanKeepChangedFiles)
             {
                 FlatButton existing = old.Controls.Find("toastReapply", true).OfType<FlatButton>().FirstOrDefault();
                 if (existing != null) existing.Enabled = idle;
+                if (existingKeep != null) existingKeep.Enabled = !busy;
                 return;
             }
             if (toastHost == null) BuildToastHost();
@@ -49,7 +51,10 @@ namespace SlotsInstaller
             FlatButton close = Button("✕", false, 40, delegate { gameNoticeDismissed = gameStatus == null ? null : gameStatus.Summary; UpdateGameFilesToast(); });
             reapply.Name = "toastReapply"; reapply.Enabled = idle;
             reapply.AccessibleName = "Reapply your replacements to the game files"; details.AccessibleName = "Show the details on the Installed page"; close.AccessibleName = "Dismiss this notice until it changes";
-            foreach (FlatButton b in new[] { reapply, details, close }) { b.Width = Px(b.Width); b.Height = Px(32); b.Font = Palette.Small; b.Margin = new Padding(0, 0, Px(6), 0); row.Controls.Add(b); }
+            // 1.0.22: Keep changes, when a changed file may be kept (MainFormReplace.cs, KeepChangedFiles).
+            FlatButton keep = Button("Keep changes", false, 116, delegate { KeepChangedFiles(); });
+            keep.Name = "toastKeep"; keep.AccessibleName = KeepChangesName; keep.Enabled = !busy;
+            foreach (FlatButton b in CanKeepChangedFiles ? new[] { reapply, keep, details, close } : new[] { reapply, details, close }) { b.Width = Px(b.Width); b.Height = Px(32); b.Font = Palette.Small; b.Margin = new Padding(0, 0, Px(6), 0); row.Controls.Add(b); }
             toast.Controls.Add(row); toast.Controls.Add(label);
             toastHost.Controls.Add(toast);
             toastHost.Visible = true; PlaceToasts();

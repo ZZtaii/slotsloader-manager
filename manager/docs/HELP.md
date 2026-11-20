@@ -398,6 +398,10 @@ It then puts back the game entries mods invalidated. Your extra outfits stay, an
 ### When another tool changed a file
 If another tool replaced or deleted a file the Manager installed, uninstalling or restoring asks "Game files changed by another tool". **Restore original** brings the game's file back, **Keep current file** leaves the other tool's file, and **Cancel** changes nothing.
 
+A tool mod's own data is not part of this. Files a mod ships under `reframework/data` are that mod's settings and saved data, and the mod may rewrite them while SF6 runs. The Manager leaves them as the mod wrote them: no notice, and **Reapply** keeps them. Uninstalling or disabling the mod removes them with it. A missing one is still put back by **Reapply**.
+
+For any other changed file of a tool mod that you want to stay as it is (a script you edited, for example), click **Keep changes** on the "Game files changed" notice. The Manager then leaves that file alone: no notice, and **Reapply** keeps it. It is still the mod's file, so uninstalling or disabling the mod removes it, and an update that ships a new version of it replaces it. **Undo** reports it again. **Keep changes** is not offered for replaced game files (`natives`) or for Slotsloader's files: there, a change means another tool took the file, and **Reapply** or uninstalling decides.
+
 # Reference
 
 ## Files and folders

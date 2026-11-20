@@ -11,13 +11,14 @@ namespace SlotsInstaller
     // Data folder (beside the executable) and safety checks as the app window.
     internal static class ReplaceCommandLine
     {
-        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "loader-flags", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
+        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "replace-keep-changes", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "loader-flags", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
         // 2.5.1: the fluffy-* names keep working (left out of the help).
         internal static readonly Dictionary<string, string> Aliases = new Dictionary<string, string> { { "fluffy-status", "manager-status" }, { "fluffy-uninstall", "manager-uninstall" }, { "fluffy-restore", "manager-restore" } };
 
         private sealed class Args
         {
-            internal string Command, Source, Game, Name, Method, Set, Json, Target, Root, SevenZip = @"C:\Program Files\7-Zip\7z.exe", SelectionFile;
+            internal string Command, Source, Game, Name, Method, Set, Json, Target, Root, SevenZip = @"C:\Program Files\7-Zip\7z.exe", SelectionFile, Mod;
+            internal bool All, CheckAgain;   // 1.0.22: replace-keep-changes
             internal List<string> Selected = new List<string>(), Libraries = new List<string>();
             internal bool HasSelection, Yes, NoLoader, RestoreOriginals, KeepCurrent, NoDownload, IncludePrereleases;
         }
@@ -49,7 +50,7 @@ namespace SlotsInstaller
             string renamed; if (Aliases.TryGetValue(a.Command, out renamed)) a.Command = renamed;
             int i = 1;
             if ((a.Command == "replace-plan" || a.Command == "replace-install" || a.Command == "preset-map") && args.Length > 1 && !args[1].StartsWith("--")) { a.Source = Path.GetFullPath(args[1]); i = 2; }
-            if ((a.Command == "replace-uninstall" || a.Command == "update-install" || a.Command == "manager-uninstall" || a.Command == "manager-restore" || a.Command == "replace-restore-original") && args.Length > 1 && !args[1].StartsWith("--")) { a.Target = args[1]; i = 2; }
+            if ((a.Command == "replace-uninstall" || a.Command == "update-install" || a.Command == "manager-uninstall" || a.Command == "manager-restore" || a.Command == "replace-restore-original" || a.Command == "replace-keep-changes") && args.Length > 1 && !args[1].StartsWith("--")) { a.Target = args[1]; i = 2; }
             for (; i < args.Length; i++)
             {
                 string key = args[i];
@@ -59,6 +60,8 @@ namespace SlotsInstaller
                 if (key == "--keep-current") { a.KeepCurrent = true; continue; }
                 if (key == "--no-download") { a.NoDownload = true; continue; }
                 if (key == "--include-prereleases") { a.IncludePrereleases = true; continue; }
+                if (key == "--all") { a.All = true; continue; }
+                if (key == "--check-again") { a.CheckAgain = true; continue; }
                 if (i + 1 >= args.Length) throw new ArgumentException("Missing value for " + key);
                 string value = args[++i];
                 switch (key)
@@ -67,6 +70,7 @@ namespace SlotsInstaller
                     case "--select": a.HasSelection = true; a.Selected.Add(value); break;
                     case "--selection": a.HasSelection = true; a.SelectionFile = Path.GetFullPath(value); break;
                     case "--name": a.Name = value; break;
+                    case "--mod": a.Mod = value; break;
                     case "--method": a.Method = value.ToLowerInvariant(); break;
                     case "--set": a.Set = value.ToLowerInvariant(); break;
                     case "--json": a.Json = value == "-" ? value : Path.GetFullPath(value); break;
@@ -81,6 +85,7 @@ namespace SlotsInstaller
             if (a.Command == "manager-uninstall" && a.Target == null) throw new ArgumentException("manager-uninstall requires the name or installed.ini section of a mod an external mod manager installed (see manager-status).");
             if (a.Command == "manager-restore" && a.Target == null) throw new ArgumentException("manager-restore requires the name or folder of a mod uninstalled with manager-uninstall (see manager-status).");
             if (a.Command == "replace-restore-original" && a.Target == null) throw new ArgumentException("replace-restore-original requires a kept game file path (see replace-status).");
+            if (a.Command == "replace-keep-changes" && (a.Target != null ? 1 : 0) + (a.Mod != null ? 1 : 0) + (a.All ? 1 : 0) > 1) throw new ArgumentException("Give one of: a file path, --mod <id or name>, or --all.");
             if (a.RestoreOriginals && a.KeepCurrent) throw new ArgumentException("Use either --restore-originals or --keep-current, not both.");
             if (a.Method != null && a.Method != ReplaceMethods.Loose && a.Method != ReplaceMethods.Pak) throw new ArgumentException("--method must be loose or pak.");
             if (a.Set != null && a.Set != ReplaceMethods.Loose && a.Set != ReplaceMethods.Pak && a.Set != "auto") throw new ArgumentException("--set must be loose, pak or auto.");
@@ -186,6 +191,31 @@ namespace SlotsInstaller
                     if (match == null) throw new IOException("No mod uninstalled with manager-uninstall matches '" + a.Target + "' (see manager-status).");
                     Console.WriteLine(engine.RestoreFluffyRemoved(match.Folder));
                     return FluffyStatus(engine);
+                }
+                case "replace-keep-changes":   // 1.0.22 (ReplaceEngine.KeepsChanges)
+                {
+                    if (a.Mod != null)
+                    {
+                        ReplaceMod mod = engine.LoadState().Mods.FirstOrDefault(m => m.Id.StartsWith(a.Mod, StringComparison.OrdinalIgnoreCase) || String.Equals(m.Name, a.Mod, StringComparison.OrdinalIgnoreCase));
+                        if (mod == null) throw new IOException("No installed replacement matches '" + a.Mod + "'.");
+                        engine.SetKeepChanges(mod.Id, !a.CheckAgain);
+                        Console.WriteLine(a.CheckAgain ? "'" + mod.Name + "' is checked again." : "Changed files of '" + mod.Name + "' are kept as they are (not its files under natives).");
+                    }
+                    else if (a.Target != null || a.All)
+                    {
+                        GameFilesStatus before = engine.Status();
+                        List<string> done = a.CheckAgain ? engine.CheckAgain(a.All ? before.KeptChanged.Concat(engine.LoadState().KeptChanged) : new[] { a.Target })
+                            : a.All ? engine.KeepAllChanged() : engine.KeepChanges(new[] { a.Target });
+                        Console.WriteLine(done.Count == 0 ? (a.CheckAgain ? "No kept file matches." : a.All ? "No changed file that can be kept." : "Already kept.")
+                            : (a.CheckAgain ? "Checked again: " : "Kept as changed: ") + String.Join(", ", done));
+                    }
+                    else
+                    {
+                        GameFilesStatus now = engine.Status();
+                        Console.WriteLine("Changed files that can be kept: " + (now.KeepableChanged.Count == 0 ? "none" : String.Join(", ", now.KeepableChanged)));
+                        Console.WriteLine("Keep one with replace-keep-changes <path>, all with --all, a whole mod with --mod <id or name>; --check-again undoes it. Nothing was changed.");
+                    }
+                    return Status(engine, config);
                 }
                 case "replace-reapply":
                     Console.WriteLine("Reapplied. " + engine.Reapply()); UnownedSlotsFlag.Ensure(engine.GameRoot);
@@ -352,6 +382,9 @@ namespace SlotsInstaller
             if (status.OrphanCostumePaks.Count > 0) Console.WriteLine(LoaderCostumePak.OrphanText + ": " + String.Join(", ", status.OrphanCostumePaks) + " (remove it: loader-pak-remove, or the Installed page's Remove it).");
             if (status.OrphanedRows > 0) Console.WriteLine(PakRepair.OrphanText(status.OrphanedRows) + ": " + String.Join(", ", status.OrphanedRowsWhere.Take(12)) + (status.OrphanedRowsWhere.Count > 12 ? ", …" : "") + " (repair: pak-repair, or the Installed page's Repair).");   // 2.4.2
             if (status.LeftoverPaks.Count > 0) Console.WriteLine(ReplaceEngine.LeftoverStatusText(status.LeftoverPaks) + " (remove: select it on the Installed page, then Remove PAK).");   // 1.0.11
+            if (status.OwnDataChanged > 0) Console.WriteLine("Data files updated by their own mod: " + status.OwnDataChanged + " (left as they are)");   // 1.0.22 (ReplaceEngine.IsModData)
+            if (state.KeptChanged.Count > 0) Console.WriteLine("Kept as changed (replace-keep-changes): " + String.Join(", ", state.KeptChanged) + (status.KeptChanged.Count > 0 ? " · changed now: " + status.KeptChanged.Count : ""));
+            foreach (ReplaceMod m in state.Mods.Where(m => m.KeepChanges)) Console.WriteLine("Changed files kept for the whole mod: " + m.Name);
             Console.WriteLine("Status: " + (status.Summary.Length == 0 ? "OK" : status.Summary) + (status.Details.Count > 1 ? " · " + String.Join(" · ", status.Details.Select(d => d.Trim())) : ""));
             return 0;
         }
@@ -489,6 +522,7 @@ namespace SlotsInstaller
             Console.WriteLine("  replace-status [--game <SF6>]        read-only: base PAK table hash, zeroed entries, natives folder, installed replacements, missing backups, moved-folder paths");
             Console.WriteLine("  replace-uninstall <id|name> --game <SF6> [--restore-originals | --keep-current]   when another tool changed its files");
             Console.WriteLine("  replace-reapply --game <SF6>         after a game update or a Steam file check");
+            Console.WriteLine("  replace-keep-changes [<path> | --all | --mod <id or name>] [--check-again]   keep a changed installed file as it is (not natives files)");
             Console.WriteLine("  replace-restore-all --game <SF6> --yes [--restore-originals | --keep-current]");
             Console.WriteLine("  replace-restore-original <path> --game <SF6>   the genuine game file behind a file kept with --keep-current");
             Console.WriteLine("  manager-status [--game <SF6>]        read-only: external mod manager folders, the mods they installed (files, shared files), mods uninstalled here");
