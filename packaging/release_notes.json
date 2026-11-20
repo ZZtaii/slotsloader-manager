@@ -2,6 +2,17 @@
   "format": "sf6suite-notes-1",
   "releases": [
     {
+      "version": "1.47.0",
+      "date": "2026-11-20",
+      "new": [],
+      "fixed": [
+        "[Custom Combos] Doctor's Office: Send Symptoms refused your own replay on a PC where the Recording Manager had never linked to the Community, or had linked under another name. You are now recognised by your user code of the game, the number the replay holds for each player."
+      ],
+      "modified": [
+        "[Custom Combos] Doctor's Office: Send Symptoms needs the game connected to its network (your user code comes from it). Without it, a message says so."
+      ]
+    },
+    {
       "version": "1.46.0",
       "date": "2026-11-19",
       "new": [
