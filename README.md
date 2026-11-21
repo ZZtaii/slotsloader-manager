@@ -6,6 +6,8 @@ A mod manager for Street Fighter 6 with faster search, more utility and safer in
 
 It installs mods as extra outfits through the **SF6 Slots Loader** by Wael3rd, or in place of the game's originals.
 
+**Download and guide:** [zztaii.com/modmanager](https://zztaii.com/modmanager) has the downloads, what the Manager does, screenshots and a getting-started guide.
+
 > Not affiliated with or endorsed by Capcom or any other publisher. Mods change game files, so keep backups and use them at your own risk.
 
 ## What the Manager does
@@ -72,4 +74,4 @@ The loader source in this repo is that synced copy; see [UPSTREAM.md](UPSTREAM.m
 ## License <!-- repo readers; not in the Assistant pack -->
 
 - **Slots Loader source** (everything except `manager/`): MIT, like Wael3rd's original. See [LICENSE](LICENSE). <!-- repo readers; not in the Assistant pack -->
-- **Slotsloader Manager** (`manager/`): source-available for personal, non-commercial use. You're welcome to read it, run it, tweak it for your own modding and share what you make with it. Redistributing the app itself (re-uploading it, its zips or its source to other sites, mod pages or repositories, or bundling it) or selling it needs permission beforehand; linking to the releases page is always fine. See [manager/LICENSE](manager/LICENSE). <!-- repo readers; not in the Assistant pack -->
+- **Slotsloader Manager** (`manager/`): source-available for personal, non-commercial use. You're welcome to read it, run it, tweak it for your own modding and share what you make with it. Redistributing the app itself (re-uploading it, its zips or its source to other sites, mod pages or repositories, or bundling it) or selling it needs permission beforehand; linking to [zztaii.com/modmanager](https://zztaii.com/modmanager) or the releases page is always fine. See [manager/LICENSE](manager/LICENSE). <!-- repo readers; not in the Assistant pack -->
