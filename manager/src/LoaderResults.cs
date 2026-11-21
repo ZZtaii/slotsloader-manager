@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace SlotsInstaller
 {
@@ -30,7 +31,7 @@ namespace SlotsInstaller
                         ? Path.GetFullPath(outfit.Folder).Substring(Path.GetFullPath(costumeRoot).TrimEnd(Path.DirectorySeparatorChar).Length).TrimStart(Path.DirectorySeparatorChar)
                         : outfit.Character+"/"+outfit.Name;
                     List<Dictionary<string,object>> matches;
-                    if (sources.TryGetValue(Normalize(relative),out matches))
+                    if (sources.TryGetValue(Normalize(relative),out matches) || sources.TryGetValue(AsLoaderWrote(relative),out matches))
                     {
                         outfit.LoaderOutfitName=String.Join(", ",matches.Select(r=>NativeModCheck.Value(r,"name")).Where(n=>n.Length>0).Distinct());
                         outfit.LoaderOutfitDetails=String.Join(Environment.NewLine,matches.Select(r=>NativeModCheck.Value(r,"fighter_dir")+" · "+NativeModCheck.Value(r,"name")+" · "+NativeModCheck.Value(r,"label")));
@@ -63,5 +64,19 @@ namespace SlotsInstaller
             }
         }
         private static string Normalize(string source) { return source.Replace('\\','/').Trim('/'); }
+        // 1.0.22: Slotsloader lists costume_mods with the ANSI code page and writes "source" in those bytes, while the
+        // rest of outfits.json is UTF-8. A folder named "Mod · Option" (the Manager's own slot names) or with an "é"
+        // reaches a UTF-8 reader as "Mod \uFFFD Option" and never matched, so a loaded slot read "Not loaded by
+        // Slotsloader". This is a path after the same round trip; it equals Normalize for plain ASCII names.
+        internal static string AsLoaderWrote(string source)
+        {
+            string path=Normalize(source ?? "");
+            return Encoding.UTF8.GetString(Encoding.Default.GetBytes(path));
+        }
+        // An installed path ("Character/Folder") is among the sources the loader reported, written either way.
+        internal static bool Reported(ICollection<string> sources, string relative)
+        {
+            return sources.Contains(Normalize(relative ?? "")) || sources.Contains(AsLoaderWrote(relative));
+        }
     }
 }

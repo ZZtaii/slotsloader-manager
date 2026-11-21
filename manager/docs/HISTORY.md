@@ -16,6 +16,14 @@
   - CLI: `replace-keep-changes [<path> | --all | --mod <id or name>] [--check-again]`; `replace-status` lists kept paths and mods. The health check shows "Changed, kept as it is · N files · …".
 - Checks: `replace` "a mod's own data (1.0.22)" (`ReplaceChecks.ModData`) and "Keep changes (1.0.22)" (`ReplaceChecks.KeepChanges`); `replace-ui` "Keep changes (1.0.22)" (`ReplaceUiChecks.KeepChangesUi`).
 
+### Loaded slots with "·" or "é" in the folder name read "Not loaded by Slotsloader"
+
+- Seen 22 Nov 2026: three slots the Manager named "Manon Outfit 3 Barefoot · Outfit 1 Feet - …" were in the game (the loader's log lists them) but the Installed page said "Not loaded by Slotsloader"; the slot without a "·" said "Loaded".
+- Cause: Slotsloader lists `costume_mods` with the ANSI code page (`FindFirstFileA`) and writes `outfits.json` `"source"` in those bytes (`·` = `B7`), while `"label"` and the rest of the file are UTF-8 (`C2 B7`). The Manager reads the file as UTF-8, so the source became "Manon/… � Outfit 1 …" and never equalled the folder path.
+- Fix: `LoaderResults.AsLoaderWrote` puts an installed path through the same round trip (ANSI bytes read as UTF-8); a source matches either way (`LoaderResults.Reported`). The Installed page status and Load order's "waiting for SF6" list use it. Plain ASCII names are unchanged. If the loader ever writes UTF-8 sources, the first lookup matches.
+- Not changed: variant toggles (`variants.json`, `variant_choices.json`) for a manual archive with such a name, since the loader reads the choices back with its own bytes; that needs the loader to write UTF-8.
+- Check: `generated` "loader mapping … ANSI-written sources" (`LoaderResultChecks`).
+
 ## 1.0.21: Slots Loader 1.27.5, a smaller loader download, loader files the game doesn't need left out, the loader zip never refused for a file
 
 - `dependencies.json` approves Slots Loader 1.27.5 (SF6 Mod Suite v1.46.0, PR ZZtaii/slotsloader-manager#38): Random outfit on the select screens of Arcade, Training and Versus gives a real random outfit and colour; the zip carries a cover picture.
