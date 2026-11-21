@@ -6,6 +6,8 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 **Start:** unzip anywhere and open **Slotsloader Manager.exe** (keep the other files beside it). Windows already has what it needs (.NET Framework 4.8); 7-Zip for RAR/7Z is downloaded by itself if you don't have it. The game and your mod manager's libraries are found for you; change them in Settings.
 
+**Guide with pictures:** [zztaii.com/modmanager](https://zztaii.com/modmanager) shows what the Manager does and how to get started, with the latest downloads.
+
 **Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
@@ -262,6 +264,6 @@ Source: this folder (`src/`). Use `build.ps1` to build both executables and `tes
 
 ## License and third-party notices
 
-Slotsloader Manager is source-available for personal, non-commercial use: see [LICENSE](https://github.com/ZZtaii/slotsloader-manager/blob/main/manager/LICENSE). Re-uploading the app, its zips or its source anywhere else needs ZZtai's permission beforehand; linking to the official releases page is always fine. Parts adapted from other projects (code ported from Slotsloader, the bcdec texture decoder, the Octicons GitHub mark) keep their own licenses, listed in [THIRD_PARTY_NOTICES.md](https://github.com/ZZtaii/slotsloader-manager/blob/main/manager/THIRD_PARTY_NOTICES.md). The `7-Zip` folder (downloaded when needed) holds unmodified 7-Zip by Igor Pavlov under the GNU LGPL with the unRAR license restriction; its license is `7-Zip\License.txt`, and its source is at [7-zip.org](https://www.7-zip.org).
+Slotsloader Manager is source-available for personal, non-commercial use: see [LICENSE](https://github.com/ZZtaii/slotsloader-manager/blob/main/manager/LICENSE). Re-uploading the app, its zips or its source anywhere else needs ZZtai's permission beforehand; linking to [zztaii.com/modmanager](https://zztaii.com/modmanager) or the official releases page is always fine. Parts adapted from other projects (code ported from Slotsloader, the bcdec texture decoder, the Octicons GitHub mark) keep their own licenses, listed in [THIRD_PARTY_NOTICES.md](https://github.com/ZZtaii/slotsloader-manager/blob/main/manager/THIRD_PARTY_NOTICES.md). The `7-Zip` folder (downloaded when needed) holds unmodified 7-Zip by Igor Pavlov under the GNU LGPL with the unRAR license restriction; its license is `7-Zip\License.txt`, and its source is at [7-zip.org](https://www.7-zip.org).
 
 Fighter portraits and stage names are read at run time from your own installed game and cached in `Data\portraits`; they are not part of this app.
