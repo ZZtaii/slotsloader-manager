@@ -72,4 +72,4 @@ The loader source in this repo is that synced copy; see [UPSTREAM.md](UPSTREAM.m
 ## License <!-- repo readers; not in the Assistant pack -->
 
 - **Slots Loader source** (everything except `manager/`): MIT, like Wael3rd's original. See [LICENSE](LICENSE). <!-- repo readers; not in the Assistant pack -->
-- **Slotsloader Manager** (`manager/`): source-available for personal, non-commercial use. You're welcome to read it, run it, tweak it for your own modding and share what you make with it. Redistributing or selling the app itself needs permission. See [manager/LICENSE](manager/LICENSE). <!-- repo readers; not in the Assistant pack -->
+- **Slotsloader Manager** (`manager/`): source-available for personal, non-commercial use. You're welcome to read it, run it, tweak it for your own modding and share what you make with it. Redistributing the app itself (re-uploading it, its zips or its source to other sites, mod pages or repositories, or bundling it) or selling it needs permission beforehand; linking to the releases page is always fine. See [manager/LICENSE](manager/LICENSE). <!-- repo readers; not in the Assistant pack -->
