@@ -55,7 +55,7 @@ The loader source in this repo is that synced copy; see [UPSTREAM.md](UPSTREAM.m
 ## Building from source <!-- repo readers; not in the Assistant pack -->
 
 - **Slotsloader Manager:** .NET Framework 4.8 (C# 5, no NuGet). Build with `manager\build.ps1` and test with `manager\test.ps1`. `manager\tools\Package-Release.ps1` builds the release zip with the approved loader inside. <!-- repo readers; not in the Assistant pack -->
-- **Slots Loader:** Visual Studio 2022 (or Build Tools) with the C++ workload, then `build.bat loader`, `build.bat plugin` or `build.bat sorter`. The full build also needs the shared core (`core\`), which lives in the [SF6 Mod Suite](https://github.com/Wael3rd/SF6-ModSuite) repository; only its headers are synced here. Testing is described in [TESTING.md](TESTING.md). <!-- repo readers; not in the Assistant pack -->
+- **Slots Loader:** Visual Studio 2022 (or Build Tools) with the C++ workload, then `build.bat loader`, `build.bat plugin` or `build.bat sorter`. The full build also needs the shared core (`core\`), which lives in Wael3rd's own source repository of the [SF6 Mod Suite](https://github.com/Wael3rd/SF6-ModSuite) (private); only its headers are synced here. Testing is described in [TESTING.md](TESTING.md). <!-- repo readers; not in the Assistant pack -->
 
 ## Community <!-- repo readers; not in the Assistant pack -->
 

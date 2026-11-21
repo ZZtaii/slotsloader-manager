@@ -4,6 +4,10 @@ Since 14 Nov 2026 the Slots Loader here is the one of the SF6 Mod Suite line, co
 [Wael3rd/SF6-ModSuite](https://github.com/Wael3rd/SF6-ModSuite). It replaces the Slotsloader fork (last release
 `loader-v1.10.9`, still in this repository's history at that tag).
 
+Since 21 Nov 2026 Wael3rd/SF6-ModSuite holds only the releases; the suite's code is in Wael's private repository
+`Wael3rd/SF6_ModSuite_Private`, with the same release tags. The sync takes the release (zips, version, notes) from
+the public repository and the source from the same tag in the private one.
+
 ## Copied from
 
 Synced to: `40bf9da850fab6d168819d8ae4375909e50be290` (release `v1.46.0`).
@@ -61,8 +65,14 @@ closes the older open ones. When a file name already approved shows another SHA-
 the same name), the pull request is titled "Re-uploaded" and says to compare the files before merging; until then
 Managers refuse the new file. An older release or package is only taken when asked for by tag on **Run workflow**.
 
-The repository needs, once: Settings, Actions, General, Workflow permissions, "Allow GitHub Actions to create and
-approve pull requests".
+The repository needs, once:
 
-By hand, from the repository root: `python .github/scripts/sync_suite.py [--release vX.Y.Z] [--allow-older]`, then
-review `git diff --cached` and commit.
+- Settings, Actions, General, Workflow permissions, "Allow GitHub Actions to create and approve pull requests";
+- the repository secret `SUITE_SOURCE_TOKEN` (Settings, Secrets and variables, Actions): a token of an account with
+  read access to `Wael3rd/SF6_ModSuite_Private`. The workflow's own token cannot read another owner's private
+  repository, and fine-grained tokens only reach repositories of their own owner, so it is a classic token with the
+  `repo` scope. It is used only to read that repository's code and tags; everything else uses the workflow's token.
+  When it expires the sync fails at the source step and says so; put a new one in the same secret.
+
+By hand, from the repository root: `SUITE_SOURCE_TOKEN=<token> python .github/scripts/sync_suite.py [--release vX.Y.Z]
+[--allow-older]`, then review `git diff --cached` and commit.
