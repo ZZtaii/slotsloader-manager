@@ -11,7 +11,10 @@ pre-releases). It then:
   2. flags a file whose name is already approved but whose SHA-256 changed (re-uploaded upstream):
      the pull request then says so in its title and first lines, and nothing is approved until merged,
   3. fetches the release's commit and replaces every path in .github/upstream-paths.txt with that
-     commit's copy (index and work tree), then checks each path's tree hash against the commit,
+     commit's copy (index and work tree), then checks each path's tree hash against the commit.
+     Since 21 Nov 2026 the suite's code is in Wael's private repository (CODE_SOURCE, same tags as
+     the releases); the releases stay on dependencies.json's "source". Reading the code needs
+     SUITE_SOURCE_TOKEN, a token of an account with read access there (see UPSTREAM.md),
   4. rewrites dependencies.json and the "Synced to" line of UPSTREAM.md,
   5. writes title.txt, body.md and branch.txt into --out (default: .sync-out) for the pull request,
   6. (Manager 1.0.21) builds the Manager's slim copy of the Slots Loader zip: Wael's zip, downloaded and checked
@@ -27,6 +30,7 @@ older release or package without --allow-older (with --scheduled an older latest
 notice and exits 0).
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -43,6 +47,8 @@ PATHS = os.path.join(ROOT, ".github", "upstream-paths.txt")
 SLIM_SKIP = os.path.join(ROOT, ".github", "loader-slim-skip.txt")
 REPO = os.environ.get("GITHUB_REPOSITORY") or "ZZtaii/slotsloader-manager"
 UPSTREAM_MD = os.path.join(ROOT, "UPSTREAM.md")
+# Where the suite's code is (private since 21 Nov 2026). Releases and their zips stay on deps["source"].
+CODE_SOURCE = os.environ.get("SUITE_SOURCE_REPO") or "Wael3rd/SF6_ModSuite_Private"
 STARTER = ("Slotsloader from this fork and the Mod Suite are now one, with combined fixes and "
            "improvements. Latest releases are now synced.")
 PACKAGES = {
@@ -53,11 +59,30 @@ TAG = re.compile(r"v(\d+(?:\.\d+)+)")
 SYNCED = re.compile(r"^Synced to: `([0-9a-f]{40})` \(release `([^`]+)`\)\.?$", re.M)
 
 
-def run(*args):
-    r = subprocess.run(args, cwd=ROOT, text=True, capture_output=True)
+def run(*args, env=None):
+    r = subprocess.run(args, cwd=ROOT, text=True, capture_output=True, env=env)
     if r.returncode != 0:
         sys.exit("command failed: %s\n%s" % (" ".join(args), (r.stderr or "").strip()))
     return (r.stdout or "").strip()
+
+
+def code_env():
+    """The environment for git and gh calls on CODE_SOURCE: SUITE_SOURCE_TOKEN for both. For git it replaces the
+    checkout's own github.com credentials (the workflow's token, which cannot read another owner's private
+    repository) through GIT_CONFIG_* variables, so the token never shows in a command line."""
+    token = os.environ.get("SUITE_SOURCE_TOKEN", "").strip()
+    if not token:
+        sys.exit("SUITE_SOURCE_TOKEN is not set: the suite's code is in the private repository %s. Add the "
+                 "repository secret SUITE_SOURCE_TOKEN (see UPSTREAM.md, Syncing)" % CODE_SOURCE)
+    basic = base64.b64encode(("x-access-token:" + token).encode()).decode()
+    key = "http.https://github.com/.extraheader"
+    env = dict(os.environ, GH_TOKEN=token, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never",
+               GIT_CONFIG_COUNT="3",
+               GIT_CONFIG_KEY_0=key, GIT_CONFIG_VALUE_0="",   # an empty value drops the headers set so far
+               GIT_CONFIG_KEY_1=key, GIT_CONFIG_VALUE_1="AUTHORIZATION: basic " + basic,
+               GIT_CONFIG_KEY_2="credential.helper", GIT_CONFIG_VALUE_2="")
+    env.pop("GITHUB_TOKEN", None)
+    return env
 
 
 def vkey(v, width=4):
@@ -133,10 +158,11 @@ def read_paths():
 
 
 def sync_source(source, tag, paths):
+    env = code_env()
     run("git", "fetch", "--quiet", "--no-tags", "--depth=1", "https://github.com/%s.git" % source,
-        "+refs/tags/%s:refs/sync/upstream" % tag)
+        "+refs/tags/%s:refs/sync/upstream" % tag, env=env)
     commit = run("git", "rev-parse", "refs/sync/upstream^{commit}")
-    released = run("gh", "api", "repos/%s/commits/%s" % (source, tag), "--jq", ".sha")
+    released = run("gh", "api", "repos/%s/commits/%s" % (source, tag), "--jq", ".sha", env=env)
     if released != commit:
         sys.exit("the tag %s moved while syncing (%s fetched, %s now): run again" % (tag, commit[:7], released[:7]))
     for p in paths:
@@ -330,7 +356,7 @@ def main():
                          loader_entry["size"] / 1048576.0, len(block["skip"]), block["release"]))
 
     paths = read_paths()
-    commit = sync_source(source, tag, paths)
+    commit = sync_source(CODE_SOURCE, tag, paths)   # the release's tag in the private code repository
     folders = changed_folders(paths)
     source_changed = bool(folders)
     if not source_changed and not packages_changed:
