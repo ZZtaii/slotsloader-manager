@@ -2,7 +2,7 @@
 // (stage_loader.cpp, included below: a unity build) so that the sorter reads a mod with the stage loader's own functions:
 // collect_options (what Fluffy would install: one option per folder holding a natives tree or a .pak; UI packs: every folder
 // with a modinfo.ini too), the stage index (load_stage_index: which game files belong to which stage), the GUI rule (menu
-// pictures are not stage files), classify_stage_variant (tile or variation), title_slots::is_title_file and
+// pictures are not stage files), classify_stage_variant (tile or variation), title_slots::is_title_movie and
 // ui_slots::fighter_of_path. Nothing of stage_loader.cpp is copied or changed; stage_loader_run and slog_open are never called
 // (they write into the game folder).
 //
@@ -106,7 +106,7 @@ StageProbe stage_probe(const std::wstring& root, const std::string& rel, const s
         for (auto& f : o.files) {
             ++r.natives_files;
             const std::string low = lower_a(f.path);
-            if (title_slots::is_title_file(low)) ++r.title_files;
+            if (title_slots::is_title_movie(low)) ++r.title_files;   // the movies: a title-music mod alone is not a title pack
             if (is_gui_path(low)) {
                 ++r.ui_files;
                 const std::string fid = ui_slots::fighter_of_path(low);
@@ -120,7 +120,7 @@ StageProbe stage_probe(const std::wstring& root, const std::string& rel, const s
     {
         static const std::unordered_set<uint64_t> title_hashes = [] {
             std::unordered_set<uint64_t> h;
-            for (auto& p : title_slots::known_paths()) if (title_slots::is_title_file(p)) h.insert(pak_path_hash(std::string_view(p)));
+            for (auto& p : title_slots::known_paths()) if (title_slots::is_title_movie(p)) h.insert(pak_path_hash(std::string_view(p)));
             return h;
         }();
         for (auto& o : paks) {

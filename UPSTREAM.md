@@ -10,7 +10,7 @@ the public repository and the source from the same tag in the private one.
 
 ## Copied from
 
-Synced to: `40bf9da850fab6d168819d8ae4375909e50be290` (release `v1.46.0`).
+Synced to: `f3f51a2d8f2ae3f361403b03423938adaae4ed63` (release `v1.48.0`).
 
 The paths in [.github/upstream-paths.txt](.github/upstream-paths.txt) are byte for byte that commit:
 

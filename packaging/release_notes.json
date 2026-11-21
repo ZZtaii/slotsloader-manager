@@ -2,6 +2,34 @@
   "format": "sf6suite-notes-1",
   "releases": [
     {
+      "version": "1.48.0",
+      "date": "2026-11-21",
+      "new": [
+        "[Custom Combos] Rhythm mode: Input History Display has a third value, Rhythm. The trial's inputs come down to a line like a rhythm game, each press judged Perfect, Marvelous, Early, Late or Miss, held buttons drawn as corridors. The recipe's asked strength wins over the example's button.",
+        "[Custom Combos] Watch Example has the replay's control bar: play / pause, one frame back or forward (across Drive Impacts and supers, down to the first frame), previous / next input (L1 / R1), previous / next recipe line (L2 / R2).",
+        "[Custom Combos] During an example, Up / Down and the pause menu's Game Speed set 50%, 80%, Standard or 150%; the speed icon under the Frame Meter shows play, pause and the speed.",
+        "[Suite] Each release's news can have its own picture, set on the community server."
+      ],
+      "fixed": [
+        "[Slots Loader] A title screen pack without its own loop or end movie kept the previous pack's movies after a switch: it now gets the game's own.",
+        "[Slots Loader] A title screen pack's music and narrator follow the pack chosen. A pack whose sounds the game cannot play keeps the game's own sounds instead of a silent title.",
+        "[Slots Loader] The unpacked copies of stage, title and UI mod archives no longer pile up: the ones no mod uses any more are removed.",
+        "[Suite] Starting an update could crash the game in rare cases (its progress strip)."
+      ],
+      "modified": []
+    },
+    {
+      "version": "1.47.0",
+      "date": "2026-11-20",
+      "new": [],
+      "fixed": [
+        "[Custom Combos] Doctor's Office: Send Symptoms refused your own replay on a PC where the Recording Manager had never linked to the Community, or had linked under another name. You are now recognised by your user code of the game, the number the replay holds for each player."
+      ],
+      "modified": [
+        "[Custom Combos] Doctor's Office: Send Symptoms needs the game connected to its network (your user code comes from it). Without it, a message says so."
+      ]
+    },
+    {
       "version": "1.46.0",
       "date": "2026-11-19",
       "new": [

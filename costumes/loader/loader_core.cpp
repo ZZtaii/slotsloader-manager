@@ -43,6 +43,7 @@
 #include <tlhelp32.h>
 #include <psapi.h>
 #pragma comment(lib, "bcrypt.lib")
+#include "cache_dirs.hpp"
 
 // ============================================================================
 // Logging
@@ -6353,26 +6354,9 @@ static std::wstring a2w_path(const std::string& s) {
     return w;
 }
 
-static void delete_tree_w(const std::wstring& dir_in) {
-    std::wstring dir = (dir_in.size() > 2 && dir_in[1] == L':') ? L"\\\\?\\" + dir_in : dir_in;
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW(long_w((dir + L"\\*")).c_str(), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 ||
-                (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0))) continue;
-            std::wstring full = dir + L"\\" + fd.cFileName;
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                delete_tree_w(full);
-            } else {
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
-                    SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
-                DeleteFileW(full.c_str());
-            }
-        } while (FindNextFileW(h, &fd));
-        FindClose(h);
-    }
-    RemoveDirectoryW(dir.c_str());
+// A cache folder and all it holds; a link inside is removed itself, never followed (common/cache_dirs.hpp)
+static bool delete_tree_w(const std::wstring& dir, cache_dirs::Failure* fail = nullptr) {
+    return cache_dirs::remove_tree(dir, nullptr, fail);
 }
 
 // Returns the folder holding the archive's content, or "" when the archive cannot be used.
@@ -6441,23 +6425,26 @@ static std::string ensure_archive_extracted(const std::string& archive_path) {
     return final_dir;
 }
 
+// At the end of the scan (a rebuild): the cache folders no archive of this scan asked for go. Only folders, never a link
+// (common/cache_dirs.hpp). One that cannot be removed is said once, with what stayed and the Win32 error, and is tried again
+// at the next rebuild only: "removed" used to be logged whatever happened, and nothing said why a folder stayed.
 static void purge_stale_archive_cache() {
-    if (g_archive_cache_root.empty()) return;
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA((g_archive_cache_root + "\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-    std::vector<std::string> stale;
-    do {
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
-        std::string n = fd.cFileName;
-        if (n == "." || n == "..") continue;
-        if (!g_archive_cache_used.count(n)) stale.push_back(n);
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-    for (auto& n : stale) {
-        delete_tree_w(a2w_path(g_archive_cache_root + "\\" + n));
-        printf("  archive cache: removed %s (archive no longer installed)\n", n.c_str());
+    if (g_archive_cache_root.empty()) { printf("  archive cache: not looked at (no costume_mods folder)\n"); return; }
+    const cache_dirs::Pruned r = cache_dirs::prune(a2w_path(g_archive_cache_root),
+        [](const std::wstring&) { return true; },             // every folder there is an archive's, or an unfinished one's
+        [](const std::wstring& n) { return g_archive_cache_used.count(w2a(n.c_str())) > 0; });
+    if (!r.there) { printf("  archive cache: none (no archive unpacked)\n"); return; }
+    if (r.link) { printf("  WARN: archive cache: %s is a link to another folder: nothing removed there\n", g_archive_cache_root.c_str()); return; }
+    if (r.list_error) {
+        printf("  WARN: archive cache: %s cannot be listed (error %lu): nothing removed\n", g_archive_cache_root.c_str(), r.list_error);
+        return;
     }
+    for (auto& n : r.removed) printf("  archive cache: removed %s (archive no longer installed)\n", w2a(n.c_str()).c_str());
+    for (auto& [n, f] : r.failed)
+        printf("  WARN: archive cache: %s not removed (error %lu on %s): tried again at the next rebuild\n", w2a(n.c_str()).c_str(),
+               f.error, w2a(f.path.c_str()).c_str());
+    printf("  archive cache: %zu in use, %zu removed (%.1f MB)%s\n", r.kept, r.removed.size(), r.bytes / 1048576.0,
+           r.failed.empty() ? "" : (", " + std::to_string(r.failed.size()) + " could not be").c_str());
 }
 
 // ============================================================================
