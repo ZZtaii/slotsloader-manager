@@ -1,48 +1,81 @@
 # Slotsloader Manager
 
-A mod manager for Street Fighter 6 with faster search, more utility and safer installs. Windows, with a beta for Linux and Steam Deck.
+A mod manager made for Street Fighter 6. Add mods as extra outfits next to the originals, mix parts from different mods, and undo anything.
 
-![Slotsloader Manager: the mod library filtered to Cammy, with a mod's preview, author and install options](docs/images/slotsloader-manager.webp)
+**[Download and guide on zztaii.com/modmanager](https://zztaii.com/modmanager)** · [All releases](../../releases) · [Discord](https://discord.gg/9Vr2SJ3)
 
-It installs mods as extra outfits through the **SF6 Slots Loader** by Wael3rd, or in place of the game's originals.
+Windows 10 or 11 (64-bit), with a beta for Linux and Steam Deck.
 
-**Download and guide:** [zztaii.com/modmanager](https://zztaii.com/modmanager) has the downloads, what the Manager does, screenshots and a getting-started guide.
+![Slotsloader Manager's mod library: Leon RE9 on Luke C1 selected, with its options, preview and Install as Extra outfit](docs/images/screens/00-mod-library.webp)
 
 > Not affiliated with or endorsed by Capcom or any other publisher. Mods change game files, so keep backups and use them at your own risk.
 
-## What the Manager does
+## What it does
 
-- **Installs mods two ways.** Add a mod as an extra outfit through the Slots Loader, or replace the original files through REFramework's loose file loader or the PAK method. Uninstalling puts the game back exactly as it was.
-- **Mixes parts from several mods.** Add to outfit puts a hair or an add-on from one mod on an outfit you already have; a recipe remembers the result so you can build it again. <!-- repo readers; not in the Assistant pack -->
-- **Checks before it installs.** Common problems like outdated colour files, old texture versions and select-screen swatches get fixed automatically. If another mod touches the same files, you'll see it.
-- **Lets you undo things.** Uninstalled mods are kept so you can bring them back, and presets save your whole setup.
-- **Makes your library easy to search.** Look up mods by character and costume (`cammy, c1`), author (`by:name`) or type (`is:bundle`, `reframework`), filter by fighter, and sort by when a mod was added, installed or last played.
-- **Handles mod variants.** Install a few variants of one mod as separate slots, or switch the variants of a bundle on and off.
-- **Keeps your outfits in order.** Drag a fighter's outfits into the order you want, or turn every outfit mod off for a while to play vanilla. <!-- repo readers; not in the Assistant pack -->
-- **Gets along with other mod managers.** Use it next to them, or import their presets.
-- **Has an optional Assistant.** Ask it to find, install or explain mods. It runs on Claude by Anthropic with your own API key, and every change waits for your OK.
+- **Extra outfits.** Add mods as new costume slots next to the originals, up to 100 per fighter, or replace an existing costume. Extra outfits go through the **SF6 Slots Loader** by Wael3rd, which comes with the Manager.
+- **Find mods fast.** Search by author, fighter, costume, keyword or format. Deep search also looks at option names and folders.
+- **Load order.** Put mods in priority order. The top mod wins any files they share; everything else stays as it is.
+- **Outfit recipes.** Mix parts from different mods, like one mod's hair on another outfit, and save the combination so you never pick every option again. <!-- repo readers; not in the Assistant pack -->
+- **Mod options.** Turn a mod's variants and layers on and off, or install a few as separate slots.
+- **Presets.** Save what's enabled and bring it back later. Anything already installed is skipped.
+- **After game updates.** Click **Reapply all** after an SF6 update or a Steam file check, and your managed mods go back in.
+- **Undo anything.** Disable a mod without losing it, switch outfit mods off for a while, or restore the original game files.
+- **Checks before installing.** Common problems like outdated colour files are fixed for you, and you'll see when two mods touch the same files.
+- **Plays well with others.** Keep using your other mod managers for what they do, or bring in their presets.
+- **Optional Assistant.** Ask it to find, install or explain mods. It runs on Claude by Anthropic with your own API key, and every change waits for your OK.
 
-## Extra outfits in SF6
+<details> <!-- repo readers; not in the Assistant pack -->
+<summary><b>More screenshots</b></summary> <!-- repo readers; not in the Assistant pack -->
 
-- Up to 100 extra outfits per fighter, straight from `.zip`, `.rar`, `.7z` or plain folders.
-- Mods with options become one outfit per combination (up to 50 per mod), and you can switch each one on or off. Or pick an outfit's options in the game, if you turn that on in the Manager.
-- After a game update the loader rebuilds its data from the game's own files, so new fighters and outfits work without waiting for a loader update.
-- Slots made from Outfit 2, 3 or 4 only show up if you own that outfit. Outfit 1 and DriveTech (C5) slots always show.
-- Installed through the Manager, it never checks for updates from inside the game, and adds to the game's menus only what you tick in the Manager's Slotsloader settings.
+![Extra outfits alongside the originals: Leon loaded as an extra outfit while Luke keeps his original Outfit 1](docs/images/screens/01-extra-outfits.webp)
+
+![Replace an existing costume: install a mod over the costume named in its details](docs/images/screens/02-replace-original.webp)
+
+![Search your library by author, fighter, costume, keyword or format, with deep search](docs/images/screens/03-library-search.webp)
+
+![Set load order: the top mod wins files that several mods share](docs/images/screens/04-load-order.webp)
+
+![Manage installed mods: move, open, edit options, check health, disable or uninstall](docs/images/screens/05-installed-controls.webp)
+
+![Save and restore outfit presets of what is enabled](docs/images/screens/06-outfit-presets.webp)
+
+![Choose a replacement method: automatic, loose file loader or PAK](docs/images/screens/07-replacement-methods.webp)
+
+![Reapply managed mods after an SF6 update or a Steam file check](docs/images/screens/08-reapply-mods.webp)
+
+![Restore original game files, with an automatic preset saved first](docs/images/screens/09-restore-files.webp)
+
+![Temporarily turn outfit mods off and resume the same setup later](docs/images/screens/10-temporary-disable.webp)
+
+![Save an outfit recipe that remembers the mods, parts and order for one outfit](docs/images/screens/11-outfit-recipes.webp)
+
+![Choose parts from each mod, such as the hair from one mod on another outfit](docs/images/screens/12-selected-parts.webp)
+
+</details> <!-- repo readers; not in the Assistant pack -->
 
 ## Getting started
 
-**You'll need** Windows 10 or 11 (64-bit), Street Fighter 6 on Steam, and [REFramework](https://github.com/praydog/REFramework) for SF6. 7-Zip is optional, for `.rar` and `.7z` mods.
+**You'll need** Street Fighter 6 on Steam and [REFramework](https://github.com/praydog/REFramework) for SF6.
 
-1. Grab `Slotsloader-Manager-<version>-portable.zip` from [Releases](../../releases/latest) and extract it anywhere, like `C:\Games\Slotsloader Manager`.
-2. Open **Slotsloader Manager.exe**. It finds SF6 through Steam. Add your mod folders in **Settings**.
-3. In **Settings → Slotsloader**, click **Install Slotsloader**. It comes bundled with the Manager, so no download needed.
-4. Pick a mod, choose **Extra outfit** or **Replace original**, and hit **Install**.
-5. Click **Launch SF6** and check out your new slots on the character select screen.
+1. Download the Manager from [zztaii.com/modmanager](https://zztaii.com/modmanager) (or [Releases](../../releases/latest)) and unzip it anywhere, like a Games folder.
+2. Open **Slotsloader Manager**. It finds SF6 by itself. Add your mod folders in **Settings**.
+3. Click **Install Slotsloader** (in **Settings → Slotsloader**). It comes with the Manager.
+4. Pick a mod, choose **Extra outfit** or **Replace original**, then **Install**.
+5. Click **Launch SF6** and find your new outfits on the character select screen.
 
-When there's an update, a small notice shows up in the app. Nothing installs until you click it. Keep the `Data` folder when you update: it holds your settings and the backups of replaced game files.
+Already replacing costumes with another mod manager? Keep it for those, or move them over with the Manager's migration (or uninstall them there) before you replace costumes here.
 
-**Linux and Steam Deck:** get the `linux` ZIP of the newest [Linux / Steam Deck beta](../../releases), extract the whole folder and open **Install SlotsLoader Manager.desktop** (on Steam Deck, in Desktop Mode, with Bottles from Discover). The release notes cover the setup. <!-- repo readers; not in the Assistant pack -->
+When there's an update, a small notice shows up in the app. Nothing changes until you click it. Keep the `Data` folder when you update: it holds your settings and the backups of replaced game files.
+
+**Linux and Steam Deck (beta):** download it from [zztaii.com/modmanager](https://zztaii.com/modmanager) or the newest [Linux / Steam Deck beta](../../releases), extract the whole folder and open **Install SlotsLoader Manager.desktop** (on Steam Deck, in Desktop Mode, with Bottles from Discover). The release notes cover the setup. <!-- repo readers; not in the Assistant pack -->
+
+## Good to know about extra outfits
+
+- Mods can be `.zip`, `.rar`, `.7z` or plain folders. 7-Zip is downloaded by itself the first time a `.rar` or `.7z` mod needs it.
+- A mod with options becomes one outfit per combination (up to 50 per mod), and you can switch each one on or off. Or pick an outfit's options in the game, if you turn that on in the Manager.
+- After a game update the loader rebuilds its data from the game's own files, so new fighters and outfits work without waiting for a loader update.
+- Slots made from Outfit 2, 3 or 4 only show up if you own that outfit. Outfit 1 and DriveTech (C5) slots always show.
+- Installed through the Manager, the loader never checks for updates from inside the game, and adds to the game's menus only what you tick in the Manager's Slotsloader settings.
 
 ## How Slots Loader updates reach you <!-- repo readers; not in the Assistant pack -->
 
@@ -74,4 +107,4 @@ The loader source in this repo is that synced copy; see [UPSTREAM.md](UPSTREAM.m
 ## License <!-- repo readers; not in the Assistant pack -->
 
 - **Slots Loader source** (everything except `manager/`): MIT, like Wael3rd's original. See [LICENSE](LICENSE). <!-- repo readers; not in the Assistant pack -->
-- **Slotsloader Manager** (`manager/`): source-available for personal, non-commercial use. You're welcome to read it, run it, tweak it for your own modding and share what you make with it. Redistributing the app itself (re-uploading it, its zips or its source to other sites, mod pages or repositories, or bundling it) or selling it needs permission beforehand; linking to [zztaii.com/modmanager](https://zztaii.com/modmanager) or the releases page is always fine. See [manager/LICENSE](manager/LICENSE). <!-- repo readers; not in the Assistant pack -->
+- **Slotsloader Manager** (`manager/`): source-available for personal, non-commercial use. You're welcome to read it, run it, tweak it for your own modding and share what you make with it. Linking to [zztaii.com/modmanager](https://zztaii.com/modmanager) or the releases page is always welcome; to re-upload the app, include it in a pack or sell it, please ask first. See [manager/LICENSE](manager/LICENSE). <!-- repo readers; not in the Assistant pack -->
