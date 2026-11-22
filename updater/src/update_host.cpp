@@ -296,6 +296,9 @@ void frame() {
         if (s == St::Idle) {
             if (!elected()) { set_state(St::Dormant); return; }
             log("this copy runs the updater (rank " + std::to_string(sf6suite_updater_rank()) + ")");
+            // the strips' hook now, at the start, never at the moment an install begins (update_game.hpp, ticker_prepare)
+            log(game::ticker_prepare() ? "the ticker's hook is placed (at the start)"
+                                       : "the ticker's hook could not be placed at the start: an install will show no progress on screen");
             set_state(St::Checking);
             spawn(check_worker);
             return;

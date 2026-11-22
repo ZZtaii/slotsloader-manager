@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include "pak.hpp"
+#include "../../../stages/loader/title_slots.hpp"   // pack_key (--caches)
 
 static int g_fail = 0, g_checks = 0;
 static std::string g_tool, g_work;
@@ -535,8 +536,20 @@ static int run_row_test(const char* build, const char* work, const char* game, c
     printf("[9] costume loader: no costume mod left while a mod pak sits above ours\n");
     foreign(3);
     run_loader("costume");  expect_row("foreign 003 added, loader run", "1M 2c 3M 4C");
+    // the archive cache at that rebuild: the removed mod's folder goes, and an older one left there, holding a read-only file
+    // and a junction to a folder outside the cache: the junction is removed itself, never followed
+    const std::string old_entry = g_row_game + "\\reframework\\costume_mods\\.cache\\Old.zip_00000000", outside = g_work + "\\row\\outside";
+    put(outside + "\\precious.txt", "a player's file outside the cache");
+    put(old_entry + "\\natives\\old.bin", "an old extraction");
+    SetFileAttributesA((old_entry + "\\natives\\old.bin").c_str(), FILE_ATTRIBUTE_READONLY);
+    system(("cmd /c mklink /J \"" + old_entry + "\\natives\\link\" \"" + outside + "\" >nul 2>&1").c_str());
+    check((GetFileAttributesA((old_entry + "\\natives\\link").c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) != 0, "a junction made in an old cache entry");
     DeleteFileA(zip.c_str());
     run_loader("costume");  expect_row("costume mod removed, loader run", "1M 2c 3M");
+    expect_said("costume", "archive cache: removed Old.zip_00000000 (archive no longer installed)");
+    expect_said("costume", "archive cache: 0 in use, ");
+    expect_said("costume", "not removed (error", false);
+    check(!exists(old_entry) && exists(outside + "\\precious.txt"), "the old cache entry gone, the junction's target untouched");
     drop(3);
     run_loader("costume");  expect_row("foreign 003 removed, loader run", "1M");
     CopyFileA(mod_archive, zip.c_str(), FALSE);
@@ -1317,7 +1330,156 @@ static int run_row_test(const char* build, const char* work, const char* game, c
     return g_fail ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Cache test: the stage loader (stagetest.exe) on a fake game folder made here from nothing (no game needed). The archive
+// caches of stage_mods, title_mods and ui_mods keep what a pass asked for and lose the rest once the pass completed, never
+// anything else; a title pack with title_start alone gets the game's own loop and end on the switch, out of the playlist.
+// ---------------------------------------------------------------------------------------------
+
+static bool junction(const std::string& link, const std::string& target) {
+    system(("cmd /c mklink /J \"" + link + "\" \"" + target + "\" >nul 2>&1").c_str());
+    const DWORD a = GetFileAttributesA(link.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
+// The key folders (16 lower-case hex digits) of a cache folder
+static size_t key_dirs(const std::string& cache) {
+    size_t n = 0;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((cache + "\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        const std::string s = fd.cFileName;
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || s.size() != 16) continue;
+        if (s.find_first_not_of("0123456789abcdef") == std::string::npos) n++;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return n;
+}
+
+static int run_cache_test(const char* build, const char* work) {
+    g_build = build; g_work = work;
+    const std::string root = g_work + "\\caches";
+    system(("cmd /c rmdir /s /q \"" + root + "\" >nul 2>&1").c_str());   // (rmdir removes a junction, never what it points to)
+    g_row_game = root + "\\game";
+    const std::string rf = g_row_game + "\\reframework", outside = root + "\\outside";
+    const std::string part = "natives/stm/streaming/product/gui/gm/ui10000/part/";
+    const char* movies[3] = { "title_start", "title_loop", "title_end" };
+    // the game's own files: the three title movies and their resource files
+    {
+        PakWriter w;
+        for (const char* m : movies) {
+            const std::string p = part + m + ".mov.1", res = "natives/stm/product/gui/gm/ui10000/part/" + std::string(m) + ".mov.1";
+            w.add_uncompressed(pak_path_hash(std::string_view(p)), bytes_of("the game's own " + p));
+            w.add_uncompressed(pak_path_hash(std::string_view(res)), bytes_of("REMV resource of " + std::string(m)));
+        }
+        make_dirs(g_row_game + "\\re_chunk_000.pak");
+        w.write((g_row_game + "\\re_chunk_000.pak").c_str());
+    }
+    const std::string stage_file = "natives/stm/product/camera/scene/ess/ess0000_00_camera.scn.20";
+    put(rf + "\\data\\SF6_StageSlots_Data\\loader\\stage_paths.txt", stage_file + "\n");
+    write_stored_zip(rf + "\\stage_mods\\Stage One.zip", { { stage_file, bytes_of("a stage mod's camera") } });
+    write_stored_zip(rf + "\\title_mods\\Full Pack.zip", { { "modinfo.ini", bytes_of("name=Full Pack\r\n") },
+        { part + "title_start.mov.1", bytes_of("full start") }, { part + "title_loop.mov.1", bytes_of("full loop") },
+        { part + "title_end.mov.1", bytes_of("full end") } });
+    write_stored_zip(rf + "\\title_mods\\Alpha 3 Startup.zip", { { "modinfo.ini", bytes_of("name=Alpha 3 Startup\r\n") },
+        { part + "title_start.mov.1", bytes_of("alpha start") } });
+    write_stored_zip(rf + "\\ui_mods\\UI One.zip", { { "modinfo.ini", bytes_of("name=UI One\r\n") },
+        { "natives/stm/product/gui/test/ui_test.gui.530035", bytes_of("a ui file") } });
+    // what earlier passes left: the unpacked archives of mods since removed, an old picture; and what is not the loader's
+    put(rf + "\\stage_mods\\.cache\\0123456789abcdef\\natives\\old.bin", "a removed stage mod's files");
+    put(rf + "\\title_mods\\.cache\\fedcba9876543210\\natives\\old.bin", "a removed title pack's files");
+    put(rf + "\\ui_mods\\.cache\\00000000000000aa\\natives\\old.bin", "a removed ui pack's files");
+    put(rf + "\\title_mods\\.cache\\_pictures\\0000000000000000.pic", "an old picture");
+    put(rf + "\\stage_mods\\.cache\\keep_me\\mine.txt", "not a folder the loader makes");
+    put(outside + "\\precious.txt", "a player's file outside the cache");
+    const bool linked = junction(rf + "\\title_mods\\.cache\\fedcba9876543210\\natives\\link", outside);
+    check(linked, "a junction made inside a stale cache entry (mklink /J)");
+    const std::string title_key_full = title_slots::pack_key("Full Pack.zip"), title_key_alpha = title_slots::pack_key("Alpha 3 Startup.zip");
+
+    printf("[C1] a pass that writes the pak: the caches keep what it asked for, the rest goes\n");
+    run_loader("stage");
+    auto output = [&]() {                       // stagetest's printout, its CR LF line ends as LF
+        std::string s = slurp(g_work + "\\row_stage.txt"), o;
+        for (char c : s) if (c != '\r') o += c;
+        return o;
+    };
+    std::string log = slurp(g_row_game + "\\SF6_StageSlots.log"), out = output();
+    check(exists(g_row_game + "\\" + pak_name(1)), "the stage pak written (patch_001)");
+    check(has(log, "archive caches: stage_mods 1 in use, 1 removed") && has(log, "title_mods 2 in use, 1 removed") &&
+          has(log, "ui_mods 1 in use, 1 removed"), "log: each cache, what it kept and what it removed");
+    check(!exists(rf + "\\stage_mods\\.cache\\0123456789abcdef") && !exists(rf + "\\title_mods\\.cache\\fedcba9876543210") &&
+          !exists(rf + "\\ui_mods\\.cache\\00000000000000aa"), "the stale entries gone (stage, title, ui)");
+    check(key_dirs(rf + "\\stage_mods\\.cache") == 1 && key_dirs(rf + "\\title_mods\\.cache") == 2 && key_dirs(rf + "\\ui_mods\\.cache") == 1,
+          "the entries of the archives installed stay");
+    check(!exists(rf + "\\title_mods\\.cache\\_pictures\\0000000000000000.pic"), "the picture nobody asked for gone");
+    check(exists(rf + "\\stage_mods\\.cache\\keep_me\\mine.txt"), "a folder the loader does not make, left alone");
+    check(exists(outside + "\\precious.txt"), "the junction's target untouched");
+    check(exists(rf + "\\stage_mods\\Stage One.zip") && exists(rf + "\\title_mods\\Full Pack.zip") && exists(rf + "\\title_mods\\Alpha 3 Startup.zip") &&
+          exists(rf + "\\ui_mods\\UI One.zip") && exists(rf + "\\data\\SF6_StageSlots_Data\\loader\\stage_paths.txt"), "the mods and the index untouched");
+    // the switch: the pack with title_start alone serves the game's own loop and end, and is not in the playlist
+    // (stagetest prints "title background <key>[ (playlist)]: title_start<-<whose copy> ..." per background, in any order)
+    auto background = [&](const std::string& key) {
+        const std::string at = "title background " + key;
+        size_t i = out.find(at + ":");
+        if (i == std::string::npos) i = out.find(at + " (playlist):");
+        if (i == std::string::npos) return std::string();
+        return out.substr(i, out.find('\n', i) - i) + " ";
+    };
+    auto serves = [](const std::string& line, const char* movie, const std::string& from) {
+        return has(line, (std::string(" ") + movie + "<-" + from + " ").c_str());
+    };
+    const std::string alpha = background(title_key_alpha), full = background(title_key_full), game = background("game");
+    printf("    %s\n    %s\n    %s\n", alpha.c_str(), full.c_str(), game.c_str());   // what stagetest says of the three backgrounds
+    check(serves(alpha, "title_start", title_key_alpha) && serves(alpha, "title_loop", "game") && serves(alpha, "title_end", "game") &&
+          !has(alpha, "(playlist)"), "Alpha 3 Startup (title_start alone): its start, the game's loop and end, out of the playlist");
+    check(serves(full, "title_start", title_key_full) && serves(full, "title_loop", title_key_full) && serves(full, "title_end", title_key_full) &&
+          has(full, "(playlist)"), "Full Pack: its own three movies, in the playlist");
+    check(serves(game, "title_start", "game") && serves(game, "title_loop", "game") && serves(game, "title_end", "game") && has(game, "(playlist)"),
+          "the game's own title: its three copies, in the playlist");
+    check(has(log, "Alpha 3 Startup.zip: 1 of the 3 title movies: left out of the playlist"), "log: why Alpha 3 Startup is out of the playlist");
+    check(has(log, "2 title file(s) of the packs that lack them served from the game's own copies"), "log: the two files from the game's copies");
+
+    printf("[C2] the same mods again: up to date, nothing removed\n");
+    run_loader("stage");
+    log = slurp(g_row_game + "\\SF6_StageSlots.log");
+    check(has(log, "up to date:") && !has(log, "archive caches:"), "up to date: the caches are not looked at");
+    check(key_dirs(rf + "\\title_mods\\.cache") == 2 && key_dirs(rf + "\\stage_mods\\.cache") == 1, "up to date: every entry still there");
+
+    printf("[C3] a stage mod and a title pack removed: their unpacked files go at the rebuild\n");
+    DeleteFileA((rf + "\\stage_mods\\Stage One.zip").c_str());
+    DeleteFileA((rf + "\\title_mods\\Full Pack.zip").c_str());
+    run_loader("stage");
+    log = slurp(g_row_game + "\\SF6_StageSlots.log");
+    out = output();
+    check(has(log, "archive caches: stage_mods 0 in use, 1 removed") && has(log, "title_mods 1 in use, 1 removed") &&
+          has(log, "ui_mods 1 in use, 0 removed"), "log: the removed mods' entries removed, the others kept");
+    check(key_dirs(rf + "\\stage_mods\\.cache") == 0 && key_dirs(rf + "\\title_mods\\.cache") == 1 && key_dirs(rf + "\\ui_mods\\.cache") == 1,
+          "on disk: only the entries of the archives still installed");
+    // Alpha 3 Startup alone: no pack has a loop or an end, so no background has the three movies: the playlist is empty
+    check(has(out, ("title background " + title_key_alpha + ": title_start<-" + title_key_alpha + "\n").c_str()) &&
+          has(out, "title background game: title_start<-game\n"), "title_start alone everywhere: nothing filled, nobody in the playlist");
+    check(has(log, "the game's own title: 1 of the 3 title movies copied"), "log: why the game's own title is out of the playlist");
+    check(exists(outside + "\\precious.txt") && exists(rf + "\\stage_mods\\.cache\\keep_me\\mine.txt"), "still untouched: outside, keep_me");
+
+    printf("[C4] every mod removed: no pak needed, the caches emptied of the loader's entries\n");
+    DeleteFileA((rf + "\\title_mods\\Alpha 3 Startup.zip").c_str());
+    DeleteFileA((rf + "\\ui_mods\\UI One.zip").c_str());
+    run_loader("stage");
+    log = slurp(g_row_game + "\\SF6_StageSlots.log");
+    check(!exists(g_row_game + "\\" + pak_name(1)), "no pak (nothing to hold)");
+    check(has(log, "archive caches: stage_mods 0 in use, 0 removed") && has(log, "title_mods 0 in use, 1 removed") &&
+          has(log, "ui_mods 0 in use, 1 removed"), "log: the last entries removed though no pak was written");
+    check(key_dirs(rf + "\\title_mods\\.cache") == 0 && key_dirs(rf + "\\ui_mods\\.cache") == 0, "on disk: no entry left");
+    check(exists(outside + "\\precious.txt") && exists(rf + "\\stage_mods\\.cache\\keep_me\\mine.txt"), "still untouched: outside, keep_me");
+
+    printf("\n%d checks, %d failed\n", g_checks, g_fail);
+    printf(g_fail ? "FAIL\n" : "PASS\n");
+    return g_fail ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 4 && std::string(argv[1]) == "--caches") return run_cache_test(argv[2], argv[3]);
     if (argc >= 6 && (std::string(argv[1]) == "--row" || std::string(argv[1]) == "--row-manager")) {
         g_manager_suite = std::string(argv[1]) == "--row-manager";
         return run_row_test(argv[2], argv[3], argv[4], argv[5], argc >= 7 ? argv[6] : nullptr);
@@ -1326,6 +1488,7 @@ int main(int argc, char** argv) {
     printf("usage: slots_clean_test <SF6_SlotsClean.exe> <work dir>\n"
            "       slots_clean_test --row <build dir> <work dir> <game dir (read only)> <costume mod archive>"
            " [<previous build dir>]\n"
-           "       slots_clean_test --row-manager <build dir> <work dir> <game dir (read only)> <costume mod archive>\n");
+           "       slots_clean_test --row-manager <build dir> <work dir> <game dir (read only)> <costume mod archive>\n"
+           "       slots_clean_test --caches <build dir> <work dir>   (the stage loader's caches and title switch, no game needed)\n");
     return 2;
 }

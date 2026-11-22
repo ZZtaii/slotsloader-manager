@@ -159,13 +159,17 @@ int main() {
         b = bind_set(game, false, 2, 4);
         check(b.consumed && !b.local && b.set == Draw({ 2, 4 }), "game outfit the match holds: the game wears it, the draw taken");
         b = bind_set(game, false, 2, 6);
-        check(b.consumed && !b.local && b.set == Draw({ 2, 6 }), "game outfit, another colour in the match: the match's colour (what the opponent sees)");
+        check(b.consumed && !b.local && b.set == Draw({ 2, 4 }), "game outfit, Color 5 drawn: kept, the match holds Color 1 / 2 only (21/11)");
         b = bind_set(game, false, 0, 1);
         check(b.consumed && b.local && b.set == game, "game outfit the match does not hold (no profile since): worn on this PC, the draw taken");
         b = bind_set(Draw{ 0, 2 }, false, 4, 1);
         check(!b.consumed && !b.local && b.set == Draw({ 4, 1 }), "Outfit 1 drawn, the match holds another: worn as the match holds, the draw waits");
         b = bind_set(Draw{ 0, 2 }, false, 0, 5);
-        check(b.consumed && !b.local && b.set == Draw({ 0, 5 }), "Outfit 1 drawn and held: the game wears it");
+        check(b.consumed && !b.local && b.set == Draw({ 0, 2 }), "Outfit 1 drawn and held, Color 3 drawn: kept (worn on this PC over Color 1 / 2)");
+        b = bind_set(Draw{ 4, 6 }, false, 4, 0);
+        check(b.consumed && !b.local && b.set == Draw({ 4, 6 }), "DriveTech in Color 7 drawn, the match holds DriveTech Color 1: Color 7 kept (worn on this PC)");
+        b = bind_set(Draw{ 0, 1 }, false, 0, 0);
+        check(b.consumed && b.set == Draw({ 0, 0 }), "Outfit 1 in Color 2 drawn, the match holds Color 1: the match's (a profile came between)");
         b = bind_set(Draw{}, false, 3, 0);
         check(!b.consumed && !b.local && b.set == Draw({ 3, 0 }), "no draw yet: what the match holds");
     }

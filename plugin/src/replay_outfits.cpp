@@ -200,6 +200,12 @@ void journal_match(Obj* desc, Obj* save) {
             e.slot_costume = slot;
             e.slot_color = color;
             e.slot_base = rs->base;
+        } else if (slot >= 0 && (slot != e.sides[e.me].costume || color != e.sides[e.me].color)) {
+            // one of the game's outfits, or a colour, the alias wore over what the replay holds (21/11)
+            e.has_slot = true;
+            e.game = true;
+            e.slot_costume = slot;
+            e.slot_color = color;
         }
     }
     std::lock_guard lk(g_mx);

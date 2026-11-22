@@ -153,7 +153,8 @@ inline bool parse_outfits(const std::string& text, std::map<int, Forced>& out, i
 // {"v":1,"key":"<16 hex>","time":<unix s>,"mode":<game mode>,"me":<0|1>,"sides":[{"fid":..,"costume":..,"color":..},..],
 //  "slot":{"mod_id":"<mod>","costume":<n>,"color":<n>,"base":<n>}|null}
 // Numbers only: no names, no player IDs. "sides" is what the replay holds; "slot" what the player really wore (an extra
-// outfit of the alias), null when the player wore what the replay holds.
+// outfit of the alias), null when the player wore what the replay holds. Since 21/11 the alias also wears the game's own
+// outfits and colours (the network holds Outfit 1 / DriveTech in Color 1 / 2): "slot":{"game":true,"costume":<n>,"color":<n>}.
 struct Side { int fid = 0, costume = -1, color = 0; };
 struct Entry {
     std::string key;
@@ -161,6 +162,7 @@ struct Entry {
     int mode = -1, me = -1;
     std::vector<Side> sides;
     bool has_slot = false;
+    bool game = false;                // the slot is one of the game's outfits (no mod_id): its number as it is
     std::string mod_id;
     int slot_costume = -1, slot_color = 0, slot_base = -1;
 };
@@ -172,7 +174,9 @@ inline std::string journal_line(const Entry& e) {
         o += (i ? "," : "") + std::string("{\"fid\":") + std::to_string(e.sides[i].fid) + ",\"costume\":" +
              std::to_string(e.sides[i].costume) + ",\"color\":" + std::to_string(e.sides[i].color) + "}";
     o += "],\"slot\":";
-    if (e.has_slot)
+    if (e.has_slot && e.game)
+        o += "{\"game\":true,\"costume\":" + std::to_string(e.slot_costume) + ",\"color\":" + std::to_string(e.slot_color) + "}";
+    else if (e.has_slot)
         o += "{\"mod_id\":\"" + json_escape(e.mod_id) + "\",\"costume\":" + std::to_string(e.slot_costume) +
              ",\"color\":" + std::to_string(e.slot_color) + ",\"base\":" + std::to_string(e.slot_base) + "}";
     else
@@ -207,7 +211,13 @@ inline size_t parse_journal(const std::string& text, std::map<std::string, Entry
         }
         if (const Json* sl = j.get("slot"); sl && sl->kind == Json::Object) {
             const Json* m = sl->get("mod_id"); const Json* c = sl->get("costume");
-            if (m && m->kind == Json::String && !m->s.empty() && c && c->kind == Json::Number) {
+            const Json* g = sl->get("game");
+            if (g && g->kind == Json::Bool && g->b && c && c->kind == Json::Number) {
+                en.has_slot = true;
+                en.game = true;
+                en.slot_costume = static_cast<int>(c->num);
+                if (const Json* col = sl->get("color")) en.slot_color = static_cast<int>(col->as_int());
+            } else if (m && m->kind == Json::String && !m->s.empty() && c && c->kind == Json::Number) {
                 en.has_slot = true;
                 en.mod_id = m->s;
                 en.slot_costume = static_cast<int>(c->num);
@@ -256,7 +266,7 @@ inline std::vector<Wear> plan(const std::vector<Side>& recorded, const Entry* en
         // side must still be the journal's fighter (a replay of the same seeds with other fighters is another match).
         if (!entry || entry->me != static_cast<int>(i) || !entry->has_slot) continue;
         if (i >= entry->sides.size() || entry->sides[i].fid != r.fid) { w.why = "journal side mismatch"; continue; }
-        const int cos = resolve_mod(reg, r.fid, entry->mod_id, entry->slot_costume, entry->slot_base);
+        const int cos = entry->game ? entry->slot_costume : resolve_mod(reg, r.fid, entry->mod_id, entry->slot_costume, entry->slot_base);
         if (cos < 0) { w.why = "worn outfit's mod gone: recorded"; continue; }
         w.costume = cos; w.color = entry->slot_color; w.why = "worn (journal)";
         w.change = cos != r.costume || w.color != r.color;

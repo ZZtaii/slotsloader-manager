@@ -144,11 +144,15 @@ struct Bind {
     bool consumed = false;
     bool local = false;
 };
+// Since 21/11 the match never holds Color 3 or later (Wael: the network sees Color 1 / 2 only): a game colour from Color 3 on
+// drawn for the outfit the match holds is kept (worn on this PC over the match's Color 1 / 2, plugin colour_only).
 inline Bind bind_set(const Draw& next, bool next_is_ours, int net_cos, int net_col) {
     const Draw net{ net_cos, net_col };
     if (!next.valid()) return { net, false, false };
-    if (!next_is_ours && net_cos == next.costume)
-        return { Draw{ net_cos, is_entry(next.color) && net_col == kEntryCarrier ? next.color : net_col }, true, false };
+    if (!next_is_ours && net_cos == next.costume) {
+        const bool keep = (is_entry(next.color) && net_col == kEntryCarrier) || (!is_entry(next.color) && next.color >= 2);
+        return { Draw{ net_cos, keep ? next.color : net_col }, true, false };
+    }
     if (next_is_ours || next.costume > 0) return { next, true, true };
     return { net, false, false };
 }

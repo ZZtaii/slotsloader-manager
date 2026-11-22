@@ -145,6 +145,17 @@ int main() {
     parse_journal(line + journal_line(e3), j2);
     check(j2.size() == 1 && j2[ka].slot_color == 4, "the same key twice: the later line wins");
     check(line.find("short") == std::string::npos && line.find("name") == std::string::npos, "numbers only: no name, no player id");
+    {   // a game outfit (or colour) worn by the alias over Outfit 1 / Color 1 (21/11)
+        Entry g = e; g.mod_id.clear(); g.game = true; g.slot_costume = 2; g.slot_color = 6; g.slot_base = -1;
+        std::map<std::string, Entry> jg;
+        parse_journal(journal_line(g), jg);
+        check(jg[ka].has_slot && jg[ka].game && jg[ka].slot_costume == 2 && jg[ka].slot_color == 6 && jg[ka].mod_id.empty(),
+              "a game outfit worn by the alias: written and read back");
+        const std::vector<Side> rec = { { 1, 0, 1 }, { 1, 0, 1 } };
+        Entry gm = jg[ka]; gm.sides = rec;
+        auto wg = plan(rec, &gm, {}, reg);
+        check(wg[0].change && wg[0].costume == 2 && wg[0].color == 6 && !wg[1].change, "Default: the player's side wears the game outfit of the journal");
+    }
 
     // ---- what each side wears ----
     const std::map<int, Forced> no_forced;

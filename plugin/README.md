@@ -51,6 +51,18 @@ The title editor is full screen: the background's picture with the "OVERDRIVE ED
 
 When `reframework\data\SF6_UISlots_Data\registry.json` (written by the loader at game start, from the interface mods dropped in `reframework\ui_mods`) lists packs, Options > Interface gets one section per pack in its left list, just above "Other Settings", named as the pack (its description line: its author). Its rows are the game's own rows (Native Core 0.9.10, `opt_section_place_rows`; an older core: no section, the choices still apply at launch): a group of options of which one at a time can be used is one row, **Game's own** (the game's files) then its options, cycled with Left / Right; any other option is one row Off / On; a heading that holds other rows is a header row when the core has them, else its name goes in front of its rows'. The game draws them, moves the focus and shows each row's description (the mod's own, its literal `\n` as spaces). A long title or value keeps its size and slides in its place, as on every row of the Options screen. Under the rows, when there is room in the right panel, the picture of the focused row's value (an Off / On row: its option's; Game's own: none), else of the pack. Every change is written to `"ui_choices"` in `settings.json` (`{ "<pack key>": [ "<option id>", ... ] }`, the other keys kept) and handed to the loader at once (`SF6UISlots_Apply` in `amd_ags_x64.dll`), which serves the new files from then on; the textures the game keeps in memory are swapped on screen (`ui_retexture.cpp`). A loader without that export applies the choice at the next launch.
 
+**Everything goes through the alias (Wael 21/11).** Online the save and the network hold only outfits and colours every
+player has: Outfit 1 or DriveTech, in Color 1 or Color 2 (`carrier.hpp` `safe_outfit`, `safe_colour`, `net_colour`). A
+slot, one of the game's other outfits (Outfit 2, 3, 4..., a Fluffy mod replacing one of them, an outfit with parts or
+shared files) and any colour from Color 3 on are worn on this PC only, over the carrier, the same way as a slot: the
+intent keeps the real choice (a game outfit's number, or for Outfit 1 / DriveTech only its colour), the save gets the
+carrier in Color 1 / 2 (the chosen colour when it is one of those, else Color 1), and the fighter profile sent while
+Battle Settings is open too. Random's draws follow the same rule (a game outfit or a colour the network must not see is
+worn on this PC only), and so does a Random colour. A game outfit or colour sent as it was raised the communication
+error 50301-30003 for players whose game counts as theirs what their account does not have (an unlock-all script).
+Outfit 1 / DriveTech in Color 3 or later is dressed when the fighters are built (no files to ask for: the outfit's own),
+so the VS screen still shows Color 1 / 2 for that case.
+
 How (since 1.15): the battle description (`BattleFlowMap.m_desc`) has one `FighterDesc` per fighter, whose `Costume`
 is what the network holds; the game also keeps a local override per fighter (`SetOverwriteDesc` / `GetCostume`) and
 builds the fighter's visual from it. When the game asks for the files of a character's carrier and the player

@@ -1,8 +1,11 @@
 // stagetest: runs the stage loader pass on a folder laid out like the game's
 // (reframework\stage_mods, reframework\data\SF6_StageSlots_Data\loader\stage_paths.txt, reframework\title_mods,
-// reframework\ui_mods), without the game. Usage: stagetest <fake game dir>   (prints the variants and the UI packs' tree)
+// reframework\ui_mods), without the game. Usage: stagetest <fake game dir>   (prints the variants, the title screen's
+//                               backgrounds (whose copy serves each movie) and the UI packs' tree)
 //        stagetest --selftest   unit tests of the tile / variation guess, stage_slots.ini, the menu picture conversion,
-//                               the title packs' choice (title_slots.hpp) and the UI packs' tree (ui_slots.hpp)
+//                               the title packs' choice (title_slots.hpp), the UI packs' tree (ui_slots.hpp) and the
+//                               loaders' cache folders (common/cache_dirs.hpp, on a scratch folder under %TEMP%)
+//        stagetest --check-title-banks <game dir> <bank file>...   (read-only) the game's title event banks against these banks
 //        stagetest --make-base <out.pak> <natives path>...   a stand-in for the game's re_chunk_000.pak (each path holds
 //                               a few bytes of its own), for the copies of the game's own files
 #include <windows.h>
@@ -11,6 +14,7 @@
 #include <string>
 #include <vector>
 #include "pak.hpp"
+#include "cache_dirs.hpp"
 #include "../loader/preview_tex.hpp"
 #include "../loader/stage_classify.hpp"
 #include "../loader/stage_loader.hpp"
@@ -158,6 +162,26 @@ void test_titles() {
           !is_title_file("natives/stm/product/gui/gm/ui10000/part/tex_title_logo.tex.241101895") &&
           !is_title_file("natives/stm/product/sound/wwise/re_logo.sbnk.1.x64"),
           "boot screens, logo textures (even tex_title_*), re_logo.sbnk: startup files");
+    const std::string music = "natives/stm/product/sound/wwise/ui_title_m.sbnk.1.x64",
+                      narrator = "natives/stm/product/sound/wwise/narration_title_m.sbnk.1.x64";
+    check(is_title_file(music) && is_title_file(narrator) && is_title_file("natives/stm/product/sound/wwise/ui_title_es.sbnk.1.x64") &&
+          is_title_file("NATIVES/STM/PRODUCT/SOUND/WWISE/Narration_Title_ES.SBNK.1.X64"),
+          "the title's sound banks (music, narrator, their event banks; any case): title files");
+    check(is_title_sound(music) && !is_title_movie(music) && is_title_movie(std::string(part) + "title_end.mov.1") &&
+          !is_title_sound(std::string(part) + "title_end.mov.1"), "a bank is a title sound, not a title movie, and the other way round");
+    check(!is_title_file("natives/stm/product/sound/wwise/ui_startmenu_cmn_m.sbnk.1.x64") &&
+          !is_title_file("natives/stm/streaming/product/sound/wwise/bgm_ac01001.spck.1.x64") &&
+          !is_title_file("natives/stm/product/sound/wwise/title/ui_x.sbnk.1.x64") &&
+          !is_title_file("natives/stm/product/sound/resource/snd_container/cnt_ui/snd_cnt_ui_title.user.2"),
+          "other banks, a package, a bank in a sub folder, the title's sound container: not title files");
+    check(private_title_path("t0123456789ab", music) == "natives/stm/_titleslots/t0123456789ab/product/sound/wwise/ui_title_m.sbnk.1.x64" &&
+          resource_file_of(music).empty(), "a bank's copy: under natives/stm/_titleslots/<key>/, no resource file (not streamed)");
+    {
+        size_t banks = 0, movies = 0;
+        for (auto& p : known_paths()) { banks += is_title_sound(p); movies += is_title_movie(p); }
+        check(banks == 4 && movies == 3 && !is_title_file("natives/stm/product/sound/wwise/re_logo.sbnk.1.x64"),
+              "known paths: the 3 movies and the 4 title banks are title files (a .pak pack's banks are named)");
+    }
 
     Settings st = parse_settings("\xEF\xBB\xBF{\n    \"display_nsfw\": false,\n    \"online_outfit\": \"Outfit 1\",\n"
                                  "    \"nested\": { \"title_pack\": \"no\", \"a\": [1, {\"b\": \"}\"}] },\n"
@@ -614,6 +638,417 @@ void test_pic_cache() {
           "cache file: cut short, longer, wrong magic, empty or without a .tex: refused");
 }
 
+// A pack lacking a title file another background has gets the game's own copy of it on the switch (title_slots::fill_from_game)
+void test_title_fill() {
+    printf("Title switch: a pack that lacks a movie\n");
+    using E = std::vector<std::pair<uint64_t, uint64_t>>;
+    const E game = { { 1, 901 }, { 2, 902 }, { 3, 903 } };   // start, loop, end -> the game's own copies
+    E start_only = { { 1, 101 } };
+    check(title_slots::fill_from_game(start_only, game) == 2 && start_only == E{ { 1, 101 }, { 2, 902 }, { 3, 903 } },
+          "title_start alone: its own start, the game's loop and end");
+    E whole = { { 1, 201 }, { 2, 202 }, { 3, 203 } };
+    check(title_slots::fill_from_game(whole, game) == 0 && whole == E{ { 1, 201 }, { 2, 202 }, { 3, 203 } }, "all three movies: nothing added");
+    E loop_only = { { 2, 302 } };
+    check(title_slots::fill_from_game(loop_only, game) == 2 && loop_only == E{ { 2, 302 }, { 1, 901 }, { 3, 903 } },
+          "title_loop alone: its loop, the game's start and end");
+    E none_held = { { 1, 101 } };
+    check(title_slots::fill_from_game(none_held, {}) == 0 && none_held.size() == 1, "no game copy in the pak: nothing added");
+    // with the title's sound banks (4 music, 5 narrator): the game's own of each, once a pack has them
+    const E game_snd = { { 1, 901 }, { 2, 902 }, { 3, 903 }, { 4, 904 }, { 5, 905 } };
+    E alpha3 = { { 1, 101 }, { 4, 104 }, { 5, 105 } };     // "Alpha 3 Alternative Intro": title_start, music, narrator
+    check(title_slots::fill_from_game(alpha3, game_snd) == 2 && alpha3 == E{ { 1, 101 }, { 4, 104 }, { 5, 105 }, { 2, 902 }, { 3, 903 } },
+          "start + banks: its own start and sounds, the game's loop and end");
+    E silent = { { 1, 201 }, { 2, 202 }, { 3, 203 } };    // three movies, no bank
+    check(title_slots::fill_from_game(silent, game_snd) == 2 && silent == E{ { 1, 201 }, { 2, 202 }, { 3, 203 }, { 4, 904 }, { 5, 905 } },
+          "movies without banks: the game's music and narrator (not the launch pack's)");
+}
+
+// ---- Title sound banks (title_slots::check_title_bank): synthetic banks laid out as SF6's (version 135) ----
+void put32(std::vector<uint8_t>& b, uint32_t v) { for (int k = 0; k < 4; ++k) b.push_back(uint8_t(v >> (8 * k))); }
+void put_chunk(std::vector<uint8_t>& b, const char* tag, const std::vector<uint8_t>& data) {
+    b.insert(b.end(), tag, tag + 4);
+    put32(b, uint32_t(data.size()));
+    b.insert(b.end(), data.begin(), data.end());
+}
+std::vector<uint8_t> bkhd(uint32_t version, uint32_t id) {
+    std::vector<uint8_t> h;
+    put32(h, version);
+    put32(h, id);
+    put32(h, 0);
+    put32(h, 0);
+    put32(h, 0);
+    return h;
+}
+// A WEM of `size` bytes whose fmt chunk says `tag`
+// tag 0xFFFE: a plain Microsoft WAV's WAVEFORMATEXTENSIBLE (40-byte fmt, 16-bit, 48 kHz, `field` at fmt +0x14, the PCM GUID) and a
+// 4-byte JUNK chunk, as "Alpha 3" ships; tag 1: a 16-byte WAVEFORMATEX; other tags: an 18-byte fmt holding the tag alone
+std::vector<uint8_t> wem(uint16_t tag, size_t size, uint16_t channels = 1, uint32_t field = 0x4) {
+    std::vector<uint8_t> w = { 'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ' };
+    auto p16 = [&](uint32_t v) { w.push_back(uint8_t(v)); w.push_back(uint8_t(v >> 8)); };
+    if (tag == 0xFFFE || tag == 1) {
+        put32(w, tag == 1 ? 16 : 40);
+        p16(tag);
+        p16(channels);
+        put32(w, 48000);
+        put32(w, 48000u * 2 * channels);
+        p16(2 * channels);
+        p16(16);
+        if (tag == 0xFFFE) {
+            p16(22);
+            p16(16);
+            put32(w, field);
+            const uint8_t guid[16] = { 1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71 };
+            w.insert(w.end(), guid, guid + 16);
+            w.insert(w.end(), { 'J', 'U', 'N', 'K', 4, 0, 0, 0, 0, 0, 0, 0 });
+        }
+    } else {
+        put32(w, 18);
+        p16(tag);
+    }
+    w.resize(std::max<size_t>(size, w.size() + 16), 0x5A);
+    return w;
+}
+std::vector<uint8_t> media_bank(uint32_t id, const std::vector<std::pair<uint32_t, std::vector<uint8_t>>>& media) {
+    std::vector<uint8_t> b, idx, data;
+    put_chunk(b, "BKHD", bkhd(135, id));
+    for (auto& [mid, w] : media) {
+        while (data.size() % 16) data.push_back(0);
+        put32(idx, mid);
+        put32(idx, uint32_t(data.size()));
+        put32(idx, uint32_t(w.size()));
+        data.insert(data.end(), w.begin(), w.end());
+    }
+    put_chunk(b, "DIDX", idx);
+    put_chunk(b, "DATA", data);
+    return b;
+}
+struct SynthSound { uint32_t object, plugin; uint8_t stream; uint32_t media, size; };
+std::vector<uint8_t> event_bank(uint32_t version, const std::vector<SynthSound>& sounds) {
+    std::vector<uint8_t> b, h;
+    put_chunk(b, "BKHD", bkhd(version, 77));
+    put32(h, uint32_t(sounds.size() + 1));
+    h.push_back(4);                       // an event first: skipped by its size
+    put32(h, 9);
+    put32(h, 1234);
+    put32(h, 1);
+    h.push_back(0);
+    for (auto& s : sounds) {
+        h.push_back(2);
+        put32(h, 48);
+        put32(h, s.object);
+        put32(h, s.plugin);
+        h.push_back(s.stream);
+        put32(h, s.media);
+        put32(h, s.size);
+        h.push_back(0x11);                // uSourceBits
+        for (int k = 0; k < 48 - 18; ++k) h.push_back(uint8_t(0xC0 + k));   // the node's other parameters
+    }
+    put_chunk(b, "HIRC", h);
+    return b;
+}
+
+void test_title_sounds() {
+    printf("Title sound banks against the game's sounds\n");
+    using namespace title_slots;
+    namespace ww = title_slots::wwise;
+    check(ww::codec_of_format(0xFFFF) == ww::kVorbis && ww::codec_of_format(0xFFFE) == ww::kPcm && ww::codec_of_format(1) == ww::kPcm &&
+          ww::codec_of_format(2) == ww::kAdpcm && ww::codec_of_format(0x3040) == 0, "codec from a WEM's fmt tag: Vorbis, PCM, ADPCM; others unknown");
+    const std::vector<uint8_t> vorbis = wem(0xFFFF, 200), pcm = wem(0xFFFE, 900), music = wem(0xFFFF, 300);
+    check(ww::wem_format(pcm.data(), pcm.size()) == 0xFFFE && ww::wem_format(vorbis.data(), 8) == 0, "fmt tag read; a cut WEM: none");
+    const std::vector<uint8_t> game_m = media_bank(11, { { 100, vorbis }, { 200, music } });
+    std::vector<ww::Media> m;
+    check(ww::media_of(game_m, m) && m.size() == 2 && m[0].id == 100 && m[0].size == 200 && m[0].codec == ww::kVorbis && m[1].id == 200,
+          "media bank: DIDX against DATA, each media's codec");
+    const std::vector<uint8_t> game_es = event_bank(135, { { 5, ww::kVorbis, 0, 100, 200 }, { 6, ww::kVorbis, 0, 200, 300 }, { 7, ww::kVorbis, 0, 999, 50 } });
+    std::vector<ww::Sound> s;
+    check(ww::sounds_of(game_es, s) && s.size() == 3 && s[0].object == 5 && s[0].media == 100 && s[0].size == 200 && s[0].plugin == ww::kVorbis,
+          "event bank: the CAkSound objects past another object");
+    const std::vector<EventBank> events = { { "natives/stm/product/sound/wwise/ui_title_es.sbnk.1.x64", game_es, false } };
+
+    BankVerdict v = check_title_bank(game_m, events);
+    check(v.media_bank && !v.refuse && v.patches.empty(), "the game's own media: nothing to adapt");
+    v = check_title_bank(game_es, events);
+    check(!v.media_bank && !v.refuse, "an event bank shipped by a pack: no media, not checked");
+
+    // "Alpha 3": media 100 in PCM of another size, media 200 the game's, media 300 no sound plays
+    const std::vector<uint8_t> alpha = media_bank(11, { { 100, pcm }, { 200, music }, { 300, pcm } });
+    // as shipped: another codec refused (kAdaptTitleCodec off: silent in game twice, 20/11), the game's codec of another size adapted
+    check(!kAdaptTitleCodec && kAdaptTitleSizes, "as shipped: another codec refused, a size of the game's codec adapted");
+    v = check_title_bank(alpha, events);
+    check(v.refuse && v.patches.empty() && v.why == "PCM where the game plays Vorbis" && v.from == ww::kVorbis && v.to == ww::kPcm,
+          "PCM where the sound says Vorbis: the bank refused, the game's own plays");
+    const std::vector<uint8_t> vorbis450 = media_bank(11, { { 100, wem(0xFFFF, 450) } });
+    v = check_title_bank(vorbis450, events);
+    check(!v.refuse && v.adapted == 1 && v.patches.size() == 1 && v.patches[0].plugin == ww::kVorbis && v.patches[0].size == 450 &&
+          v.fields.empty() && v.from == ww::kVorbis && v.to == ww::kVorbis, "Vorbis of another size: that sound's size adapted, its codec kept");
+    {
+        std::vector<uint8_t> sized = game_es;
+        apply_sound_patches(sized, 0, v.patches);
+        size_t d = 0;
+        for (size_t i = 0; i < sized.size(); ++i) d += sized[i] != game_es[i];
+        check(ww::sounds_of(sized, s) && s[0].plugin == ww::kVorbis && s[0].size == 450 && s[1].size == 300 && d >= 1 && d <= 4,
+              "the size patch: only uInMemoryMediaSize's bytes of that sound changed");
+    }
+    v = check_title_bank(vorbis450, events, {}, false, false);
+    check(v.refuse && v.why.find("another size") != std::string::npos, "Vorbis of another size, sizes not adapted: refused");
+    v = check_title_bank(media_bank(11, { { 100, vorbis }, { 300, pcm } }), events, {}, false);
+    check(!v.refuse && v.patches.empty(), "the game's codec and size, plus a media no sound plays: plays as it is");
+    // the adaptation itself, kept for a later try (adapt = true)
+    v = check_title_bank(alpha, events, {}, true);
+    check(!v.refuse && v.adapted == 1 && v.patches.size() == 1 && v.patches[0].plugin == ww::kPcm && v.patches[0].size == 900 &&
+          v.from == ww::kVorbis && v.to == ww::kPcm, "PCM where the sound says Vorbis: that sound adapted, codec and size; the others left");
+    std::vector<uint8_t> patched = game_es;
+    apply_sound_patches(patched, 0, v.patches);
+    check(ww::sounds_of(patched, s) && s[0].plugin == ww::kPcm && s[0].size == 900 && s[0].media == 100 && s[0].stream == 0 &&
+          s[1].plugin == ww::kVorbis && s[1].size == 300 && s[2].size == 50, "the patched copy: that sound's codec and size, the media id kept");
+    size_t changed = 0;
+    for (size_t i = 0; i < patched.size(); ++i) changed += patched[i] != game_es[i];
+    check(patched.size() == game_es.size() && changed <= 8 && changed >= 2, "the patched copy: same size, at most the 8 bytes of the two fields");
+    std::vector<uint8_t> other = game_es;
+    apply_sound_patches(other, 1, v.patches);
+    check(other == game_es, "patches of another event bank: nothing changed");
+
+    // the same media played by two banks' sounds: both adapted
+    const std::vector<uint8_t> narr_es = event_bank(135, { { 8, ww::kVorbis, 0, 100, 200 } });
+    const std::vector<EventBank> two = { events[0], { "natives/stm/product/sound/wwise/narration_title_es.sbnk.1.x64", narr_es, false } };
+    v = check_title_bank(alpha, two, {}, true);
+    check(!v.refuse && v.adapted == 1 && v.patches.size() == 2 && v.patches[0].bank == 0 && v.patches[1].bank == 1,
+          "a media two banks' sounds play: both sounds adapted, counted once");
+
+    // what cannot be adapted: the bank refused
+    v = check_title_bank(media_bank(11, { { 100, wem(0x3040, 900) } }), events, {}, true);
+    check(v.refuse && v.patches.empty() && v.why.find("not known") != std::string::npos, "a format not known here: refused");
+    v = check_title_bank(media_bank(11, { { 100, wem(0x3040, 200) } }), events, {}, true);
+    check(v.refuse, "an unknown format even with the declared size: refused (its codec cannot be named)");
+    const uint32_t opus = 0x00140001;
+    const std::vector<EventBank> opus_es = { { events[0].path, event_bank(135, { { 5, opus, 0, 100, 200 } }), false } };
+    std::vector<ww::Media> game_opus;
+    ww::media_of(media_bank(11, { { 100, wem(0x3040, 200) } }), game_opus);
+    v = check_title_bank(media_bank(11, { { 100, wem(0x3040, 700) } }), opus_es, game_opus, true);
+    check(!v.refuse && v.patches.size() == 1 && v.patches[0].plugin == opus && v.patches[0].size == 700,
+          "a format not known here but the game's own for that media: its codec kept, the size adapted");
+    v = check_title_bank(media_bank(11, { { 100, wem(0x3040, 700) } }), opus_es, game_opus, false, false);
+    check(v.refuse && v.why.find("another size") != std::string::npos, "the same without the adaptation: refused (another size)");
+    v = check_title_bank(media_bank(11, { { 100, wem(0x3040, 200) } }), opus_es, game_opus);
+    check(!v.refuse && v.patches.empty(), "the game's own unknown format and size: plays as it is");
+
+    // the channel field (fmt +0x14): a Windows speaker mask rewritten to Wwise's packed config, those 4 bytes only
+    check(wwise_channel_config(0x4) == 0x4101 && wwise_channel_config(0x63F) == 0x63F108 && wwise_channel_config(0x3) == 0x3102,
+          "packed config: (mask << 12) | popcount(mask) | 0x100 (mono 0x4101, 7.1 0x63F108)");
+    check(packed_channel_config(0x4101, 1) && packed_channel_config(0x63F108, 8) && !packed_channel_config(0x4, 1) &&
+          !packed_channel_config(0x63F, 8), "a packed config read as one; a Windows mask not");
+    const std::vector<uint8_t> a3 = media_bank(11, { { 100, wem(0xFFFE, 900, 8, 0x63F) }, { 200, music }, { 300, wem(0xFFFE, 400, 1, 0x4) },
+                                                     { 400, wem(0xFFFE, 300, 1, 0x4) } });
+    const std::vector<EventBank> a3_es = { { events[0].path, event_bank(135, { { 5, ww::kVorbis, 0, 100, 200 }, { 6, ww::kVorbis, 0, 200, 300 },
+                                                                              { 9, ww::kVorbis, 0, 300, 50 } }), false } };
+    v = check_title_bank(a3, a3_es, {}, true);
+    std::vector<ww::Media> a3m;
+    ww::media_of(a3, a3m);
+    check(!v.refuse && v.patches.size() == 2 && v.fields.size() == 2 && v.fields[0].first == a3m[0].fmt + 20 && v.fields[0].second == 0x63F108 &&
+          v.fields[1].first == a3m[2].fmt + 20 && v.fields[1].second == 0x4101 && v.media_info.size() == 2,
+          "plain-WAV PCM: the played media's channel fields rewritten (7.1, mono), not the one no sound plays");
+    std::vector<uint8_t> a3c = a3;
+    apply_media_fields(a3c, v.fields);
+    size_t diff = 0;
+    for (size_t i = 0; i < a3c.size(); ++i) diff += a3c[i] != a3[i];
+    std::vector<ww::Media> a3cm;
+    check(a3c.size() == a3.size() && diff <= 8 && ww::media_of(a3c, a3cm) && a3cm.size() == 4 && a3cm[0].size == a3m[0].size &&
+          a3cm[2].channels == 1 && ww::rd32(a3c, a3m[2].fmt + 20) == 0x4101 && ww::rd32(a3c, a3m[0].fmt + 20) == 0x63F108 &&
+          ww::rd32(a3c, a3m[3].fmt + 20) == 0x4, "the copy: only those fields changed, DIDX and sizes kept");
+    check(v.media_info[0].find("8 ch, 48000 Hz, 768000 bytes/s, block 16, 16 bits, channel field 0x63f -> 0x63f108") != std::string::npos,
+          "the log line per media: channels, rate, bytes/s, block, bits, the field");
+    v = check_title_bank(media_bank(11, { { 100, wem(0xFFFE, 900, 1, 0x4101) } }), events, {}, true);
+    check(!v.refuse && v.fields.empty() && v.patches.size() == 1, "a field already packed: left, the sounds still adapted");
+    v = check_title_bank(media_bank(11, { { 100, wem(1, 900) } }), events, {}, true);
+    check(v.refuse && v.why.find("channel layout") != std::string::npos, "PCM without an extensible fmt: refused");
+    v = check_title_bank(media_bank(11, { { 100, wem(0xFFFE, 900, 2, 0x4) } }), events, {}, true);
+    check(v.refuse && v.why.find("channel layout") != std::string::npos, "a mask that does not count the channels: refused");
+    v = check_title_bank(media_bank(11, { { 100, wem(0xFFFE, 900, 1, 0x4) } }), events, {}, false);
+    check(v.refuse && v.fields.empty(), "without the adaptation: refused, no field rewritten");
+    v = check_title_bank(alpha, { { events[0].path, event_bank(135, { { 5, ww::kVorbis, 2, 100, 200 } }), false } }, {}, true);
+    check(v.refuse && v.why.find("streamed") != std::string::npos, "a streamed sound: refused");
+    v = check_title_bank(alpha, { { events[0].path, game_es, true } }, {}, true);
+    check(v.refuse && v.why.find("pack's own") != std::string::npos, "against the pack's own event bank: refused (never patched)");
+    v = check_title_bank(alpha, { { events[0].path, event_bank(135, { { 5, ww::kPcm, 0, 100, 900 } }), true } });
+    check(!v.refuse && v.patches.empty(), "the pack's own event bank that says PCM and the size: plays as it is");
+
+    // banks that cannot be read: no sounds, nothing decided from them
+    check(!ww::sounds_of(event_bank(88, { { 5, ww::kVorbis, 0, 100, 200 } }), s), "an event bank of an unknown layout (version 88): not read");
+    std::vector<uint8_t> cut = game_es;
+    cut.resize(cut.size() - 10);
+    check(!ww::sounds_of(cut, s) && !ww::media_of(std::vector<uint8_t>(game_m.begin(), game_m.end() - 5), m), "a bank cut short: not read");
+    v = check_title_bank(alpha, { { events[0].path, cut, false } });
+    check(!v.refuse && v.patches.empty(), "no event bank readable: the bank kept as it is");
+}
+
+// Offline, on the real game: its title event banks from re_chunk_000.pak, each bank given (and the game's own media banks) checked
+// and, when adapted, patched and read back. Read-only.
+int check_title_banks(int argc, wchar_t** argv) {
+    using namespace title_slots;
+    PakReader base;
+    const std::wstring game = argv[2];
+    if (!base.open(narrow(game + L"\\re_chunk_000.pak").c_str())) { printf("re_chunk_000.pak not readable\n"); return 1; }
+    std::vector<EventBank> events;
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
+    for (auto& path : known_paths()) {
+        if (!is_title_sound(path)) continue;
+        const PakEntry* e = base.find(pak_path_hash(std::string_view(path)));
+        if (!e) continue;
+        std::vector<uint8_t> d = base.read(*e);
+        std::vector<wwise::Sound> s;
+        if (wwise::sounds_of(d, s)) {
+            printf("game event bank %s: %zu sound(s)\n", path.c_str(), s.size());
+            events.push_back({ path, std::move(d), false });
+        } else {
+            files.push_back({ "game:" + path, std::move(d) });
+        }
+    }
+    for (int i = 3; i < argc; ++i) {
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, argv[i], L"rb") || !f) { printf("cannot read %s\n", narrow(argv[i]).c_str()); return 1; }
+        std::vector<uint8_t> d;
+        uint8_t buf[65536];
+        for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0;) d.insert(d.end(), buf, buf + n);
+        fclose(f);
+        files.push_back({ narrow(argv[i]), std::move(d) });
+    }
+    std::vector<wwise::Media> game_media;
+    for (auto& [name, d] : files) {
+        std::vector<wwise::Media> m;
+        if (name.compare(0, 5, "game:") == 0 && wwise::media_of(d, m)) game_media.insert(game_media.end(), m.begin(), m.end());
+    }
+    const bool adapt = kAdaptTitleCodec || _wgetenv(L"STAGETEST_ADAPT") != nullptr;   // STAGETEST_ADAPT: show the codec adaptation anyway
+    int bad = 0;
+    for (auto& [name, d] : files) {
+        const BankVerdict v = check_title_bank(d, events, game_media, adapt);
+        printf("%s: %s%s", name.c_str(), !v.media_bank ? "no media" : v.refuse ? "REFUSED: " : v.patches.empty() ? "plays as it is" : "adapted",
+               v.refuse ? v.why.c_str() : "");
+        if (!v.patches.empty()) printf(" (%zu media, %s -> %s, %zu sound(s))", v.adapted, wwise::codec_name(v.from).c_str(), wwise::codec_name(v.to).c_str(),
+                                       v.patches.size());
+        printf("\n");
+        for (auto& line : v.media_info) printf("  %s\n", line.c_str());
+        if (!v.fields.empty()) {
+            std::vector<uint8_t> copy = d;
+            apply_media_fields(copy, v.fields);
+            size_t changed = 0;
+            for (size_t k = 0; k < copy.size(); ++k) changed += copy[k] != d[k];
+            std::vector<wwise::Media> before, after;
+            const bool ok = wwise::media_of(d, before) && wwise::media_of(copy, after) && after.size() == before.size() && copy.size() == d.size();
+            printf("  channel field rewritten for %zu media: %s, %zu byte(s) changed\n", v.fields.size(), ok ? "reads back" : "BROKEN", changed);
+            if (!ok || changed > 4 * v.fields.size()) ++bad;
+        }
+        for (size_t e = 0; e < events.size(); ++e) {
+            if (std::none_of(v.patches.begin(), v.patches.end(), [&](const SoundPatch& p) { return p.bank == e; })) continue;
+            std::vector<uint8_t> copy = events[e].data;
+            apply_sound_patches(copy, e, v.patches);
+            std::vector<wwise::Sound> before, after;
+            wwise::sounds_of(events[e].data, before);
+            const bool ok = wwise::sounds_of(copy, after) && after.size() == before.size() && copy.size() == events[e].data.size();
+            size_t changed = 0;
+            for (size_t k = 0; k < copy.size(); ++k) changed += copy[k] != events[e].data[k];
+            printf("  %s patched: %s, %zu byte(s) changed\n", events[e].path.c_str(), ok ? "reads back" : "BROKEN", changed);
+            if (!ok || changed > 8 * v.patches.size()) ++bad;
+            for (size_t k = 0; k < after.size(); ++k)
+                if (after[k].plugin != before[k].plugin || after[k].size != before[k].size)
+                    printf("    sound %u (media %u): %s %u -> %s %u\n", after[k].object, after[k].media, wwise::codec_name(before[k].plugin).c_str(),
+                           before[k].size, wwise::codec_name(after[k].plugin).c_str(), after[k].size);
+        }
+    }
+    return bad ? 1 : 0;
+}
+
+// The loaders' cache folders (common/cache_dirs.hpp), on a scratch folder under %TEMP%: what goes, what stays, links never followed
+void test_cache_dirs() {
+    printf("Cache folders\n");
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    const std::wstring base = std::wstring(tmp) + L"sf6_cache_dirs_test_" + std::to_wstring(GetCurrentProcessId());
+    cache_dirs::remove_tree(base);
+    auto put = [](const std::wstring& path, const char* text) {
+        for (size_t i = 3; i < path.size(); ++i)
+            if (path[i] == L'\\') CreateDirectoryW(path.substr(0, i).c_str(), nullptr);
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, path.c_str(), L"wb") == 0 && f) { fputs(text, f); fclose(f); }
+    };
+    auto there = [](const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; };
+    auto junction = [](const std::wstring& link, const std::wstring& target) {
+        const std::wstring cmd = L"cmd /c mklink /J \"" + link + L"\" \"" + target + L"\" >nul 2>&1";
+        return _wsystem(cmd.c_str()) == 0 && (GetFileAttributesW(link.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+    };
+    const std::wstring outside = base + L"\\outside", cache = base + L"\\mods\\.cache";
+    put(outside + L"\\precious.txt", "a player's file");
+    const std::wstring used = cache + L"\\0123456789abcdef", stale = cache + L"\\fedcba9876543210";
+    put(used + L"\\natives\\a.bin", "in use");
+    put(stale + L"\\natives\\deep\\b.bin", "stale");
+    put(stale + L"\\.complete", "ok\n");
+    SetFileAttributesW((stale + L"\\natives\\deep\\b.bin").c_str(), FILE_ATTRIBUTE_READONLY);
+    SetFileAttributesW((stale + L"\\natives\\deep").c_str(), FILE_ATTRIBUTE_READONLY);
+    put(cache + L"\\_pictures\\0000000000000000.pic", "pic");
+    put(cache + L"\\Not_a_key\\c.bin", "someone's");
+    put(cache + L"\\abcdefabcdefabcd", "a file with a key's name");
+    put(cache + L"\\ABCDEF0123456789\\d.bin", "upper case: not a key the loader writes");
+    const bool linked = junction(stale + L"\\natives\\link", outside) && junction(cache + L"\\1111111111111111", outside);
+    check(cache_dirs::is_hex16(L"0123456789abcdef") && !cache_dirs::is_hex16(L"0123456789ABCDEF") && !cache_dirs::is_hex16(L"_pictures") &&
+          !cache_dirs::is_hex16(L"0123456789abcde") && !cache_dirs::is_hex16(L"0123456789abcdef0"), "is_hex16: 16 lower-case hex digits only");
+    const cache_dirs::Pruned r = cache_dirs::prune(cache, cache_dirs::is_hex16, [](const std::wstring& n) { return n == L"0123456789abcdef"; });
+    check(r.there && !r.link && !r.list_error && r.kept == 1 && r.removed.size() == 1 && r.removed[0] == L"fedcba9876543210" && r.failed.empty(),
+          "prune: the entry in use kept, the stale one removed (read-only file and folder inside)");
+    check(r.bytes == 8, "prune: the bytes of the removed files counted (5 + 3)");
+    check(!there(stale) && there(used + L"\\natives\\a.bin"), "prune: the stale folder gone, the one in use whole");
+    check(there(cache + L"\\_pictures\\0000000000000000.pic") && there(cache + L"\\Not_a_key\\c.bin") && there(cache + L"\\abcdefabcdefabcd") &&
+          there(cache + L"\\ABCDEF0123456789\\d.bin"), "prune: _pictures, other names and a file with a key's name left alone");
+    if (linked) {
+        check(there(outside + L"\\precious.txt"), "a junction inside a stale entry: removed itself, its target untouched");
+        check(there(cache + L"\\1111111111111111") && there(cache + L"\\1111111111111111\\precious.txt"),
+              "a junction with a key's name in the cache: left alone (never followed)");
+        const std::wstring link_root = base + L"\\linked\\.cache";
+        CreateDirectoryW((base + L"\\linked").c_str(), nullptr);
+        put(outside + L"\\2222222222222222\\e.bin", "behind a linked cache folder");
+        const bool root_linked = junction(link_root, outside);
+        const cache_dirs::Pruned l = cache_dirs::prune(link_root, cache_dirs::is_hex16, [](const std::wstring&) { return false; });
+        check(root_linked && l.there && l.link && l.removed.empty() && there(outside + L"\\2222222222222222\\e.bin"),
+              "a cache folder that is a junction: nothing removed behind it");
+        RemoveDirectoryW(link_root.c_str());
+        RemoveDirectoryW((cache + L"\\1111111111111111").c_str());
+    } else {
+        check(false, "junctions (mklink /J) could not be made: the link cases were not run");
+    }
+    const cache_dirs::Pruned none = cache_dirs::prune(base + L"\\no_such\\.cache", cache_dirs::is_hex16, [](const std::wstring&) { return false; });
+    check(!none.there && none.removed.empty(), "prune: a cache folder that is not there: nothing");
+    check(cache_dirs::remove_tree(base + L"\\no_such") && !cache_dirs::remove_tree(outside + L"\\precious.txt") && there(outside + L"\\precious.txt"),
+          "remove_tree: a folder not there is gone already; a file is never removed");
+    std::wstring deep = base + L"\\long";                       // past MAX_PATH
+    while (deep.size() < 300) deep += L"\\a_rather_long_folder_name";
+    put(L"\\\\?\\" + deep + L"\\f.bin", "deep");
+    check(cache_dirs::remove_tree(base + L"\\long") && !there(L"\\\\?\\" + base + L"\\long"), "remove_tree: a tree past MAX_PATH");
+    check(cache_dirs::remove_tree(base) && !there(base), "remove_tree: the scratch folder removed");
+}
+
+// The title screen's backgrounds the pass found: each one's files (title_start / loop / end) and whose copy serves them
+void print_titles() {
+    const TitleTables& t = stage_loader_titles();
+    if (t.backgrounds.empty()) return;
+    std::vector<std::string> keys;
+    for (auto& [key, r] : t.backgrounds) keys.push_back(key);
+    for (auto& [key, r] : t.backgrounds) {
+        const bool playlist = std::find(t.playlist_pool.begin(), t.playlist_pool.end(), key) != t.playlist_pool.end();
+        printf("title background %s%s:", key.c_str(), playlist ? " (playlist)" : "");
+        for (auto& [real, copy] : r) {
+            std::string file = "?", from = "?";
+            for (auto& p : title_slots::known_paths()) {
+                if (!title_slots::is_title_file(p) || pak_path_hash(std::string_view(p)) != real) continue;
+                file = p.substr(p.rfind('/') + 1);     // title_start, ui_title_m...
+                file = file.substr(0, file.find('.'));
+                for (auto& k : keys)
+                    if (pak_path_hash(std::string_view(title_slots::private_title_path(k, p))) == copy) from = k;
+            }
+            printf(" %s<-%s", file.c_str(), from.c_str());
+        }
+        printf("\n");
+    }
+    printf("title launch: %s\n", t.launch.c_str());
+}
+
 // The UI packs found by the pass: the tree, then what unticking everything in the game would serve
 void print_ui() {
     const ui_slots::Tables& ui = stage_loader_ui();
@@ -642,11 +1077,22 @@ void print_ui() {
     }
 }
 
-// A stand-in for the game's re_chunk_000.pak: each natives path given holds a few bytes of its own
+// A stand-in for the game's re_chunk_000.pak: each natives path given holds a few bytes of its own, or, given as
+// <natives path>=<file>, that file's bytes (real banks, for the title sounds' check)
 int make_base(int argc, wchar_t** argv) {
     PakWriter w;
     for (int i = 3; i < argc; ++i) {
-        const std::string p = narrow(argv[i]), data = "the game's own " + p;
+        std::string p = narrow(argv[i]), data = "the game's own " + p;
+        const size_t eq = p.find('=');
+        if (eq != std::string::npos) {
+            FILE* f = nullptr;
+            if (_wfopen_s(&f, widen(p.substr(eq + 1)).c_str(), L"rb") || !f) { printf("cannot read %s\n", p.substr(eq + 1).c_str()); return 1; }
+            data.clear();
+            char buf[65536];
+            for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0;) data.append(buf, n);
+            fclose(f);
+            p = p.substr(0, eq);
+        }
         w.add_uncompressed(pak_path_hash(std::string_view(p)), std::vector<uint8_t>(data.begin(), data.end()));
     }
     const bool ok = w.write(narrow(argv[2]).c_str());
@@ -664,10 +1110,14 @@ int wmain(int argc, wchar_t** argv) {
         test_titles();
         test_ui();
         test_pic_cache();
+        test_title_fill();
+        test_title_sounds();
+        test_cache_dirs();
         printf(g_fails ? "%d FAILED\n" : "all ok\n", g_fails);
         return g_fails ? 1 : 0;
     }
     if (argc >= 3 && wcscmp(argv[1], L"--make-base") == 0) return make_base(argc, argv);
+    if (argc >= 3 && wcscmp(argv[1], L"--check-title-banks") == 0) return check_title_banks(argc, argv);
     if (argc < 2) { fprintf(stderr, "usage: stagetest <fake game dir> | stagetest --selftest | stagetest --make-base <out.pak> <path>...\n"); return 2; }
     slog_open(argv[1]);
     std::vector<StageVariant> vars;
@@ -676,6 +1126,7 @@ int wmain(int argc, wchar_t** argv) {
         printf("%s  stage %u (%s)  \"%s\"  %zu files%s%s  %s: %s\n", v.key.c_str(), v.stage_id, v.ess.c_str(), v.name.c_str(),
                v.redirects.size(), v.has_preview ? "  preview" : "", v.banner.empty() ? "" : (" (" + v.banner + ")").c_str(),
                v.tile ? "TILE" : "variation", v.kind_reason.c_str());
+    print_titles();
     print_ui();
     return 0;
 }
