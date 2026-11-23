@@ -56,7 +56,7 @@ Manager).
 
 ## Syncing
 
-The workflow [Sync with the SF6 Mod Suite](.github/workflows/sync-suite.yml) runs every day and on demand
+The workflow [Sync with the SF6 Mod Suite](.github/workflows/sync-suite.yml) runs every 30 minutes and on demand
 (Actions, **Run workflow**, optionally with a release tag such as `v1.37.0`; an older tag goes back to it). When the
 suite has a new release it opens a pull request that copies the paths above from that release's commit, checks each
 path's tree hash, updates `dependencies.json` and the "Synced to" line above. Merging the pull request after testing

@@ -12,7 +12,9 @@ name: Sync with the SF6 Mod Suite
 
 on:
   schedule:
-    - cron: "17 6 * * *"
+    # Every 30 minutes (off the busy :00 and :30), so a new release is picked up soon after it is published. A run with
+    # nothing new stops after "Already synced", and one whose pull request already exists does nothing.
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
       release:

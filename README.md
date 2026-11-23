@@ -82,7 +82,7 @@ When there's an update, a small notice shows up in the app. Nothing changes unti
 The Manager installs the official Slots Loader zip from Wael3rd's releases, unchanged, and only the version this repo has approved. <!-- repo readers; not in the Assistant pack -->
 
 1. Wael3rd publishes a new SF6 Mod Suite release. <!-- repo readers; not in the Assistant pack -->
-2. A daily GitHub Action copies its loader source here and opens a pull request that updates [dependencies.json](dependencies.json): the version, file, size and SHA-256 of each zip. <!-- repo readers; not in the Assistant pack -->
+2. A GitHub Action checks for a new release every 30 minutes, copies its loader source here and opens a pull request that updates [dependencies.json](dependencies.json): the version, file, size and SHA-256 of each zip. <!-- repo readers; not in the Assistant pack -->
 3. Once it's been tested, merging that pull request approves the version. Managers read the list when they start and once a day, offer the update, download it from Wael3rd's release and check every file against the list before installing. <!-- repo readers; not in the Assistant pack -->
 
 The loader source in this repo is that synced copy; see [UPSTREAM.md](UPSTREAM.md). <!-- repo readers; not in the Assistant pack -->
