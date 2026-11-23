@@ -1,6 +1,14 @@
 // SF6 Slots — which costume slots the player sees. Pure logic, no game access (plugin/tests).
 //
-// A slot made from fighter F's Outfit N is shown only when the game counts that outfit as the
+// Normal mode (since 22/11, Wael: "tous les mods et toutes les couleurs des mods sans aucune limitation pour aucun
+// personnage hors ligne ou dans tous les modes en ligne"): every slot is shown and owned, whatever outfit it is made
+// from; nothing is asked. The online alias (carrier.hpp, v1.49) is what made the old rule useless: the save and the
+// network only ever hold Outfit 1 / DriveTech in Color 1 / 2, the slot is worn on this PC only, so the outfit a slot was
+// made from never leaves the PC. The game is never told that the base outfit itself is owned: only the slot's own
+// record is (AddDlcSaveData), so a base outfit the account does not have cannot reach the save or the network.
+//
+// The check below (13/10 - 22/11 in normal mode) now runs in Manager mode only, as the Manager's fork does:
+// a slot made from fighter F's Outfit N is shown only when the game counts that outfit as the
 // player's. The game's answer is the list of costume numbers it lists for F
 // (app.InventoryManager.CostumeInventory.GetCostumeNoList): the list of the character select
 // screen (app.UIFlowUI10505.Param.GetCostumeId) and of Battle Settings
@@ -12,7 +20,7 @@
 // Manager mode (common/manager_mode.hpp: the Slotsloader Manager installed this loader) follows the rules of
 // the Manager's own Slotsloader fork instead: slots made from Outfit 1 or DriveTech are always shown and never
 // asked about, and the check is off altogether while the Manager's opt-out marker is present
-// (manager_marker.hpp). Outside Manager mode none of this exists: set_manager_rules is never called.
+// (manager_marker.hpp). Outside Manager mode set_manager_rules is never called: the book never hides a slot.
 #pragma once
 
 #include <algorithm>
@@ -31,8 +39,8 @@ constexpr int kDriveTech = 4;   // costume id 4 (DriveTech, C5)
 
 class Book {
 public:
-    // Manager mode only (see the top): Outfit 1 and DriveTech always shown; check false: every slot shown,
-    // nothing asked (the Manager's opt-out marker)
+    // Manager mode only (see the top): the check on, Outfit 1 and DriveTech always shown; check false: every slot shown,
+    // nothing asked (the Manager's opt-out marker). Without it (normal mode): every slot shown, nothing asked.
     void set_manager_rules(bool check) { manager_ = true; check_ = check; }
     bool check() const { return check_; }
 
@@ -71,7 +79,7 @@ public:
 private:
     // Manager mode: Outfit 1 and DriveTech are never asked about
     bool exempt(int outfit) const { return manager_ && (outfit == kOutfit1 || outfit == kDriveTech); }
-    bool manager_ = false, check_ = true;
+    bool manager_ = false, check_ = false;
     static bool has(const std::vector<uint32_t>& v, uint32_t x) {
         return std::find(v.begin(), v.end(), x) != v.end();
     }

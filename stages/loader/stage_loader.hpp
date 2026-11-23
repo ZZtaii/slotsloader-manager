@@ -48,7 +48,8 @@ struct StageVariant {
 };
 
 // The title screen's backgrounds, for the switch on a return to the title (stage_redirect.hpp): per background key (a pack's,
-// "game" the game's own), the real title files' hashes -> its copies' in the stage pak (only those the pak holds).
+// "game" the game's own), the real title files' hashes -> its copies' in the stage pak (only those the pak holds); a title file a
+// pack lacks and another background has -> the game's own copy (title_slots::fill_from_game).
 struct TitleTables {
     std::vector<std::pair<std::string, std::vector<std::pair<uint64_t, uint64_t>>>> backgrounds;
     std::string launch;                 // the background this launch wrote at the real paths ("game": none written)

@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "archive.hpp"
+#include "cache_dirs.hpp"
 #include "pak.hpp"
 #include "patch.hpp"          // texture_mip_check, shared with the costume loader
 #include "preview_tex.hpp"
@@ -524,9 +525,13 @@ std::string compute_fingerprint(const std::vector<Source>& sources, const std::w
     return hex16(fnv64(acc));
 }
 
-// Archives are unpacked once into stage_mods\.cache\<key>\, reused while the archive is unchanged.
+// Archives are unpacked once into stage_mods\.cache\<key>\ (title_mods, ui_mods: the same), reused while the archive is unchanged.
+// The keys asked for in a pass, per cache folder (lower case): what prune_archive_caches keeps once the pass completed.
+std::map<std::wstring, std::set<std::wstring>> g_unpacked;
+
 bool unpack_archive(const Source& s, const std::wstring& cache_root, std::wstring& out_dir) {
     std::string key = hex16(fnv64(narrow(s.name) + "|" + std::to_string(s.size) + "|" + std::to_string(s.mtime)));
+    g_unpacked[lower_w(cache_root)].insert(widen(key));
     out_dir = cache_root + L"\\" + widen(key);
     std::wstring done = out_dir + L"\\.complete";
     if (file_exists(done)) return true;
@@ -696,10 +701,15 @@ bool retire_pak(const std::wstring& game_dir, const PatchPak& p, int max_mod, bo
 // ---------------------------------------------------------------------------------------------
 
 // Part of the title packs' fingerprint: bump it when what is written of a pack changes.
-const char* TITLE_FORMAT_VERSION = "titleslots-11";      // 2: the packs' pictures; 3: at 1920x1080, and the game's own; 4: Random's mosaic;
+const char* TITLE_FORMAT_VERSION = "titleslots-16";      // 2: the packs' pictures; 3: at 1920x1080, and the game's own; 4: Random's mosaic;
                                                         // 5: every background's title files at private paths (the live switch);
                                                         // 6: streamed copies under natives/stm/streaming/_titleslots (the core's playlist);
-                                                        // 7: their resource files beside them; 11: packs shipped as a .pak
+                                                        // 7: their resource files beside them; 11: packs shipped as a .pak;
+                                                        // 12: the title's sound banks are title files (private copies, the game's own);
+                                                        // 13: a pack's banks checked against the game's sounds (adapted event banks, refused banks);
+                                                        // 14: no adaptation (kAdaptTitleSounds): a differing bank is refused;
+                                                        // 15: adaptation on again, with the PCM media's channel field rewritten;
+                                                        // 16: only a size of the game's codec adapted (kAdaptTitleSizes)
 
 struct TitlePack { title_slots::Pack info; Option opt; };   // opt: its natives files, listed, not read
 
@@ -872,7 +882,7 @@ bool open_game_paks(const std::wstring& game_dir, PakReader& base, std::vector<s
     return true;
 }
 
-// Every pack's title files at their private paths (title_slots::private_title_path: the switch on a return to the title),
+// Every pack's title files (movies and title sound banks) at their private paths (title_slots::private_title_path: the switch on a return to the title),
 // the chosen pack's at their real paths too (this launch's title, served before any hook: the same data, stored once), and,
 // with skip_intro, the chosen startup pack's startup files at their real paths. Read now, one pack at a time; their textures
 // checked like a stage mod's. Then the game's own title files (re_chunk_000.pak and its sub paks) at the private paths of
@@ -890,13 +900,133 @@ void add_title_files(TitleScan& t, PakWriter& writer, const std::wstring& game_d
         check_textures(sel);
     };
     std::map<std::string, uint64_t> title_paths;          // every title file a pack has: the game's own copy of each
+    PakReader base;
+    std::vector<std::unique_ptr<PakReader>> subs;
+    const bool game_ok = !t.packs.empty() && open_game_paks(game_dir, base, subs);
+    // The game's title event banks (the sounds that play the title's media), read once, when a pack has a title bank
+    std::vector<title_slots::EventBank> game_events;
+    std::vector<title_slots::wwise::Media> game_media;     // the game's own title media (their formats)
+    bool events_read = false;
+    auto read_game_events = [&] {
+        if (events_read || !game_ok) return;
+        events_read = true;
+        for (auto& path : title_slots::known_paths()) {
+            if (!title_slots::is_title_sound(path)) continue;
+            const PakEntry* e = base.find(pak_path_hash(std::string_view(path)));
+            if (!e) continue;
+            title_slots::EventBank eb{ path, base.read(*e), false };
+            std::vector<title_slots::wwise::Sound> s;
+            std::vector<title_slots::wwise::Media> m;
+            if (title_slots::wwise::sounds_of(eb.data, s)) game_events.push_back(std::move(eb));
+            else if (title_slots::wwise::media_of(eb.data, m)) game_media.insert(game_media.end(), m.begin(), m.end());
+        }
+    };
+    // A listed file's bytes as the game reads them (a pack's .pak may store them compressed)
+    auto plain = [](const OptFile& f) {
+        const int comp = int(f.attrib & 0xFF);
+        return comp ? pak_decompress(f.data, comp, f.dsize) : f.data;
+    };
+    size_t adapted_packs = 0;
     for (size_t i = 0; i < t.packs.size(); ++i) {
         TitlePack& p = t.packs[i];
         Option sel;
         read_sel(p, true, sel);
         const bool chosen = (int)i == t.choice.title;
-        for (auto& f : sel.files) {
+        // Its title sound banks against the sounds that play them (title_slots::check_title_bank): a bank that cannot play is
+        // not written (the game's own plays), a codec or size that differs is adapted in copies of the game's event banks
+        std::set<size_t> refused;
+        std::vector<std::pair<std::string, std::vector<uint8_t>>> adapted;   // event bank path -> its patched copy
+        std::map<size_t, std::vector<std::pair<size_t, uint32_t>>> fields_of; // a media bank (index in sel.files) -> its channel fields rewritten
+        if (std::any_of(sel.files.begin(), sel.files.end(), [](const OptFile& f) { return title_slots::is_title_sound(f.path); })) {
+            read_game_events();
+            std::vector<title_slots::EventBank> events = game_events;          // the pack's own event banks replace the game's
+            for (auto& f : sel.files) {
+                if (!title_slots::is_title_sound(f.path)) continue;
+                title_slots::EventBank own{ f.path, plain(f), true };
+                std::vector<title_slots::wwise::Sound> s;
+                if (!title_slots::wwise::sounds_of(own.data, s)) continue;
+                events.erase(std::remove_if(events.begin(), events.end(), [&](const title_slots::EventBank& e) { return e.path == f.path; }),
+                             events.end());
+                events.push_back(std::move(own));
+            }
+            std::vector<title_slots::SoundPatch> patches;
+            std::string note;
+            std::vector<std::string> refused_what, reasons;    // "music", "narrator"; why, each once
+            size_t media = 0, channel_fixed = 0;
+            uint32_t from = 0, to = 0;
+            for (size_t k = 0; k < sel.files.size(); ++k) {
+                const OptFile& f = sel.files[k];
+                if (!title_slots::is_title_sound(f.path)) continue;
+                const title_slots::BankVerdict v = title_slots::check_title_bank(plain(f), events, game_media);
+                const std::string leaf = f.path.substr(f.path.rfind('/') + 1, f.path.find(".sbnk") - f.path.rfind('/') - 1);
+                if (v.refuse) {
+                    refused.insert(k);
+                    const std::string what = leaf.find("narration") != std::string::npos ? "narrator"
+                                             : leaf.compare(0, 3, "ui_") == 0 ? "music" : leaf;
+                    if (std::find(refused_what.begin(), refused_what.end(), what) == refused_what.end()) refused_what.push_back(what);
+                    if (std::find(reasons.begin(), reasons.end(), v.why) == reasons.end()) reasons.push_back(v.why);
+                    continue;
+                }
+                if (!v.fields.empty()) { fields_of[k] = v.fields; channel_fixed += v.fields.size(); }
+                for (auto& line : v.media_info) slog("    %s: %s", leaf.c_str(), line.c_str());
+                if (v.patches.empty()) continue;
+                if (!from) { from = v.from; to = v.to; }
+                media += v.adapted;
+                patches.insert(patches.end(), v.patches.begin(), v.patches.end());
+            }
+            std::string banks;
+            for (size_t e = 0; e < events.size(); ++e) {
+                if (std::none_of(patches.begin(), patches.end(), [&](const title_slots::SoundPatch& sp) { return sp.bank == e; })) continue;
+                std::vector<uint8_t> copy = events[e].data;
+                title_slots::apply_sound_patches(copy, e, patches);
+                const size_t n = (size_t)std::count_if(patches.begin(), patches.end(), [&](const title_slots::SoundPatch& sp) { return sp.bank == e; });
+                const std::string& ep = events[e].path;
+                banks += (banks.empty() ? "" : ", ") + ep.substr(ep.rfind('/') + 1, ep.find(".sbnk") - ep.rfind('/') - 1) + " (" +
+                         std::to_string(n) + " sound" + (n == 1 ? "" : "s") + ")";
+                adapted.push_back({ ep, std::move(copy) });
+            }
+            if (!adapted.empty() || channel_fixed) {
+                ++adapted_packs;
+                std::string what;
+                if (!adapted.empty() && from == to)
+                    what = std::to_string(media) + " media in the game's codec (" + title_slots::wwise::codec_name(to) + ") of another size";
+                else if (!adapted.empty())
+                    what = std::to_string(media) + " media in " + title_slots::wwise::codec_name(to) + " where the game plays " +
+                           title_slots::wwise::codec_name(from) + " (or of another size)";
+                if (channel_fixed) what += (what.empty() ? "" : ", ") + std::string("channel field rewritten for ") + std::to_string(channel_fixed) + " media";
+                if (!adapted.empty()) what += "; the game's " + banks + " adapted for this pack";
+                slog("  title sounds: %s: adapted: %s", p.info.name.c_str(), what.c_str());
+            }
+            if (!refused_what.empty()) {
+                std::string what, why;
+                std::stable_partition(refused_what.begin(), refused_what.end(), [](const std::string& w) { return w == "music"; });
+                for (size_t k = 0; k < refused_what.size(); ++k)
+                    what += (k == 0 ? "" : k + 1 == refused_what.size() ? " and " : ", ") + refused_what[k];
+                for (auto& r : reasons) why += (why.empty() ? "" : "; ") + r;
+                slog("  title sounds: %s: its %s %s not in the game's format (%s): the game's own sounds are kept", p.info.name.c_str(),
+                     what.c_str(), refused_what.size() == 1 ? "is" : "are", why.c_str());
+            }
+        }
+        for (size_t k = 0; k < sel.files.size(); ++k) {
+            OptFile& f = sel.files[k];
             title_paths[f.path] = f.hash;
+            if (refused.count(k)) continue;
+            const auto fx = fields_of.find(k);
+            if (fx != fields_of.end()) {                   // its channel fields rewritten: a copy of its bytes, the zip untouched
+                std::vector<uint8_t> copy = plain(f);
+                title_slots::apply_media_fields(copy, fx->second);
+                const std::string src = "title:" + p.info.key + ":" + f.path + ":wwise-channels";
+                const int64_t size = int64_t(copy.size());
+                const uint64_t priv = pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, f.path)));
+                if (chosen) writer.add_raw(priv, copy, 0, size);
+                else writer.add_raw(priv, std::move(copy), 0, size);
+                writer.note_source(src);
+                ++n_private;
+                if (!chosen) continue;
+                if (!writer.add_same_source(f.hash, src)) writer.add_raw(f.hash, std::move(copy), 0, size);
+                ++n_title;
+                continue;
+            }
             const std::string src = "title:" + p.info.key + ":" + f.path;
             writer.add_raw(pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, f.path))), std::move(f.data), f.attrib, f.dsize);
             writer.note_source(src);
@@ -906,7 +1036,16 @@ void add_title_files(TitleScan& t, PakWriter& writer, const std::wstring& game_d
             OptFile again = f;                             // not shared after all: read again for the real path
             if (read_listed(again)) { writer.add_raw(f.hash, std::move(again.data), f.attrib, f.dsize); ++n_title; }
         }
+        // the adapted event banks: this pack's title files like the rest (make_title_tables finds them by their private paths)
+        for (auto& [path, data] : adapted) {
+            const uint64_t real = pak_path_hash(std::string_view(path));
+            title_paths[path] = real;
+            if (chosen) { writer.add_uncompressed(real, data); ++n_title; }
+            writer.add_uncompressed(pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, path))), std::move(data));
+            ++n_private;
+        }
     }
+    if (adapted_packs) slog("  title sounds: %zu pack(s) played through adapted copies of the game's event banks", adapted_packs);
     if (t.choice.startup >= 0) {
         Option sel;
         read_sel(t.packs[size_t(t.choice.startup)], false, sel);
@@ -916,9 +1055,7 @@ void add_title_files(TitleScan& t, PakWriter& writer, const std::wstring& game_d
         }
     }
     if (title_paths.empty()) return;
-    PakReader base;
-    std::vector<std::unique_ptr<PakReader>> subs;
-    if (!open_game_paks(game_dir, base, subs)) {
+    if (!game_ok) {
         slog("  the game's own title files: re_chunk_000.pak not readable, no switch back to it on a return to the title");
         return;
     }
@@ -968,49 +1105,92 @@ void make_title_tables(const TitleScan& t, const std::wstring& pak_path) {
         if (kpka_index(f, idx)) for (auto& k : idx) held[k.hash] = true;
         fclose(f);
     }
-    std::map<std::string, uint64_t> title_paths;
-    size_t entries = 0;
+    std::map<std::string, uint64_t> title_paths;          // every title file a pack has (the game's own copy of each is in the pak)
+    for (auto& p : t.packs)
+        for (auto& file : p.opt.files)
+            if (title_slots::is_title_file(file.path)) title_paths[file.path] = file.hash;
+    // The core's playlist gives the title's three movies a background's own copies (title.cpp: _titleslots/<key>/.../title_start,
+    // title_loop and title_end, always the three): each one whole in the pak (data + resource file), or the background is left out
+    // of the playlist. A pack that lacks a movie has no copy of it under its key; its visits, through the switch, show the game's
+    // own copy of what it lacks (below).
+    auto playable = [&](const std::string& key) {
+        for (auto& path : title_slots::known_paths()) {
+            const std::string res = title_slots::resource_file_of(path);
+            if (!title_slots::is_title_file(path) || res.empty()) continue;
+            if (!held.count(pak_path_hash(std::string_view(title_slots::private_title_path(key, path)))) ||
+                !held.count(pak_path_hash(std::string_view(title_slots::private_title_path(key, res)))))
+                return false;
+        }
+        return true;
+    };
+    size_t entries = 0, with_sound = 0;
     for (auto& p : t.packs) {
         std::vector<std::pair<uint64_t, uint64_t>> r;
+        size_t movies = 0, sounds = 0;
+        bool music_off = false, narrator_off = false;      // a bank the build refused (add_title_files said why): not in the pak
+        size_t adapted_banks = 0;                          // the game's event banks adapted for this pack, in the pak
         for (auto& file : p.opt.files) {
             if (!title_slots::is_title_file(file.path)) continue;
-            title_paths[file.path] = file.hash;
             const uint64_t h = pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, file.path)));
-            if (held.count(h)) r.push_back({ file.hash, h });
+            if (held.count(h)) {
+                r.push_back({ file.hash, h });
+                ++(title_slots::is_title_sound(file.path) ? sounds : movies);
+            } else if (title_slots::is_title_sound(file.path)) {
+                (file.path.find("narration") != std::string::npos ? narrator_off : music_off) = true;
+            }
             if (file.path.find("/title_start.") != std::string::npos &&
                 std::find(g_titles.start_hashes.begin(), g_titles.start_hashes.end(), file.hash) == g_titles.start_hashes.end())
                 g_titles.start_hashes.push_back(file.hash);
         }
+        // the game's event banks adapted for this pack (add_title_files): in the pak under its key, not among its files
+        for (auto& path : title_slots::known_paths()) {
+            if (!title_slots::is_title_sound(path)) continue;
+            const uint64_t real = pak_path_hash(std::string_view(path));
+            const uint64_t h = pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, path)));
+            if (!held.count(h) || std::any_of(r.begin(), r.end(), [&](const std::pair<uint64_t, uint64_t>& e) { return e.first == real; })) continue;
+            if (std::any_of(p.opt.files.begin(), p.opt.files.end(), [&](const OptFile& f) { return f.hash == real; })) continue;
+            r.push_back({ real, h });
+            ++sounds;
+            ++adapted_banks;
+            title_paths[path] = real;
+        }
+        if (adapted_banks)
+            slog("  title sounds: %s: played through %zu adapted cop%s of the game's event banks", p.info.name.c_str(), adapted_banks,
+                 adapted_banks == 1 ? "y" : "ies");
+        if (music_off || narrator_off)
+            slog("  title sounds: %s: its %s not in the game's format: the game's own sounds are kept", p.info.name.c_str(),
+                 music_off && narrator_off ? "music and narrator are" : music_off ? "music is" : "narrator is");
         if (r.empty()) continue;
         entries += r.size();
-        g_titles.random_pool.push_back(p.info.key);
-        bool playable = true;                         // the core's playlist: every streamed title file whole (data + resource file)
-        for (auto& file : p.opt.files) {
-            if (!title_slots::is_title_file(file.path)) continue;
-            const std::string res = title_slots::resource_file_of(file.path);
-            if (res.empty()) continue;
-            playable = playable && held.count(pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, file.path)))) &&
-                       held.count(pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, res))));
+        if (sounds) {
+            ++with_sound;
+            slog("  title_mods: %s: %zu title sound bank(s), switched with its movies", p.opt.rel.c_str(), sounds);
         }
-        if (playable) g_titles.playlist_pool.push_back(p.info.key);
+        g_titles.random_pool.push_back(p.info.key);
+        if (playable(p.info.key)) g_titles.playlist_pool.push_back(p.info.key);
+        else slog("  title_mods: %s: %zu of the 3 title movies: left out of the playlist on the title screen", p.opt.rel.c_str(), movies);
         g_titles.backgrounds.push_back({ p.info.key, std::move(r) });
     }
     std::vector<std::pair<uint64_t, uint64_t>> game;
+    size_t game_movies = 0, game_sounds = 0;
     for (auto& [path, hash] : title_paths) {
         const uint64_t h = pak_path_hash(std::string_view(title_slots::private_title_path(title_slots::kGamePictureKey, path)));
-        if (held.count(h)) game.push_back({ hash, h });
+        if (!held.count(h)) continue;
+        game.push_back({ hash, h });
+        ++(title_slots::is_title_sound(path) ? game_sounds : game_movies);
     }
+    if (with_sound) slog("  the game's own title sound banks: %zu copied (the music and narrator of the packs without them)", game_sounds);
+    // A pack that lacks a title file another background has: the game's own copy of it (title_slots::fill_from_game), what the
+    // real path holds when that pack is the launch's. Without it the switch left there the file of the pack the launch wrote.
+    size_t from_game = 0;
+    for (auto& [key, r] : g_titles.backgrounds) from_game += title_slots::fill_from_game(r, game);
+    entries += from_game;
+    if (from_game) slog("  title switch: %zu title file(s) of the packs that lack them served from the game's own copies", from_game);
     entries += game.size();
     if (!game.empty()) {
-        bool playable = true;                         // the game's own copies for the playlist: data + resource file
-        for (auto& [path, hash] : title_paths) {
-            const std::string res = title_slots::resource_file_of(path);
-            if (res.empty()) continue;
-            playable = playable && held.count(pak_path_hash(std::string_view(title_slots::private_title_path(title_slots::kGamePictureKey, path)))) &&
-                       held.count(pak_path_hash(std::string_view(title_slots::private_title_path(title_slots::kGamePictureKey, res))));
-        }
         g_titles.random_pool.insert(g_titles.random_pool.begin(), title_slots::kGamePictureKey);
-        if (playable) g_titles.playlist_pool.insert(g_titles.playlist_pool.begin(), title_slots::kGamePictureKey);
+        if (playable(title_slots::kGamePictureKey)) g_titles.playlist_pool.insert(g_titles.playlist_pool.begin(), title_slots::kGamePictureKey);
+        else slog("  the game's own title: %zu of the 3 title movies copied (only those a pack has): left out of the playlist", game_movies);
         g_titles.backgrounds.push_back({ title_slots::kGamePictureKey, std::move(game) });
     }
     g_titles.has_selection = t.settings.has_pool;
@@ -1087,6 +1267,43 @@ void pic_prune(PicCache& c) {
         if (!e.dir && !c.used.count(e.name) && DeleteFileW(lp(c.dir + L"\\" + e.name).c_str())) ++removed;
     if (removed) slog("  picture cache %s: %zu unused file(s) removed", narrow(c.dir.substr(c.dir.find(L"reframework"))).c_str(), removed);
     c.active = false;
+}
+
+// Once a pass completed (its pak written, or none needed): in the archive cache of stage_mods, title_mods and ui_mods, the unpacked
+// archives no archive of this pass asked for (removed, or changed: another key) go. They used to stay for ever (a player's caches
+// reached 27.4 GB, 11/2026). Only the folders unpack_archive makes (cache_dirs::is_hex16): the pictures' folder (pic_prune), any other
+// name, every file and every link are left alone, a link is never followed (common/cache_dirs.hpp). One that cannot be removed is
+// said once and tried again at the next pass that rebuilds the pak, not at every launch.
+void prune_archive_caches(const std::wstring& game_dir) {
+    std::string summary;
+    for (const wchar_t* folder : { L"stage_mods", L"title_mods", L"ui_mods" }) {
+        const std::wstring root = game_dir + L"\\reframework\\" + folder + L"\\.cache";
+        const std::set<std::wstring>& used = g_unpacked[lower_w(root)];
+        const cache_dirs::Pruned r = cache_dirs::prune(root, cache_dirs::is_hex16, [&](const std::wstring& n) { return used.count(n) > 0; });
+        const std::string where = narrow(folder) + "\\.cache";
+        std::string s = narrow(folder) + " ";
+        if (!r.there) {
+            s += "none";
+        } else if (r.link) {
+            s += "not looked at";
+            slog("  WARN: %s is a link to another folder: nothing removed there", where.c_str());
+        } else if (r.list_error) {
+            s += "not read";
+            slog("  WARN: %s cannot be listed (error %lu): nothing removed", where.c_str(), r.list_error);
+        } else {
+            char b[96];
+            snprintf(b, sizeof(b), "%zu in use, %zu removed (%.1f MB)", r.kept, r.removed.size(), r.bytes / 1048576.0);
+            s += b;
+            if (!r.failed.empty()) s += ", " + std::to_string(r.failed.size()) + " could not be";
+        }
+        for (auto& [name, f] : r.failed) {
+            const std::wstring p = f.path.compare(0, 4, L"\\\\?\\") == 0 ? f.path.substr(4) : f.path;
+            slog("  WARN: %s\\%s not removed (error %lu on %s): tried again at the next rebuild", where.c_str(), narrow(name).c_str(), f.error,
+                 narrow(p).c_str());
+        }
+        summary += (summary.empty() ? "" : "; ") + s;
+    }
+    slog("  archive caches: %s", summary.c_str());
 }
 
 // Every pack's picture, at natives/stm/<preview_resource>.<tex version>: 1280x720 from its screenshot. One that cannot
@@ -1560,6 +1777,7 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     CreateDirectoryW((game_dir + L"\\reframework\\data").c_str(), nullptr);
     CreateDirectoryW(data_dir.c_str(), nullptr);
     CreateDirectoryW((data_dir + L"\\loader").c_str(), nullptr);
+    g_unpacked.clear();
 
     auto sources = list_sources(mods_dir);
     TitleScan title = scan_titles(game_dir);
@@ -1824,8 +2042,6 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
         }
         slog("  wrote %s (%zu entries)", narrow(leaf(target_path)).c_str(), writer.entry_count());
         pak_entries = writer.entry_count();
-        pic_prune(g_pic_title);                      // the pass completed: the pictures nobody asked for go
-        pic_prune(g_pic_ui);
     }
     if (!save_table(data_dir, fp, pak_entries, vars)) slog("ERROR: cannot write the table");
     apply_overrides(mods_dir, vars);
@@ -1834,6 +2050,10 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     make_title_tables(title, target_path);
     make_ui_tables(ui, target_path);
     if (!save_ui_registry(game_dir, ui)) slog("ERROR: cannot write the UI packs' registry");
+    // The pass completed (its pak written, or none needed): what the caches hold for no source of this pass goes
+    pic_prune(g_pic_title);
+    pic_prune(g_pic_ui);
+    prune_archive_caches(game_dir);
     out = std::move(vars);
     slog("built: %zu variant(s) from %zu option(s), %zu title pack file(s), %zu UI pack file(s), %.1f ms", out.size(), options.size(),
          title_files + startup_files, ui_private + ui_real + ui_game, ms());
