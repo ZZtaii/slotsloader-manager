@@ -32,9 +32,18 @@ folder; the loader rewrites it at every launch where something changed.
 - 1.8.1, all of it: C. Viper Bayonetta (wings included), Ken SFV with Ken SFV Hair in one sub-folder (only the
   combined outfit), several mods of the same outfit installed together (colours no longer mixed).
 
-## Slots of outfits the player does not own (plugin), to check in game
+## Every slot, owned base outfit or not (plugin, 22/11), to check in game
 
-A slot made from an outfit the game does not count as the player's is hidden (see plugin/README.md). Before the
+1. **Normal mode, no unlock-all script**: launch, leave the title screen. Log: `every slot shown and owned, whatever
+   outfit it is made from`, no `hidden:` line. Mai: High Priestess (made from her Outfit 2, not bought) is listed in
+   Battle Settings and on the select screens, with its colours; C. Viper: Bayonetta, Battlesuit, Trench Coat.
+2. **Online**: a casual and a ranked match in such a slot: worn on this PC, the opponent sees Outfit 1 / DriveTech in
+   Color 1 / 2 (journal line `wore slot vNN`), no communication error 50301-30003. Same from the select screen of a
+   room / Battle Hub match.
+
+## Slots of outfits the player does not own (plugin, Manager mode only since 22/11), to check in game
+
+In Manager mode, a slot made from an outfit the game does not count as the player's is hidden (see plugin/README.md). Before the
 tests: the new `SF6_CostumeSlotsNative.dll` in `reframework\plugins\` (game closed), an empty
 `reframework\data\SF6_CostumeSlots_data\ownership_probe.txt` (the log then shows each method's answer). The log is
 `reframework\data\SF6_CostumeSlots_data\native_log.txt`; `outfits.json` (`based_on`: 1 = Outfit 2, 2 = Outfit 3,

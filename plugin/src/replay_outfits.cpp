@@ -16,6 +16,9 @@
 //     (rto.hpp, the player's own choices stay as they are). A fighter set to the Random outfit wears a draw of its pool, one
 //     per playback (costumes::replay_random: the Random outfit's rules, its colour among the outfit's and the Color Mod's); a
 //     fighter whose colour is Random, a colour of its outfit's round (costumes::replay_random_colour), one per playback too.
+//     The two sides of a mirror match draw in a random order; each side's Color Mod request names its side.
+// setupDesc is hooked once (ReplayFlowMap's own method; FGReplayFlowMap has none of its own: "x1" in the log), so one setup
+// dresses once; the thread_local below is not a stack and needs none.
 #include "slots.hpp"
 #include "replay_outfits.hpp"
 #include "colormod_link.hpp"
@@ -24,6 +27,7 @@
 
 #include <ctime>
 #include <mutex>
+#include <random>
 
 namespace slots::replay {
 namespace {
@@ -34,6 +38,7 @@ const char* kRegistry = "reframework/data/SF6_Costumes_Data/registry.json";
 
 std::mutex g_mx;                                    // everything below: the hooks may run on any thread
 std::vector<RegSlot> g_reg;   uint64_t g_reg_stamp = 0;
+std::map<int, int> g_random;                        // each character's Random outfit (registry possession "random"), by fighter
 std::map<int, Forced> g_forced; uint64_t g_forced_stamp = 0;
 int g_stage = -1;                                   // the forced stage (StageDesc.StageId), -1: the replay's own
 BgmChoice g_bgm;                                    // the Replay Music row
@@ -53,7 +58,7 @@ uint64_t stamp(const char* path) {
 // The registry, the tab's choices and the journal, read again when their file changed (under g_mx)
 void refresh() {
     if (uint64_t s = stamp(kRegistry); s != g_reg_stamp) {
-        g_reg = parse_registry(read_file(kRegistry, 16u << 20));
+        g_reg = parse_registry(read_file(kRegistry, 16u << 20), &g_random);
         g_reg_stamp = s;
     }
     if (uint64_t s = stamp(kOutfits); s != g_forced_stamp) {
@@ -176,6 +181,8 @@ void journal_match(Obj* desc, Obj* save) {
     if (!read_info(data ? get_obj(data, "ReplayInfo") : nullptr, rf, e.sides)) { logf("replay outfits: journal, the match's replay could not be read"); return; }
     e.key = replay_key(rf);
     if (e.key.empty()) return;
+    e.has_facts = true;
+    e.facts = rf;
     e.time = static_cast<long long>(_time64(nullptr));
     e.mode = game_mode(desc);
     // The player's side: the team of our session member; the replay's sides are in team order (checked by fighter)
@@ -192,6 +199,8 @@ void journal_match(Obj* desc, Obj* save) {
     // What the player really wore: the alias's slot on the player's fighter, named by its mod
     int slot = -1, color = 0;
     if (costumes::dressed_slot(my_fd, e.sides[e.me].fid, slot, color)) {
+        // the Color Mod entry worn with it (before g_mx: the Color Mod takes its own lock)
+        e.colormod = costumes::worn_entry(e.me, e.sides[e.me].fid, slot, color, e.has_cm);
         std::lock_guard lk(g_mx);
         refresh();
         if (const RegSlot* rs = slot_of(g_reg, e.sides[e.me].fid, slot)) {
@@ -200,6 +209,27 @@ void journal_match(Obj* desc, Obj* save) {
             e.slot_costume = slot;
             e.slot_color = color;
             e.slot_base = rs->base;
+        } else if (slot >= 0 && !costumes::registry_slot(e.sides[e.me].fid, slot)
+                   && (slot != e.sides[e.me].costume || color != e.sides[e.me].color)) {
+            // one of the game's outfits, or a colour, the alias wore over what the replay holds (21/11)
+            e.has_slot = true;
+            e.game = true;
+            e.slot_costume = slot;
+            e.slot_color = color;
+        }
+    } else {
+        // no override (Outfit 1 / DriveTech in Color 1 / 2, as the replay holds it): a Color Mod entry worn on colour 02 is kept
+        // all the same, the replay shows the plain colour without it
+        const Side& mine = e.sides[e.me];
+        bool known = false;
+        const std::string id = costumes::worn_entry(e.me, mine.fid, mine.costume, mine.color, known);
+        if (known && !id.empty()) {
+            e.has_slot = true;
+            e.game = true;
+            e.slot_costume = mine.costume;
+            e.slot_color = mine.color;
+            e.has_cm = true;
+            e.colormod = id;
         }
     }
     std::lock_guard lk(g_mx);
@@ -213,9 +243,10 @@ void journal_match(Obj* desc, Obj* save) {
     g_last_written = e.key;
     g_journal[e.key] = e;
     g_journal_stamp = stamp(kJournal);
-    logf("replay outfits: journal, match %s (game mode %d): P%d F%d %s", e.key.c_str(), e.mode, e.me + 1, e.sides[e.me].fid,
-         e.has_slot ? ("wore slot v" + std::to_string(e.slot_costume) + " colour " + std::to_string(e.slot_color)).c_str()
-                    : "wore what the replay holds");
+    logf("replay outfits: journal, match %s (game mode %d): P%d F%d %s; %s", e.key.c_str(), e.mode, e.me + 1, e.sides[e.me].fid,
+         e.has_slot ? ("wore slot v" + std::to_string(e.slot_costume) + " colour " + std::to_string(e.slot_color) +
+                       (!e.has_cm ? ", Color Mod entry not known" : e.colormod.empty() ? ", no Color Mod entry" : ", Color Mod entry " + e.colormod)).c_str()
+                    : "wore what the replay holds", facts_text(rf).c_str());
 }
 
 void post_create_save(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
@@ -253,40 +284,40 @@ void dress_replay(Obj* map) {
     std::lock_guard lk(g_mx);
     refresh();
     auto je = g_journal.find(key);
+    if (je == g_journal.end()) je = g_journal.find(replay_key(rf, true));   // a line from before 22/11: its key held the stage
     const Entry* entry = je != g_journal.end() ? &je->second : nullptr;
     auto wear = plan(recorded, entry, g_forced, g_reg);
-    // A fighter set to its Random outfit: a draw of its pool for this playback (the Random outfit's rules), its colour one of
-    // the outfit's or a Color Mod entry (asked below, on colour 1, as a forced entry is). A fighter whose colour is Random (any
-    // other outfit): a colour of that outfit's round, the same way. The same flow map set up again within a few seconds (a
-    // derived flow map's setupDesc calling its base's: both hooked) keeps its draws.
-    static uintptr_t s_map = 0;
-    static ULONGLONG s_at = 0;
-    struct Drawn { int forced = -1; bool colour = false; int cos = -1, col = 0; std::string cm; };
-    static std::map<size_t, Drawn> s_drawn;                     // side -> the outfit forced, what was drawn for it
-    const ULONGLONG now = GetTickCount64();
-    if (s_map != reinterpret_cast<uintptr_t>(map) || now - s_at > 5000) s_drawn.clear();
-    s_map = reinterpret_cast<uintptr_t>(map);
-    s_at = now;
-    for (size_t i = 0; i < ds.size(); ++i) {
+    // Random (replay_outfits.hpp): a fighter set to its Random outfit wears a draw of its pool for this playback (the Random
+    // outfit's rules), its colour one of the outfit's or a Color Mod entry (asked below, on colour 1, as a forced entry is); a
+    // fighter whose colour is Random (any other outfit), a colour of that outfit's round. The sides of a mirror match draw in a
+    // random order (draw_order). The same flow map setting up the same replay again within 5 s is the same playback: its draws
+    // are kept (PlaybackDraws, by side, fighter and outfit forced). A draw that fails: what the replay recorded on that side.
+    static PlaybackDraws s_draws;
+    static std::mt19937 s_rng{ std::random_device{}() };
+    s_draws.begin(reinterpret_cast<uintptr_t>(map), key, GetTickCount64(), 5000);
+    std::vector<int> fids;
+    for (const Side& r : recorded) fids.push_back(r.fid);
+    for (size_t i : draw_order(fids, [] { return static_cast<uint32_t>(s_rng()); })) {
         Wear& w = wear[i];
-        int cos = -1, col = 0;
-        std::string cm;
         if (!w.forced) continue;
-        bool colour = false;
-        if (auto d = s_drawn.find(i); d != s_drawn.end() && d->second.forced == w.costume && d->second.colour == w.random_color) {
-            cos = d->second.cos; col = d->second.col; cm = d->second.cm; colour = d->second.colour;
-        } else if (costumes::replay_random(recorded[i].fid, w.costume, cos, col, cm)) {
-            s_drawn[i] = { w.costume, w.random_color, cos, col, cm };
-        } else if (w.random_color && costumes::replay_random_colour(recorded[i].fid, w.costume, col, cm)) {
-            cos = w.costume;
-            colour = true;
-            s_drawn[i] = { w.costume, true, cos, col, cm };
-        } else continue;
-        w.costume = cos;
-        w.color = col;
-        w.colormod = cm;
-        w.why = colour ? "forced: Random colour" : "forced: Random";
-        w.change = cos != recorded[i].costume || col != recorded[i].color;
+        const int fid = recorded[i].fid;
+        const bool rnd_outfit = is_random_outfit(g_random, fid, w.costume);
+        if (!rnd_outfit && !w.random_color) continue;
+        const Drawn* d = s_draws.find(i, fid, w.costume, !rnd_outfit);
+        const bool kept = d != nullptr;
+        if (!d) {
+            Drawn nd{ fid, w.costume, !rnd_outfit, w.costume, 0, {} };
+            const bool ok = rnd_outfit ? costumes::replay_random(fid, w.costume, nd.cos, nd.col, nd.cm)
+                                       : costumes::replay_random_colour(fid, w.costume, nd.col, nd.cm);
+            if (ok) {
+                s_draws.keep(i, nd);
+                d = s_draws.find(i, fid, w.costume, !rnd_outfit);
+            } else
+                logf("replay outfits: P%zu F%d %s: nothing drawn, it keeps what the replay recorded (c%d/%d)", i + 1, fid,
+                     rnd_outfit ? "on its Random outfit" : ("on outfit " + std::to_string(w.costume) + ", colour Random").c_str(),
+                     recorded[i].costume, recorded[i].color);
+        }
+        wear_draw(w, recorded[i], d, rnd_outfit, kept);
     }
     std::string line;
     for (size_t i = 0; i < ds.size(); ++i) {
@@ -303,26 +334,62 @@ void dress_replay(Obj* map) {
     // The Color Mod (colormod_link.hpp): a forced fighter wears exactly the colour chosen, over the player's own Color
     // Mod choices (never changed), for this replay only: the request names this replay's flow map and the Color Mod drops
     // it once another one runs. Its entry (RW / MC) on colour 1, or "" = the game's own colours (not the player's MC
-    // choice on 02). Earlier requests (another replay) go first.
+    // choice on 02). Earlier requests (another replay) go first. A side that shares its fighter and outfit with another side
+    // (side_shared: a mirror match on one outfit, My Own's player with the opponent on the same outfit) names its battle side
+    // (team i: P(i + 1)), so each wears its own; every other request is for any side, as before. An older Color Mod has one
+    // request per fighter / outfit: the sides on colour 02 asked last (fallback_order), said once.
     colormod::clear(SF6CM_SCOPE_REPLAY);
-    for (size_t i = 0; i < ds.size(); ++i) {
-        const Wear& w = wear[i];
-        if (!w.forced) continue;
-        const bool ok = colormod::request(SF6CM_SCOPE_REPLAY, recorded[i].fid, w.costume, w.colormod, map);
-        if (!w.colormod.empty() || ok)
-            line += ", P" + std::to_string(i + 1) + " Color Mod: " + (w.colormod.empty() ? std::string("game colours") : w.colormod) +
-                    (ok ? "" : " (no Color Mod)");
+    const bool per_side = colormod::sides_known();
+    std::vector<SideRequest> reqs = replay_requests(wear, recorded);
+    if (!per_side && !reqs.empty() && colormod::available()) {
+        reqs = fallback_order(std::move(reqs));
+        if (requests_shared(wear, recorded)) {
+            line += ", one Color Mod request for both sides of that fighter and outfit (an older Color Mod)";
+            static bool s_told = false;
+            if (!s_told) {
+                s_told = true;
+                logf("replay outfits: this Color Mod has no request per side (SF6ColorMod_RequestSide, 22/11): in a mirror match on "
+                     "one outfit both sides wear one request, the one of the side on colour 02 (said once)");
+            }
+        }
     }
-    // The costume options: a forced fighter wears what is saved for its outfit, or that outfit's defaults, over the player's
-    // own choices (never written), by fighter so on whichever side it plays, for this replay only (its flow map, as the Color
-    // Mod's requests); their files are asked for now, before the game asks for the fighters'.
+    for (const SideRequest& q : reqs) {
+        const bool sided = per_side && q.shared;
+        const bool ok = sided ? colormod::request_side(SF6CM_SCOPE_REPLAY, q.side, q.fid, q.costume, q.id, map)
+                              : colormod::request(SF6CM_SCOPE_REPLAY, q.fid, q.costume, q.id, map);
+        if (!q.id.empty() || ok)
+            line += ", P" + std::to_string(q.side) + " Color Mod: " + (q.id.empty() ? std::string("game colours") : q.id) +
+                    (sided ? " (this side's own)" : "") + (ok ? "" : " (no Color Mod)");
+    }
+    // The costume options (rto.hpp), over the player's own choices (only read, never written), by fighter so on whichever side
+    // it plays, for this replay only (its flow map, as the Color Mod's requests); their files are asked for now, before the game
+    // asks for the fighters'. A forced outfit: what is saved for it in Replays > Settings, else its defaults. A Random outfit's
+    // draw (Wael 22/11): what is saved for the outfit drawn, else the player's own choices of that side (Fighter Settings'),
+    // never the defaults. (The hooks run on the game thread, where the player's choices are changed: read as they are.)
     std::map<int, rto::ForcedFighter> forced_opts;
     for (size_t i = 0; i < ds.size(); ++i) {
         const Wear& w = wear[i];
         if (!w.forced) continue;
-        rto::ForcedFighter& ff = forced_opts[recorded[i].fid];
+        const int fid = recorded[i].fid;
+        auto f = g_forced.find(fid);
+        rto::ForcedFighter& ff = forced_opts[fid];
         ff.costume = w.costume;
-        if (auto f = g_forced.find(recorded[i].fid); f != g_forced.end()) ff.by_mod = f->second.options;
+        if (!w.random_outfit) {
+            if (f != g_forced.end()) ff.by_mod = f->second.options;
+            continue;
+        }
+        const rto::Slot* s = rto::outfit_slot(fid, w.costume);
+        if (!s) continue;                                          // the outfit drawn has no options
+        const std::vector<std::string>* saved = nullptr;
+        if (f != g_forced.end())
+            if (auto it = f->second.options.find(s->mod); it != f->second.options.end()) saved = &it->second;
+        if (saved) {
+            ff.by_mod[s->mod] = *saved;
+            line += ", P" + std::to_string(i + 1) + " options: saved for " + s->mod;
+        } else {
+            ff.by_mod[s->mod] = rto::chosen_of(rto::manifest(), *s, rto::choices(), i == 0 ? 0 : 1);
+            line += ", P" + std::to_string(i + 1) + " options: the player's own for " + s->mod;
+        }
     }
     if (forced_opts.empty()) rto::replay_wear_clear();
     else rto::replay_wear_set(std::move(forced_opts), reinterpret_cast<uintptr_t>(map));
@@ -354,6 +421,8 @@ void dress_replay(Obj* map) {
         } else line += ", music: no BattleRule.BgmType (left alone)";
     }
     logf("replay outfits: replay %s%s: %s", key.c_str(), entry ? " (in the journal)" : "", line.c_str());
+    if (!entry)
+        logf("replay outfits: replay %s not in the journal: %s; %s", key.c_str(), facts_text(rf).c_str(), closest_lines(rf, g_journal, 3).c_str());
 }
 
 void post_setup_desc(void** /*ret_val*/, REFrameworkTypeDefinitionHandle, unsigned long long) {

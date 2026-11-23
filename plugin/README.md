@@ -51,6 +51,18 @@ The title editor is full screen: the background's picture with the "OVERDRIVE ED
 
 When `reframework\data\SF6_UISlots_Data\registry.json` (written by the loader at game start, from the interface mods dropped in `reframework\ui_mods`) lists packs, Options > Interface gets one section per pack in its left list, just above "Other Settings", named as the pack (its description line: its author). Its rows are the game's own rows (Native Core 0.9.10, `opt_section_place_rows`; an older core: no section, the choices still apply at launch): a group of options of which one at a time can be used is one row, **Game's own** (the game's files) then its options, cycled with Left / Right; any other option is one row Off / On; a heading that holds other rows is a header row when the core has them, else its name goes in front of its rows'. The game draws them, moves the focus and shows each row's description (the mod's own, its literal `\n` as spaces). A long title or value keeps its size and slides in its place, as on every row of the Options screen. Under the rows, when there is room in the right panel, the picture of the focused row's value (an Off / On row: its option's; Game's own: none), else of the pack. Every change is written to `"ui_choices"` in `settings.json` (`{ "<pack key>": [ "<option id>", ... ] }`, the other keys kept) and handed to the loader at once (`SF6UISlots_Apply` in `amd_ags_x64.dll`), which serves the new files from then on; the textures the game keeps in memory are swapped on screen (`ui_retexture.cpp`). A loader without that export applies the choice at the next launch.
 
+**Everything goes through the alias (Wael 21/11).** Online the save and the network hold only outfits and colours every
+player has: Outfit 1 or DriveTech, in Color 1 or Color 2 (`carrier.hpp` `safe_outfit`, `safe_colour`, `net_colour`). A
+slot, one of the game's other outfits (Outfit 2, 3, 4..., a Fluffy mod replacing one of them, an outfit with parts or
+shared files) and any colour from Color 3 on are worn on this PC only, over the carrier, the same way as a slot: the
+intent keeps the real choice (a game outfit's number, or for Outfit 1 / DriveTech only its colour), the save gets the
+carrier in Color 1 / 2 (the chosen colour when it is one of those, else Color 1), and the fighter profile sent while
+Battle Settings is open too. Random's draws follow the same rule (a game outfit or a colour the network must not see is
+worn on this PC only), and so does a Random colour. A game outfit or colour sent as it was raised the communication
+error 50301-30003 for players whose game counts as theirs what their account does not have (an unlock-all script).
+Outfit 1 / DriveTech in Color 3 or later is dressed when the fighters are built (no files to ask for: the outfit's own),
+so the VS screen still shows Color 1 / 2 for that case.
+
 How (since 1.15): the battle description (`BattleFlowMap.m_desc`) has one `FighterDesc` per fighter, whose `Costume`
 is what the network holds; the game also keeps a local override per fighter (`SetOverwriteDesc` / `GetCostume`) and
 builds the fighter's visual from it. When the game asks for the files of a character's carrier and the player
@@ -110,7 +122,15 @@ word, `CommonMessage756`, in each language). It has one colour, which its Color 
 
 ## Slots of outfits the player does not own
 
-A slot made from a character's Outfit 2 (or 3, 4) is shown only if the game counts that outfit as the player's.
+Since 22/11 (normal mode): every slot is shown and owned, whatever outfit it is made from, owned by the account or
+not (Mai's High Priestess, made from her Outfit 2, with no Outfit 2 bought). Nothing is asked; the log says once
+`costumes: every slot shown and owned, whatever outfit it is made from`. The online alias (v1.49) is what made the
+rule below useless: the save and the network only hold Outfit 1 / DriveTech in Color 1 / 2, the slot is worn on this
+PC only. Only the slot's own record is given (`AddDlcSaveData`), never the base outfit's: an outfit the account does
+not have never reaches the save or the network. Every slot has its 10 colours owned (boot), as before.
+
+Manager mode only (the Slotsloader Manager installed the loader, its fork's rules; off with its opt-out marker):
+a slot made from a character's Outfit 2 (or 3, 4) is shown only if the game counts that outfit as the player's.
 The plugin asks the game the question its own screens ask: `app.InventoryManager.CostumeInventory.GetCostumeNoList`
 (the costume numbers of a character the player can pick), which the character select screen
 (`app.UIFlowUI10505.Param.GetCostumeId`) and Battle Settings (`app.helper.hGUI.GetEnableFighterCostumeIdList`) list.
@@ -178,14 +198,23 @@ the rows follow the outfit shown on the Costume row, and a row at an end says ho
 
 ## Replay Outfits (`replay_outfits.cpp`, rules in `replay_outfits.hpp`)
 
-What each character wears in a replay, never in a live battle. **Default**: what the players really wore. The replay holds
-the carrier for the player's own fighter (online alias), so at the end of each online match one line goes to
-`SF6_CostumeSlots_data\replay_journal.jsonl` (numbers only: the replay's key, the player's side, both sides' outfit and
-colour as the replay holds them, the slot really worn, by its mod); a replay found there shows the player's side in that
-slot, the opponent as recorded; a replay not found there shows what it recorded. **Forced**
-(`SF6_CostumeSlots_data\replay_outfits.json`, written by the Replay Outfits tab, read again when it changed): the chosen
-outfit and colour on every side that plays that character, the player's own included. An extra outfit is named by its
-`mod_id` (registry.json): a mod that is gone leaves the character on Default.
+What each character wears in a replay, never in a live battle, per character in
+`SF6_CostumeSlots_data\replay_outfits.json` (written by Replays > Settings > Replay Outfit Settings, read again when it
+changed). **Off** (no entry; the default since 22/11, before it was My Own's journal): what the replay recorded, the game's
+data; since the online alias (1.49) that is Outfit 1 / DriveTech in Color 1 / 2 for the player's own fighter. **My Own**
+(`"mode": "own"`): what the player really wore in that match. The replay holds the carrier for the player's own fighter, so
+at the end of each online match one line goes to `SF6_CostumeSlots_data\replay_journal.jsonl` (numbers only: the replay's
+key, the player's side, both sides' outfit and colour as the replay holds them, the slot really worn, by its mod, and the
+Color Mod entry worn on colour 02); a replay found there shows the player's side in that slot and entry, the opponent as
+recorded; a replay not found there shows what it recorded. **Forced** (`"mode": "forced"`): the chosen outfit and colour on
+every side that plays that character, the player's own included. An extra outfit is named by its `mod_id` (registry.json):
+a mod that is gone leaves the character on what the replay recorded. **Random outfit** (the character's Random outfit) and
+**Random colour**: a draw at each playback from the replays' own rounds (`state.json` `"random_replay"`), the two sides of a
+mirror match in a random order; a draw that fails leaves that side as recorded. A Random outfit's draw wears the costume
+options saved for the outfit drawn, else the player's own; a forced outfit those saved for it, else its defaults. A side
+that shares its fighter and outfit with another side (a mirror match) asks the Color Mod for its own battle side
+(`SF6ColorMod_RequestSide`), so each keeps its entry and My Own's entry stays on the player; every other request is for any
+side. An older Color Mod has one request per fighter / outfit (said once in the log).
 
 - Music: the Replay Music row of the tab (`"bgm"` in the same file, `replay_bgm.hpp`), the game's values with Self as P1 and
   Opponent as P2, then Custom. A replay does not follow the online setting (the save's `MatchingSelectBgm`): its `BattleRule.BgmType` stays

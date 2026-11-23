@@ -31,4 +31,25 @@ inline bool stale(int saved, int carrier, int save_cos, bool intent, bool fighte
     return carrier >= 0 && saved != carrier && save_cos == saved && (intent || !fighter_has_it);
 }
 
+// ---- Wael 21/11: "tout spoof le costume 1 ou drive tech, couleur 1 ou 2" ----
+// Online, the save and the network hold only outfits every player has, Outfit 1 or DriveTech, in colour 1 or 2 (0 or 1):
+// anything else (a slot, the game's Outfit 2 / 3 / 4..., a colour from 3 on) is worn on this PC only, over the carrier.
+// A game outfit or colour sent as it is raised the server's communication error 50301-30003 for players whose game counts
+// as theirs what their account does not have (an unlock-all script, a mod replacing that outfit).
+
+// An outfit every player has: what the network may hold as it is
+inline bool safe_outfit(int costume) { return costume == kOutfit1 || costume == kDriveTech; }
+// A colour every outfit has for every player: Color 1 or Color 2
+inline bool safe_colour(int colour) { return colour == 0 || colour == 1; }
+
+// The colour the save holds for a choice worn in `colour` over a carrier whose colours are `carrier_colours` (empty: not
+// known): the colour itself when it is Color 1 or 2 and the carrier has it, else Color 1 (Color 2 when only that one is
+// listed). Never Color 3 or later, whatever the list says.
+inline int net_colour(int colour, const std::set<int>& carrier_colours) {
+    auto has = [&](int c) { return carrier_colours.empty() || carrier_colours.count(c) != 0; };
+    if (safe_colour(colour) && has(colour)) return colour;
+    if (!has(0) && has(1)) return 1;
+    return 0;
+}
+
 } // namespace slots::carrier

@@ -132,11 +132,105 @@ int main() {
                                    [](int cos, int c) { return cos != 5 || worn_colour(c) != 1; });
         check(d.costume == 5 && d.color == 0, "every colour of the outfit drawn ridden on 02 by a mirror: colour 0");
     }
+    {   // refused only for now (a mirror's colour, an NSFW outfit hidden): still given in this round, never back before it ends
+        bool ok = true;
+        for (uint32_t seed = 1; seed <= 200; ++seed) {
+            Rng rng = seeded(seed);
+            Pool p;
+            p.drawn = { 1 };
+            p.last = 1;
+            const int v = draw(p, { 1, 2, 3 }, [](int c) { return c != 1; }, rng);   // 1 refused now
+            ok &= (v == 2 || v == 3) && has(p.drawn, 1);
+            const int w = draw(p, { 1, 2, 3 }, nullptr, rng);                         // everything allowed again
+            ok &= w != 1 && w != v && (w == 2 || w == 3);
+            const int x = draw(p, { 1, 2, 3 }, nullptr, rng);                         // the round is over: a new one
+            ok &= x != w && p.drawn.size() == 1;
+        }
+        check(ok, "a value refused only for now stays given: the round's other values come first (200 seeds)");
+        Pool q;
+        q.drawn = { 0, 7 };
+        q.last = 7;
+        Rng rng = seeded(9);
+        const int v = draw(q, { 0, 2, 7 }, [](int c) { return c == 2; }, rng);
+        check(v == 2 && has(q.drawn, 0) && has(q.drawn, 7), "the values refused now keep their place in the round");
+        check(draw(q, { 0, 2, 7 }, [](int c) { return c != 2; }, rng) != 2 && q.drawn.size() == 1,
+              "every value allowed now was given: a new round, the refused one not in it");
+    }
+    {   // a draw on a copy of the rounds (a select screen's landing), given in the rounds later: as if drawn there
+        bool same = true, chain = true;
+        auto colours = [](int) { return std::vector<int>{ 0, 1, 2 }; };
+        for (uint32_t seed = 1; seed <= 300; ++seed) {
+            Rng rng = seeded(seed);
+            Fighter a;
+            for (uint32_t k = 0; k < seed % 7; ++k) draw_outfit(a, outfits, nullptr, colours, rng);   // some rounds under way
+            Fighter copy = a;
+            const Draw d = draw_outfit(copy, outfits, nullptr, colours, rng);
+            Fighter given = a;
+            give_draw(given, d);
+            same &= given.outfits.drawn == copy.outfits.drawn && given.outfits.last == copy.outfits.last
+                    && given.colours[d.costume].drawn == copy.colours[d.costume].drawn;
+            Fighter second = a;                                   // a second player on the same fighter: drawn on the first one's
+            give_draw(second, d);
+            const Draw e = draw_outfit(second, outfits, nullptr, colours, rng);
+            chain &= e.costume != d.costume;
+        }
+        check(same, "a draw on a copy, given in the rounds afterwards: the rounds as if drawn there (300 seeds)");
+        check(chain, "a second player's draw on the first one's copy: never the same outfit (300 seeds)");
+        Pool p;
+        p.drawn = { 0 };
+        p.last = 0;
+        give(p, 2);
+        check(p.drawn == std::vector<int>({ 0, 2 }) && p.last == 2, "give: the value joins the round");
+        give(p, 0);
+        check(p.drawn == std::vector<int>({ 0 }) && p.last == 0, "give: a value the round gave already starts a new round");
+        Fighter none;
+        give_draw(none, Draw{});
+        check(none.outfits.drawn.empty() && none.colours.empty(), "give_draw of no draw: nothing");
+    }
+    {   // the pool: the game's outfits listed that the costume table has, then the loader's the player sees
+        const std::vector<int> listed = { 0, 1, 2, 4, 5, 16, 17, 104, 5, 2 };
+        auto slot = [](int c) { return c >= 5 && c <= 12; };
+        auto table = [](int c) { return c < 5; };
+        Listed l = split_listed(listed, 104, slot, table);
+        check(l.game == std::vector<int>({ 0, 1, 2, 4 }) && l.unknown == std::vector<int>({ 16, 17 }),
+              "a listed number neither the loader's nor the table's: never in the pool");
+        l = split_listed(listed, 104, slot, nullptr);
+        check(l.game == std::vector<int>({ 0, 1, 2, 4, 16, 17 }) && l.unknown.empty(), "the table not known yet: every listed number is the game's");
+        const std::vector<int> game = { 0, 4 };
+        check(pool_of(&game, { 5, 7, 4 }) == std::vector<int>({ 0, 4, 5, 7 }), "the pool: the game's listed, then the loader's shown");
+        check(pool_of(nullptr, { 5 }) == std::vector<int>({ 0, 5 }), "the row never read: Outfit 1 and the loader's");
+        check(pool_of(nullptr, {}) == std::vector<int>({ 0 }), "nothing known: Outfit 1 alone");
+    }
+    {   // an outfit's colours: the game's table (owned or not) and its Color row, each once, no entry
+        const int mc = entry_value("mc");
+        check(outfit_colours({ 0, 1, 2, 9 }, { 0, 1, 200, mc }) == std::vector<int>({ 0, 1, 2, 9, 200 }),
+              "the table's colours, then the row's others (an EX colour), never an entry");
+        check(outfit_colours({}, { 3, 0 }) == std::vector<int>({ 3, 0 }), "no table: the row's");
+        check(outfit_colours({ 5, -1 }, {}) == std::vector<int>({ 5 }), "no row: the table's");
+        check(outfit_colours({}, {}).empty(), "nothing known: none (the caller's Color 1)");
+    }
+    {   // state.json's numbers nobody knows any more: out of the rounds and the next draws
+        Fighter f;
+        f.outfits = { { 0, 16, 5, 17 }, 17 };
+        f.colours[0] = { { 1 }, 1 };
+        f.colours[17] = { { 0 }, 0 };
+        f.next = { 17, 0 };
+        f.next_colour = { 16, 1 };
+        const int n = forget(f, [](int c) { return c < 16; });
+        check(n == 6 && f.outfits.drawn == std::vector<int>({ 0, 5 }) && f.outfits.last == -1 && f.colours.size() == 1
+              && f.colours.count(0) && !f.next.valid() && !f.next_colour.valid(), "forget: every value of an unknown outfit goes (6)");
+        Fighter g;
+        g.outfits = { { 0, 5 }, 5 };
+        g.next = { 5, 3 };
+        check(forget(g, [](int c) { return c < 16; }) == 0 && g.next == Draw({ 5, 3 }) && g.outfits.last == 5, "forget: known ones stay");
+    }
     {   // online: the set and the save
         const Draw game{ 2, 4 }, ours{ 12, 1 };
-        check(save_holds(game, false) == game, "a game outfit drawn: the save holds it (the profile sends it)");
+        check(!save_holds(game, true, false).valid(), "Outfit 3 drawn: the alias wears it, the save holds the carrier (1.49)");
+        check(save_holds(Draw{ 4, 6 }, false, true) == Draw({ 4, 6 }), "DriveTech drawn: the save holds it (the profile sends it)");
+        check(!save_holds(Draw{ 17, 0 }, false, false).valid(), "a number nobody knows drawn: the save holds the carrier, never it");
         const int rw = entry_value("rw");
-        check(save_holds(Draw{ 2, rw }, false) == Draw({ 2, 1 }), "a game outfit and an entry drawn: the save holds the outfit on 02");
+        check(save_holds(Draw{ 0, rw }, false) == Draw({ 0, 1 }), "Outfit 1 and an entry drawn: the save holds Outfit 1 on 02");
         Bind e = bind_set(Draw{ 2, rw }, false, 2, 1);
         check(e.consumed && !e.local && e.set == Draw({ 2, rw }), "the match holds that outfit on 02: the entry is worn (on this PC)");
         e = bind_set(Draw{ 2, rw }, false, 2, 5);
@@ -159,13 +253,17 @@ int main() {
         b = bind_set(game, false, 2, 4);
         check(b.consumed && !b.local && b.set == Draw({ 2, 4 }), "game outfit the match holds: the game wears it, the draw taken");
         b = bind_set(game, false, 2, 6);
-        check(b.consumed && !b.local && b.set == Draw({ 2, 6 }), "game outfit, another colour in the match: the match's colour (what the opponent sees)");
+        check(b.consumed && !b.local && b.set == Draw({ 2, 4 }), "game outfit, Color 5 drawn: kept, the match holds Color 1 / 2 only (21/11)");
         b = bind_set(game, false, 0, 1);
         check(b.consumed && b.local && b.set == game, "game outfit the match does not hold (no profile since): worn on this PC, the draw taken");
         b = bind_set(Draw{ 0, 2 }, false, 4, 1);
         check(!b.consumed && !b.local && b.set == Draw({ 4, 1 }), "Outfit 1 drawn, the match holds another: worn as the match holds, the draw waits");
         b = bind_set(Draw{ 0, 2 }, false, 0, 5);
-        check(b.consumed && !b.local && b.set == Draw({ 0, 5 }), "Outfit 1 drawn and held: the game wears it");
+        check(b.consumed && !b.local && b.set == Draw({ 0, 2 }), "Outfit 1 drawn and held, Color 3 drawn: kept (worn on this PC over Color 1 / 2)");
+        b = bind_set(Draw{ 4, 6 }, false, 4, 0);
+        check(b.consumed && !b.local && b.set == Draw({ 4, 6 }), "DriveTech in Color 7 drawn, the match holds DriveTech Color 1: Color 7 kept (worn on this PC)");
+        b = bind_set(Draw{ 0, 1 }, false, 0, 0);
+        check(b.consumed && b.set == Draw({ 0, 0 }), "Outfit 1 in Color 2 drawn, the match holds Color 1: the match's (a profile came between)");
         b = bind_set(Draw{}, false, 3, 0);
         check(!b.consumed && !b.local && b.set == Draw({ 3, 0 }), "no draw yet: what the match holds");
     }

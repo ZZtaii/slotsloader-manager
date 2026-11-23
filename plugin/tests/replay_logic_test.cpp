@@ -440,6 +440,34 @@ int main() {
             check(parse_guid(bgm_value_guid(bm), bg) && bgm_value_english(bm)[0] != 0, "bgm: each value has its words");
     }
 
+    {   // My Own (22/11): the Costume row's first value, On starts on it; its one colour reads My Own; "mode":"own" in the file
+        Fighter o = ryu();
+        o.outfits.push_back(own_outfit());
+        sort_outfits(o.outfits);
+        check(o.outfits.size() == 6 && o.outfits[0].own && o.outfits[0].costume == kOwnCostume, "My Own: kept, first in the list");
+        check(o.outfits[1].costume == 0, "My Own: then the game outfits");
+        const Choice first = cycle_outfit(o, Choice{}, +1);
+        check(first.forced && first.costume == kOwnCostume, "My Own: On from Off starts on it");
+        check(cycle_outfit(o, first, -1).forced == false, "My Own: Left from it goes back to Off (the row skips it)");
+        check(cycle_outfit(o, first, +1).costume == 0, "My Own: Right from it, Outfit 1");
+        check(cycle_color(o, first, +1) == first && cycle_color(o, first, -1) == first, "My Own: one colour, nothing to cycle (no Random)");
+        check(choice_color_label(o.outfits[0], first) == o.outfits[0].name && !o.outfits[0].name.empty(), "My Own: its Color row reads My Own");
+        check(row_text(o, first).find(o.outfits[0].name) == 0, "My Own: the log line");
+        Choice rnd = cycle_outfit(o, first, +1);
+        rnd = cycle_color(o, rnd, -1);   // Outfit 1, the colour Random (its last value)
+        check(rnd.random_color, "Outfit 1 on Random colour");
+        check(!cycle_outfit(o, rnd, -1, true).random_color, "back to My Own: no Random colour carried");
+        const std::vector<Fighter> cat = { o };
+        const Choices sc = { { 1, first } };
+        check(summary_lines(cat, sc, 20) == std::vector<std::string>{ "Ryu: " + o.outfits[0].name }, "My Own: one summary line, no colour");
+        const std::string own_text = to_json(sc);
+        check(own_text.find("\"mode\": \"own\"") != std::string::npos && own_text.find("costume") == std::string::npos, "My Own: written as mode own");
+        Choices own_back;
+        check(from_json(own_text, own_back) && own_back.size() == 1 && own_back[1] == first, "My Own: read back");
+        check(from_json("{\"version\":1,\"fighters\":{\"1\":{\"mode\":\"own\",\"options\":{\"esf001/x\":[\"a\"]}}}}", own_back) && own_back[1].costume == kOwnCostume,
+              "My Own: read with options kept beside it");
+    }
+
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;
 }
