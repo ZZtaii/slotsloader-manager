@@ -1209,9 +1209,16 @@ force them in a replay, `SF6_ColorModNative.dll` exports (the suite's usual patt
   (state.json is never changed): that entry on colour 02, or `""` = the game's own colours. Scope 1 = the tab's preview
   (Battle Settings' capture-room fighter outside a battle, set while the character's page is up); scope 2 = one replay's
   battle (`battle` = its `ReplayFlowMap`), applied only while it is the running flow map and dropped once another runs.
+- `int SF6ColorMod_RequestSide(int scope, int side, int fighter, int costume, const char* id, void* battle)` (22/11, scope 2
+  only): the same for one battle side (1 = P1, 2 = P2, the description's team 0 / 1; 0 = any side, what
+  `SF6ColorMod_Request` asks). A mirror match's two fighters on the same outfit then wear each its own entry; a side's
+  request comes before one for any side. Absent from an older Color Mod: the plugin falls back to `SF6ColorMod_Request`.
+- `int SF6ColorMod_FighterEntry(int fighter, int costume, char* id, int cap)` (22/11): the entry the player's own choice
+  (Fighter Settings) puts on that fighter and outfit, 1 with its id, 0 for the plain colour 02 or Random. The plugin writes
+  it in its replay journal (`"colormod"` beside the slot's colour), so a replay set to **My Own** asks for that very entry.
 The tab stores a Color Mod entry as `"color": 1, "colormod": "<entry file path>"` in `replay_outfits.json`; at the
 replay's `setupDesc` every forced fighter is asked for (its entry, or the game colours), replacing the previous replay's
-requests.
+requests. My Own (`"mode": "own"`) takes the match's journal line instead: the slot, its colour and its Color Mod entry.
 
 **Opponent Outfit Settings** lists the same entries in the game's own colour grid, each as colour 02 for the game. The Color
 Mod gives each RW / MC cell its own squares and dresses the preview with the selected cell through the same scope 1 request

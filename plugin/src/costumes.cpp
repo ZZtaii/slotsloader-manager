@@ -5,11 +5,13 @@
 //     loader computed), each character's carrier (carrier.hpp) with its colours and folder, once;
 //   - ownership: every slot is owned (AddDlcSaveData), slots of removed mods are not; the game
 //     clears DLC ownership at login, so it is given back after the title screen and whenever a
-//     screen that lists outfits opens. A slot made from an outfit the player does not own (the
-//     game's own list of the character's outfits says so, ownership.hpp) is not owned: the select
-//     screen and Battle Settings do not list it;
-//   - online alias: Battle Settings keeps the character's carrier in the save (Outfit 1 or DriveTech, the
-//     player's setting: carrier.hpp),
+//     screen that lists outfits opens. A slot made from an outfit the player does not own (the game's own
+//     list of the character's outfits says so) is not owned, the select screen and Battle Settings do not
+//     list it: Manager mode as the Manager's fork does, normal mode while ownership.hpp kLimitToOwnedOutfits
+//     is on (Wael 24/11/2026: on);
+//   - online alias: Battle Settings keeps in the save what the network may hold (carrier.hpp decide: the
+//     carrier, Outfit 1 or DriveTech, for a slot or an outfit the account does not really own,
+//     true_owner.hpp; an outfit and a colour the account owns as they are, Wael 24/11/2026),
 //     which is what other players see, and the slot chosen there as an intent; when the game asks for
 //     the carrier's files for a match, the player's own fighter in the battle description gets the slot
 //     as the game's own local costume override and the slot's files are asked for next to the
@@ -22,7 +24,6 @@
 #include "slots_ui.hpp"
 #include "rto.hpp"
 #include "ownership.hpp"
-#include "true_owner.hpp"
 #include "manager_marker.hpp"
 #include "../../common/file_sha256.hpp"
 #include "../../common/manager_mode.hpp"
@@ -32,6 +33,7 @@
 #include "colormod_link.hpp"
 #include "perf.hpp"
 #include "random_logic.hpp"
+#include "true_owner.hpp"
 #include "words.hpp"
 #include "wjournal.hpp"
 
@@ -162,17 +164,15 @@ std::map<int, Intent> g_intent;
 std::recursive_mutex g_alias_mx;       // the alias's state (see "Online alias") and Random's below: hooks and tick
 
 // ---- Random (random_logic.hpp; see "Random" below), under g_alias_mx ----
-// What each character's Costume row lists (the Random outfit left out) and the colours each of its game outfits' Color row
-// lists, read on the game thread offline (the screens that list outfits) and kept as numbers for the hooks that draw
-std::map<int, std::vector<int>> g_rand_outfits;
-// The same without the game outfits the player does not really have (true_owner.hpp: an unlock-all script lists them all): ranked
-// matches draw from it, everything else from the whole row (Wael 10/11). The online draw made before matchmaking does not know the
-// next match's mode: it follows the last online set's (ranked or none seen yet: the owned pool; another online mode: the whole row).
-std::map<int, std::vector<int>> g_rand_owned;
-std::map<int, std::vector<int>> g_rand_owned_seen;   // the last owned lists logged
-bool g_online_owned = true;
-constexpr int kRankedMatch = 14;       // app.EGameMode.RANKED_MATCH
+// The game's outfits each character's Costume row lists that the game's costume table has (rnd::split_listed), read on the game
+// thread offline (the screens that list outfits) and kept as numbers for the hooks that draw; the loader's outfits come from the
+// registry at each draw (rand_outfits_of). No ownership limit (Wael 22/11): every mode, ranked included, draws from it.
+std::map<int, std::vector<int>> g_rand_game;
+std::map<int, std::vector<int>> g_rand_pool_seen;     // the last pools logged
+std::map<int, std::vector<int>> g_rand_unknown_seen;  // the last numbers logged as known to nobody
+// Every game outfit's colours in the game's table, owned or not (TableDataManager.GetFighterCostumeColors, read once a session)
 std::map<std::pair<int, int>, std::vector<int>> g_rand_colours;
+bool g_rand_colours_read = false;
 std::map<int, rnd::Fighter> g_rand;    // per character: its rounds and Battle Settings' next draw (state.json "random")
 // Replays' own rounds (Wael 10/11: "two separate rounds"): Replays > Settings' Random outfit and Random colours draw from them, the
 // battles from g_rand (state.json "random_replay"; no next draw)
@@ -199,6 +199,7 @@ std::map<std::pair<int, int>, int> g_moved;
 // ---- per character ----
 struct Fighter {
     int carrier = -1;                // the alias's outfit (carrier.hpp), -1 not decided or none
+    carrier::Own dt_own = carrier::Own::Unknown;   // the account really owns its DriveTech (true_owner.hpp), as the carrier was decided
     bool left_out = false;           // no carrier: no alias for this character
     std::set<int> costumes;          // the character's own outfits in the game's costume table
     std::set<int> base_colors; int base_min = 0; bool base_known = false;   // the carrier's colours
@@ -215,27 +216,84 @@ bool g_carriers_done = false, g_table_ok = false;
 bool g_online_dt = false;
 bool g_carrier_apply = false;
 
-// The fighter's carrier from the setting, with its colours when they are known
-void set_carrier(struct Fighter& fr);
+// The fighter's carrier from the setting and whether the account owns its DriveTech, with its colours when they are known
+void set_carrier(int fid);
 
 int carrier_of(int fid) {
     auto it = g_f.find(fid);
     return it == g_f.end() ? -1 : it->second.carrier;
 }
-// What the save data holds while a slot is the intent: the carrier (the setting's until it is decided)
+// What the save data holds while a slot is the intent: the carrier (Outfit 1 until it is decided: whether the account owns
+// DriveTech is not known then, Wael 24/11/2026)
 int save_cos_of(int fid) {
     int c = carrier_of(fid);
-    return c >= 0 ? c : g_online_dt ? carrier::kDriveTech : carrier::kOutfit1;
+    return c >= 0 ? c : carrier::kOutfit1;
 }
 
-void set_carrier(Fighter& fr) {
-    fr.carrier = carrier::choose(fr.costumes, g_online_dt);
+void set_carrier(int fid) {
+    Fighter& fr = g_f[fid];
+    // DriveTech only when the account really owns it (Wael 24/11/2026: "costume 1 ou drive tech selon le choix et dispo du costume")
+    fr.dt_own = trueown::outfit(fid, carrier::kDriveTech);
+    fr.carrier = carrier::owned_carrier(fr.costumes, g_online_dt, fr.dt_own);
     auto c = fr.colours.find(fr.carrier);
     fr.base_known = c != fr.colours.end() && !c->second.empty();
     fr.base_colors = fr.base_known ? c->second : std::set<int>{};
     fr.base_min = fr.base_known ? *c->second.begin() : 0;
 }
 std::string carrier_name(int fid) { return ownership::outfit_label(save_cos_of(fid)); }
+
+// ---- the network decision (carrier.hpp decide; Wael 24/11/2026: "quoi qu'il arrive on fait le spoof comme il faut en ligne") ----
+// Outside Battle Settings the save holds what the network may hold, in every mode the save feeds: a slot is worn on this PC only
+// over the carrier in Color 1 / 2 (as since 21/11, "tout spoof le costume 1 ou drive tech, couleur 1 ou 2"); a game outfit and a
+// colour the account really owns (true_owner.hpp) are held as they are; one only an unlock-all script gives is worn on this PC
+// only, the save holding the carrier (an outfit) or Color 1 (a colour); not known: Color 1 of the carrier. Every place that
+// writes the save or a description for the network asks pick_for; what the player sees never changes (the real choice).
+// Numbers only (trueown answers from what it read on the game thread): any thread.
+bool unknown_outfit(int fid, int cos);
+carrier::Pick pick_for(int fid, int cos, int col) {
+    carrier::Ask a;
+    a.costume = cos;
+    a.colour = col;
+    auto it = g_f.find(fid);
+    if (it != g_f.end() && !it->second.left_out) {
+        a.carrier = it->second.carrier;
+        if (it->second.base_known) a.carrier_colours = &it->second.base_colors;
+    }
+    if (cos < 0 || unknown_outfit(fid, cos)) a.kind = carrier::Kind::NotKnown;
+    else if (is_slot(fid, cos)) a.kind = carrier::Kind::Slot;   // the Random outfit included: one of ours, never sent
+    else {
+        a.kind = carrier::Kind::Game;
+        a.outfit = trueown::outfit(fid, cos);
+        if (col >= 2) a.colour_own = trueown::colour(fid, cos, col);
+    }
+    return carrier::decide(a);
+}
+// The network may hold outfit `cos` of `fid` as it is (in Color 1): Outfit 1, a game outfit the account really owns
+bool outfit_sendable(int fid, int cos) { return pick_for(fid, cos, 0).net_cos == cos; }
+// ... and that outfit in colour `col`
+bool colour_sendable(int fid, int cos, int col) {
+    const carrier::Pick p = pick_for(fid, cos, col);
+    return p.net_cos == cos && p.net_col == col;
+}
+// The colour the save (and the network) holds for outfit `cos` worn in colour `col`
+int net_col_of(int fid, int cos, int col) { return pick_for(fid, cos, col).net_col; }
+
+// A game outfit of `fid` the network may not hold as it is (only an unlock-all script gives it, or whether the account owns it is
+// not known; DriveTech included since 24/11/2026): worn by the alias, never held by the save outside the menu
+bool alias_game(int fid, int cos) {
+    if (cos <= 0 || is_slot(fid, cos)) return false;
+    auto it = g_f.find(fid);
+    return it != g_f.end() && it->second.carrier >= 0 && !it->second.left_out && it->second.costumes.count(cos) != 0
+           && !outfit_sendable(fid, cos);
+}
+// An outfit the alias wears for `fid`: a slot the player sees, or one of the game's outfits above
+bool wearable(int fid, int cos) { return is_slot(fid, cos) ? shown(fid, cos) : alias_game(fid, cos); }
+// The colour the save (and the network) holds for a choice worn in colour `c`: Color 1 or 2 the carrier has
+int net_colour_of(int fid, int c) {
+    static const std::set<int> none;
+    auto it = g_f.find(fid);
+    return carrier::net_colour(c, it != g_f.end() && it->second.base_known ? it->second.base_colors : none);
+}
 
 // The carrier the save data was given in an earlier session (state.json "carrier"; DriveTech when
 // it names none), to move a save that still holds it (carrier::stale)
@@ -431,7 +489,13 @@ void load_state() {
             if (kept >= 0 && game) { g_to_game[fid] = {kept, in.color, in.slot}; in = Intent{}; }
             else if (kept > 0 && is_slot(fid, kept)) { in.slot = kept; migrated = true; }
         }
-        if (in.slot && !is_slot(fid, in.slot)) in = Intent{};   // the slot's mod is gone
+        // the slot's mod is gone; a game outfit (Outfit 2, 3...: numbered before the slots) stays, checked by wanted_slot
+        // once the costume table is read (alias_game)
+        if (in.slot && !is_slot(fid, in.slot)) {
+            auto so = g_slot_of.find(fid);
+            const bool game = in.slot > 0 && (so == g_slot_of.end() || so->second.empty() || in.slot < so->second.begin()->first);
+            if (!game) in = Intent{};
+        }
         g_intent[fid] = in;
     }
     rto::migration_done();
@@ -451,6 +515,8 @@ void save_state() {
         } else if (in.slot) {
             if (in.color >= 0) snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d, \"color\": %d%s }", first ? "" : ",", fid, in.slot, in.color, car);
             else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d%s }", first ? "" : ",", fid, in.slot, car);
+        } else if (in.color >= 0) {
+            snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": false, \"color\": %d%s }", first ? "" : ",", fid, in.color, car);
         } else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": false%s }", first ? "" : ",", fid, car);
         o += b; first = false;
     }
@@ -553,21 +619,25 @@ void set_col(Obj* e, int v, int fid, const char* why) {
 // Random (random_logic.hpp): the character's Random outfit is never worn, a draw takes its place
 // ---------------------------------------------------------------------------------------------
 //
-// The pools: what each character's Costume row lists (GetCostumeNoList, read on the game thread offline, at the screens that
-// list outfits) without the Random outfit, and without the NSFW outfits while they are hidden (checked again at each draw from
-// the numbers load_registry kept and the atomic setting: the hooks draw). A colour among those the drawn outfit can show: for a
-// game outfit its colour records (TableDataManager.GetFighterCostumeColors) the player has (a default one, else one in the
-// save: the colours a character's level unlocks), once a session; ours have 0-9 (insert_colors). Never through
-// ColorInventory.GetColorList: the Color Mod follows the last list the game asked for (where its entries sit in the Color row),
-// a list asked by us in between would move them.
-//   - Picked on a select screen (Arcade, Training, Versus...): a FighterDesc in Random gets its draw (Costume, Color) when the
-//     game asks for the fighters' files, before the VS screen and the fighters read the description; the request in flight of the
-//     Random outfit's files asks for the drawn outfit's (its argument), and so does its unload later (rand_on_load / _unload).
+// The pools: the game's outfits each character's Costume row lists (GetCostumeNoList, read on the game thread offline, at the
+// screens that list outfits) that the game's costume table has, then the loader's outfits the player sees (the registry, at each
+// draw), without the Random outfit and the NSFW outfits while they are hidden (checked again at each draw from the numbers
+// load_registry kept and the atomic setting: the hooks draw). No ownership limit (Wael 22/11). A colour among every colour the
+// drawn outfit has: for a game outfit its colour records in the game's table (TableDataManager.GetFighterCostumeColors, owned or
+// not, once a session) and its Color row's; ours have 0-9 (insert_colors). Never through ColorInventory.GetColorList: the Color
+// Mod follows the last list the game asked for (where its entries sit in the Color row), a list asked by us in between would move
+// them.
+//   - Picked on a select screen (Arcade, Training, Versus, Team Battle): drawn when the cursor lands on Random (pre_sel_setting),
+//     written in the battle's description by post_select_desc; elsewhere offline, a FighterDesc in Random gets its draw (Costume,
+//     Color) when the game asks for the fighters' files, before the VS screen and the fighters read the description; the request
+//     in flight of the Random outfit's files asks for the drawn outfit's (its argument), and so does its unload later
+//     (rand_on_load / _unload).
 //   - Battle Settings (online, rooms, Battle Hub: the alias's modes): the intent is Random and its next draw is made at once
-//     (before the profile the menu sends). A game outfit drawn is what the save holds outside the menu and in the profile (the
-//     opponent sees it); one of ours leaves the carrier there and the alias wears it. A match's first managed load of the
-//     player's fighter takes the next draw for the set (rand_bind; a rematch builds the fighters again without asking for files)
-//     and makes the one after, which the save gets at the next profile built or screen that lists outfits.
+//     (before the profile the menu sends). Outfit 1 or DriveTech drawn is what the save holds outside the menu and in the profile,
+//     in Color 1 / 2 (the opponent sees it); any other outfit leaves the carrier there and the alias wears it. A match's first
+//     managed load of the player's fighter takes the next draw for the set (rand_bind; a rematch builds the fighters again without
+//     asking for files) and makes the one after, which the save gets at the next profile built, select screen, or Battle Settings
+//     opened (on_menu_open).
 bool online_now();
 Obj* costume_inventory();
 std::vector<uint32_t> listed_outfits(Method* m_list, Obj* ci, int fid, bool* ok);
@@ -580,28 +650,48 @@ bool rand_allowed(int fid, int cos) {
     auto it = g_nsfw_nos.find(fid);
     return it == g_nsfw_nos.end() || std::find(it->second.begin(), it->second.end(), static_cast<uint32_t>(cos)) == it->second.end();
 }
-// The pool's outfits, as the Costume row last listed them (owned: the ones the player really has); never read yet: Outfit 1 alone
-// (under g_alias_mx)
-std::vector<int> rand_outfits_of(int fid, bool owned = false) {
-    const auto& m = owned ? g_rand_owned : g_rand_outfits;
-    auto it = m.find(fid);
-    return it != m.end() && !it->second.empty() ? it->second : std::vector<int>{ carrier::kOutfit1 };
+// The game's costume table has outfit `cos` of `fid` (read_carriers; true while the table is not known)
+bool in_table(int fid, int cos) {
+    if (!g_table_ok) return true;
+    auto it = g_f.find(fid);
+    // a fighter whose outfits were not read (the table is read for the fighters that have slots): not known, so never "unknown"
+    if (it == g_f.end() || it->second.costumes.empty()) return true;
+    return it->second.costumes.count(cos) != 0;
 }
+// A number neither one of the loader's outfits (registry.json) nor in the game's costume table: a pak another program left (seen
+// 22/11: Ryu's "costume 16, 17, 18, 25", shown as "Outfit XX..." in Battle Settings). Never drawn, never held by the save outside
+// the menu (the carrier takes its place). Not known while the table is not read.
+bool unknown_outfit(int fid, int cos) { return cos >= 0 && g_table_ok && !is_slot(fid, cos) && !in_table(fid, cos); }
+// The loader's outfits of `fid` the player sees now (registry.json; an NSFW one only while they are shown), Random left out
+std::vector<int> rand_slots_of(int fid) {
+    std::vector<int> v;
+    if (auto f = g_slot_of.find(fid); f != g_slot_of.end())
+        for (auto& [cos, i] : f->second)
+            if (!g_slots[i].random && visible(g_slots[i])) v.push_back(cos);
+    return v;
+}
+// The pool's outfits (rnd::pool_of): the game's the Costume row last listed (never read yet: Outfit 1 alone), then the loader's
+// the player sees now (under g_alias_mx)
+std::vector<int> rand_outfits_of(int fid) {
+    auto it = g_rand_game.find(fid);
+    return rnd::pool_of(it != g_rand_game.end() ? &it->second : nullptr, rand_slots_of(fid));
+}
+// A game outfit's colours as its Color row listed them when the game showed it (rand_seen_row: any outfit of any character)
+std::map<std::pair<int, int>, std::vector<int>> g_row_colours;
+// The colours an outfit has: a slot's 0-9 (insert_colors); a game outfit's every colour of the game's table, owned or not, and of
+// its Color row (rnd::outfit_colours; Wael 22/11: no ownership limit). Empty: none known (the table not read, the row never seen).
 std::vector<int> rand_colours_of(int fid, int cos) {
     if (is_mod_slot(fid, cos)) return { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-    auto it = g_rand_colours.find({ fid, cos });
-    return it != g_rand_colours.end() ? it->second : std::vector<int>{};
+    static const std::vector<int> none;
+    auto t = g_rand_colours.find({ fid, cos });
+    auto r = g_row_colours.find({ fid, cos });
+    return rnd::outfit_colours(t != g_rand_colours.end() ? t->second : none, r != g_row_colours.end() ? r->second : none);
 }
-// A game outfit's colours as its Color row listed them when the game showed it (rand_seen_row: any outfit of any character,
-// where the player can choose Random): for the outfits rand_read_lists did not read
-std::map<std::pair<int, int>, std::vector<int>> g_row_colours;
-// Every colour a draw of that outfit takes: the game's (rand_colours_of, else its Color row's, none known: Color 1) and the
-// Color Mod's RW / MC entries of it, when it can dress them in a battle (as numbers: rnd::entry_value). Under g_alias_mx (the
-// Color Mod's lock is taken after it).
+// Every colour a draw of that outfit takes: its colours (rand_colours_of; none known: Color 1) and the Color Mod's RW / MC entries
+// of it, when it can dress them in a battle (as numbers: rnd::entry_value). Under g_alias_mx (the Color Mod's lock is taken after
+// it).
 std::vector<int> rand_draw_colours_of(int fid, int cos) {
     std::vector<int> v = rand_colours_of(fid, cos);
-    if (v.empty())
-        if (auto r = g_row_colours.find({ fid, cos }); r != g_row_colours.end()) v = r->second;
     if (v.empty()) v.push_back(0);
     if (colormod::battle_ok())
         for (const auto& e : colormod::entries(fid, cos)) v.push_back(rnd::entry_value(e.id));
@@ -621,11 +711,13 @@ std::string rand_colour_name(int fid, int cos, int v) {
         if (rnd::entry_value(e.id) == v) return e.label;
     return "an entry gone since";
 }
-// The row lists it (not read yet this session: a draw kept from the last one stays)
-bool rand_listed(int fid, int cos, bool owned = false) {
-    const auto& m = owned ? g_rand_owned : g_rand_outfits;
-    auto it = m.find(fid);
-    return it == m.end() || std::find(it->second.begin(), it->second.end(), cos) != it->second.end();
+// The pool has it now: one of the loader's the player sees, or a game outfit the row listed (the row not read yet this session:
+// a draw kept from the last one stays, unless nobody knows its number)
+bool rand_listed(int fid, int cos) {
+    if (is_slot(fid, cos)) return is_mod_slot(fid, cos) && shown(fid, cos);
+    if (unknown_outfit(fid, cos)) return false;
+    auto it = g_rand_game.find(fid);
+    return it == g_rand_game.end() || std::find(it->second.begin(), it->second.end(), cos) != it->second.end();
 }
 std::string rand_name(int fid, int cos) {
     if (!is_mod_slot(fid, cos)) return ownership::outfit_label(cos);
@@ -639,20 +731,24 @@ bool rand_intent(int fid) {
     return in != g_intent.end() && is_random(fid, in->second.slot);
 }
 
-// A draw from the character's pool (under g_alias_mx). `colour_ok(costume, colour)`: what the colour may be (a mirror's left
-// out; none: any). owned: only the outfits the player really has (ranked).
-rnd::Draw rand_draw(int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr, bool owned = false,
-                    bool replay = false) {
+// A draw from the character's pool into the rounds `f` (the character's own, Replays' own, or a copy of them: a select screen's,
+// rand_sel_draw), under g_alias_mx. `colour_ok(costume, colour)`: what the colour may be (a mirror's left out; none: any).
+rnd::Draw rand_draw_on(rnd::Fighter& f, int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr) {
     const rnd::Rng rng = [] { return static_cast<uint32_t>(g_rng()); };
-    rnd::Fighter& f = replay ? g_rand_replay[fid] : g_rand[fid];
-    const rnd::Draw d = rnd::draw_outfit(f, rand_outfits_of(fid, owned), [fid](int c) { return rand_allowed(fid, c); },
+    const std::vector<int> outs = rand_outfits_of(fid);
+    const rnd::Draw d = rnd::draw_outfit(f, outs, [fid](int c) { return rand_allowed(fid, c); },
                                          [fid](int c) { return rand_draw_colours_of(fid, c); }, rng, colour_ok);
-    if (!d.valid()) { logf("[F%d] Random: nothing to draw (%s)", fid, why); return d; }
-    g_rand_dirty = true;
+    if (!d.valid()) { logf("[F%d] Random: nothing to draw, every outfit of the pool refused now (%s)", fid, why); return d; }
     size_t pool = 0;
-    for (int c : rand_outfits_of(fid, owned)) pool += rand_allowed(fid, c) ? 1 : 0;
-    logf("[F%d] Random: %s %s drawn (%s; %zu of %zu outfits given in this round%s)", fid, rand_name(fid, d.costume).c_str(),
-         rand_colour_name(fid, d.costume, d.color).c_str(), why, f.outfits.drawn.size(), pool, owned ? ", the player's own only" : "");
+    for (int c : outs) pool += rand_allowed(fid, c) ? 1 : 0;
+    logf("[F%d] Random: %s %s drawn (%s; %zu of %zu outfits given in this round)", fid, rand_name(fid, d.costume).c_str(),
+         rand_colour_name(fid, d.costume, d.color).c_str(), why, f.outfits.drawn.size(), pool);
+    return d;
+}
+// A draw from the character's own rounds (replay: Replays' own), kept in state.json
+rnd::Draw rand_draw(int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr, bool replay = false) {
+    const rnd::Draw d = rand_draw_on(replay ? g_rand_replay[fid] : g_rand[fid], fid, why, colour_ok);
+    if (d.valid()) g_rand_dirty = true;
     return d;
 }
 // A Random colour of outfit `cos` (the Color Mod's Random value), from that outfit's round (under g_alias_mx). `ok`: what it may
@@ -676,17 +772,19 @@ void rand_ensure_next_colour(int fid, int cos, const char* why) {
 }
 
 // The Color Mod dresses an entry drawn on a battle side (its scopes 3 / 4) until the next battle's fighters are asked for
-// (rand_clear_worn). A game colour drawn: nothing to ask (the game wears it). Under g_alias_mx.
+// (rand_clear_worn). A game colour drawn: nothing to ask (the game wears it). Under g_alias_mx. Asked every time (the request
+// replaces the side's last one: the Color Mod may have dropped it since), logged when it changes.
 void rand_wear_entry(int side, int fid, int cos, int v, const char* why) {
     if (!rnd::is_entry(v) || (side != 1 && side != 2)) return;
     const std::string id = rand_entry_id(fid, cos, v);
     RandReq& r = g_rand_req[side];
-    if (!id.empty() && r.fid == fid && r.cos == cos && r.id == id) return;   // asked already (a rematch's fighters built again)
     if (id.empty()) { logf("[F%d] Random: the entry drawn for %s is gone: colour 02 (%s)", fid, rand_name(fid, cos).c_str(), why); return; }
     if (!colormod::request_battle(side, fid, cos, id)) { logf("[F%d] Random: the Color Mod refused the entry drawn: colour 02 (%s)", fid, why); return; }
+    const bool again = r.fid == fid && r.cos == cos && r.id == id;
     r = { fid, cos, id };
-    logf("[F%d] Random: P%d wears %s of %s, dressed by the Color Mod (%s)", fid, side, rand_colour_name(fid, cos, v).c_str(),
-         rand_name(fid, cos).c_str(), why);
+    if (!again)
+        logf("[F%d] Random: P%d wears %s of %s, dressed by the Color Mod (%s)", fid, side, rand_colour_name(fid, cos, v).c_str(),
+             rand_name(fid, cos).c_str(), why);
 }
 void rand_clear_worn(const char* why) {
     if (g_rand_req[1].fid < 0 && g_rand_req[2].fid < 0) return;
@@ -695,17 +793,40 @@ void rand_clear_worn(const char* why) {
     logf("costumes: Random: the entries drawn for the last battle are over (%s)", why);
 }
 // Battle Settings' Random: its next draw, made again when it is gone from the row or hidden (NSFW) (under g_alias_mx)
+// A draw worn on this PC only (the alias), the save and the network holding the carrier: one of ours, or a game outfit the
+// network may not hold (alias_game: only an unlock-all script gives it, or not known). A game outfit the account owns is held as
+// it is (Outfit 1 always), in its colour when the network may hold it too (net_col_of, Wael 24/11/2026): another colour is worn
+// on this PC over Color 1 (colour_only), never through the outfit's files asked for again.
+bool rand_local(int fid, const rnd::Draw& d) {
+    return d.valid() && (is_mod_slot(fid, d.costume) || alias_game(fid, d.costume));
+}
 void rand_ensure_next(int fid, const char* why) {
     rnd::Fighter& f = g_rand[fid];
-    if (f.next.valid() && rand_allowed(fid, f.next.costume) && rand_listed(fid, f.next.costume, g_online_owned)) return;
-    f.next = rand_draw(fid, why, nullptr, g_online_owned);
+    if (f.next.valid() && rand_allowed(fid, f.next.costume) && rand_listed(fid, f.next.costume)) {
+        // its colour an entry the Color Mod no longer has (its pack removed): the colour drawn again, the outfit kept (only while the
+        // Color Mod can say: one not linked yet has no entries at all)
+        if (rnd::is_entry(f.next.color) && colormod::battle_ok() && rand_entry_id(fid, f.next.costume, f.next.color).empty()) {
+            logf("[F%d] Random: the entry drawn with %s for the next set is gone: its colour is drawn again (%s)", fid,
+                 rand_name(fid, f.next.costume).c_str(), why);
+            f.next.color = rand_draw_colour(fid, f.next.costume, nullptr, why);
+        }
+        return;
+    }
+    if (f.next.valid())
+        logf("[F%d] Random: the next draw, %s, is no longer in the pool (or hidden now): drawn again (%s)", fid,
+             rand_name(fid, f.next.costume).c_str(), why);
+    f.next = rand_draw(fid, why);
 }
-// What the save holds for Random outside the menu: its next draw when that is a game outfit, else nothing (the carrier)
+// What the save holds for Random outside the menu: its next draw when the network may hold that outfit, else nothing (the
+// carrier: the alias wears it, or nobody knows its number)
 rnd::Draw rand_save_draw(int fid) {
     auto it = g_rand.find(fid);
-    return it == g_rand.end() ? rnd::Draw{} : rnd::save_holds(it->second.next, is_mod_slot(fid, it->second.next.costume));
+    if (it == g_rand.end()) return rnd::Draw{};
+    const rnd::Draw& n = it->second.next;
+    return rnd::save_holds(n, rand_local(fid, n), n.valid() && outfit_sendable(fid, n.costume));
 }
-// What the save holds outside the menu while `fid` has an intent: the carrier, or the game outfit Random drew
+// What the save holds outside the menu while `fid` has an intent: the carrier, or the game outfit Random drew (one the network
+// may hold: anything else is worn on this PC only, rand_local)
 int held_cos_of(int fid) {
     std::lock_guard lk(g_alias_mx);
     if (rand_intent(fid))
@@ -719,12 +840,11 @@ void rand_apply_save(int fid, Obj* e, const char* why) {
     rand_ensure_next(fid, why);
     if (const rnd::Draw d = rand_save_draw(fid); d.valid()) {
         set_cos(e, d.costume, fid, why);
-        set_col(e, d.color, fid, why);
+        set_col(e, net_col_of(fid, d.costume, d.color), fid, why);   // a colour the network may not hold: worn on this PC (colour_only)
         return;
     }
     set_cos(e, save_cos_of(fid), fid, why);
-    auto fr = g_f.find(fid);
-    if (fr != g_f.end() && fr->second.base_known && !fr->second.base_colors.count(get_col(e))) set_col(e, fr->second.base_min, fid, why);
+    set_col(e, net_colour_of(fid, get_col(e)), fid, why);
 }
 // What the player's fighter of `fid` wears for Random in a battle: online the set's draw (once taken), elsewhere the next one
 rnd::Draw rand_worn(int fid, bool net) {
@@ -764,14 +884,15 @@ void rand_colour_close(int fid, Obj* e, int v, int shown) {
     }
     if (f.next_colour.costume != v) g_rand_cset.erase(fid);   // another outfit: the set (online) is taken again
     rand_ensure_next_colour(fid, v, "Random colour chosen: its next colour");
-    if (!is_slot(fid, v)) set_col(e, rnd::worn_colour(f.next_colour.color), fid, "Random colour: its next colour");
+    if (!is_slot(fid, v) && !alias_game(fid, v))
+        set_col(e, net_col_of(fid, v, rnd::worn_colour(f.next_colour.color)), fid, "Random colour: its next colour (what the network may hold)");
 }
 // Outside the menu: the save of a game outfit whose colour is Random holds its next colour (a profile built, a screen that
 // lists outfits); a save that holds another outfit now is left as it is
 void rand_colour_save(int fid, Obj* e, const char* why) {
     const rnd::Draw* n = rand_colour_of(fid);
     if (!n || intent_slot(fid) || get_cos(e) != n->costume) return;
-    set_col(e, rnd::worn_colour(n->color), fid, why);
+    set_col(e, net_col_of(fid, n->costume, rnd::worn_colour(n->color)), fid, why);
 }
 // Battle Settings' Random colour of a slot the alias wears: online the set's (once taken), elsewhere the next one; -1 none
 int rand_slot_colour(int fid, int slot, bool net) {
@@ -780,6 +901,23 @@ int rand_slot_colour(int fid, int slot, bool net) {
     if (!net) return n->color;
     auto s = g_rand_cset.find(fid);
     return s != g_rand_cset.end() && s->second.costume == slot ? s->second.color : -1;
+}
+
+// Each pool as a log line when it changed since it was last logged (the game's outfits listed, the loader's the player sees now,
+// each with the number of colours a draw of it takes). Under g_alias_mx.
+void rand_log_pools(const char* why) {
+    for (auto& [fid, rno] : g_random_no) {
+        const std::vector<int> v = rand_outfits_of(fid);
+        std::vector<int>& seen = g_rand_pool_seen[fid];
+        if (seen == v) continue;
+        seen = v;
+        std::string line;
+        for (int cos : v) {
+            const std::vector<int> cs = rand_colours_of(fid, cos);
+            line += (line.empty() ? "" : ", ") + rand_name(fid, cos) + " (" + (cs.empty() ? std::string("colours not known") : std::to_string(cs.size()) + " colours") + ")";
+        }
+        logf("[F%d] Random: the pool is %s (%s%s)", fid, line.c_str(), why, g_rand_game.count(fid) ? "" : "; the Costume row not read yet");
+    }
 }
 
 // "Display NSFW Outfits" changed: a new round of every pool (the rows list other outfits now); a next draw, or a set's, hidden
@@ -794,80 +932,140 @@ void rand_nsfw_changed() {
     for (auto& [fid, f] : g_rand_replay) rnd::refill(f);
     for (auto& [fid, s] : g_rand_set)
         if (s.bound && !rand_allowed(fid, s.set.costume)) s.bound = false;
+    rand_log_pools("Display NSFW Outfits changed");   // the loader's outfits come from the registry: shown or hidden at once
 }
 
-// The Costume row of every character that has a Random outfit, and the colours of its game outfits (once a session each). Game
-// thread, offline: the game answers with what the player owns then, its DLC answer Steam's (true_owner.hpp: an unlock-all script
-// makes the game's own DLC answer yes for everything; Wael 10/11, Random never draws an outfit the player does not have). When the
-// game cannot be asked that way, every game outfit given only by DLCs Steam does not count as the player's is left out.
+// Every game outfit's colours in the game's table, owned or not (Wael 22/11: no ownership limit; TableDataManager.
+// GetFighterCostumeColors of its first record, as the replay tab's catalog reads them), once a session, on the game thread: the
+// draws of an outfit the Costume row does not list (a replay forcing Outfit 3) have them too. Not read: tried again at the next
+// screen that lists outfits.
+void rand_read_colours(const char* why) {
+    if (g_rand_colours_read || g_random_no.empty()) return;
+    static bool told = false;
+    if (g_game_rid.empty()) {
+        if (!told) { told = true; logf("Random: the game's outfit colours not read yet (the costume table not read): Color 1 until then (%s)", why); }
+        return;
+    }
+    auto* tm = api().get_managed_singleton("app.TableDataManager");
+    Method* m_cols = tm ? method_of(tm->get_type_definition(), "GetFighterCostumeColors", 2) : nullptr;
+    if (!m_cols) {
+        if (!told) { told = true; logf("Random: TableDataManager.GetFighterCostumeColors not found: a game outfit draws among its Color row's colours (%s)", why); }
+        return;
+    }
+    std::map<std::pair<int, int>, std::vector<int>> cols;
+    size_t n = 0, empty = 0;
+    for (auto& [key, rid] : g_game_rid) {
+        Obj* list = call_obj(m_cols, tm, { arg_i32(rid), arg_bool(false) });
+        std::vector<int>& cs = cols[key];
+        for (int j = 0, k = list_count(list); j < k; ++j) {
+            int32_t no = -1;
+            if (Obj* cr = list_item(list, j); cr && get_i32(cr, "colorNo", no) && no >= 0 && no < rnd::kEntryMin
+                && std::find(cs.begin(), cs.end(), no) == cs.end())
+                cs.push_back(no);
+        }
+        n += cs.size();
+        empty += cs.empty() ? 1 : 0;
+    }
+    std::lock_guard lk(g_alias_mx);
+    g_rand_colours = std::move(cols);
+    g_rand_colours_read = true;
+    logf("Random: every game outfit's colours read from the game's table, owned or not (%zu outfits, %zu colours, %zu with none; %s)",
+         g_rand_colours.size(), n, empty, why);
+}
+
+// The game's outfits each character's Costume row lists, on the game thread offline (the screens that list outfits). Online the
+// game answers with what the account owns (REFramework stops Lua scripts then, an unlock-all script's hooks with them): the pools
+// keep the outfits read last offline, the loader's come from the registry at each draw (rand_outfits_of). A number neither one of
+// the loader's nor in the game's costume table is never taken (rnd::split_listed).
 void rand_read_lists(const char* why) {
-    if (g_random_no.empty() || online_now()) return;
+    if (g_random_no.empty()) return;
+    rand_read_colours(why);
+    static bool told_online = false, told_missing = false;
+    if (online_now()) {
+        if (!told_online) {
+            told_online = true;
+            std::lock_guard lk(g_alias_mx);
+            logf("Random: the Costume rows are not read during or after an online battle until the next offline one: the game's outfits "
+                 "read last stay, the loader's follow the registry (%s)", why);
+            rand_log_pools(why);
+        }
+        return;
+    }
+    told_online = false;
     Obj* ci = costume_inventory();
     static Method* m_list = nullptr;
     if (ci && !m_list) m_list = method_of(ci->get_type_definition(), "GetCostumeNoList", 1);
-    if (!ci || !m_list) return;
-    auto* tm = api().get_managed_singleton("app.TableDataManager");
-    Method* m_cols = tm ? method_of(tm->get_type_definition(), "GetFighterCostumeColors", 2) : nullptr;
-    auto* im = api().get_managed_singleton("app.InventoryManager");
-    Obj* col_inv = im ? get_obj(im, "_Color") : nullptr;
-    std::map<int, std::vector<int>> outs, owns;
-    std::map<std::pair<int, int>, std::vector<int>> cols;
-    int not_owned = 0;
+    if (!ci || !m_list) {
+        if (!told_missing) {
+            told_missing = true;
+            logf("Random: the Costume rows cannot be read (%s): the pools hold Outfit 1 and the loader's outfits (%s)",
+                 ci ? "CostumeInventory.GetCostumeNoList not found" : "no costume inventory yet", why);
+        }
+        return;
+    }
+    std::map<int, rnd::Listed> got;
+    int failed = 0;
     for (auto& [fid, rno] : g_random_no) {
         bool ok = false;
         const std::vector<uint32_t> listed = listed_outfits(m_list, ci, fid, &ok);
-        if (!ok) continue;
-        std::vector<int>& v = outs[fid];
-        std::vector<int>& vo = owns[fid];
-        for (uint32_t c : listed) {
-            const int cos = static_cast<int>(c);
-            if (cos == rno || (is_slot(fid, cos) && !shown(fid, cos)) || std::find(v.begin(), v.end(), cos) != v.end()) continue;
-            v.push_back(cos);
-            if (is_slot(fid, cos) || trueown::owned(fid, cos)) vo.push_back(cos);
-            else ++not_owned;
-        }
-        for (int cos : v) {
-            const std::pair<int, int> key{ fid, cos };
-            if (is_slot(fid, cos)) continue;
-            {
-                std::lock_guard lk(g_alias_mx);
-                if (g_rand_colours.count(key)) continue;
-            }
-            auto r = g_game_rid.find(key);
-            Obj* list = (m_cols && r != g_game_rid.end()) ? call_obj(m_cols, tm, { arg_i32(r->second), arg_bool(false) }) : nullptr;
-            std::vector<int>& cs = cols[key];
-            for (int j = 0, n = list_count(list); j < n; ++j) {
-                Obj* cr = list_item(list, j);
-                int32_t no = -1, id = 0;
-                if (!cr || !get_i32(cr, "colorNo", no) || no < 0 || std::find(cs.begin(), cs.end(), no) != cs.end()) continue;
-                get_i32(cr, "id", id);
-                const auto* def = static_cast<const uint8_t*>(field_ptr(cr, "isDefault"));
-                bool owned = def && *def != 0;
-                if (!owned && col_inv) {
-                    bool asked = false;
-                    owned = call_bool(col_inv, "ExistsSaveData", { arg_i32(id) }, &asked) || !asked;
-                }
-                if (owned) cs.push_back(no);
-            }
-        }
+        if (!ok) { ++failed; continue; }
+        std::vector<int> v;
+        for (uint32_t c : listed) v.push_back(static_cast<int>(c));
+        const int f = fid;
+        got[fid] = rnd::split_listed(v, rno, [f](int c) { return is_slot(f, c); },
+                                     g_table_ok ? std::function<bool(int)>([f](int c) { return in_table(f, c); }) : nullptr);
     }
+    if (failed) logf("Random: %d Costume row%s could not be read: their pools keep what was read before (%s)", failed, failed == 1 ? "" : "s", why);
     std::lock_guard lk(g_alias_mx);
-    for (auto& [k, v] : cols) g_rand_colours[k] = std::move(v);
-    if (owns != g_rand_owned_seen) {
-        g_rand_owned_seen = owns;
-        logf("Random: ranked matches leave out %d game outfits the player does not really have (%s)", not_owned, why);
-    }
-    for (auto& [fid, v] : owns) g_rand_owned[fid] = std::move(v);
-    for (auto& [fid, v] : outs) {
-        if (g_rand_outfits[fid] == v) continue;
-        std::string line;
-        for (int cos : v) {
-            const std::vector<int> cs = rand_colours_of(fid, cos);
-            line += (line.empty() ? "" : ", ") + rand_name(fid, cos) + " (" + std::to_string(cs.size()) + " colours)";
+    for (auto& [fid, l] : got) {
+        std::vector<int>& seen = g_rand_unknown_seen[fid];
+        if (!l.unknown.empty() && seen != l.unknown) {
+            std::string nos;
+            for (int c : l.unknown) nos += (nos.empty() ? "" : ", ") + std::to_string(c);
+            logf("[F%d] Random: costume %s listed by the game but neither one of the loader's outfits (registry.json) nor in the game's "
+                 "costume table (a pak another program left?): never drawn (%s)", fid, nos.c_str(), why);
         }
-        logf("[F%d] Random: the pool is %s (%s)", fid, line.c_str(), why);
-        g_rand_outfits[fid] = std::move(v);
+        seen = l.unknown;
+        g_rand_game[fid] = std::move(l.game);
     }
+    rand_log_pools(why);
+}
+
+// The rounds and next draws state.json kept: the numbers neither one of the loader's outfits nor in the game's costume table
+// dropped (a session that had a pak another program left drew them: 22/11, Ryu's next draw "costume 17"). Once, when the table is
+// known.
+void rand_forget_unknown() {
+    std::lock_guard lk(g_alias_mx);
+    int n = 0;
+    for (auto* all : { &g_rand, &g_rand_replay })
+        for (auto& [fid, f] : *all) {
+            const int f_id = fid;
+            const int k = rnd::forget(f, [f_id](int c) { return !unknown_outfit(f_id, c); });
+            if (!k) continue;
+            n += k;
+            logf("[F%d] Random: %d value%s kept in state.json (%s) for outfits neither the loader's nor in the game's costume table: dropped",
+                 fid, k, k == 1 ? "" : "s", all == &g_rand ? "rounds, next draws" : "Replays' rounds");
+        }
+    if (n) g_rand_dirty = true;
+}
+
+// The network decision of a fighter in the log, one line each time it changes (Wael 24/11/2026): where it was made, what the save
+// (or the description) held, what this PC wears, what the network gets, why. Under g_alias_mx.
+std::map<int, std::string> g_pick_seen;
+std::string pick_text(int fid, int cos, int col) {
+    char c[24];
+    snprintf(c, sizeof c, " colour %d", col);
+    if (is_random(fid, cos)) return "Random" + std::string(c);
+    return (is_mod_slot(fid, cos) ? "slot " : "") + rand_name(fid, cos) + c;
+}
+void log_pick(int fid, const char* where, int save_cos, int save_col, const carrier::Pick& p) {
+    const std::string worn = pick_text(fid, p.worn_cos, p.worn_col), net = pick_text(fid, p.net_cos, p.net_col);
+    const std::string sig = worn + "|" + net + "|" + p.why;
+    std::string& seen = g_pick_seen[fid];
+    if (seen == sig) return;
+    seen = sig;
+    logf("[F%d] online pick (%s): the save held %s; worn on this PC: %s; the network gets %s (%s)", fid, where,
+         pick_text(fid, save_cos, save_col).c_str(), worn.c_str(), net.c_str(), p.why);
 }
 
 // Battle Settings opened: the menu shows the slot where the save has the carrier (a hidden slot is not
@@ -880,15 +1078,39 @@ void on_menu_open() {
         // Fighter Settings walk to Random starts there)
         if (const rnd::Draw* n = rand_colour_of(fid); n && !in.slot && get_cos(e) == n->costume && get_col(e) != rnd::kEntryCarrier)
             set_col(e, rnd::kEntryCarrier, fid, "so the menu shows Random");
-        if (!in.slot || !shown(fid, in.slot)) continue;
+        if (!in.slot) {   // an outfit the network holds in a colour it may not hold: the save held Color 1 outside the menu
+            const int v = get_cos(e);
+            if (in.color >= 0 && !rand_colour_of(fid) && outfit_sendable(fid, v) && !colour_sendable(fid, v, in.color)
+                && get_col(e) == net_col_of(fid, v, in.color))
+                set_col(e, in.color, fid, "so the menu shows the colour");
+            continue;
+        }
+        if (!wearable(fid, in.slot)) {
+            // a game outfit kept as the intent that the network may hold now (the account's: bought, or its ownership read since):
+            // the menu shows it, its close decides again. A hidden slot: the menu shows the carrier, as before.
+            if (!is_slot(fid, in.slot) && !unknown_outfit(fid, in.slot) && outfit_sendable(fid, in.slot) && get_cos(e) == held_cos_of(fid)) {
+                set_cos(e, in.slot, fid, "so the menu shows the outfit (the account's now)");
+                if (in.color >= 0) set_col(e, in.color, fid, "so the menu shows the colour");
+            }
+            continue;
+        }
+        // Random: the save first gets what it must hold for the next draw now (an online set drew a new one since the save was
+        // last written, with no fighter profile in between: the save still held the last draw's outfit, DriveTech for one, and
+        // the menu showed it in place of Random, which its close then took as the choice)
+        if (is_random(fid, in.slot) && get_cos(e) != in.slot) rand_apply_save(fid, e, "Battle Settings opened: Random's next draw");
         if (get_cos(e) == held_cos_of(fid)) set_cos(e, in.slot, fid, is_random(fid, in.slot) ? "so the menu shows Random" : "so the menu shows the slot");
+        else if (get_cos(e) != in.slot)
+            logf("[F%d] Battle Settings opened: the save holds outfit %d, not %d: the menu shows it (the choice stays %d until the menu "
+                 "closes)", fid, get_cos(e), held_cos_of(fid), in.slot);
         // Random's Color row has one value (insert_colors)
         const int col = is_random(fid, in.slot) ? 0 : in.color;
         if (col >= 0 && get_col(e) != col) set_col(e, col, fid, "so the menu shows the colour");
     }
 }
 
-// Battle Settings closed: a slot chosen there becomes the intent, the save gets the carrier
+// Battle Settings closed: what the menu shows is the player's real choice; the save gets what the network may hold (pick_for:
+// a slot, an outfit or a colour the account does not really own is the carrier / Color 1, Wael 24/11/2026), the intent what this
+// PC wears over it
 void on_menu_close() {
     logf("costumes: Battle Settings closed");
     for (auto& [fid, e] : save_entries()) {
@@ -896,22 +1118,32 @@ void on_menu_close() {
         const int col_shown = get_col(e);
         // The menu showed the carrier in place of a hidden slot: left so, the choice is kept for the
         // day the outfit is the player's again (until then the alias leaves it out)
-        if (v == save_cos_of(fid) && g_intent[fid].slot && !shown(fid, g_intent[fid].slot)) continue;
+        if (v == save_cos_of(fid) && g_intent[fid].slot && is_slot(fid, g_intent[fid].slot) && !shown(fid, g_intent[fid].slot)) continue;
         rand_colour_close(fid, e, v, col_shown);       // a Random colour (before the slot's save gets its carrier colour)
-        const int chosen = is_slot(fid, v) ? v : 0;
-        if (chosen != g_intent[fid].slot) g_rand_set.erase(fid);   // another choice: Random's set (online) is taken again
-        set_intent_slot(fid, chosen, "chosen in the menu");
         if (is_random(fid, v)) {
+            if (v != g_intent[fid].slot) g_rand_set.erase(fid);   // another choice: Random's set (online) is taken again
+            set_intent_slot(fid, v, "chosen in the menu");
             set_intent_color(fid, get_col(e), "chosen in the menu");
             rand_apply_save(fid, e, "Random chosen: its next draw");
-        } else if (is_slot(fid, v)) {
-            set_cos(e, save_cos_of(fid), fid, "what the game and the network must see");
-            int c = get_col(e);
-            set_intent_color(fid, c, "chosen in the menu");
-            auto& fr = g_f[fid];
-            if (fr.base_known && !fr.base_colors.count(c))
-                set_col(e, fr.base_min, fid, ("a colour " + carrier_name(fid) + " has").c_str());
+            continue;
         }
+        // a number neither one of the loader's outfits nor in the game's costume table (a pak another program left): never held by
+        // the save, never sent as it is; the carrier in Color 1 in its place, no choice kept (pick_for: not known)
+        if (unknown_outfit(fid, v))
+            logf("[F%d] Battle Settings: outfit %d is neither one of the loader's nor in the game's costume table: %s in its place",
+                 fid, v, carrier_name(fid).c_str());
+        const int c = get_col(e);   // (a Random colour of a game outfit: its next one, rand_colour_close)
+        const carrier::Pick p = pick_for(fid, v, c);
+        const carrier::Kept k = carrier::intent_of(p);
+        if (k.slot != g_intent[fid].slot) g_rand_set.erase(fid);   // another choice: Random's set (online) is taken again
+        set_intent_slot(fid, k.slot, "chosen in the menu");
+        set_cos(e, p.net_cos, fid, "what the game and the network must see");
+        log_pick(fid, "Battle Settings closed", v, c, p);
+        // a Random colour of an outfit the network holds as it is: the save keeps its next colour (rand_colour_close)
+        if (!k.slot && rand_colour_of(fid)) continue;
+        set_intent_color(fid, k.color, k.slot ? "chosen in the menu" : k.color >= 0 ? "chosen in the menu (worn on this PC only)"
+                                                                                   : "a colour the network may hold chosen");
+        set_col(e, p.net_col, fid, "what the network must see");
     }
 }
 
@@ -933,11 +1165,23 @@ void drop_nsfw_choices(const std::map<int, Obj*>& entries) {
         const int v = get_cos(e);
         if (v == save_cos_of(fid) || v == was) set_cos(e, carrier::kOutfit1, fid, why);
         const int c = ownership::outfit1_colour(colour, get_col(e), g_f[fid].o1_colors);
-        if (c >= 0) set_col(e, c, fid, why);
+        // through the decision (Wael 24/11/2026): a colour the account does not really own is worn on this PC over Color 1
+        const int cos = get_cos(e), col = c >= 0 ? c : get_col(e);
+        const carrier::Pick p = pick_for(fid, cos, col);
+        const carrier::Kept k = carrier::intent_of(p);
+        set_intent_slot(fid, k.slot, why);
+        set_intent_color(fid, k.color, why);
+        set_cos(e, p.net_cos, fid, why);
+        set_col(e, p.net_col, fid, why);
+        log_pick(fid, "an NSFW outfit hidden", cos, col, p);
     }
 }
 
-// Outside the menu the save never keeps a slot number, nor a former carrier
+// Outside the menu the save holds only what the network may hold (pick_for), never a former carrier (Wael 24/11/2026: "quoi
+// qu'il arrive"): a slot number, an outfit or a colour the account does not really own found there (a choice the plugin did not
+// see: a menu close missed, a path of the game's own, a save of an older version) becomes the intent (carrier::real_choice) and
+// the save gets the decision. Run at boot, when Battle Settings closes, at the select screens, at every fighter profile the game
+// builds or sends, and after a battle was set up from a save that held such a value (g_save_check).
 void safety_net() {
     std::lock_guard lk(g_alias_mx);   // the intents and Random's draws, which the hooks read
     bool carriers_saved = false;
@@ -975,20 +1219,34 @@ void safety_net() {
             }
             if (fr.carrier >= 0 && was != fr.carrier) { g_saved_carrier[fid] = fr.carrier; carriers_saved = true; }
         }
-        if (is_slot(fid, v)) {
-            set_intent_slot(fid, v, "slot found in the save outside the menu");
-            set_cos(e, save_cos_of(fid), fid, "safety net");
+        // Random: the save holds its next draw (an outfit and a colour the network may hold) or the carrier
+        if (rand_intent(fid)) { rand_apply_save(fid, e, "Random: its next draw"); continue; }
+        const int c = get_col(e);
+        const bool outfit_ok = outfit_sendable(fid, v), colour_ok = outfit_ok && colour_sendable(fid, v, c);
+        // Battle Settings' Random colour of the outfit the save holds as it is: its next colour (over whatever colour is there)
+        if (const rnd::Draw* n = rand_colour_of(fid); n && outfit_ok && !in.slot && n->costume == v) {
+            rand_colour_save(fid, e, "Random colour: its next colour");
+            continue;
         }
-        if (g_intent[fid].slot && fr.base_known && !is_random(fid, g_intent[fid].slot)) {
-            int c = get_col(e);
-            if (!fr.base_colors.count(c)) {
-                set_intent_color(fid, c, "colour found in the save outside the menu");
-                set_col(e, fr.base_min, fid, "safety net");
-            }
-        }
-        // Random: the save holds its next draw (a game outfit) or the carrier, whatever was written above
-        if (is_random(fid, g_intent[fid].slot)) rand_apply_save(fid, e, "Random: its next draw");
-        rand_colour_save(fid, e, "Random colour: its next colour");
+        if (unknown_outfit(fid, v))
+            logf("[F%d] the save holds outfit %d, neither one of the loader's nor in the game's costume table: %s in its place", fid, v,
+                 carrier_name(fid).c_str());
+        // (a Random colour of another outfit: the intent's colour is the one chosen before it, kept for that outfit, not this one's)
+        const bool rcol = rand_colour_of(fid) != nullptr;
+        const carrier::Choice ch = carrier::real_choice(v, c, in.slot, rcol && !in.slot ? -1 : in.color, outfit_ok, colour_ok);
+        const carrier::Pick p = pick_for(fid, ch.costume, ch.colour);
+        const carrier::Kept k = carrier::intent_of(p);
+        const char* why = !outfit_ok ? (is_slot(fid, v) ? "slot found in the save outside the menu"
+                                                         : "outfit found in the save outside the menu (the network may not hold it)")
+                        : !colour_ok ? "colour found in the save outside the menu (the network may not hold it)"
+                                     : "safety net";
+        set_intent_slot(fid, k.slot, why);
+        if (k.slot || !rcol || k.color >= 0) set_intent_color(fid, k.color, why);
+        set_cos(e, p.net_cos, fid, "safety net: what the network may hold");
+        set_col(e, p.net_col, fid, "safety net: what the network may hold");
+        log_pick(fid, "safety net", v, c, p);
+        // the Random outfit's own number found in the save: Random is the intent, the save gets its next draw
+        if (is_random(fid, k.slot)) rand_apply_save(fid, e, "Random: its next draw");
     }
     if (carriers_saved) save_state();
     drop_nsfw_choices(entries);
@@ -1099,15 +1357,27 @@ void probe(Obj* ci, const char* why) {
     }
 }
 
-// The game's answer for the outfits the slots are made from: the costume numbers it lists for
-// each character (CostumeInventory.GetCostumeNoList). Asked offline only, for the outfits not
-// known to be owned yet; a slot whose outfit the game does not list once the title screen is left
-// (purchases and DLC known) is hidden, with one log line.
+// Manager mode only (ownership.hpp): the game's answer for the outfits the slots are made from: the
+// costume numbers it lists for each character (CostumeInventory.GetCostumeNoList). Asked offline
+// only, for the outfits not known to be owned yet; a slot whose outfit the game does not list once
+// the title screen is left (purchases and DLC known) is hidden, with one log line. Normal mode: nothing
+// is asked, every slot is shown.
 bool g_check_off = false;
 bool g_online_logged = false;
 
 void check_outfits(Obj* ci, const char* why) {
     if (g_check_off) return;
+    if (!g_book.check()) {
+        g_check_off = true;
+        logf("costumes: every slot shown and owned, whatever outfit it is made from (the online alias keeps it on this PC)");
+        return;
+    }
+    static bool told_rule = false;
+    if (!told_rule) {
+        told_rule = true;
+        logf("costumes: a slot is shown only while the game lists the outfit it is made from as the player's (%s)",
+             g_managed ? "Manager mode, the Manager's rules" : "normal mode, ownership.hpp kLimitToOwnedOutfits");
+    }
     if (online_now()) {
         if (!g_online_logged) { logf("costumes: online battle, outfit ownership not asked (the answers already given are kept)"); g_online_logged = true; }
         return;
@@ -1246,7 +1516,7 @@ bool carriers_from_folders() {
         for (auto& [sfx, fc] : want) if (ends_with(p, sfx)) { has[fc.first].insert(fc.second); break; }
         return true;
     });
-    for (int fid : g_fighters) { g_f[fid].costumes = has[fid]; set_carrier(g_f[fid]); }
+    for (int fid : g_fighters) { g_f[fid].costumes = has[fid]; set_carrier(fid); }
     logf("costumes: the game's costume table gives no answer, carriers taken from the scene's folders");
     return true;
 }
@@ -1280,7 +1550,7 @@ void read_carriers() {
             for (int fid : g_fighters) {
                 auto& fr = g_f[fid];
                 for (auto& [cn, rid] : rid_of[fid]) fr.costumes.insert(cn);
-                set_carrier(fr);
+                set_carrier(fid);
             }
         } else if (++g_table_passes < kTablePasses || !carriers_from_folders()) return;
         else src = "the scene's folders";
@@ -1323,7 +1593,7 @@ void read_carriers() {
             }
             if (!cs.empty()) fr.colours[cn] = cs;
         }
-        set_carrier(fr);
+        set_carrier(fid);
     }
     g_bc_done = std::all_of(g_fighters.begin(), g_fighters.end(), [](int fid) { return g_f[fid].carrier < 0 || g_f[fid].base_known; });
     if (g_bc_done) logf("costumes: %s colours read", carriers_text().c_str());
@@ -1529,6 +1799,7 @@ std::map<int, int> g_mlive;             // fighter -> slot of the last managed r
 // then back on the slot's character with the network holding Outfit 1: no request of the carrier, and the fighters
 // were built with the slot's override on files released two matches before: connection error)
 bool g_mbatch_open = false;
+ULONGLONG g_mbatch_at = 0;              // the open batch's last managed request (a batch whose fighters are never built ends)
 // The FighterDescs the plugin gave a slot as their override (seq: the order they were dressed in)
 struct Dressed { int fid, slot, color; uint32_t seq; };
 // Each FighterDesc here is held (add_ref in dress, release in undress): the plugin takes the override off later, at the next
@@ -1611,15 +1882,16 @@ bool read_desc(Obj* desc, DescInfo& d, bool at_load) {
 int wanted_slot(int fid, const DescInfo* d = nullptr) {
     auto in = g_intent.find(fid);
     if (in == g_intent.end() || !in->second.slot || g_menu_open) return 0;
-    if (!is_random(fid, in->second.slot)) return shown(fid, in->second.slot) ? in->second.slot : 0;
+    if (!is_random(fid, in->second.slot)) return wearable(fid, in->second.slot) ? in->second.slot : 0;
     if (d && d->net) {                     // the set's draw, when this PC wears it over what the match holds (rand_bind)
         auto s = g_rand_set.find(fid);
         if (s == g_rand_set.end() || !s->second.bound || !s->second.local) return 0;
         const int c = s->second.set.costume;
-        return c > 0 && rand_allowed(fid, c) && (!is_slot(fid, c) || shown(fid, c)) ? c : 0;
+        return c > 0 && rand_allowed(fid, c) && (is_slot(fid, c) ? is_mod_slot(fid, c) && shown(fid, c) : !unknown_outfit(fid, c)) ? c : 0;
     }
     const rnd::Draw w = rand_worn(fid, false);
-    return w.valid() && is_mod_slot(fid, w.costume) && rand_allowed(fid, w.costume) && shown(fid, w.costume) ? w.costume : 0;
+    return w.valid() && rand_allowed(fid, w.costume)
+           && ((is_mod_slot(fid, w.costume) && shown(fid, w.costume)) || alias_game(fid, w.costume)) ? w.costume : 0;
 }
 // The colour the player's fighter wears with that slot, as drawn (rnd::is_entry: one of the Color Mod's entries): the one
 // chosen with it, Random's drawn one, a Random colour's (Battle Settings), else the description's
@@ -1634,6 +1906,24 @@ int wanted_value(const DescInfo& d, const DescFighter& f) {
     return in != g_intent.end() && in->second.color >= 0 ? in->second.color : f.color;
 }
 
+// An outfit the network holds as it is (Outfit 1, one the account owns) worn in a colour the network may not hold (Battle
+// Settings, Random, a Random colour; Wael 24/11/2026: a colour the account does not really own): the colour the player's fighter
+// wears on this PC over the Color 1 / 2 the match holds; -1 none. No files to ask for: the outfit's own.
+int colour_only(const DescInfo& d, const DescFighter& f) {
+    if (g_menu_open || !f.ours || d.picked || !outfit_sendable(f.fid, f.cos) || wanted_slot(f.fid, &d)) return -1;
+    int c = -1;
+    auto in = g_intent.find(f.fid);
+    if (in != g_intent.end() && is_random(f.fid, in->second.slot)) {
+        const rnd::Draw w = rand_worn(f.fid, d.net);
+        if (w.valid() && w.costume == f.cos) c = w.color;
+    } else if (const int v = rand_slot_colour(f.fid, f.cos, d.net); v >= 0) c = v;
+    else if (const rnd::Draw* n = rand_colour_of(f.fid); n && n->costume == f.cos) {
+        // a Random colour of this outfit whose set was not taken (the match holds another colour): what the match holds, never the
+        // colour chosen before the Random colour was (the intent keeps it)
+    } else if (in != g_intent.end() && !in->second.slot) c = in->second.color;
+    return c >= 0 && !rnd::is_entry(c) && !colour_sendable(f.fid, f.cos, c) && c != f.color ? c : -1;
+}
+
 // A match's first managed load of the player's fighter of `fid` (a new opponent): Random's next draw is taken for the whole set,
 // unless the match holds another game outfit than the one drawn (random_logic.hpp bind_set), and the one after is made
 std::set<int> g_rand_batch;             // characters whose set was taken in this batch of managed requests (until fighters are built)
@@ -1643,21 +1933,18 @@ void rand_bind(int fid, const DescInfo& d) {
     for (auto& f : d.f) if (f.fid == fid && f.ours) { mine = &f; break; }
     if (!mine) return;
     g_rand_batch.insert(fid);
-    if (const bool ranked = d.mode == kRankedMatch; ranked != g_online_owned) {
-        g_online_owned = ranked;
-        logf("Random: %s: the online draws take %s", ranked ? "a ranked match" : "an online match that is not ranked",
-             ranked ? "only the outfits the player really has" : "from the whole Costume row");
-    }
     rand_ensure_next(fid, "a match begins");
     rnd::Fighter& rf = g_rand[fid];
-    const rnd::Bind b = rnd::bind_set(rf.next, is_mod_slot(fid, rf.next.costume), mine->cos, mine->color);
+    const rnd::Bind b = rnd::bind_set(rf.next, rand_local(fid, rf.next), mine->cos, mine->color);
     g_rand_set[fid] = { b.set, true, b.local };
     if (b.consumed) {
         logf("[F%d] Random: this set wears %s %s%s", fid, rand_name(fid, b.set.costume).c_str(), rand_colour_name(fid, b.set.costume, b.set.color).c_str(),
-             !b.local ? " (what the opponent sees)" : is_mod_slot(fid, b.set.costume) ? " (on this PC: the opponent sees what the match holds)"
+             !b.local ? (colour_sendable(fid, b.set.costume, b.set.color) || rnd::is_entry(b.set.color)
+                             ? " (what the opponent sees)" : " (the opponent sees the outfit in Color 1, this colour on this PC)")
+                      : rand_local(fid, b.set) ? " (on this PC: the opponent sees what the match holds)"
                       : " (on this PC: no fighter profile sent since the draw, the opponent sees what the match holds)");
         if (!b.local) rand_wear_entry(mine->team + 1, fid, b.set.costume, b.set.color, "this set");   // (the alias's: as it dresses)
-        rf.next = rand_draw(fid, "the next set", nullptr, g_online_owned);
+        rf.next = rand_draw(fid, "the next set");
     } else {
         logf("[F%d] Random: the match holds %s, not %s drawn (no fighter profile sent since the draw, and Outfit 1 cannot be "
              "worn over another): this set wears it, the draw waits for the next one", fid, ownership::outfit_label(mine->cos).c_str(),
@@ -1680,7 +1967,8 @@ void rand_bind_colour(int fid, const DescInfo& d) {
     const int cos = n->costume;
     rand_ensure_next_colour(fid, cos, "a match begins");
     const rnd::Draw next = *rand_colour_of(fid);
-    const rnd::Bind b = slot ? rnd::Bind{ next, true, true } : rnd::bind_colour(next, mine->cos, mine->color);
+    const bool local = slot || (!rnd::is_entry(next.color) && !colour_sendable(fid, cos, next.color));
+    const rnd::Bind b = local ? rnd::Bind{ next, true, true } : rnd::bind_colour(next, mine->cos, mine->color);
     if (!b.consumed) {
         g_rand_cset.erase(fid);
         logf("[F%d] Random colour: the match holds %s colour %d, not %s drawn (no fighter profile sent since the draw): this set "
@@ -1690,8 +1978,8 @@ void rand_bind_colour(int fid, const DescInfo& d) {
     }
     g_rand_cset[fid] = b.set;
     logf("[F%d] Random colour: this set wears %s of %s%s", fid, rand_colour_name(fid, cos, b.set.color).c_str(), rand_name(fid, cos).c_str(),
-         slot ? " (the alias's, on this PC)" : rnd::is_entry(b.set.color) ? " (on this PC: the opponent sees colour 02)" : " (what the opponent sees)");
-    if (!slot) rand_wear_entry(mine->team + 1, fid, cos, b.set.color, "this set");
+         local ? " (the alias's, on this PC)" : rnd::is_entry(b.set.color) ? " (on this PC: the opponent sees colour 02)" : " (what the opponent sees)");
+    if (!local) rand_wear_entry(mine->team + 1, fid, cos, b.set.color, "this set");
     g_rand[fid].next_colour = { cos, rand_draw_colour(fid, cos, nullptr, "the next set") };
 }
 // Offline the player's fighter comes in the save's outfit, the carrier. Online in what the network holds: the carrier,
@@ -1710,6 +1998,37 @@ bool slot_held(int fid, int slot, bool online_only = false) {
     if (ex == g_extra.end()) return false;
     for (auto& x : ex->second) if (x.slot == slot) return true;
     return false;
+}
+// The slot's files held for the fighters being built now. Online: the managed ones (this match's, or the last match's for a
+// rematch, which builds the fighters again without asking for files). Offline: the ones asked for next to the carrier's, or
+// managed ones asked for in this batch; never the last online match's managed files, the game released them after that
+// match (22/11, A.K.I. in Rival AI after an online match: no request of her files at all, the slot worn on the strength of
+// the online match's, an invisible fighter, two instant KOs).
+bool slot_held_now(int fid, int slot, bool online) {
+    if (online) return slot_held(fid, slot, true);
+    if (auto b = g_mbatch.find(fid); b != g_mbatch.end() && b->second > 0)
+        if (auto m = g_mlive.find(fid); m != g_mlive.end() && m->second == slot) return true;
+    auto ex = g_extra.find(fid);
+    if (ex == g_extra.end()) return false;
+    for (auto& x : ex->second) if (x.slot == slot) return true;
+    return false;
+}
+// ---- the CPU battles of the Battle Hub: the Learning AI match ("V-Rival", game mode 22), the exam (20), a cabinet's CPU (21) ----
+// app.battle.CpuBattleFlowMapBase.LoadBattleAsset asks for each fighter's files itself, from FighterDesc.Costume alone: none of
+// BattleFlowMap's requests runs, and the costume override is not read (PC1, 22/11: static app.constant.scn.getFighterPath(fid,
+// class, costume, 0), then FlowMapBase.requestLoadAssets). The fighters are then built from the override all the same
+// (setupFighterAsset: getFighterPath(FighterDesc, true)): a slot worn there had no files, an invisible fighter and two instant KOs
+// (Wael 22/11, A.K.I. Young). So when that flow map loads its fighters, the player's fighter is dressed and the slot's paths (the
+// game's own, from the dressed description) are asked of the same flow map, next to the carrier's: it counts them as its own and
+// releases them when it ends (FlowMapBase.onEnd), nothing to mirror.
+Method* m_scn_path_fd = nullptr;       // static app.constant.scn.getFighterPath(app.battle.FighterDesc, Boolean isOverrideCostume)
+Method* m_req_assets = nullptr;        // app.FlowMapBase.requestLoadAssets(IEnumerable<String>, is_activate, priority, is_scene_asset, is_all_candidate, sync)
+struct MapContent { Obj* map = nullptr; std::map<int, int> slots; };   // fighter -> the slot whose files that flow map holds
+MapContent g_content;                  // under g_alias_mx
+bool content_held(Obj* map, int fid, int slot) {
+    if (!map || g_content.map != map) return false;
+    auto it = g_content.slots.find(fid);
+    return it != g_content.slots.end() && it->second == slot;
 }
 void alias_line(int fid, const char* what, const DescInfo& d) {
     char sig[512];
@@ -1876,12 +2195,37 @@ bool g_rand_load_open = false;
 ULONGLONG g_rand_load_at = 0;
 constexpr int kColourModP2 = 91;       // the Color Mod's mark of a P2 on colour 02 in a mirror (its P2_VIRTUAL_ID): 02 too
 
-// What Battle Settings drew that the save holds and the game wears itself (a game outfit): the Random outfit's next draw, else
-// the Random colour's next colour (a slot's is the alias's)
+// The select screen's draws (see "Random on a select screen" below), under g_alias_mx, from the select's start until the next
+// select's: per (select player number, fighter) - a Team Battle player has several fighters - the draw made when the cursor landed
+// on Random, made on a copy of the fighter's rounds and given in them only once a battle wears it (rnd::give_draw); the battle's
+// team that wore it (a reload of that battle asks for its entry again)
+struct SelDraw { int no = -1, fid = 0; rnd::Draw d; uint32_t seq = 0; bool given = false; int team = -1; };
+std::map<std::pair<int, int>, SelDraw> g_sel_draw;
+std::map<int, int> g_sel_fighter;      // select player number -> the fighter its screen set last
+uint32_t g_sel_seq = 0;
+// The Random colour drawn for each side of the select's battle ([1] P1, [2] P2: the Color Mod's sides): a reload of that battle
+// (a stage changed, the training popup) asks for its entry again instead of drawing anew; the training popup's draw replaces it
+struct SelColour { int fid = -1, cos = -1, v = -1; };
+SelColour g_sel_colour[3];
+
+// A new select screen: the last one's draws are over (in the hook, under the lock: a SetFighterSetting of the new screen in the
+// same frame must not find the last screen's draw)
+void rand_select_start() {
+    std::lock_guard lk(g_alias_mx);
+    size_t open = 0;
+    for (auto& [k, s] : g_sel_draw) open += s.given ? 0 : 1;
+    if (open) logf("costumes: Random: %zu draw%s of the last select screen never worn: not given in the rounds", open, open == 1 ? "" : "s");
+    g_sel_draw.clear();
+    g_sel_fighter.clear();
+    g_sel_colour[1] = g_sel_colour[2] = SelColour{};
+}
+
+// What Battle Settings drew that the save holds and the game wears itself (an outfit the network may hold): the Random outfit's
+// next draw, else the Random colour's next colour (any other outfit's is the alias's)
 rnd::Draw rand_settings_draw(int fid) {
     if (rand_intent(fid)) {
         const rnd::Draw w = rand_worn(fid, false);
-        return w.valid() && !is_mod_slot(fid, w.costume) ? w : rnd::Draw{};
+        return w.valid() && outfit_sendable(fid, w.costume) ? w : rnd::Draw{};
     }
     const rnd::Draw* n = rand_colour_of(fid);
     return n && !intent_slot(fid) ? *n : rnd::Draw{};
@@ -1889,14 +2233,16 @@ rnd::Draw rand_settings_draw(int fid) {
 
 // The draws of an offline battle (Costume and Color written as a replay's are, replay_outfits.cpp: the game asks for that
 // outfit's files and builds the fighter from it itself):
-//   - every FighterDesc in a Random outfit: an outfit and its colour;
+//   - every FighterDesc in a Random outfit: an outfit and its colour (not for the select's own description, `from_select`: its
+//     screen loaded the outfit it drew, post_select_desc wrote it);
 //   - picked on a select screen (Arcade: the player's fighters only, the CPU's colours are the game's), a FighterDesc on colour
-//     02 whose side (team + 1: the Color Mod's P1 / P2) chose the Random value for that fighter and outfit: its colour.
+//     02 whose side (team + 1: the Color Mod's P1 / P2) chose the Random value for that fighter and outfit: its colour. A reload
+//     of the select's battle asks again for the entries its draws wore (the batch that began it cleared them).
 // A colour another fighter of the same outfit wears in this battle is not drawn (the game's own rule: no mirror in one colour;
 // an entry is colour 02). An entry drawn is dressed by the Color Mod on that side (rand_wear_entry).
 // Elsewhere (Battle Settings' choice, offline: Combo Trials, the hub's...): the save holds what was drawn and the game wears
 // it; an entry drawn there is dressed on the player's side.
-void rand_dress_desc(Obj* desc) {
+void rand_dress_desc(Obj* desc, bool from_select = false) {
     struct One { Obj* f; int fid, cos, col, team, pad; bool pending; };
     std::vector<One> v;
     uint8_t mode = 0;
@@ -1916,7 +2262,8 @@ void rand_dress_desc(Obj* desc) {
         }
     }
     const bool any_pad = std::any_of(v.begin(), v.end(), [](const One& o) { return o.pad >= 0; });
-    const bool picked = (mode == 1 || mode == 2 || mode == 3 || mode == 4 || mode == 19) && any_pad;   // (a replay has no pad)
+    const bool select_mode = mode == 1 || mode == 2 || mode == 3 || mode == 4 || mode == 19;
+    const bool picked = select_mode && (any_pad || from_select);   // (a replay has no pad)
     const bool colours = colormod::battle_ok();
     auto worn = [](int col) { return col == kColourModP2 ? rnd::kEntryCarrier : col; };
     if (!picked && colours)
@@ -1926,10 +2273,29 @@ void rand_dress_desc(Obj* desc) {
             const rnd::Draw w = rand_settings_draw(o.fid);
             if (w.valid() && w.costume == o.cos) rand_wear_entry(o.team + 1, o.fid, o.cos, w.color, "Battle Settings' draw");
         }
+    // the select's battle again (a reload): the entries its draws wore asked for again, never drawn anew
+    if (picked && colours)
+        for (const One& o : v) {
+            if (g_rand_done.count(o.f) || worn(o.col) != rnd::kEntryCarrier) continue;
+            const int side = o.team + 1;
+            for (auto& [k, s] : g_sel_draw)
+                if (s.given && s.team == o.team && s.fid == o.fid && s.d.costume == o.cos && rnd::is_entry(s.d.color)) {
+                    g_rand_done.insert(o.f);
+                    rand_wear_entry(side, o.fid, o.cos, s.d.color, "the select's draw, asked again for this load");
+                    break;
+                }
+            if (g_rand_done.count(o.f) || side < 1 || side > 2) continue;
+            const SelColour& c = g_sel_colour[side];
+            int cf = -1, cc = -1;
+            if (c.fid == o.fid && c.cos == o.cos && rnd::is_entry(c.v) && colormod::random_choice(side, cf, cc) && cf == o.fid && cc == o.cos) {
+                g_rand_done.insert(o.f);
+                rand_wear_entry(side, o.fid, o.cos, c.v, "the Random colour drawn for this battle, asked again for this load");
+            }
+        }
     for (One& o : v) {
         if (g_rand_done.count(o.f)) continue;
         int cf = -1, cc = -1;
-        o.pending = is_random(o.fid, o.cos)
+        o.pending = (is_random(o.fid, o.cos) && !from_select)
                     || (picked && colours && (mode != 1 || o.pad >= 0) && worn(o.col) == rnd::kEntryCarrier
                         && colormod::random_choice(o.team + 1, cf, cc) && cf == o.fid && cc == o.cos);
     }
@@ -1947,7 +2313,7 @@ void rand_dress_desc(Obj* desc) {
             const rnd::Draw d = rand_draw(o.fid, "picked on a select screen: this battle", [&](int cos, int col) { return !taken(o, cos, col); });
             o.pending = false;
             g_rand_done.insert(o.f);
-            if (!d.valid()) continue;              // nothing to draw: the Random outfit's own files, Outfit 1's scene
+            if (!d.valid()) continue;              // nothing to draw (logged): the Random outfit's own files, Outfit 1's scene
             o.cos = d.costume;
             o.col = rnd::worn_colour(d.color);
             set_i32(o.f, "Costume", o.cos);
@@ -1964,6 +2330,7 @@ void rand_dress_desc(Obj* desc) {
                 o.col = c;
                 set_i32(o.f, "Color", c);
             }
+            if (side == 1 || side == 2) g_sel_colour[side] = { o.fid, o.cos, c };   // kept for a reload of this battle
             if (wjournal::on()) wjournal::log("RANDOM_COLOUR fd=%p F%d c%d -> %d", (void*)o.f, o.fid, o.cos, c);
             rand_wear_entry(side, o.fid, o.cos, c, "picked on a select screen: this battle");
         }
@@ -2038,7 +2405,7 @@ void rand_on_unload(int fid, void** argv) {
 }
 
 
-// ---- Random on a select screen (Arcade, Training, Versus): the draw where the screen loads its fighters ----
+// ---- Random on a select screen (Arcade, Training, Versus, Team Battle): the draw where the screen loads its fighters ----
 // The local modes load a fighter's files on the character select, as its cursor shows them (app.menu.SelectedFighterCtrl:
 // SetFighterSetting(no, fid, costume, color) feeds the player's LoadCtrl, which loads that outfit), and the battle builds
 // from those files: no requestNotManagedFighterAssetLoad comes before setupFighterAsset (Training, read in game 17/11:
@@ -2047,25 +2414,44 @@ void rand_on_unload(int fid, void** argv) {
 // fails both ways (tried 17/11): at setupFighterAsset the drawn outfit's files are not there (the fighter is not built), at
 // the select's end the load waits for ever. So the draw is made here, when the cursor lands on Random: the screen loads the
 // drawn outfit (its preview shows it: Wael's choice, 17/11), and the description the select writes gets the same draw
-// (post_select_desc). A new landing on Random draws again.
-struct SelDraw { int fid = 0; rnd::Draw d; };
-std::map<int, SelDraw> g_sel_draw;     // select player number -> its draw (under g_alias_mx)
+// (post_select_desc). Another outfit of that fighter, then Random again: a new draw. The draw is made on a copy of the fighter's
+// rounds (a landing never confirmed uses nothing up: 22/11, four draws in one visit of F28's, none worn) and given in them when
+// the battle wears it; a second player on the same fighter draws on the first one's copy (neither outfit-and-colour twice).
+
+// A landing on Random of select player `no` on fighter `fid`: a draw on a copy of its rounds, the other players' draws of that
+// fighter not worn yet given in the copy first (and their colours of the same outfit left out)
+rnd::Draw rand_sel_draw(int no, int fid) {
+    rnd::Fighter copy = g_rand[fid];
+    std::vector<const SelDraw*> others;
+    for (auto& [k, s] : g_sel_draw)
+        if (s.fid == fid && k.first != no && !s.given) others.push_back(&s);
+    std::sort(others.begin(), others.end(), [](const SelDraw* a, const SelDraw* b) { return a->seq < b->seq; });
+    for (const SelDraw* s : others) rnd::give_draw(copy, s->d);
+    return rand_draw_on(copy, fid, "picked on a select screen: the screen loads it, given in the rounds once a battle wears it",
+                        [&](int cos, int col) {
+                            for (const SelDraw* s : others)
+                                if (s->d.costume == cos && rnd::worn_colour(s->d.color) == rnd::worn_colour(col)) return false;
+                            return true;
+                        });
+}
 
 int pre_sel_setting(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || argc < 6 || g_random_no.empty()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     try {
         const int no = arg_int(argv[2]), fid = arg_int(argv[3]), cos = arg_int(argv[4]);
         std::lock_guard lk(g_alias_mx);
-        if (online_now() || !is_random(fid, cos)) { g_sel_draw.erase(no); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+        g_sel_fighter[no] = fid;
+        const auto key = std::make_pair(no, fid);
+        if (online_now() || !is_random(fid, cos)) { g_sel_draw.erase(key); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
         // the screen calls this on many frames (every frame while a choice is confirmed, seen 17/11): one draw per landing
         // on Random, kept while the cursor stays there (a new draw each call made the screen load again and again)
-        auto had = g_sel_draw.find(no);
+        auto had = g_sel_draw.find(key);
         rnd::Draw d;
-        if (had != g_sel_draw.end() && had->second.fid == fid) d = had->second.d;
+        if (had != g_sel_draw.end()) d = had->second.d;
         else {
-            d = rand_draw(fid, "picked on a select screen: the screen loads it");
-            if (!d.valid()) { g_sel_draw.erase(no); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-            g_sel_draw[no] = SelDraw{ fid, d };
+            d = rand_sel_draw(no, fid);
+            if (!d.valid()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;   // (logged: the screen loads Random's own outfit, Outfit 1's copy)
+            g_sel_draw[key] = SelDraw{ no, fid, d, ++g_sel_seq, false, -1 };
         }
         argv[4] = arg_i32(d.costume);
         argv[5] = arg_i32(rnd::worn_colour(d.color));
@@ -2073,13 +2459,19 @@ int pre_sel_setting(int argc, void** argv, REFrameworkTypeDefinitionHandle*, uns
     } catch (...) {}
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
+// The draw of the fighter select player `no` set last, if it is one (under g_alias_mx)
+const SelDraw* sel_draw_of(int no) {
+    auto f = g_sel_fighter.find(no);
+    if (f == g_sel_fighter.end()) return nullptr;
+    auto it = g_sel_draw.find({ no, f->second });
+    return it != g_sel_draw.end() ? &it->second : nullptr;
+}
 // The Color row moved while the outfit is Random (one colour, "Random"): the screen keeps the drawn colour
 int pre_sel_colour(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || argc < 4) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     try {
         std::lock_guard lk(g_alias_mx);
-        auto it = g_sel_draw.find(arg_int(argv[2]));
-        if (it != g_sel_draw.end()) argv[3] = arg_i32(rnd::worn_colour(it->second.d.color));
+        if (const SelDraw* s = sel_draw_of(arg_int(argv[2]))) argv[3] = arg_i32(rnd::worn_colour(s->d.color));
     } catch (...) {}
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -2097,48 +2489,150 @@ void post_sel_colour_index(void** ret_val, REFrameworkTypeDefinitionHandle, unsi
     if (team < 0 || !ret_val || g_closing.load(std::memory_order_relaxed)) return;
     try {
         std::lock_guard lk(g_alias_mx);
-        auto it = g_sel_draw.find(team);
-        if (it == g_sel_draw.end()) return;
+        const SelDraw* s = sel_draw_of(team);
+        if (!s) return;
         const int was = static_cast<int>(reinterpret_cast<uintptr_t>(*ret_val) & 0xFFFFFFFFu);
-        const int col = rnd::worn_colour(it->second.d.color);
+        const int col = rnd::worn_colour(s->d.color);
         if (was == col) return;
         *ret_val = reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint32_t>(col)));
         static int s_logged = 0;
-        if (s_logged++ < 20) logf("[F%d] Random: the select's colour of P%d is the draw's: %d (the row gave %d)", it->second.fid, team + 1, col, was);
+        if (s_logged++ < 20) logf("[F%d] Random: the select's colour of P%d is the draw's: %d (the row gave %d)", s->fid, team + 1, col, was);
     } catch (...) {}
 }
-// The select wrote the battle's description (bBattleFighterSelectFlow.setupFighterDesc): a fighter in the Random outfit
-// whose player's screen loaded a draw wears that draw (the files loaded are the drawn outfit's); the later requests of the
-// battle (rand_on_load), if any come, find it done
+// The select wrote the battle's description (bBattleFighterSelectFlow.setupFighterDesc, Arcade's setupBattleDesc): the entries
+// of the last battle are over; a fighter in the Random outfit whose player's screen loaded a draw wears that draw (the files
+// loaded are the drawn outfit's), given in its rounds now, its colour drawn again when another fighter of this battle wears the
+// same fighter, outfit and colour (the game's rule: no mirror in one colour; GetColorIndex follows); then the select's Random
+// colours (rand_dress_desc). The later requests of the battle (rand_on_load), if any come, find it done.
 void post_select_desc(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return;
     try {
         std::lock_guard lk(g_alias_mx);
-        if (g_sel_draw.empty()) return;
         Obj* desc = battle_desc();
         bool net = false;
-        if (!desc || (get_bool(desc, "IsNetwork", net) && net)) return;
+        if (!desc) { logf("costumes: Random: a select screen wrote a battle's description, not found: no draw written in it"); return; }
+        if (get_bool(desc, "IsNetwork", net) && net) return;   // (online: the alias and rand_bind)
+        rand_clear_worn("a battle described by a select screen");
+        struct One { Obj* f; int fid, cos, col, team; SelDraw* s; };
+        std::vector<One> v;
         Obj* teams = get_obj(desc, "Teams");
         for (int t = 0, nt = list_count(teams); t < nt; ++t) {
-            auto it = g_sel_draw.find(t);
-            if (it == g_sel_draw.end()) continue;
             Obj* fs = get_obj(list_item(teams, t), "Fighters");
             for (int i = 0, nf = list_count(fs); i < nf; ++i) {
                 Obj* f = list_item(fs, i);
-                int32_t fid = 0, cos = -1;
-                if (!f || !get_i32(f, "FighterId", fid) || !get_i32(f, "Costume", cos) || fid != it->second.fid || !is_random(fid, cos)) continue;
-                const rnd::Draw& d = it->second.d;
-                set_i32(f, "Costume", d.costume);
-                set_i32(f, "Color", rnd::worn_colour(d.color));
-                g_rand_done.insert(f);
-                g_rand_last[fid] = d.costume;
-                rand_wear_entry(t + 1, fid, d.costume, d.color, "picked on a select screen: this battle");
-                logf("[F%d] Random: P%d wears %s colour %d (drawn when the select screen loaded it)", fid, t + 1, rand_name(fid, d.costume).c_str(), d.color);
+                int32_t fid = 0, cos = -1, col = 0;
+                if (!f || !get_i32(f, "FighterId", fid) || !get_i32(f, "Costume", cos)) continue;
+                get_i32(f, "Color", col);
+                v.push_back({ f, fid, cos, col, t, nullptr });
             }
         }
-        // (kept until the next character select: the screen sets its colours once more when both players have confirmed,
-        // seen 17/11: the preview went back to colour 1 for a moment when the draw was forgotten here)
-    } catch (...) {}
+        // each fighter in the Random outfit: its player's draw (player number = team), else the draw of a player whose screen set
+        // that fighter (Team Battle), each draw once
+        std::set<const SelDraw*> used;
+        for (One& o : v) {
+            if (!is_random(o.fid, o.cos)) continue;
+            auto it = g_sel_draw.find({ o.team, o.fid });
+            SelDraw* s = it != g_sel_draw.end() && !used.count(&it->second) ? &it->second : nullptr;
+            for (auto p = g_sel_draw.begin(); !s && p != g_sel_draw.end(); ++p)
+                if (p->second.fid == o.fid && !used.count(&p->second)) s = &p->second;
+            if (!s) {
+                logf("[F%d] Random: P%d is in the Random outfit with no draw of its select screen: Outfit 1's copy, as its preview", o.fid, o.team + 1);
+                continue;
+            }
+            used.insert(s);
+            o.s = s;
+            o.cos = s->d.costume;
+            o.col = rnd::worn_colour(s->d.color);
+        }
+        auto worn = [](int col) { return col == kColourModP2 ? rnd::kEntryCarrier : col; };
+        for (One& o : v) {
+            if (!o.s) continue;
+            SelDraw& s = *o.s;
+            // another fighter of this battle in the same fighter, outfit and colour (as worn): this one's colour drawn again
+            auto taken = [&](int col) {
+                for (const One& g : v)
+                    if (&g != &o && g.fid == o.fid && g.cos == o.cos && worn(g.col) == rnd::worn_colour(col)) return true;
+                return false;
+            };
+            if (!s.given) {
+                if (taken(s.d.color)) {
+                    const int was = s.d.color;
+                    rnd::give(g_rand[o.fid].outfits, s.d.costume);
+                    s.d.color = rand_draw_colour(o.fid, s.d.costume, [&](int col) { return !taken(col); },
+                                                 "picked on a select screen: another fighter of this battle wears the colour drawn");
+                    logf("[F%d] Random: P%d's %s colour drawn again (%s was another fighter's of this battle)", o.fid, o.team + 1,
+                         rand_name(o.fid, s.d.costume).c_str(), rand_colour_name(o.fid, s.d.costume, was).c_str());
+                } else rnd::give_draw(g_rand[o.fid], s.d);
+                s.given = true;
+                s.team = o.team;
+                g_rand_dirty = true;
+            }
+            o.col = rnd::worn_colour(s.d.color);
+            set_i32(o.f, "Costume", s.d.costume);
+            set_i32(o.f, "Color", o.col);
+            g_rand_done.insert(o.f);
+            g_rand_last[o.fid] = s.d.costume;
+            rand_wear_entry(o.team + 1, o.fid, s.d.costume, s.d.color, "picked on a select screen: this battle");
+            logf("[F%d] Random: P%d wears %s %s (drawn when the select screen loaded it)", o.fid, o.team + 1, rand_name(o.fid, s.d.costume).c_str(),
+                 rand_colour_name(o.fid, s.d.costume, s.d.color).c_str());
+        }
+        // the select's Random colours (the Color Mod's Random value on a side): drawn for this battle now, the mirror's left out
+        rand_dress_desc(desc, true);
+        // (the draws are kept until the next character select: the screen sets its colours once more when both players have
+        // confirmed, seen 17/11: the preview went back to colour 1 for a moment when the draw was forgotten here)
+    } catch (...) { logf("costumes: EXCEPTION at a select screen's battle description (Random)"); }
+}
+
+// ---- the network decision where a battle is set up from the save (Wael 24/11/2026: "quoi qu'il arrive") ----
+// The save normally holds the decision already (safety_net, every fighter profile). A battle whose description the game built from
+// a save that did not (a choice made by a path the plugin does not see: a tester's v1.28.0 log, a Battle Hub CPU battle that
+// loaded "F13 c6", 6 being a slot's own number, "1 of the player's, 0 in a slot": nothing aliased) gets it here: the player's
+// fighter holding a slot number, or an outfit / colour the account does not really own, takes it as the intent
+// (carrier::real_choice), the description gets what the network may hold, the alias wears the real choice, and the tick fixes
+// the save itself (g_save_check: safety_net). Under g_alias_mx.
+std::atomic<bool> g_save_check{false};
+bool desc_to_net(const DescInfo& d, DescFighter& f, const char* where) {
+    if (!f.ours || d.picked || g_menu_open || rand_intent(f.fid)) return false;   // (Random: the save holds its draw or the carrier)
+    const int col = f.color == kColourModP2 ? rnd::kEntryCarrier : f.color;
+    const bool outfit_ok = outfit_sendable(f.fid, f.cos), colour_ok = outfit_ok && colour_sendable(f.fid, f.cos, col);
+    if (outfit_ok && colour_ok) return false;
+    const Intent& in = g_intent[f.fid];
+    const carrier::Choice ch = carrier::real_choice(f.cos, col, in.slot, in.color, outfit_ok, colour_ok);
+    const carrier::Pick p = pick_for(f.fid, ch.costume, ch.colour);
+    const carrier::Kept k = carrier::intent_of(p);
+    set_intent_slot(f.fid, k.slot, where);
+    set_intent_color(f.fid, k.color, where);
+    log_pick(f.fid, where, f.cos, col, p);
+    if (p.net_cos != f.cos) set_i32(f.fd, "Costume", p.net_cos);
+    if (p.net_col != col) set_i32(f.fd, "Color", p.net_col);
+    if (wjournal::on()) wjournal::log("ALIAS_NET fd=%p F%d c%d/%d -> c%d/%d", (void*)f.fd, f.fid, f.cos, f.color, p.net_cos, p.net_col);
+    f.cos = p.net_cos;
+    if (p.net_col != col) f.color = p.net_col;
+    g_save_check = true;
+    return true;
+}
+// A request of the game's for files of `fid` in outfit `cos` the network may not hold (a slot's number, an outfit the account does
+// not really own): the player's fighter holds it when the description says so. Online the network got it already (sent before
+// the plugin's decision reached the save: one line per match), offline the game wears it as it is in this battle; either way the
+// save gets the decision at the next tick (g_save_check). Under g_alias_mx.
+std::set<std::pair<int, int>> g_raw_told;   // (fighter, outfit) told for this batch of requests
+void raw_request(Obj* map, int fid, int cos) {
+    // the description request_desc gives, read without its side effects (a reload's dropped, the room's training area decided):
+    // the carrier's requests own those
+    Obj* own = map ? get_obj(map, "m_desc") : nullptr;
+    if (!alive(own)) own = battle_desc();
+    Obj* desc = g_reload_desc && map == g_reload_map && alive(g_reload_desc) ? g_reload_desc : own;
+    DescInfo d;
+    if (!read_desc(desc, d, false) || d.picked) return;
+    for (auto& f : d.f) {
+        if (f.fid != fid || f.cos != cos || !f.ours) continue;
+        g_save_check = true;
+        if (!g_raw_told.insert({ fid, cos }).second) return;
+        logf("[F%d] the %s description holds %s for the player's fighter (game mode %d): %s; the save gets the decision now", fid,
+             d.net ? "online battle's" : "battle's", pick_text(fid, cos, f.color).c_str(), d.mode,
+             d.net ? "the network got it before the plugin could replace it" : "worn as it is in this battle");
+        return;
+    }
 }
 
 int pre_asset_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
@@ -2154,6 +2648,11 @@ int pre_asset_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsi
     if (it != g_f.end() && it->second.carrier >= 0 && cos == it->second.carrier)
         try { tell_thread(); std::lock_guard lk(g_alias_mx); on_carrier_load(reinterpret_cast<Obj*>(argv[1]), fid, arg_int(argv[3]), arg_int(argv[5])); }
         catch (...) { g_in_request = false; }
+    else if (it != g_f.end() && cos > 0)   // (the decision reads the carriers' colours: under the lock, as the tick writes them)
+        try {
+            std::lock_guard lk(g_alias_mx);
+            if (is_mod_slot(fid, cos) || alias_game(fid, cos)) raw_request(reinterpret_cast<Obj*>(argv[1]), fid, cos);
+        } catch (...) {}
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -2209,10 +2708,24 @@ int pre_managed_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
     const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
     try {
         std::lock_guard lk(g_alias_mx);
+        // A batch whose fighters were never built (the match given up during its loading: an opponent who left) is over after 20 s
+        // without a managed request, as an offline batch is (rand_batch): the next match asks for its own files and takes its own
+        // set, never the files of a flow map that ended
+        const ULONGLONG now = GetTickCount64();
+        if (g_mbatch_open && now - g_mbatch_at > 20000) {
+            logf("costumes: alias, the last batch of managed requests built no fighters (%llu s ago): over, this one is a new match",
+                 (now - g_mbatch_at) / 1000);
+            g_mbatch_open = false;
+            g_mbatch.clear();
+            g_rand_batch.clear();
+            g_rand_cbatch.clear();
+        }
+        g_mbatch_at = now;
         if (!g_mbatch_open) {
             g_mbatch_open = true;
             for (auto& [f, s] : g_mlive) logf("[F%d] alias: slot v%02d's managed files are the last match's: no longer counted", f, s);
             g_mlive.clear();
+            g_raw_told.clear();
             rand_clear_worn("a new match's fighters asked for");
         }
         // Battle Settings' Random colour: the set against this opponent
@@ -2228,7 +2741,72 @@ int pre_managed_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
             std::lock_guard lk(g_alias_mx);
             if (cos == it->second.carrier || wanted_slot(fid) || rand_intent(fid))
                 on_carrier_managed(reinterpret_cast<Obj*>(argv[1]), fid, arg_int(argv[3]), arg_int(argv[5]));
+            else if (is_mod_slot(fid, cos) || alias_game(fid, cos))
+                raw_request(reinterpret_cast<Obj*>(argv[1]), fid, cos);
         } catch (...) { g_in_request = false; }
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
+// CpuBattleFlowMapBase.LoadBattleAsset (see "the CPU battles of the Battle Hub"): the slot's files next to the carrier's
+void on_cpu_load(Obj* map) {
+    g_content = {};                                      // the last CPU battle's files went with its flow map
+    Obj* desc = map ? get_obj(map, "m_desc") : nullptr;
+    if (!alive(desc)) desc = battle_desc();
+    DescInfo d;
+    // none of BattleFlowMap's requests runs here: the last battle's entries are over now (rand_batch's rule), and an entry
+    // Battle Settings drew for Outfit 1 / DriveTech on colour 02 is asked for here (the slots' are, as they are dressed)
+    rand_clear_worn("a CPU battle's fighters asked for");
+    if (!read_desc(desc, d, true)) { logf("costumes: alias, a CPU battle's fighters asked for with no description: no slot"); return; }
+    int mine = 0, worn = 0;
+    std::string who;
+    for (auto& f : d.f) {
+        who += (who.empty() ? "" : ", ") + std::string("F") + std::to_string(f.fid) + " c" + std::to_string(f.cos) + " pad " + std::to_string(f.pad) +
+               " ctrl " + std::to_string(f.ctrl);
+        mine += f.ours ? 1 : 0;
+        // the files are asked for from FighterDesc.Costume right after this hook: the description holds what the network may hold
+        // first (a slot number, an outfit or a colour the account does not really own: the intent, worn by the alias below)
+        if (desc_to_net(d, f, "a CPU battle set up from the save"))
+            who += " -> c" + std::to_string(f.cos) + " (the decision)";
+        const int slot = wanted_slot(f.fid, &d);
+        if (!wears_slot(d, f, slot)) {
+            if (f.ours && f.color == rnd::kEntryCarrier)
+                if (const rnd::Draw w = rand_settings_draw(f.fid); w.valid() && w.costume == f.cos && rnd::is_entry(w.color))
+                    rand_wear_entry(f.team + 1, f.fid, f.cos, w.color, "a CPU battle: Battle Settings' draw");
+            continue;
+        }
+        if (!dress_drawn(d, f, slot)) continue;
+        Obj* paths = call_obj(m_scn_path_fd, nullptr, { arg_obj(f.fd), arg_bool(true) });
+        const int n = paths ? list_count(paths) : 0;
+        bool asked = false;
+        if (n > 0) {
+            g_in_request = true;
+            auto r = call(m_req_assets, map, { arg_obj(paths), arg_bool(true), arg_i32(0), arg_bool(false), arg_bool(false), arg_bool(false) });
+            g_in_request = false;
+            asked = !r.exception_thrown;
+        }
+        if (wjournal::on()) wjournal::log("ALIAS_LOAD_CPU map=%p F%d v%d paths=%d ok=%d", (void*)map, f.fid, slot, n, asked ? 1 : 0);
+        if (!asked) {
+            logf("[F%d] alias: slot v%02d's files could not be asked of the CPU battle's flow map (%d paths): no alias", f.fid, slot, n);
+            undress(f.fd, "its files could not be asked for");
+            continue;
+        }
+        g_content.map = map;
+        g_content.slots[f.fid] = slot;
+        ++worn;
+        logf("[F%d] alias: slot v%02d's files asked of the CPU battle's flow map (%d paths) next to %s's (game mode %d)", f.fid, slot, n,
+             carrier_name(f.fid).c_str(), d.mode);
+    }
+    logf("costumes: alias, a CPU battle's fighters asked for (%s, game mode %d): %s; %d of the player's, %d in a slot or an outfit worn on "
+         "this PC only", d.net ? "online" : "offline", d.mode, who.c_str(), mine, worn);
+}
+int pre_cpu_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    g_fighter_requests.fetch_add(1, std::memory_order_relaxed);
+    g_load_map.store(reinterpret_cast<Obj*>(argv[1]), std::memory_order_relaxed);
+    g_load_desc.store(nullptr, std::memory_order_relaxed);
+    post(EV_FIGHTER_LOAD);
+    try { tell_thread(); std::lock_guard lk(g_alias_mx); on_cpu_load(reinterpret_cast<Obj*>(argv[1])); }
+    catch (...) { g_in_request = false; logf("costumes: EXCEPTION at a CPU battle's fighter files"); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -2253,6 +2831,8 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
     try {
         DescInfo d;
         std::set<Obj*> keep;
+        Obj* const map = reinterpret_cast<Obj*>(argv[1]);
+        if (g_content.map && g_content.map != map) g_content = {};   // another flow map's fighters: that CPU battle is over
         const bool read = read_desc(reinterpret_cast<Obj*>(argv[2]), d, false);
         g_built_mode.store(read ? d.mode : -1, std::memory_order_relaxed);
         g_built_net.store(read && d.net, std::memory_order_relaxed);
@@ -2260,10 +2840,14 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
         if (read)
             for (auto& f : d.f) {
                 const int slot = wanted_slot(f.fid, &d);
+                if (!slot) {   // Outfit 1 / DriveTech in a colour from Color 3 on: that colour on this PC (no files to ask for)
+                    if (const int c = colour_only(d, f); c >= 0 && dress(f, f.cos, c)) keep.insert(f.fd);
+                    continue;
+                }
                 if (!wears_slot(d, f, slot)) continue;
-                if (!slot_held(f.fid, slot, d.net)) {
-                    logf("[F%d] alias: the slot's files were not asked for before the fighters were built: not aliased (%s, game mode %d)",
-                         f.fid, d.net ? "online" : "offline", d.mode);
+                if (!slot_held_now(f.fid, slot, d.net) && !content_held(map, f.fid, slot)) {
+                    logf("[F%d] alias: the slot's files were not asked for before the fighters were built: not aliased, %s worn (%s, game mode %d)",
+                         f.fid, carrier_name(f.fid).c_str(), d.net ? "online" : "offline", d.mode);
                     continue;
                 }
                 if (dress_drawn(d, f, slot)) keep.insert(f.fd);
@@ -2285,6 +2869,7 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
     g_rand_last.clear();
     g_rand_done.clear();
     g_rand_load_open = false;
+    g_raw_told.clear();
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -2326,7 +2911,15 @@ void rand_profile_outside_menu() {
 
 int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || tl_profile_depth++ > 0) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    // which thread builds / sends the profile (the safety net runs here since 1.49.0): logged once, against the game thread's
+    static std::atomic<bool> told_thread{false};
+    if (!told_thread.exchange(true))
+        logf("costumes: fighter profile hook on thread %lu (LateUpdateBehavior: %lu)", GetCurrentThreadId(), g_game_thread.load());
     if (!g_menu_open) {
+        // a save that still holds a slot number, an outfit or a colour the network must not see (a close not seen, a path of the
+        // game's own, the first start after an update): the safety net's rule first, then Random's. Also before the carriers are
+        // decided (Wael 24/11/2026: never the save's value): the decision is then the carrier Outfit 1 in Color 1.
+        try { safety_net(); } catch (...) {}
         try { rand_profile_outside_menu(); } catch (...) {}
         return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     }
@@ -2335,36 +2928,38 @@ int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long lon
         int n = 0;
         for (auto& [fid, e] : save_entries()) {
             const int v = get_cos(e), c = get_col(e);
-            if (!is_slot(fid, v)) {
-                // a game outfit on the Color Mod's Random value (colour 02, its Fighter Settings choice for that fighter): the
-                // profile sends the next colour (made now when there is none), the menu gets 02 back after
-                if (c != rnd::kEntryCarrier || colormod::fighter_random(fid) != v) continue;
+            int held = v, hcol = c;
+            if (is_random(fid, v)) {
+                // Random: its next draw (made now when there is none: the profile the menu sends must hold it), an outfit the
+                // network may hold in its colour (the decision's), else the carrier
+                rand_ensure_next(fid, "Random chosen: its next draw");
+                const rnd::Draw rd = rand_save_draw(fid);
+                held = rd.valid() ? rd.costume : save_cos_of(fid);
+                hcol = rd.valid() ? net_col_of(fid, rd.costume, rd.color) : net_colour_of(fid, c);
+            } else if (c == rnd::kEntryCarrier && colormod::fighter_random(fid) == v && outfit_sendable(fid, v)) {
+                // a game outfit the network holds, on the Color Mod's Random value (colour 02, its Fighter Settings choice for that
+                // fighter): the profile sends the next colour (made now when there is none), the menu gets 02 back after
                 rand_ensure_next_colour(fid, v, "Random colour chosen: its next colour");
-                const int nc = rnd::worn_colour(g_rand[fid].next_colour.color);
-                if (nc == c) continue;
-                g_swapped.push_back({ e, fid, v, c, v });
-                ++n;
-                g_swapped_n.store(static_cast<int>(g_swapped.size()), std::memory_order_relaxed);
-                set_i32(e, "MatchingFighterColor", nc);
-                continue;
+                hcol = net_col_of(fid, v, rnd::worn_colour(g_rand[fid].next_colour.color));
+            } else {
+                // everything else through the decision: a slot, an outfit or a colour the account does not really own (an outfit
+                // nobody knows included) go as the carrier / Color 1, the menu gets the real choice back after
+                const carrier::Pick p = pick_for(fid, v, c);
+                held = p.net_cos;
+                hcol = p.net_col;
+                log_pick(fid, "a fighter profile while Battle Settings is open", v, c, p);
             }
-            // Random: its next draw (made now when there is none: the profile the menu sends must hold it), a game outfit in
-            // its colour, else the carrier
-            rnd::Draw rd;
-            if (is_random(fid, v)) { rand_ensure_next(fid, "Random chosen: its next draw"); rd = rand_save_draw(fid); }
-            const int held = rd.valid() ? rd.costume : save_cos_of(fid);
+            if (held == v && hcol == c) continue;
             g_swapped.push_back({ e, fid, v, c, held });
             ++n;
             g_swapped_n.store(static_cast<int>(g_swapped.size()), std::memory_order_relaxed);
             set_i32(e, "MatchingFighterCostume", held);
-            const auto& fr = g_f[fid];
-            if (rd.valid()) set_i32(e, "MatchingFighterColor", rd.color);
-            else if (fr.base_known && !fr.base_colors.count(c)) set_i32(e, "MatchingFighterColor", fr.base_min);
+            set_i32(e, "MatchingFighterColor", hcol);
         }
         static int told = 0;
         if (n && told++ < 20)
-            logf("costumes: the fighter profile is read while Battle Settings is open: %d save entr%s hold the carrier for it",
-                 n, n == 1 ? "y" : "ies");
+            logf("costumes: the fighter profile is read while Battle Settings is open: %d save entr%s hold what the network may hold "
+                 "for it", n, n == 1 ? "y" : "ies");
     } catch (...) {}
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -2519,14 +3114,29 @@ void post_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned l
 // ---- hooks: screens ----
 template <perf::Id ID> int pre_menu_open(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)  { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_MENU_OPEN); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 template <perf::Id ID> int pre_menu_close(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_MENU_CLOSE); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-template <perf::Id ID> int pre_select_start(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_SELECT_START); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+// (a new select screen's Random draws start here, in the hook: rand_select_start)
+template <perf::Id ID> int pre_select_start(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); try { rand_select_start(); } catch (...) {} post(EV_SELECT_START); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 template <perf::Id ID> int pre_select_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_SELECT_END); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 int pre_title_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)    { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_TITLE_END); perf::end(perf::HkCosTitleOnDestroy, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+
+// What the account really owns, read again (true_owner.hpp, game thread; Wael 24/11/2026): when an answer may have changed (the
+// tables read at last, a purchase, Steam), the carriers are decided again if a DriveTech's ownership changed, and the saves get
+// the decision again (safety_net, at the tick's end)
+void own_refresh(const char* why) {
+    if (!trueown::refresh(why)) return;
+    g_save_check = true;
+    for (int fid : g_fighters)   // (the setting on Outfit 1: no carrier to change; a change of the setting decides them again)
+        if (auto it = g_f.find(fid); g_online_dt && it != g_f.end() && trueown::outfit(fid, carrier::kDriveTech) != it->second.dt_own) {
+            g_carrier_apply = true;
+            break;
+        }
+}
 
 } // namespace
 
 bool display_nsfw() { return g_show_nsfw; }
 int random_outfit(int fighter) { auto r = g_random_no.find(fighter); return r == g_random_no.end() ? -1 : r->second; }
+bool registry_slot(int fighter, int costume) { return is_slot(fighter, costume); }
 
 // The in-game row "Display NSFW Outfits" (nsfw_option.cpp) exists: settings.json is followed (read now) even when
 // no NSFW outfit or option is installed, so the row shows the file.
@@ -2690,6 +3300,27 @@ void install_hooks() {
         hook_all(bfm, "setupFighterAsset", pre_setup_fighters, nullptr);
         hook_all(bfm, "SetupReloadBattleAsset", pre_reload_setup, nullptr);
         g_draw_hooks = true;
+        // the CPU battles of the Battle Hub load their fighters themselves (Learning AI / V-Rival, exam, cabinet CPU)
+        auto first_param = [](Method* m) {
+            auto ps = m->get_params();
+            auto* pt = ps.empty() ? nullptr : reinterpret_cast<TD*>(ps[0].t);
+            return pt ? pt->get_full_name() : std::string();
+        };
+        auto by_param = [&](TD* td, const char* name, uint32_t n, const char* param0) -> Method* {
+            for (auto* ty = td; ty; ty = ty->get_parent_type())
+                for (auto* m : ty->get_methods())
+                    if (m && m->get_name() && !strcmp(m->get_name(), name) && m->get_num_params() == n
+                        && first_param(m).find(param0) != std::string::npos) return m;
+            return nullptr;
+        };
+        auto* cpu = tdb->find_type("app.battle.CpuBattleFlowMapBase");
+        m_scn_path_fd = by_param(tdb->find_type("app.constant.scn"), "getFighterPath", 2, "FighterDesc");
+        m_req_assets = by_param(tdb->find_type("app.FlowMapBase"), "requestLoadAssets", 6, "IEnumerable");
+        if (cpu && m_scn_path_fd && m_req_assets && m_scn_path_fd->is_static())
+            hook_all(cpu, "LoadBattleAsset", pre_cpu_load, nullptr);
+        else
+            logf("costumes: the CPU battles' fighter load is not as known (flow map %d, getFighterPath(FighterDesc) %d, requestLoadAssets(paths) %d): "
+                 "no slot in a Learning AI match", cpu ? 1 : 0, m_scn_path_fd ? 1 : 0, m_req_assets ? 1 : 0);
     } else logf("costumes: the battle description's costume override is missing (game update?): no alias");
     // the fighter profile sent to the server: built, sent, checked (see "the fighter profile")
     if (auto* tdm = tdb->find_type("app.TemporarilyDataManager"))
@@ -2736,7 +3367,7 @@ bool busy() {
     if (g_slots.empty()) return false;
     if (!g_boot_done || g_revoke_cursor >= kStaticMin || g_color_cursor >= kColorMin) return true;
     if (g_cl_check_started && !g_cl_hooked) return true;     // Random's Color row: the code check's verdict not acted on yet
-    return g_nsfw_apply || g_carrier_apply || g_rand_dirty.load();
+    return g_nsfw_apply || g_carrier_apply || g_rand_dirty.load() || g_save_check.load();
 }
 
 void tick(uint32_t ev) {
@@ -2746,10 +3377,14 @@ void tick(uint32_t ev) {
     // ---- boot, once: every 30 frames until everything is in place (title screen, menus) ----
     if (!g_boot_done && g_frame - g_boot_last >= 30 && g_frame > 60) {
         g_boot_last = g_frame;
+        own_refresh("boot");                      // the account's DriveTech first: the carriers follow it
         read_carriers();
         insert_colors();
         insert_select_ui();
         bool owned = give_ownership("boot");
+        // Random: the numbers state.json kept that nobody knows go, once the costume table is known (before any draw is kept)
+        static bool forgot = false;
+        if (g_carriers_done && g_table_ok && !forgot) { forgot = true; rand_forget_unknown(); }
         if (owned && g_bc_done) rand_read_lists("boot");     // Random's pools (the carriers' records first: their colours)
         if (owned && g_carriers_done) safety_net();   // the carriers first: the save gets the right one
         g_boot_done = (g_bc_done && g_colors_done && g_ui_done && owned) || g_frame > 60 * 600;
@@ -2783,12 +3418,12 @@ void tick(uint32_t ev) {
     // ---- ownership back after the title screen (login clears it, 1 slot seen 30/09), and at every
     // screen that lists outfits. (UIFlowTitle is also destroyed when a battle loads: one pass then.)
     // From there on, a slot whose outfit the game does not count as the player's is hidden.
-    if (ev & EV_SELECT_START) { std::lock_guard lk(g_alias_mx); g_sel_draw.clear(); }   // Random: a new select draws anew
     if (ev & (EV_TITLE_END | EV_SELECT_START | EV_MENU_OPEN)) {
         g_after_title = true;
         const char* why = (ev & EV_SELECT_START) ? "character select" : (ev & EV_MENU_OPEN) ? "Battle Settings" : "title screen left";
         give_ownership(why);
         rand_read_lists(why);                     // Random's pools: what the Costume rows list now
+        own_refresh(why);                         // what the account really owns now (a purchase since): the network decision
     }
 
     // ---- Battle Settings ----
@@ -2822,9 +3457,15 @@ void tick(uint32_t ev) {
         g_carrier_apply = false;
         {
             std::lock_guard lk(g_alias_mx);
-            for (int fid : g_fighters) set_carrier(g_f[fid]);
+            for (int fid : g_fighters) set_carrier(fid);
         }
         logf("costumes: carriers now %s", carriers_text().c_str());
+        safety_net();
+    }
+    // The network decision again (Wael 24/11/2026): after a battle was set up from a save that held a slot number or an outfit /
+    // colour the network must not hold (desc_to_net, raw_request), and when the account's ownership was read again (own_refresh)
+    if (g_save_check.load() && !g_menu_open) {
+        g_save_check = false;
         safety_net();
     }
 
@@ -2868,19 +3509,33 @@ bool load_fighters(std::vector<LoadFighter>& out, const char** why) {
 bool replay_random_colour(int fighter, int costume, int& out_color, std::string& entry) {
     if (fighter <= 0 || costume < 0 || is_random(fighter, costume)) return false;
     std::lock_guard lk(g_alias_mx);
+    // no colour known for that outfit (the game's table not read, its Color row never seen) and no entry: nothing to draw from,
+    // the replay keeps the colour it recorded (never Color 1 for want of a list)
+    if (rand_colours_of(fighter, costume).empty() && (!colormod::battle_ok() || colormod::entries(fighter, costume).empty())) {
+        logf("[F%d] Random colour: no colour known for %s (the game's table not read, its Color row never seen): the replay keeps "
+             "its own", fighter, rand_name(fighter, costume).c_str());
+        return false;
+    }
     const int v = rand_draw_colour(fighter, costume, nullptr, "a replay's colour set to Random in Replays > Settings", true);
     out_color = rnd::worn_colour(v);
     entry = rand_entry_id(fighter, costume, v);
+    if (rnd::is_entry(v) && entry.empty())
+        logf("[F%d] Random colour: the entry drawn for %s in a replay is gone: colour 02", fighter, rand_name(fighter, costume).c_str());
     return true;
 }
 bool replay_random(int fighter, int costume, int& out_costume, int& out_color, std::string& entry) {
     if (!is_random(fighter, costume)) return false;
     std::lock_guard lk(g_alias_mx);
-    const rnd::Draw d = rand_draw(fighter, "a replay set to Random in Replays > Settings", nullptr, false, true);
-    if (!d.valid()) return false;
+    const rnd::Draw d = rand_draw(fighter, "a replay set to Random in Replays > Settings", nullptr, /*replay=*/true);
+    if (!d.valid()) {
+        logf("[F%d] Random: nothing to draw for a replay set to Random (no outfit of the pool allowed now): the replay keeps its own", fighter);
+        return false;
+    }
     out_costume = d.costume;
     out_color = rnd::worn_colour(d.color);
     entry = rand_entry_id(fighter, d.costume, d.color);
+    if (rnd::is_entry(d.color) && entry.empty())
+        logf("[F%d] Random: the entry drawn with %s in a replay is gone: colour 02", fighter, rand_name(fighter, d.costume).c_str());
     return true;
 }
 bool dressed_slot(Obj* fd, int fid, int& slot, int& color) {
@@ -2894,6 +3549,19 @@ bool dressed_slot(Obj* fd, int fid, int& slot, int& color) {
     slot = w->slot;
     color = w->color;
     return true;
+}
+std::string worn_entry(int team, int fid, int costume, int color, bool& known) {
+    known = false;
+    if (color != 1) { known = colormod::available(); return {}; }   // an entry rides on colour 02 only
+    {
+        std::lock_guard lk(g_alias_mx);
+        const int side = team + 1;
+        if ((side == 1 || side == 2) && g_rand_req[side].fid == fid && g_rand_req[side].cos == costume && !g_rand_req[side].id.empty()) {
+            known = true;
+            return g_rand_req[side].id;
+        }
+    }
+    return colormod::fighter_entry(fid, costume, known);   // (not under g_alias_mx: the Color Mod takes its own lock)
 }
 int battle_mode() {
     auto* desc = battle_desc();
@@ -2934,7 +3602,26 @@ int random_now(int side, int fighter, int costume) {
         !g_slot_of.count(fighter) || is_random(fighter, costume))
         return -1;
     std::lock_guard lk(g_alias_mx);
-    const int v = rand_draw_colour(fighter, costume, nullptr, "the training popup: Random chosen, worn now");
+    // the colours (as worn) the other side's fighters of that fighter and outfit wear: not drawn (the game's rule: no mirror in one
+    // colour; an entry is 02)
+    std::vector<int> taken;
+    if (Obj* desc = battle_desc()) {
+        Obj* teams = get_obj(desc, "Teams");
+        for (int t = 0, nt = list_count(teams); t < nt; ++t) {
+            if (t == side - 1) continue;
+            Obj* fs = get_obj(list_item(teams, t), "Fighters");
+            for (int i = 0, nf = list_count(fs); i < nf; ++i) {
+                Obj* f = list_item(fs, i);
+                int32_t fid = 0, cos = -1, col = -1;
+                if (!f || !get_i32(f, "FighterId", fid) || fid != fighter || !get_i32(f, "Costume", cos) || cos != costume || !get_i32(f, "Color", col)) continue;
+                taken.push_back(col == kColourModP2 ? rnd::kEntryCarrier : col);
+            }
+        }
+    }
+    const rnd::Allowed ok = taken.empty() ? rnd::Allowed()
+                                          : rnd::Allowed([&taken](int c) { return !rnd::has(taken, rnd::worn_colour(c)); });
+    const int v = rand_draw_colour(fighter, costume, ok, "the training popup: Random chosen, worn now");
+    g_sel_colour[side] = { fighter, costume, v };   // a reload of this battle keeps it
     if (rnd::is_entry(v)) {
         rand_wear_entry(side, fighter, costume, v, "the training popup");
         return rnd::kEntryCarrier;
