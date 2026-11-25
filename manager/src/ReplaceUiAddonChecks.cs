@@ -95,6 +95,47 @@ namespace SlotsInstaller
             AddonSplit split2 = LibraryAddons.Split(merged2, new[] { mainFiles, merged2.Components.Single(c => c.Name == "Barefoot").Id }, false);
             Require(split2.MainIds.Contains(merged2.Components.Single(c => c.Name == "Shorts").Id) && split2.Warnings.Count == 1 && split2.Warnings[0].Contains("shorts.tex.241101895") && split2.Warnings[0].Contains("Barefoot"), "leftover note: " + String.Join(" / ", split2.Warnings));
             AddonCopies(addon);
+            NamelessAddons(main);
+        }
+
+        // 26 Nov 2026 (the user's "Bison Cammy Barefoot Addon.zip": no menu folder, one option with AddonFor= naming the main
+        // mod, all under one top folder; Fluffy shows it inside "Bison Cammy", the Manager didn't): an add-on archive with no
+        // name of its own joins the main mod its AddonFor= names. The index gives it no mod name, only its AddonFor.
+        internal static string WriteNamelessAddon(string folder, string addonFor, string option, string bytes)
+        {
+            string zip = Path.Combine(folder, option + " Addon.zip");
+            WriteZip(zip, new Dictionary<string, byte[]> {
+                { "Top/02A " + option + "/modinfo.ini", Ini("name=" + option + "\nAddonFor=" + addonFor + "\ndescription=Requires Main file\nRequirement=Main files\nMenuPriority=1\n") },
+                { "Top/02A " + option + "/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes(bytes) } });
+            return zip;
+        }
+        private static void NamelessAddons(string main)
+        {
+            string folder = Path.Combine(Path.GetDirectoryName(main), "nameless");
+            Directory.CreateDirectory(folder);
+            string toMod = WriteNamelessAddon(folder, AddonTestName, "Barefoot C2", "barefoot c2 mesh");
+            string toGroup = WriteNamelessAddon(folder, "Outfit", "Sandals", "sandals mesh");
+            string elsewhere = WriteNamelessAddon(folder, "Some other mod", "Boots", "boots mesh");
+            ModPackage m = PackageReader.Load(main, ""), a = PackageReader.Load(toMod, ""), g = PackageReader.Load(toGroup, ""), x = PackageReader.Load(elsewhere, "");
+            using (var reader = new SourceReader(toMod, ""))
+            {
+                Library.ModInfoSummary info = Library.ReadModInfo(reader);
+                Require(info.DisplayName == "" && info.AddonFors.SequenceEqual(new[] { AddonTestName }), "fixture: the nameless addon's index name " + info.DisplayName + " / " + String.Join(",", info.AddonFors));
+            }
+            Require(a.Name == "Barefoot C2" && LibraryAddons.IsNameless(a) && LibraryAddons.IsNameless(g) && !LibraryAddons.IsNameless(m), "nameless: " + a.Name + " " + LibraryAddons.IsNameless(a) + " " + LibraryAddons.IsNameless(g) + " " + LibraryAddons.IsNameless(m));
+            Require(LibraryAddons.IsAddonOf(m, a) && LibraryAddons.IsAddonOf(m, g) && !LibraryAddons.IsAddonOf(a, m) && !LibraryAddons.IsAddonOf(g, m), "a nameless addon is not the main mod's addon (or the other way round)");
+            Require(!LibraryAddons.IsAddonOf(m, x), "a nameless addon of another mod was merged");
+            // A one-option mod of its own (no AddonFor=) is never nameless, so another name still keeps it out.
+            ModPackage plain = PackageReader.Load(toMod, ""); plain.Components.ForEach(c => c.AddonFor = "");
+            Require(!LibraryAddons.IsNameless(plain) && !LibraryAddons.IsAddonOf(m, plain), "a plain one-option mod was taken for a nameless addon");
+            ModPackage merged = LibraryAddons.Merge(m, new List<ModPackage> { a, g });
+            ModComponent rootMenu = merged.Components.Single(c => c.IsDummy && c.ParentId == null && c.Name == AddonTestName), outfit = merged.Components.Single(c => c.Name == "Outfit");
+            ModComponent bareC2 = merged.Components.Single(c => c.Name == "Barefoot C2"), sandals = merged.Components.Single(c => c.Name == "Sandals");
+            Require(bareC2.ParentId == rootMenu.Id && sandals.ParentId == outfit.Id && merged.AddonParts.Count == 2, "merged: Barefoot C2 under " + bareC2.ParentId + ", Sandals under " + sandals.ParentId);
+            string mainFiles = merged.Components.Single(c => c.Name == "Main files").Id;
+            AddonSplit split = LibraryAddons.Split(merged, new[] { mainFiles, bareC2.Id }, true);
+            Require(split.MainIds.Contains(mainFiles) && split.Ticked.Single().Value.SequenceEqual(new[] { "Top/02A Barefoot C2" }) && Composer.Plan(a, split.Ticked.Single().Value, true).CanInstall,
+                "split: main " + String.Join("|", split.MainIds) + " addon " + String.Join("|", split.Ticked.SelectMany(p => p.Value)));
         }
 
         // 23 Nov 2026 (the user's three copies of "Sakura as Ryu C1 - Barefoot Addons.zip" showed every option three times):
@@ -223,6 +264,24 @@ namespace SlotsInstaller
                 Require(merged.PreviewBytes(bare.Id, "").SequenceEqual(AddonPreview), "Barefoot's preview was not read from the addon");
                 Require(!mainEntry.OptionIds.Any(id => id.StartsWith(LibraryAddons.PrefixHead)), "the main row lists the addon's options: " + String.Join(",", mainEntry.OptionIds));
                 Require(Get<Label>(form, "packageHint").Text.StartsWith("With options from " + Path.GetFileName(addon)), "no hint about the addon: " + Get<Label>(form, "packageHint").Text);
+                // 26 Nov 2026: a nameless addon row (no mod name in the index, AddonFor= the main mod) joins too, under the
+                // main mod's menu; one whose AddonFor names another mod is never read.
+                string nameless = Path.Combine(folder, "nameless", "Barefoot C2 Addon.zip"), stranger = Path.Combine(folder, "nameless", "Boots Addon.zip");
+                var namelessEntry = new LibraryEntry { SourcePath = nameless, Name = Path.GetFileNameWithoutExtension(nameless), DisplayName = "", Kind = "ZIP", OptionNames = new List<string> { "Barefoot C2" }, AddonFors = new List<string> { AddonTestName } };
+                var strangerEntry = new LibraryEntry { SourcePath = stranger, Name = Path.GetFileNameWithoutExtension(stranger), DisplayName = "", Kind = "ZIP", OptionNames = new List<string> { "Boots" }, AddonFors = new List<string> { "Some other mod" } };
+                library.Add(namelessEntry); library.Add(strangerEntry);
+                try
+                {
+                    reads = form.PackageReads;
+                    open(mainEntry);
+                    ModPackage withNameless = Get<ModPackage>(form, "package");
+                    Require(form.PackageReads == reads + 1 && withNameless.AddonParts != null && withNameless.AddonParts.Count == 2 && withNameless.AddonParts.Any(p => ReplacePlanner.SameSource(p.SourcePath, nameless)),
+                        "the nameless addon did not join (or another was read): reads +" + (form.PackageReads - reads) + ", parts " + (withNameless.AddonParts == null ? 0 : withNameless.AddonParts.Count));
+                    Require(node("Barefoot C2").Parent == node(AddonTestName) && node("Barefoot").Parent == node("Outfit"), "Barefoot C2 is not under the main mod's menu");
+                }
+                finally { library.Remove(namelessEntry); library.Remove(strangerEntry); }
+                open(mainEntry);
+                Require(Get<ModPackage>(form, "package").AddonParts.Count == 1, "the nameless addon stayed after its row left the library");
                 // 1.0.19 (the user: "relax requirements ... install the mod anyways. this helps to mix and match options"):
                 // Main files unticked by hand stays out when Barefoot (Requirement=Main files) is ticked; the line under
                 // the preview picture names it and its row lights up. Ticked again by hand, it is back for good.

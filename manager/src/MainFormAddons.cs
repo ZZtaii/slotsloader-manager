@@ -100,7 +100,8 @@ namespace SlotsInstaller
         }
 
         // A library row as the worker sees it (copied on the UI thread).
-        private sealed class AddonCandidate { internal string SourcePath, Name; internal List<string> OptionNames; internal bool Installed; }
+        // Nameless: an add-on archive without a mod name of its own, matched by its AddonFor= (LibraryAddons.IsNameless).
+        private sealed class AddonCandidate { internal string SourcePath, Name; internal List<string> OptionNames; internal bool Installed, Nameless; }
 
         // UI thread: the library's other archives with a known mod name and option names (the worker reads those named
         // like the open mod).
@@ -112,12 +113,20 @@ namespace SlotsInstaller
             LibraryEntry listed = library.FirstOrDefault(e => e != null && String.Equals(e.SourcePath, opened.SourcePath, StringComparison.OrdinalIgnoreCase));
             string known = listed != null && !String.IsNullOrWhiteSpace(listed.DisplayName) ? listed.DisplayName : opened.DisplayName;
             openedName = (known ?? "").Trim();
+            List<string> openedOptions = (listed != null && listed.OptionNames != null && listed.OptionNames.Count > 0 ? listed.OptionNames : opened.OptionNames) ?? new List<string>();
+            var ownOptions = new HashSet<string>(openedOptions.Select(n => (n ?? "").Trim()).Where(n => n.Length > 0), StringComparer.OrdinalIgnoreCase);
+            if (openedName.Length > 0) ownOptions.Add(openedName);
             foreach (LibraryEntry e in library)
             {
-                if (e == null || String.IsNullOrEmpty(e.SourcePath) || e.NamesPending || String.IsNullOrWhiteSpace(e.DisplayName) || e.OptionNames == null || e.OptionNames.Count == 0) continue;
+                if (e == null || String.IsNullOrEmpty(e.SourcePath) || e.NamesPending || e.OptionNames == null || e.OptionNames.Count == 0) continue;
                 if (String.Equals(e.SourcePath, opened.SourcePath, StringComparison.OrdinalIgnoreCase)) continue;
+                // 26 Nov 2026: a row without a mod name (an add-on archive with no menu folder, like "Bison Cammy Barefoot
+                // Addon.zip") is a candidate when an AddonFor= of it names the open mod or one of its options; the package
+                // check (LibraryAddons.IsNameless, IsAddonOf) decides once it is read.
+                bool nameless = String.IsNullOrWhiteSpace(e.DisplayName);
+                if (nameless && (e.AddonFors == null || !e.AddonFors.Any(a => ownOptions.Contains((a ?? "").Trim())))) continue;
                 // A known name: only rows named the same (the package name is checked again once it is read).
-                if (openedName.Length > 0 && !String.Equals(e.DisplayName.Trim(), openedName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!nameless && openedName.Length > 0 && !String.Equals(e.DisplayName.Trim(), openedName, StringComparison.OrdinalIgnoreCase)) continue;
                 // 17 Nov 2026 (the user's Mod library was slow on robhal's base packs: 20 archives named "!BASE FILES (for swap by
                 // robhal)", each read in full, about 18.7 s per open): an addon has an AddonFor= (LibraryAddons.IsAddonOf), so a
                 // mod known to have none is never read for this. Not known yet (an older index record): read, as before.
@@ -125,7 +134,7 @@ namespace SlotsInstaller
                 // Installed (a Replace record or an outfit's added part from this file): kept among copies (DropCopies).
                 bool used = gameRows.Any(r => r.Mod != null && ReplacePlanner.SameSource(r.Mod.SourcePath, e.SourcePath))
                     || installed.Any(o => o != null && o.Parts != null && o.Parts.Any(g => ReplacePlanner.SameSource(g.SourcePath, e.SourcePath)));
-                list.Add(new AddonCandidate { SourcePath = e.SourcePath, Name = e.DisplayName.Trim(), OptionNames = e.OptionNames.ToList(), Installed = used });
+                list.Add(new AddonCandidate { SourcePath = e.SourcePath, Name = (e.DisplayName ?? "").Trim(), OptionNames = e.OptionNames.ToList(), Installed = used, Nameless = nameless });
             }
             return list;
         }
@@ -139,7 +148,7 @@ namespace SlotsInstaller
             Func<string, bool> named = name => String.Equals(name, (loaded.Name ?? "").Trim(), StringComparison.OrdinalIgnoreCase) || (openedName.Length > 0 && String.Equals(name, openedName, StringComparison.OrdinalIgnoreCase));
             var own = new HashSet<string>(loaded.Components.Select(c => (c.Name ?? "").Trim()), StringComparer.OrdinalIgnoreCase);
             var addons = new List<ModPackage>();
-            foreach (AddonCandidate candidate in candidates.Where(c => named(c.Name) && c.OptionNames.Any(n => !own.Contains(n.Trim()))).OrderBy(c => c.SourcePath, StringComparer.OrdinalIgnoreCase))
+            foreach (AddonCandidate candidate in candidates.Where(c => (c.Nameless || named(c.Name)) && c.OptionNames.Any(n => !own.Contains(n.Trim()))).OrderBy(c => c.SourcePath, StringComparer.OrdinalIgnoreCase))
             {
                 OperationContext.ThrowIfCancellationRequested();
                 try

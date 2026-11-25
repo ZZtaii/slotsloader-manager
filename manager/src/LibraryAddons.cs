@@ -71,13 +71,26 @@ namespace SlotsInstaller
             return named.Count == 1 ? named[0] : null;
         }
 
-        // An addon of `main`: same package name, another source, no saved bundle layout on either, and at least one option
-        // whose AddonFor the addon itself can't resolve names exactly one option of the main mod.
+        // An addon of `main`: same package name (or a nameless add-on, below), another source, no saved bundle layout on
+        // either, and at least one option whose AddonFor the addon itself can't resolve names exactly one option of the
+        // main mod.
         internal static bool IsAddonOf(ModPackage main, ModPackage candidate)
         {
             if (main == null || candidate == null || main.MergedFrom != null || candidate.MergedFrom != null) return false;
-            if (main.HasBundleLayout || candidate.HasBundleLayout || !SameName(main.Name, candidate.Name) || ReplacePlanner.SameSource(main.SourcePath, candidate.SourcePath)) return false;
+            if (main.HasBundleLayout || candidate.HasBundleLayout || ReplacePlanner.SameSource(main.SourcePath, candidate.SourcePath)) return false;
+            if (!SameName(main.Name, candidate.Name) && !IsNameless(candidate)) return false;
             return candidate.Components.Any(c => c.ParentId == null && !String.IsNullOrWhiteSpace(c.AddonFor) && Target(main, c.AddonFor) != null);
+        }
+
+        // 26 Nov 2026 (the user's "Bison Cammy Barefoot Addon.zip": one option with AddonFor=Bison Cammy and no menu folder;
+        // Fluffy shows it in "Bison Cammy", the Manager didn't): an archive with no name of its own, whose top-level
+        // options all name a group it doesn't have (AddonFor= unresolved inside it) and no dummy root. Its package name
+        // is only its first option's, so it is matched by its AddonFor alone.
+        internal static bool IsNameless(ModPackage candidate)
+        {
+            if (candidate == null) return false;
+            List<ModComponent> roots = candidate.Components.Where(c => c.ParentId == null).ToList();
+            return roots.Count > 0 && roots.All(c => !c.IsDummy && !String.IsNullOrWhiteSpace(c.AddonFor) && !SameName(c.AddonFor, c.Name));
         }
 
         // A new package (cached packages are shared and never changed): the main's components as they are, then each
