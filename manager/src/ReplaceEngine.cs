@@ -676,9 +676,46 @@ namespace SlotsInstaller
         {
             string real = GamePath(AgsRealPath);
             if (!File.Exists(real)) return false;
-            string name = KnownBuilds.Name(actual);
+            string name = KnownBuilds.Name(actual), realSha = Sha(real);
+            if (realSha == actual) return false;
             bool proxy = (name != null && name.IndexOf("proxy", StringComparison.OrdinalIgnoreCase) >= 0) || File.Exists(GamePath(LoaderCostumePak.PluginPath));
-            return proxy && Sha(real) != actual;
+            // 1.0.22: a proxy of a build not in the table, with the plugin gone (a "Restore to vanilla" removes it), was
+            // taken for the game's own file and put back when Slotsloader was turned off: SF6 then could not start
+            // (a proxy without its amd_ags_x64_real.dll). The genuine AMD library beside a file that is not one decides.
+            return proxy || (IsGenuineAgs(real, realSha) && !IsGenuineAgs(GamePath(AgsPath), actual));
+        }
+
+        // The game's AMD GPU Services library: the known release, or any build AMD describes as that library.
+        internal static bool IsGenuineAgs(string file, string sha)
+        {
+            string name = sha == null ? null : KnownBuilds.Name(sha);
+            if (name != null) return name.IndexOf("game's own", StringComparison.OrdinalIgnoreCase) >= 0;
+            try
+            {
+                if (String.IsNullOrEmpty(file) || !File.Exists(file)) return false;
+                string description = System.Diagnostics.FileVersionInfo.GetVersionInfo(file).FileDescription ?? "";
+                return description.IndexOf("AMD GPU Services", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch (Exception ex) { if (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException) return false; throw; }
+        }
+
+        // 1.0.22: removing a Slotsloader record's amd_ags_x64.dll must leave the genuine library. A record installed
+        // over an outside Slotsloader may hold that loader's proxy as "the original" (or no original): the genuine
+        // amd_ags_x64_real.dll still in the game folder is put back instead. Null when the original is fine.
+        private string GenuineAgsInstead(OriginalBackup original, ReplaceJournal journal)
+        {
+            if (original != null && IsGenuineAgs(original.Backup, original.Sha256)) return null;
+            string real = GamePath(AgsRealPath);
+            if (!File.Exists(real)) return null;
+            string realSha = Sha(real);
+            if (!IsGenuineAgs(real, realSha)) return null;
+            string copy = Path.Combine(BackupDir, "ags-" + Guid.NewGuid().ToString("N") + ".bin");
+            journal.CreatedPaths.Add(copy);
+            Directory.CreateDirectory(BackupDir); File.Copy(real, copy);
+            if (Sha(copy) != realSha) throw new IOException("Could not keep an exact copy of " + AgsRealPath + ".");
+            journal.CleanupAfterCommit.Add(copy);
+            Program.LogLine("Slotsloader removed: " + AgsPath + " is put back from the genuine " + AgsRealPath + (original == null ? " (no original was kept)." : " (the kept original, SHA-256 " + original.Sha256 + ", is not AMD's library)."));
+            return copy;
         }
         // Full TOC copy (header + entry table) before the first change of each PAK identity.
         internal string EnsureTocBackup(PakIndex pak)
@@ -1033,7 +1070,13 @@ namespace SlotsInstaller
                     // broke the new loader). An uninstall still restores every original.
                     bool dropOriginal = original != null && was != null && options.LoaderSwitchFrom != null && String.Equals(was.Owner, options.LoaderSwitchFrom, StringComparison.OrdinalIgnoreCase);
                     string targetSha = original == null || dropOriginal ? null : original.Sha256;
-                    if (actual != targetSha) fileOps.Add(new JournalOp { Kind = "file", Path = path, BeforeSha = actual, BeforeSource = beforeSource, AfterSha = targetSha, AfterSource = targetSha == null ? null : original.Backup });
+                    string targetSource = targetSha == null ? null : original.Backup;
+                    if (!dropOriginal && was != null && path.Equals(AgsPath, StringComparison.OrdinalIgnoreCase) && LoaderCostumePak.IsLoaderMod(current.Find(was.Owner)))
+                    {
+                        string genuine = GenuineAgsInstead(original, journal);
+                        if (genuine != null) { targetSource = genuine; targetSha = Sha(genuine); }
+                    }
+                    if (actual != targetSha) fileOps.Add(new JournalOp { Kind = "file", Path = path, BeforeSha = actual, BeforeSource = beforeSource, AfterSha = targetSha, AfterSource = targetSource });
                     if (dropOriginal) Program.LogLine("Slotsloader replaced: " + path + " removed with the old loader; the file from before it (" + original.Size + " bytes, SHA-256 " + original.Sha256 + ") is not put back.");
                     if (original != null) { originals.Remove(original); journal.CleanupAfterCommit.Add(original.Backup); }
                 }
@@ -1632,9 +1675,11 @@ namespace SlotsInstaller
                 var unreadable = new List<string>();
                 foreach (ReplaceMod mod in state.Mods)
                 {
-                    var candidates = mod.Files.Where(f => f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) && f.Size <= 256L * 1024 * 1024 &&
+                    // 25 Nov 2026: also a PAK mod's patch PAK and prefabs (PakModFixes.cs: outdated type signatures inside).
+                    var candidates = mod.Files.Where(f => (f.Path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) && f.Size <= 256L * 1024 * 1024 &&
                         (f.Path.IndexOf(".user.", StringComparison.OrdinalIgnoreCase) >= 0 || f.Path.IndexOf(".tex.", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        f.Path.EndsWith(".scn.20", StringComparison.OrdinalIgnoreCase))).ToList();
+                        f.Path.EndsWith(".scn.20", StringComparison.OrdinalIgnoreCase) || f.Path.EndsWith(".pfb.17", StringComparison.OrdinalIgnoreCase)))
+                        || (IsPatchPakPath(f.Path) && f.Size <= PakModFixes.PakReadLimit)).ToList();
                     var paths = new Dictionary<ModFile,string>();
                     var missing = new List<ModFile>();
                     foreach (ModFile f in candidates)
@@ -1655,7 +1700,7 @@ namespace SlotsInstaller
                     foreach (ModFile f in candidates)
                     {
                         string stored = StoreFile(state, mod, f), readable = paths[f];
-                        if (!File.Exists(readable) || new FileInfo(readable).Length > 256L * 1024 * 1024) continue;
+                        if (!File.Exists(readable) || new FileInfo(readable).Length > (IsPatchPakPath(f.Path) ? PakModFixes.PakReadLimit : 256L * 1024 * 1024)) continue;
                         List<FixResult> quick;
                         if (f.Path.IndexOf(".tex.", StringComparison.OrdinalIgnoreCase) >= 0 && ModFixes.TextureFileOk(readable, out quick)) continue;   // 1.0.1: nothing to repair (header only)
                         byte[] data = File.ReadAllBytes(readable);

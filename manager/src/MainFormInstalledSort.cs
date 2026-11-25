@@ -155,6 +155,7 @@ namespace SlotsInstaller
                 if (DateTime.TryParse(game.Mod.InstalledUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out installed)) return installed.ToUniversalTime().Ticks;
                 if (history != null && history.LastInstallOrSwitch.HasValue) return history.LastInstallOrSwitch.Value.Ticks;
             }
+            if (game != null && game.Stage != null && installedSort != InstalledSortKey.Played && game.Stage.InstalledUtc != DateTime.MinValue) return game.Stage.InstalledUtc.Ticks;   // 25 Nov 2026
             return 0;
         }
     }

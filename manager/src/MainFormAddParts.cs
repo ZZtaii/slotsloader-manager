@@ -31,7 +31,7 @@ namespace SlotsInstaller
         private void UpdateAddPartsButton()
         {
             if (addPartsButton == null) return;
-            bool show = !IsReplaceMode && package != null;
+            bool show = !IsReplaceMode && !StageMode && package != null;
             if (showAddParts != show) { showAddParts = show; LayoutVariantRow(); }
             CompositionPlan selection = show ? AddSelection() : null;
             addPartsButton.Enabled = show && !busy && missingRestoredOptions.Count == 0 && selection != null && selection.Errors.Count == 0 && selection.Files.Count > 0;

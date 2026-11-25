@@ -6,7 +6,8 @@ using System.Text.RegularExpressions;
 
 namespace SlotsInstaller
 {
-    public sealed class NativeAsset { public string EntryPath, DestinationPath; public long Size; }
+    // Crc: the CRC-32 the archive lists for the file (ZIP central directory, 7-Zip listing); null when not listed (folders).
+    public sealed class NativeAsset { public string EntryPath, DestinationPath; public long Size; public uint? Crc; }
     public sealed class ModComponent
     {
         public string Id, Name, Description, Author, Version, AddonFor, ParentId, PreviewEntry;
@@ -21,8 +22,12 @@ namespace SlotsInstaller
         // Only Replace-original installs use them; DestinationPath is game-root relative.
         public List<NativeAsset> RootAssets = new List<NativeAsset>();
         internal bool HasFiles(bool includeRoot) { return Assets.Count > 0 || (includeRoot && RootAssets.Count > 0); }
-        public bool IsChoiceGroup { get { return IsDummy && (BundleRule == "Choose one" || BundleRule == "Choose up to one" || ((BundleRule == null || BundleRule == "Original") && Regex.IsMatch(Description ?? "", @"(select|choose|pick)\s+(only\s+)?one", RegexOptions.IgnoreCase))); } }
-        internal bool RequiresChoice { get { return IsChoiceGroup && (BundleRule == "Choose one" || (BundleRule != "Choose up to one" && (AuthorChoiceRequired ?? !Regex.IsMatch(Name+" "+Description,@"\boptional\b",RegexOptions.IgnoreCase)))); } }
+        // A choose-one set in the bundle layout (Reorder bundle). 2026-11-25 (the user: "remove choose one from guesses
+        // entirely"): description wording ("Choose one outfit.") no longer makes a choose-one group, a required pick or a
+        // default tick. Only this explicit kind blocks an install when two of its options are ticked.
+        public bool IsChoiceGroup { get { return IsDummy && (BundleRule == "Choose one" || BundleRule == "Choose up to one"); } }
+        internal bool ExplicitChoice { get { return IsChoiceGroup; } }
+        internal bool RequiresChoice { get { return IsDummy && BundleRule == "Choose one"; } }
     }
     public sealed class ModPackage
     {
@@ -92,7 +97,9 @@ namespace SlotsInstaller
                 List<ModComponent> directChildren;
                 if (!index.Children.TryGetValue(group.Id,out directChildren)) directChildren = new List<ModComponent>();
                 if (group.IsChoiceGroup)
+                {
                     choices[group.Id] = new HashSet<string>(directChildren.Select(c=>c.Id),StringComparer.OrdinalIgnoreCase);
+                }
                 else if (group.BundleRule != "Choose any")
                 {
                     // A shared file between main files and an overlay is expected.

@@ -16,13 +16,14 @@ namespace SlotsInstaller
         internal FluffyMod Fluffy;
         internal PatchPak Leftover;         // 1.0.11: a patch PAK no mod manager lists (MainFormLeftoverPaks.cs)
         internal bool LeftoverBelowAnother; // a higher patch PAK exists: removing it leaves the empty placeholder
+        internal StageInstall Stage;        // 25 Nov 2026: an extra stage the Manager put in stage_mods (MainFormStages.cs)
         internal int Priority, Conflicts, Owned;
         internal List<RowShare> Shares = new List<RowShare>();      // other mods with the same files
         internal List<string> Stacks = new List<string>();          // "Cammy Outfit 2 · 2 mods · 'A' wins"
         internal bool HasConflicts { get { return Shares.Count > 0 || Stacks.Count > 0; } }
-        internal string Name { get { return Mod != null ? Mod.Name : Fluffy != null ? Fluffy.Name : Leftover != null ? ReplaceEngine.LeftoverTitle : ""; } }
-        internal string Key { get { return Mod != null ? Mod.Id : Fluffy != null ? Fluffy.Section : Leftover != null ? "leftover:" + Leftover.Name : ""; } }
-        internal string KindLabel { get { return Kind == "Fluffy" ? "External mod manager" : Kind == "Leftover" ? ReplaceEngine.LeftoverTitle : Kind == "Pak" ? "PAK mod" : Kind == "Tool" ? "Tool mod" : Kind == "Mixed" ? "Tool mod + replacement" : "Replacement"; } }
+        internal string Name { get { return Mod != null ? Mod.Name : Fluffy != null ? Fluffy.Name : Leftover != null ? ReplaceEngine.LeftoverTitle : Stage != null ? Stage.Name : ""; } }
+        internal string Key { get { return Mod != null ? Mod.Id : Fluffy != null ? Fluffy.Section : Leftover != null ? "leftover:" + Leftover.Name : Stage != null ? "stage:" + Stage.Folder : ""; } }
+        internal string KindLabel { get { return Kind == "Fluffy" ? "External mod manager" : Kind == "Leftover" ? ReplaceEngine.LeftoverTitle : Kind == "Stage" ? "Extra stage" : Kind == "Pak" ? "PAK mod" : Kind == "Tool" ? "Tool mod" : Kind == "Mixed" ? "Tool mod + replacement" : "Replacement"; } }
     }
 
     internal sealed class RowShare
@@ -184,7 +185,7 @@ namespace SlotsInstaller
             toggle.Controls.Add(modeToggle);
             modeNotice = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = Palette.Tiny, ForeColor = Palette.Muted, AutoEllipsis = true, Padding = new Padding(0, 4, 0, 0) };
             // 1.0.8: REFramework first; 1.0.10: a REFramework notice without an offer (the external manager's) does nothing.
-            modeNotice.Click += delegate { if (IsReplaceMode || toolStatus == null) return; if (ReFrameworkNotice(toolStatus) != null) { if (toolStatus.ReFrameworkOffer) OfferReFrameworkInstall(); } else if (toolStatus.ReFramework && !toolStatus.SlotsLoader) OfferSlotsLoaderInstall(); };
+            modeNotice.Click += delegate { if (IsReplaceMode || StageMode || toolStatus == null) return; if (ReFrameworkNotice(toolStatus) != null) { if (toolStatus.ReFrameworkOffer) OfferReFrameworkInstall(); } else if (toolStatus.ReFramework && !toolStatus.SlotsLoader) OfferSlotsLoaderInstall(); };
             modePanel.Controls.Add(modeNotice); modePanel.Controls.Add(toggle); modePanel.Controls.Add(captionRow);
             return modePanel;
         }
@@ -218,8 +219,8 @@ namespace SlotsInstaller
             }
             if (changed && package != null)
             {
-                var keep = selectedOrder.Where(id => { var c = package.Find(id); return c != null && c.HasFiles(IsReplaceMode); }).ToList();
-                FillComponents(keep.Count > 0 ? keep : Composer.DefaultSelection(package, IsReplaceMode));
+                var keep = selectedOrder.Where(id => { var c = package.Find(id); return c != null && c.HasFiles(WithRootFiles); }).ToList();
+                FillComponents(keep.Count > 0 ? keep : StageMode ? StageDefaults(package) : Composer.DefaultSelection(package, IsReplaceMode));
                 if (!IsReplaceMode) editingReplacement = null;
             }
             ResetPlan();
@@ -230,6 +231,9 @@ namespace SlotsInstaller
         {
             if (modePanel == null) return;
             modeToggle.SelectedIndex = IsReplaceMode ? 1 : 0;
+            // 25 Nov 2026: a stage mod's first side is Extra stage (MainFormStages.cs).
+            if (stageInfo != null && package != null) modeToggle.SetOption(0, StageModeLabel, StageModeDescription);
+            else modeToggle.SetOption(0, "Extra outfit", "Extra outfit (Slotsloader): adds the outfit as a new slot; the original stays.");
             bool forced = IsReplaceMode && forcedReplaceReason != null;
             modeToggle.Locked = forced;
             // 1.0.1: the external-manager lockout (ReplaceEngine.ExternalLockReason); the health check gives the full reason.
@@ -242,7 +246,7 @@ namespace SlotsInstaller
             bool replaceOff = ReplaceEngine.IsExternalLock(locked);
             modeLockHint.Text = forced ? "· locked for this mod" : !IsReplaceMode && replaceOff ? "· Replace off: the external mod manager has " + ReplacePlanner.N(external.Mods.Count, "mod") : "";
             modeLockHint.ForeColor = forced ? Palette.Muted : Palette.Accent;
-            if (targetPanel != null) targetPanel.Visible = !IsReplaceMode;
+            if (targetPanel != null) targetPanel.Visible = !IsReplaceMode && !StageMode;
             replacesPanel.Visible = IsReplaceMode;
             if (IsReplaceMode)
             {
@@ -270,12 +274,14 @@ namespace SlotsInstaller
                 // 1.0.18: outfit mods are off and Slotsloader with them: say that, not "isn't installed · click to install it".
                 if (ModsAreOff && gameStatus.ModsOff.LoaderId.Length > 0 && !toolStatus.SlotsLoader && !toolStatus.ReFrameworkOffer) { notice = "Outfit mods are off, so extra outfits won't load · turn them back on in Settings"; clickable = false; }
                 bool fine = notice.StartsWith("Adds the outfit", StringComparison.Ordinal);
+                if (StageMode) { notice = StageNotice(); fine = StageLoaderReady; clickable = false; }   // 25 Nov 2026 (MainFormStages.cs)
                 modeNotice.Text = notice;
                 modeNotice.ForeColor = fine ? Palette.Muted : Palette.Accent;
                 modeNotice.Cursor = clickable ? Cursors.Hand : Cursors.Default;
                 installButton.Text = "Install"; previewButton.Text = "Health"; previewButton.AccessibleName = "Health";
                 // Extra outfit mode always shows Uninstall outfit (UpdateLibraryUninstall).
             }
+            if (package != null) previewButton.Enabled = !busy && !StageMode;   // 25 Nov 2026: Extra stage has nothing to check
             UpdateLibraryUninstall();
             UpdateFooter();
             UpdateDestination();
@@ -682,6 +688,12 @@ namespace SlotsInstaller
                     List<PatchPak> paks = LoaderCostumePak.Scan(engine.GameRoot); int top = paks.Select(p => p.Number).DefaultIfEmpty(0).Max();
                     foreach (PatchPak p in ReplaceEngine.LeftoverPaks(paks, state, fluffyInstalls)) result.Rows.Add(new GameModRow { Kind = "Leftover", Leftover = p, LeftoverBelowAnother = p.Number < top });
                 }
+                // 25 Nov 2026: the extra stages the Manager put in stage_mods (StageMods.cs), one row each.
+                foreach (StageInstall s in StageMods.List(engine.GameRoot))
+                {
+                    result.Rows.Add(new GameModRow { Kind = "Stage", Stage = s });
+                    if (!String.IsNullOrEmpty(s.Record.SourcePath)) result.Sources.Add(s.Record.SourcePath);
+                }
                 result.FluffyRoots = fluffyInstalls.Roots.ToList(); result.FluffyStamp = fluffyInstalls.Stamp ?? FluffyInstalls.StampOf(fluffyInstalls.Roots);
                 result.Status = engine.Status();
             }
@@ -787,8 +799,9 @@ namespace SlotsInstaller
 
         private IEnumerable<GameModRow> FilterGameRows(InstalledQuery searchQuery)
         {
-            if (InstalledKindFilter == "Extra") return new GameModRow[0];
             IEnumerable<GameModRow> rows = gameRows;
+            // 25 Nov 2026: extra stages are extras: Extra shows them (and no replacement), Installed the replacements only.
+            rows = InstalledKindFilter == "Extra" ? rows.Where(r => r.Stage != null) : InstalledKindFilter == "Installed" ? rows.Where(r => r.Stage == null) : rows;
             if (!searchQuery.Empty) rows = rows.Where(r => GameRowMatchesSearch(searchQuery, r));
             if (installedCharacters.Count > 0) rows = rows.Where(r => r.Mod != null && installedCharacters.Any(who => (r.Mod.Affects ?? "").IndexOf(who, StringComparison.OrdinalIgnoreCase) >= 0));
             string state = installedState == null ? "" : Convert.ToString(installedState.SelectedItem);
@@ -801,10 +814,11 @@ namespace SlotsInstaller
         {
             bool selected = e.Item.Selected; Rectangle r = e.Bounds;
             using (Brush bg = new SolidBrush(selected ? Palette.Selected : Palette.Surface)) e.Graphics.FillRectangle(bg, r);
-            Color rail = row.Mod == null ? Palette.Border : row.Mod.Enabled ? Palette.Accent : Palette.Border;
+            Color rail = row.Mod == null ? (row.Stage != null ? Palette.Accent : Palette.Border) : row.Mod.Enabled ? Palette.Accent : Palette.Border;
             using (Brush b = new SolidBrush(rail)) e.Graphics.FillRectangle(b, r.Left + Px(1), r.Top + Px(12), Px(3), r.Height - Px(24));
             TextRenderer.DrawText(e.Graphics, row.Name, Palette.Strong, new Rectangle(r.Left + Px(14), r.Top + Px(10), r.Width - Px(25), Px(24)), Palette.Text, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             string sub = row.Leftover != null ? LeftoverRowText(row)   // 1.0.11
+                : row.Stage != null ? StageRowText(row)   // 25 Nov 2026 (MainFormStages.cs)
                 : row.Fluffy != null ? "External mod manager   ·   " + ReplacePlanner.N(row.Fluffy.Files.Count, "file") + (row.Fluffy.CopiedFiles ? "" : "   ·   PAK install") + "   ·   uninstall it there"
                 : (SourceChanged(row.Mod.SourcePath) && !LoaderCostumePak.IsLoaderMod(row.Mod) ? "Source changed   ·   " : "") + row.KindLabel + "   ·   " + OrderPlace(row) + "   ·   " + (row.Mod.Enabled ? "Enabled" : "Disabled") + (row.Conflicts > 0 ? "   ·   " + ReplacePlanner.N(row.Conflicts, "shared file") : "") + (row.Mod.Test ? "   ·   Test" : "") + (row.Stacks.Count > 0 ? "   ·   " + row.Stacks[0] : String.IsNullOrEmpty(row.Mod.Affects) || row.Kind == "Tool" ? "" : "   ·   " + row.Mod.Affects);
             Rectangle meta = DrawSourceGoneNote(e.Graphics, row.Mod != null && !LoaderCostumePak.IsLoaderMod(row.Mod) ? row.Mod.SourcePath : null, new Rectangle(r.Left + Px(14), r.Top + Px(36), r.Width - Px(25), Px(20)));   // 2.4.1 Delete: muted "Source deleted"
@@ -815,6 +829,7 @@ namespace SlotsInstaller
         private void ShowGameRow(GameModRow row)
         {
             if (row.Leftover != null) { ShowLeftoverRow(row); return; }   // 1.0.11 (MainFormLeftoverPaks.cs)
+            if (row.Stage != null) { ShowStageRow(row); return; }   // 25 Nov 2026 (MainFormStages.cs)
             installedTitle.Text = row.Name;
             var chips = new List<ChipStrip.Chip> { row.Fluffy != null ? ChipStrip.Quiet("External mod manager") : ChipStrip.Neutral(row.KindLabel) };
             if (row.Mod != null && !LoaderCostumePak.IsLoaderMod(row.Mod)) AddAuthorChip(chips, row.Mod.SourcePath);   // 2.5.9
@@ -933,6 +948,7 @@ namespace SlotsInstaller
         {
             if (row.Fluffy != null) { UninstallFluffyRow(row); return; }
             if (row.Leftover != null) { RemoveLeftoverRow(row); return; }   // 1.0.11
+            if (row.Stage != null) { UninstallStageRow(row); return; }   // 25 Nov 2026
             if (row.Mod == null) return;
             UninstallReplacementIds(new List<string> { row.Mod.Id }, "Uninstalled " + row.Name, "Uninstalling replacement");
         }

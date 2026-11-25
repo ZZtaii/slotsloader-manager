@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -230,6 +230,9 @@ namespace SlotsInstaller
                 { "Juri/Hair/Short/modinfo.ini", "name=Short\r\n" }, { "Juri/Hair/Short/natives/stm/product/model/esf/esf016/001/02/esf016_001_02.mesh.230110883", "short" },
                 { "Juri/Ribbon/modinfo.ini", "name=Ribbon\r\naddonfor=Main Files\r\n" }, { "Juri/Ribbon/natives/stm/product/model/esf/esf016/001/04/esf016_001_04.mesh.230110883", "ribbon" } });
             ModPackage g = PackageReader.Load(grouped, "");
+            // 2026-11-25: "Choose one hair" in the description ticks nothing; "Choose one" set in Reorder bundle does.
+            Require(BatchDefaults.Selection(g, false).All(id => g.Find(id).Name != "Long" && g.Find(id).Name != "Short"), "worded hair group was ticked");
+            g.Components.First(c => c.Name == "Hair").BundleRule = "Choose one"; g.PrepareChoices();
             List<string> gids = BatchDefaults.Selection(g, false);
             var gnames = gids.Select(id => g.Find(id).Name).ToList();
             Require(gnames.Contains("Main Files") && gnames.Count(n => n == "Long" || n == "Short") == 1 && !gnames.Contains("Ribbon"), "grouped: " + String.Join(", ", gnames));
@@ -648,6 +651,7 @@ namespace SlotsInstaller
                 return c;
             };
             var grouped = new ModPackage { Name = "Grouped", Components = new List<ModComponent> { part("", null, true), part("Main", "", false), part("Skins", "", true), part("Oily", "Skins", false), part("Dry", "Skins", false) } };
+            grouped.Components.First(c => c.Id == "Skins").BundleRule = "Choose one";   // 2026-11-25: wording alone is no rule
             grouped.PrepareChoices();
             string ruleSays = null;
             using (var pick = new OptionPickForm("Grouped", "hint", grouped, new[] { "Main", "Oily" }, "", delegate(List<string> ids) { return ruleSays; }))

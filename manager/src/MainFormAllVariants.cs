@@ -54,7 +54,7 @@ namespace SlotsInstaller
         private void UpdateAllVariants()
         {
             if (allVariantsRow == null) return;
-            bool show = !IsReplaceMode && package != null && VariantOptionCount > 1 && ArchiveInstalls.IsArchive(package.SourcePath);
+            bool show = !IsReplaceMode && !StageMode && package != null && VariantOptionCount > 1 && ArchiveInstalls.IsArchive(package.SourcePath);
             if (showAllVariants != show) { showAllVariants = show; LayoutVariantRow(); }
             if (!show) return;
             bool installedAll = LinkedOutfits(package.SourcePath).Any(o => o.WholeArchive);
@@ -67,7 +67,7 @@ namespace SlotsInstaller
 
         private void InstallAllVariants()
         {
-            if (busy || package == null || IsReplaceMode || targetCharacter.SelectedIndex < 0) return;
+            if (busy || package == null || IsReplaceMode || StageMode || targetCharacter.SelectedIndex < 0) return;
             WithFreshPackage(InstallAllVariantsFresh);
         }
         private void InstallAllVariantsFresh()

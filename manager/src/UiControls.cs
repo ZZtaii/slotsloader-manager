@@ -332,6 +332,12 @@ namespace SlotsInstaller
             TabStop = true; Font = Palette.Small; Cursor = Cursors.Hand; Height = 32;
         }
         internal string[] Options { get { return (string[])options.Clone(); } }
+        // 25 Nov 2026: INSTALL AS names its first side "Extra stage" while a stage mod is open (MainFormStages.cs).
+        internal void SetOption(int index, string text, string description)
+        {
+            if (index < 0 || index > 1 || text == null || (options[index] == text && Descriptions[index] == (description ?? ""))) return;
+            options[index] = text; Descriptions[index] = description ?? ""; Invalidate(); AccessibilityNotifyClients(AccessibleEvents.NameChange, index);
+        }
         internal readonly string[] Descriptions = { "", "" };
         internal int SelectedIndex { get { return selected; } set { int v = Math.Max(0, Math.Min(1, value)); if (v == selected) return; selected = v; Invalidate(); AccessibilityNotifyClients(AccessibleEvents.StateChange, 0); AccessibilityNotifyClients(AccessibleEvents.StateChange, 1); } }
         internal bool Locked { get { return locked; } set { if (locked == value) return; locked = value; Cursor = value ? Cursors.Default : Cursors.Hand; Invalidate(); } }

@@ -41,6 +41,11 @@ namespace SlotsInstaller
                     string source = CreateRequiredFixture(Path.Combine(root, "Fixture required bundle"));
                     string archive = Path.Combine(root, "Fixture required bundle.zip");
                     ZipFile.CreateFromDirectory(source, archive);
+                    // 2026-11-25: description wording no longer makes required groups; the two are "Choose one" in a
+                    // saved Reorder bundle layout, as an author or user sets them.
+                    var rows = BundleLayout.Options(PackageReader.Load(archive, ""));
+                    foreach (var row in rows.Where(r => r.Name == "Outfit choices" || r.Name == "Skin choices")) row.Rule = "Choose one";
+                    BundleLayout.Save(archive, SourceReader.Stamp(archive), rows);
                     string game = Path.Combine(root, "game");
                     string costumes = Path.Combine(game, "reframework", "costume_mods");
                     CreateInstalledFixtures(costumes);
@@ -52,7 +57,7 @@ namespace SlotsInstaller
                         report.Add("Hidden native window at " + form.DeviceDpi + " DPI, generated fixtures under " + root + ". No real outfits or libraries were written.");
                         CheckTitleBar(form, report);
                         CheckStatus(form, report);
-                        CheckRequiredChoices(form, source, report, root);
+                        CheckRequiredChoices(form, archive, report, root);
                         CheckDrop(form, archive, source, root, report);
                         CheckShortcuts(form, archive, report);
                         CheckInstalledDetails(form, report, root);
@@ -147,10 +152,11 @@ namespace SlotsInstaller
         private static void CheckRequiredChoices(MainForm form, string source, List<string> report, string root)
         {
             ModPackage package = PackageReader.Load(source, "");
+            Require(package.HasBundleLayout, "fixture: the saved layout was not read");
             Set(form, "package", package);
             // 1.0.18: the defaults now tick a choice in each required group; this check starts from the main files alone.
             var defaults = Composer.DefaultSelection(package);
-            Require(Composer.UnresolvedChoiceGroups(package, defaults).Count == 0, "The default selection left a required group open.");
+            // (With a saved layout the defaults are the layout's own ticks, so no group is filled in here.)
             Call(form, "FillComponents", defaults.Where(id => Composer.IsBase(package.Find(id))).ToList());
             var tree = Get<OptionTree>(form, "componentTree"); tree.ExpandAll();
             var unresolved = Get<List<ModComponent>>(form, "unresolvedChoices");

@@ -219,7 +219,8 @@ namespace SlotsInstaller
                 string low = pair.Key.ToLowerInvariant();
                 List<FixResult> quick;
                 if (prepared.Native && low.Contains(".tex.") && ModFixes.TextureFileOk(staged, out quick)) prepared.Fixes = quick;   // 1.0.1: header only
-                else if (prepared.Native && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && low.EndsWith(".scn.20"))) && prepared.Size <= 256L * 1024 * 1024)
+                else if ((prepared.Native && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && (low.EndsWith(".scn.20") || low.EndsWith(".pfb.17")))) && prepared.Size <= 256L * 1024 * 1024)
+                    || (reference != null && ReplaceEngine.IsPatchPakPath(pair.Key) && prepared.Size <= PakModFixes.PakReadLimit))   // 25 Nov 2026: PakModFixes.cs
                 {
                     byte[] data = File.ReadAllBytes(staged);
                     prepared.Fixes = ModFixes.UpgradeModFile(ref data, reference, pair.Key);
@@ -735,7 +736,8 @@ namespace SlotsInstaller
                         string low = pair.Key.ToLowerInvariant();
                         List<FixResult> quick;
                         if (low.StartsWith("natives/") && low.Contains(".tex.") && ModFixes.TextureFileOk(file, out quick)) item.Fixes = quick;   // 1.0.1: header only
-                        else if (low.StartsWith("natives/") && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && low.EndsWith(".scn.20"))) && item.Size <= 256L * 1024 * 1024)
+                        else if ((low.StartsWith("natives/") && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && (low.EndsWith(".scn.20") || low.EndsWith(".pfb.17")))) && item.Size <= 256L * 1024 * 1024)
+                            || (reference != null && ReplaceEngine.IsPatchPakPath(pair.Key) && item.Size <= PakModFixes.PakReadLimit))   // 25 Nov 2026: PakModFixes.cs
                         {
                             byte[] data = System.IO.File.ReadAllBytes(file);
                             item.Fixes = ModFixes.UpgradeModFile(ref data, reference, pair.Key);

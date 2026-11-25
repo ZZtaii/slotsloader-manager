@@ -23,8 +23,11 @@ namespace SlotsInstaller
         // 1.0.19: what the selection leaves out that the mod marks as needed, or that looks needed (MissingNeed).
         internal List<MissingNeed> Needs=new List<MissingNeed>();
         // The errors plus what Needs was an error for until 1.0.18, and the warnings without those (the Assistant).
-        internal List<string> StrictErrors() { return Errors.Concat(Needs.Where(n=>n.Strict!=null).Select(n=>n.Strict)).Distinct().ToList(); }
-        internal List<string> StrictWarnings() { return Warnings.Where(w=>!Needs.Any(n=>n.Strict!=null && n.Text==w)).ToList(); }
+        internal List<string> StrictErrors() { return Errors.Concat(Needs.Where(n=>n.Strict!=null).Select(n=>n.Strict)).Concat(GuessedChoices.Values).Distinct().ToList(); }
+        internal List<string> StrictWarnings() { return Warnings.Where(w=>!Needs.Any(n=>n.Strict!=null && n.Text==w) && !GuessedChoices.ContainsKey(w)).ToList(); }
+        // 2026-11-23: two picks in a choose-one group the Manager only guessed (description wording, shared files): the
+        // warning shown to the user -> the error the Assistant still refuses on.
+        internal Dictionary<string,string> GuessedChoices=new Dictionary<string,string>();
         // 1.0.18: only these parts of the selection were kept (OutfitParts.Keep); empty = all of it.
         internal List<string> OnlyParts=new List<string>();
     }
@@ -34,7 +37,8 @@ namespace SlotsInstaller
     // an option the selection leaves out although another option names it (its parent, Requirement=), the bundle marks
     // it Required, its name looks like main files, or a "Required · choose one" group has nothing picked (Needed is the
     // group then). It is a note in Warnings and by the preview picture, never an error. Still errors: nothing ticked,
-    // an option that is gone, two picks in a choose-one group, and an Extra outfit with no mesh at all.
+    // an option that is gone, two picks in a choose-one group set in the bundle layout (a guessed one only warns since
+    // 2026-11-23, GuessedChoices), and an Extra outfit with no mesh at all.
     // Strict is the error this was until 1.0.18 (null for main files guessed from a name, which were a note already):
     // the Assistant still refuses on it (CompositionPlan.StrictErrors), because a model that forgets a required choice
     // looks the same as a user who left it out on purpose.
@@ -214,7 +218,14 @@ namespace SlotsInstaller
             foreach (ModComponent group in package.Components.Where(package.IsChoice))
             {
                 if (!ScopeIsActive(package,group.ParentId,p.Layers) && !p.Layers.Any(c=>IsDescendant(package,c,group))) continue;
-                if (ChoicesIn(package,group,p.Layers)>1 && !(savedWinnerCheck && group.InferredChoice)) p.Errors.Add("Choose one option in '"+group.Name+"'.");
+                if (ChoicesIn(package,group,p.Layers)<=1 || (savedWinnerCheck && group.InferredChoice)) continue;
+                // 2026-11-23 (the user: "when we are guessing things, we shouldn't refuse installs"): only a choose-one set in
+                // the bundle layout blocks. One guessed from description wording or shared files is a warning.
+                string strict="Choose one option in '"+group.Name+"'.";
+                if (group.ExplicitChoice) { p.Errors.Add(strict); continue; }
+                string guessed="'"+group.Name+"' looks like a choose-one group and more than one of its options is ticked. Where they share files, the last one wins.";
+                if (!p.Warnings.Contains(guessed)) p.Warnings.Add(guessed);
+                p.GuessedChoices[guessed]=strict;
             }
             if (replaceMode)
             {
@@ -309,9 +320,23 @@ namespace SlotsInstaller
             foreach (ModComponent group in package.Components.Where(package.IsChoice))
             {
                 if (!ScopeIsActive(package,group.ParentId,layers) && !layers.Any(c=>IsDescendant(package,c,group))) continue;
+                if (InUnpickedBranch(package,group,layers)) continue;
                 if (group.RequiresChoice && ChoicesIn(package,group,layers)==0) result.Add(group);
             }
             return result;
+        }
+        // 2026-11-25 (Ingrid C1 Bare Legs Bundle: "02 Variants" pick one of "03 C1 Shoes" or "04 Barefoot", each a choose-one
+        // group): with a C1 Shoes option ticked, Barefoot is the branch not taken, so it asks for nothing.
+        private static bool InUnpickedBranch(ModPackage p,ModComponent group,List<ModComponent> layers)
+        {
+            var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (ModComponent child=group, parent=p.Find(group.ParentId); parent!=null && seen.Add(parent.Id); child=parent, parent=p.Find(parent.ParentId))
+            {
+                if (!p.IsChoice(parent) || !p.IsChoiceBranch(parent,child)) continue;
+                if (layers.Any(l => !String.Equals(l.Id,child.Id,StringComparison.OrdinalIgnoreCase) && !IsDescendant(p,l,child) && p.IsChoiceBranch(parent,p.Find(ChoiceBranch(p,l,parent)))))
+                    return true;
+            }
+            return false;
         }
         private static string ChoiceBranch(ModPackage p,ModComponent child,ModComponent group)
         {

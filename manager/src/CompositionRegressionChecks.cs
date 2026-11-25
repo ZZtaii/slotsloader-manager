@@ -22,7 +22,7 @@ namespace SlotsInstaller
             int failures = 0;
             Check("nested selections retain implicit-root main and required groups",delegate { RootRequirements(Path.Combine(run,"root-requirements")); },ref failures);
             Check("main files and a replacing overlay compose and install together",delegate { BaseOverlay(Path.Combine(run,"base-overlay")); },ref failures);
-            Check("inferred alternatives exclude main files but still reject peer conflicts",delegate { InferredAlternatives(Path.Combine(run,"inferred-alternatives")); },ref failures);
+            Check("inferred alternatives exclude main files and only warn on peer conflicts",delegate { InferredAlternatives(Path.Combine(run,"inferred-alternatives")); },ref failures);
             Check("independent bundle requirements remain scoped to the selected branch",delegate { IndependentBranches(Path.Combine(run,"independent-branches")); },ref failures);
             Check("nested choice branches count their parent and child as one alternative",delegate { NestedBranches(Path.Combine(run,"nested-branches")); },ref failures);
             Check("case-insensitive IDs, dependencies and previews retain canonical identities",delegate { CaseHandling(Path.Combine(run,"case-handling")); },ref failures);
@@ -30,7 +30,9 @@ namespace SlotsInstaller
             Check("an option named after the game's main menu is not the mod's main files",delegate { MainMenuName(Path.Combine(run,"main-menu-name")); },ref failures);
             Check("'base' in an option's name does not make it main files",delegate { BaseInName(Path.Combine(run,"base-in-name")); },ref failures);
             Check("a pack of base textures outside outfit folders points to Replace original",delegate { SharedTextures(Path.Combine(run,"shared-textures")); },ref failures);
-            Console.WriteLine("Composition regression checks: "+(10-failures)+" passed, "+failures+" failed.");
+            Check("'choose one variant' wording never makes main files an alternative or refuses an install",delegate { ChooseOneWording(Path.Combine(run,"choose-one-wording")); },ref failures);
+            Check("a choose-one group in the branch not taken asks for nothing",delegate { BranchNotTaken(Path.Combine(run,"branch-not-taken")); },ref failures);
+            Console.WriteLine("Composition regression checks: "+(12-failures)+" passed, "+failures+" failed.");
             return failures;
         }
 
@@ -55,6 +57,27 @@ namespace SlotsInstaller
             var result=Installer.Install(plan,Path.Combine(root,"game","reframework","costume_mods"),"Ingrid","Fixture outfit","",false);
             Require(File.ReadAllText(Safety.Under(result.Folder,Material))==expectedMaterial,"Installed material did not match the winning source component.");
             Require(result.FileCount==plan.Files.Count,"Installed file count differs from reviewed composition.");
+        }
+        // 2026-11-25: Ingrid C1 Bare Legs Bundle. "02 Variants" (pick one) holds "03 C1 Shoes" and "04 Barefoot", each "Choose
+        // one outfit." With a C1 Shoes option ticked, Barefoot showed "Required · choose one".
+        private static void BranchNotTaken(string root)
+        {
+            Put(root,"00/modinfo.ini","name=Bundle\ndummymod=true\n");
+            Put(root,"01/modinfo.ini","name=01 Main files\naddonfor=Bundle\n"); Put(root,"01/"+Material,"main");
+            Put(root,"02/modinfo.ini","name=02 Variants\naddonfor=Bundle\ndummymod=true\ndescription=Pick one option. Either from C1 Shoes or Barefoot\n");
+            Put(root,"03/modinfo.ini","name=03 C1 Shoes\naddonfor=02 Variants\ndummymod=true\ndescription=Choose one outfit.\n");
+            Put(root,"04/modinfo.ini","name=04 Barefoot\naddonfor=02 Variants\ndummymod=true\ndescription=Choose one outfit.\n");
+            foreach (string s in new[]{"03","04"}) foreach (string o in new[]{"Full","Cape"})
+            { Put(root,s+o+"/modinfo.ini","name="+s+" "+o+"\naddonfor="+(s=="03"?"03 C1 Shoes":"04 Barefoot")+"\n"); Put(root,s+o+"/"+Mesh,s+o); }
+            ModPackage package=Load(root);
+            // 2026-11-25: the wording alone makes no choose-one group and ticks nothing.
+            Require(!package.Components.Any(c=>c.IsChoiceGroup) && Composer.DefaultSelection(package).SequenceEqual(new[]{Named(package,"01 Main files").Id}),"Worded groups: "+String.Join(",",Composer.DefaultSelection(package)));
+            foreach (string g in new[]{"02 Variants","03 C1 Shoes","04 Barefoot"}) Named(package,g).BundleRule="Choose one";
+            package.PrepareChoices();
+            Func<string[],string> open=names=>String.Join(",",Composer.UnresolvedChoiceGroups(package,names.Select(n=>Named(package,n).Id)).Select(g=>g.Name));
+            Require(open(new[]{"01 Main files","03 Full"})=="","Shoes picked, still open: "+open(new[]{"01 Main files","03 Full"}));
+            Require(open(new[]{"01 Main files","04 Cape"})=="","Barefoot picked, still open: "+open(new[]{"01 Main files","04 Cape"}));
+            Require(open(new[]{"01 Main files"})=="02 Variants","Main files only: "+open(new[]{"01 Main files"}));
         }
         private static void OptionOrder(string root)
         {
@@ -108,6 +131,9 @@ namespace SlotsInstaller
             Put(source,"skins/modinfo.ini","name=Skin choices\ndummymod=true\ndescription=Choose one skin\n");
             Put(source,"skins/default/modinfo.ini","name=Default skin\n"); Put(source,"skins/default/"+Texture,"skin texture");
             ModPackage package=Load(source);
+            // 2026-11-25: "Choose one skin" in a description asks for nothing; the rule from Reorder bundle does.
+            Require(Plan(package,"main","outfits/dress").Needs.Count==0,"A worded group became required.");
+            Named(package,"Outfit choices").BundleRule="Choose one"; Named(package,"Skin choices").BundleRule="Choose one"; package.PrepareChoices();
             CompositionPlan missing=Plan(package,"outfits/dress");
             // 1.0.19 (the user: "relax requirements ... install the mod anyways"): the main files guessed from the name
             // and the empty required skin group are both notes (Needs, Warnings); neither is an error.
@@ -229,7 +255,31 @@ namespace SlotsInstaller
             ModPackage package=Load(root); ModComponent group=package.Find("");
             Require(package.IsChoice(group) && !package.IsChoiceBranch(group,package.Find("main")) && package.IsChoiceBranch(group,package.Find("blue")),"Inferred branch membership includes main files or excludes a peer alternative.");
             Require(Plan(package,"main","blue").CanInstall && Plan(package,"main","red").CanInstall,"A base with one variant was rejected.");
-            Require(!Plan(package,"main","blue","red").CanInstall,"Conflicting peer variants were accepted.");
+            // 2026-11-23 (the user: guesses never refuse installs): peers inferred from shared files warn, never block.
+            CompositionPlan both=Plan(package,"main","blue","red");
+            Require(both.CanInstall && both.Warnings.Any(w=>w.Contains("looks like a choose-one group")),"Peer variants guessed from shared files: "+Errors(both));
+        }
+        // 2026-11-23: the user's Barefoot C. Viper bundles. "choose one variant" in the menu's description made Main files and
+        // the Variants group alternatives, and Main files + a variant was refused.
+        private static void ChooseOneWording(string root)
+        {
+            const string say="description=Enable Main files and choose one variant.\n";
+            Put(root,"00 Menu/modinfo.ini","name=Viper Bundle\ndummymod=true\n"+say);
+            Put(root,"01 Main/modinfo.ini","name=01 Main files - Viper\naddonfor=Viper Bundle\n"+say); Put(root,"01 Main/"+Material,"main material"); Put(root,"01 Main/"+Texture,"skin");
+            Put(root,"02 Variants/modinfo.ini","name=02 Variants - Viper\naddonfor=Viper Bundle\ndummymod=true\n"+say);
+            foreach (string v in new[]{"Wings","Remove Wings"}) { Put(root,"03 "+v+"/modinfo.ini","name="+v+" - Viper\naddonfor=02 Variants - Viper\nrequirement=01 Main files - Viper\n"+say); Put(root,"03 "+v+"/"+Mesh,v+" mesh"); }
+            ModPackage package=Load(root);
+            ModComponent menu=Named(package,"Viper Bundle"), variants=Named(package,"02 Variants - Viper");
+            string main=Named(package,"01 Main files - Viper").Id, wings=Named(package,"Wings - Viper").Id, bare=Named(package,"Remove Wings - Viper").Id;
+            Require(!package.IsChoice(menu) && package.IsChoice(variants) && package.IsChoiceBranch(variants,package.Find(wings)),"Main files counted as an alternative to the variants.");
+            CompositionPlan picked=Plan(package,main,bare);
+            Require(picked.CanInstall && picked.Errors.Count==0 && !picked.Warnings.Any(w=>w.Contains("choose-one")),"Main files + one variant: "+Errors(picked)+" / "+String.Join(" / ",picked.Warnings));
+            CompositionPlan both=Plan(package,main,wings,bare);
+            Require(both.CanInstall && both.Warnings.Any(w=>w.StartsWith("'02 Variants - Viper' looks like a choose-one group")),"Two variants of a guessed group: "+Errors(both));
+            // A choose-one set in the bundle layout still blocks two picks.
+            variants.BundleRule="Choose one"; package.PrepareChoices();
+            Require(!Plan(package,main,wings,bare).CanInstall,"An explicit Choose one accepted two picks.");
+            InstallAndCheck(Plan(package,main,bare),root,"main material");
         }
         private static void IndependentBranches(string root)
         {
@@ -241,6 +291,9 @@ namespace SlotsInstaller
                 Put(root,branch+"-skin/modinfo.ini","name="+branch+" skin\naddonfor="+branch+" skin options\n"); Put(root,branch+"-skin/"+Material,branch+" material");
             }
             ModPackage package=Load(root);
+            Require(Composer.DefaultSelection(package).SequenceEqual(new[]{"A-main"}),"A worded skin group was ticked: "+String.Join(",",Composer.DefaultSelection(package)));
+            foreach (string branch in new[]{"A","B"}) Named(package,branch+" skin options").BundleRule="Choose one";
+            package.PrepareChoices();
             Require(Plan(package,"A-main","A-skin").CanInstall,"Inactive Bundle B blocked a complete Bundle A.");
             CompositionPlan missing=Plan(package,"A-main");
             // 1.0.19: the empty required group of the branch in use is a note; nothing of Bundle B is named.
@@ -257,7 +310,9 @@ namespace SlotsInstaller
             Put(root,"A/child/modinfo.ini","name=Attached texture\n"); Put(root,"A/child/"+Texture,"extra texture");
             ModPackage package=Load(root);
             Require(Plan(package,"A","A/child").CanInstall,"A branch and its child counted as two alternatives.");
-            Require(!Plan(package,"A","B","A/child").CanInstall,"Competing nested choice branches were accepted.");
+            // 2026-11-23: "Choose one" here comes from the description, a guess: two branches warn, never block.
+            CompositionPlan both=Plan(package,"A","B","A/child");
+            Require(both.CanInstall && both.Warnings.Any(w=>w.Contains("looks like a choose-one group")),"Competing branches of a guessed group: "+Errors(both));
             Require(!Plan(package,"A/child").CanInstall,"A real contributing parent was not required.");
         }
         private static void CaseHandling(string root)

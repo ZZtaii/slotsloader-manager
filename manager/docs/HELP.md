@@ -154,6 +154,13 @@ Extra outfits need REFramework and Slotsloader in the game folder. In Extra outf
 For an archive with several options, **Install all variants** copies the whole archive into `reframework\costume_mods\<Character>\`, as if you dropped it there yourself. Slotsloader then builds usually one outfit per combination (up to 50 per mod). Mods made for an external mod manager get one per shape option.
 When a ZIP mod shows options from an add-on archive (marked **Add-on** in the list), the copy includes them, so their combinations are built too. Right-click an option to open its archive in Explorer.
 
+### Extra stage
+A stage mod opens with **INSTALL AS** showing **Extra stage** (needs Wael's Slots Loader) and **Replace original**.
+- Each ticked option becomes a variant of its stage: UP / DOWN on the stage select picks it, and the original stays a choice. A whole new stage gets its own cell in Battle Settings, Training and Replays.
+- One option starts ticked; with several, tick the variants you want (all of them if you like).
+- It goes to `reframework\stage_mods\<Mod name>\`; installing again updates it. The Installed page shows an **Extra stage** row whose **Uninstall** deletes it.
+- Stage mods that come as a `.pak` are found by the library search "stage" too.
+
 ### Add to outfit
 **Add to outfit** copies only the ticked options (one hair option of a bundle, for example) into an extra outfit the Manager already installed. Files with the same names are replaced and nothing else changes. Files made for another outfit slot can't go on it, so those outfits can't be picked. The Installed page shows what was added; **Added parts** reorders or removes them (the top one wins).
 
