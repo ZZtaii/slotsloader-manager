@@ -413,12 +413,15 @@ namespace SlotsInstaller
             Require(skin.ParentId == Named(package, "2) Goth Juri skin options").Id, "Trimmed Addonfor parent resolution failed.");
             Require(outfit.ParentId == Named(package, "3) Goth Juri outfit options").Id, "Outfit parent resolution failed.");
             CompositionPlan incomplete = Composer.Plan(package, new[] { main.Id });
-            // 1.0.19 (relaxed requirements): what is left out is a note for the user and still an error for the Assistant.
-            Require(incomplete.Needs.Count > 0 && incomplete.StrictErrors().Count > 0, "Main-only Juri package must still name the missing mesh/MDF options (a note since 1.0.19, strict for the Assistant).");
+            // 1.0.22 (guesses never block): the skin and outfit groups are choose-one only by their descriptions ("Select one
+            // skin type"), so main files alone ask for nothing, not even of the Assistant (1.0.19 to 1.0.21: a note, strict
+            // for the Assistant). Explicit "Choose one" rules: CompositionRegressionChecks.
+            Require(incomplete.CanInstall && incomplete.StrictErrors().Count == 0, "Main-only Juri package: description wording must not require a pick: " + string.Join("; ", incomplete.StrictErrors()));
             CompositionPlan plan = Composer.Plan(package, new[] { main.Id, skin.Id, outfit.Id });
             Require(plan.CanInstall && plan.Files.Count == 49, "Complete Goth Juri expected 49 assets: " + string.Join("; ", plan.Errors));
             CompositionPlan conflicting = Composer.Plan(package, new[] { main.Id, skin.Id, Named(package, "oily").Id, outfit.Id });
-            Require(!conflicting.CanInstall && conflicting.Errors.Any(e => e.IndexOf("one", StringComparison.OrdinalIgnoreCase) >= 0), "Conflicting skin alternatives must require one selected choice.");
+            // 1.0.22: two skins in a group that is choose-one only by its description: never blocked (a warning at most).
+            Require(conflicting.CanInstall, "Two skins in a guessed choose-one group must not block: " + string.Join("; ", conflicting.Errors));
             CompositionPlan overlays = Composer.Plan(package, new[] { hideShirt.Id, outfit.Id, skin.Id, main.Id });
             Require(overlays.CanInstall && overlays.Files.Count == 49, "Main should apply before selected optional overlays.");
             Require(overlays.Overrides.Any(o => o.Winner == hideShirt.Name), "Hide-shirt override winner not recorded.");
