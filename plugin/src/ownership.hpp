@@ -1,6 +1,13 @@
 // SF6 Slots — which costume slots the player sees. Pure logic, no game access (plugin/tests).
 //
-// A slot made from fighter F's Outfit N is shown only when the game counts that outfit as the
+// Normal mode follows kLimitToOwnedOutfits below. From 22/11 to 24/11/2026 it was off (Wael 22/11: "tous les mods et toutes
+// les couleurs des mods sans aucune limitation pour aucun personnage hors ligne ou dans tous les modes en ligne"): every slot
+// shown and owned, whatever outfit it is made from. Wael switched it back on 24/11/2026: normal mode hides again a slot made
+// from an outfit the game does not list as the player's. Either way a slot never reaches the network (carrier.hpp decide: the
+// carrier), and the game is never told that the base outfit itself is owned: only the slot's own record is (AddDlcSaveData).
+//
+// The check below (13/10 - 22/11 and again since 24/11/2026 in normal mode, always in Manager mode, as the Manager's fork
+// does): a slot made from fighter F's Outfit N is shown only when the game counts that outfit as the
 // player's. The game's answer is the list of costume numbers it lists for F
 // (app.InventoryManager.CostumeInventory.GetCostumeNoList): the list of the character select
 // screen (app.UIFlowUI10505.Param.GetCostumeId) and of Battle Settings
@@ -12,7 +19,7 @@
 // Manager mode (common/manager_mode.hpp: the Slotsloader Manager installed this loader) follows the rules of
 // the Manager's own Slotsloader fork instead: slots made from Outfit 1 or DriveTech are always shown and never
 // asked about, and the check is off altogether while the Manager's opt-out marker is present
-// (manager_marker.hpp). Outside Manager mode none of this exists: set_manager_rules is never called.
+// (manager_marker.hpp). Outside Manager mode set_manager_rules is never called: the switch alone decides.
 #pragma once
 
 #include <algorithm>
@@ -26,13 +33,23 @@ namespace slots::ownership {
 
 enum class State : uint8_t { Unknown, NotOwned, Owned };
 
+// THE SWITCH (Wael, 24/11/2026: "interrupteur dans le code, pas in-game"). One word, then a build and a release; no setting
+// file, no option in the game, nothing a player can change.
+//   false: normal mode shows every slot, whatever outfit it is made from (1.28.0, the state shipped until 24/11/2026).
+//   true : normal mode goes back to the rule of before 1.28.0: a slot made from an outfit the game does not list as the
+//          player's is hidden (Outfit 1 and DriveTech included in the question, as then). It hides by the outfit a mod is
+//          MADE ON, not by what it looks like: a wholly new costume put on Outfit 3's place is hidden with the rest.
+// Manager mode is not concerned either way: it keeps the Manager's own rules (set_manager_rules).
+// On since 24/11/2026 (Wael's decision).
+constexpr bool kLimitToOwnedOutfits = true;
+
 constexpr int kOutfit1   = 0;   // costume 0, every fighter's default outfit
 constexpr int kDriveTech = 4;   // costume id 4 (DriveTech, C5)
 
 class Book {
 public:
-    // Manager mode only (see the top): Outfit 1 and DriveTech always shown; check false: every slot shown,
-    // nothing asked (the Manager's opt-out marker)
+    // Manager mode only (see the top): the check on, Outfit 1 and DriveTech always shown; check false: every slot shown,
+    // nothing asked (the Manager's opt-out marker). Without it (normal mode): every slot shown, nothing asked.
     void set_manager_rules(bool check) { manager_ = true; check_ = check; }
     bool check() const { return check_; }
 
@@ -71,7 +88,7 @@ public:
 private:
     // Manager mode: Outfit 1 and DriveTech are never asked about
     bool exempt(int outfit) const { return manager_ && (outfit == kOutfit1 || outfit == kDriveTech); }
-    bool manager_ = false, check_ = true;
+    bool manager_ = false, check_ = kLimitToOwnedOutfits;
     static bool has(const std::vector<uint32_t>& v, uint32_t x) {
         return std::find(v.begin(), v.end(), x) != v.end();
     }

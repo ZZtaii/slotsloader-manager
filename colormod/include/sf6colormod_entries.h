@@ -14,6 +14,9 @@
  *       scope 2 (replay):  the fighters of one replay's battle; `battle` = its flow map (app.battle.ReplayFlowMap).
  *                          Applied only while it is the running flow map (bFlowManager.m_flow_work._FlowMap); dropped
  *                          once another one runs, or when it never ran within 10 s. A new request replaces the old.
+ *                          SF6ColorMod_RequestSide names the battle side too (1 = P1, 2 = P2: gBattle.PBManager.Players[0 / 1],
+ *                          the description's team 0 / 1): a mirror match's two fighters on the same outfit then wear each
+ *                          its own; a side's request comes first, then one for any side (SF6ColorMod_Request = side 0).
  *       scope 3 / 4 (battle, P1 / P2): the battle fighter of that side (its model and sub-models, never the character
  *                          select's previews) while it wears colour 02, from the request until the requester replaces or
  *                          clears it: the Slots Loader's Random colour drew that entry for this battle (or set, online).
@@ -52,6 +55,10 @@ typedef int (*SF6ColorMod_EntriesVersionFn)(void);
 typedef int (*SF6ColorMod_EntriesFn)(int fighter, int costume, SF6CMEntry* out, int cap);
 /* A request (see above). id NULL or "" = the game's own colours. battle: scope 2 only (NULL refused). 1 = taken. */
 typedef int (*SF6ColorMod_RequestFn)(int scope, int fighter, int costume, const char* id, void* battle);
+/* Added 22/11 (absent from older Color Mods: the caller falls back to SF6ColorMod_Request, a mirror's two sides then share
+ * one request): the same for one battle side, scope 2 only (side 1 = P1, 2 = P2; 0 = any side, SF6ColorMod_Request's).
+ * 1 = taken; 0 = refused (a side outside 0-2, or a side on another scope). SF6CM_ENTRIES_VERSION stays 1. */
+typedef int (*SF6ColorMod_RequestSideFn)(int scope, int side, int fighter, int costume, const char* id, void* battle);
 /* Every request of that scope goes. */
 typedef void (*SF6ColorMod_ClearRequestsFn)(int scope);
 /* Added with the ticks of Opponent Outfit Settings, absent from older Color Mods: how many entries are ticked for an outfit there, on top of the colour numbers the
@@ -65,6 +72,12 @@ typedef int (*SF6ColorMod_RandomChoiceFn)(int side, int* fighter, int* costume);
  * colour of `fighter`, remembered per fighter (set when Random is picked on its Color row, dropped when another colour is
  * picked there or Fighter Settings is left on another outfit of it): the outfit it was chosen on, -1 none. Any thread. */
 typedef int (*SF6ColorMod_FighterRandomFn)(int fighter);
+/* Added 22/11 (absent from Color Mod 0.26.2 and older): the entry the player's own fighter wears in a mode that takes its
+ * outfit from Battle Settings (online, the Battle Hub...): Fighter Settings' remembered entry, when it was chosen for that
+ * fighter and outfit (it is worn on colour 02). 1 = an entry, its id written to `id` (UTF-8, NUL-terminated, cut at cap);
+ * 0 = none (the plain colour 02, or Random). The Slots Loader writes it in its replay journal, so a replay set to My Own
+ * asks for that very entry (scope 2). Any thread. */
+typedef int (*SF6ColorMod_FighterEntryFn)(int fighter, int costume, char* id, int cap);
 
 /* The other way, SF6_CostumeSlotsNative.dll's export, looked for by the Color Mod (absent = no Random value anywhere):
  * 1 when the Slots Loader draws a Random colour for that outfit (every outfit but a character's Random outfit, whose one

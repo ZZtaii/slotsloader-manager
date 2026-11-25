@@ -49,7 +49,9 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
   looks; the cursor goes there and that look stays chosen. After a fight, the list opens on the stage fought.
 - To remove a mod, delete its archive or folder: the stage pak is rebuilt at the next launch. Archives are
   unpacked once into `stage_mods\.cache` (as much disk space as their unpacked size, 120 MB for the lighting
-  pack); that folder can be deleted at any time.
+  pack); that folder can be deleted at any time. After a rebuild, the unpacked copy of an archive that was removed or
+  changed is deleted (the same for `title_mods\.cache` and `ui_mods\.cache`); only the loader's own folders there are
+  touched, and a link is never followed. One that cannot be deleted is logged and tried again at the next rebuild.
 - Without stage mods, no stage is changed and nothing is hooked.
 
 ### Tiles and variations (Battle Settings, Training and Replays), in test
@@ -98,7 +100,7 @@ Title screen mods (Fluffy-style packs: a `modinfo.ini` and a `natives` tree with
 with files that skip the boot logos and the health warning) go **as downloaded** in `reframework/title_mods/`: the
 `.zip`, `.7z` or `.rar` file itself, a folder, or a `.pak` (alone, or inside the archive or folder, as Fluffy installs it).
 Archives are unpacked once into `title_mods\.cache`. A pak keeps only the hashes of its paths: its files are named from the
-twelve paths every title pack has (`title_slots::known_paths()`) and from the packs shipped as files; a file named by neither
+paths title packs have (`title_slots::known_paths()`) and from the packs shipped as files; a file named by neither
 is a startup file (the log counts them). Each pack gets a key (`t` + 12 hex digits) from its archive or folder name, so a choice survives a new
 download of the same file; names and authors come from `modinfo.ini`.
 
@@ -107,11 +109,24 @@ download of the same file; names and authors come from `modinfo.ini`.
   (`true` / `false`, missing: `false`) and `"title_random_pool"` (the backgrounds Random draws from; at least one
   stays ticked). A key that names no pack gives the game's own title (logged). They are set in Options > Interface >
   Title Screen Selection (needs Native Core 0.9.9) and Interface > Other Settings (`skip_intro`).
-- The chosen pack's title movies (`natives/stm/streaming/product/gui/gm/ui10000/part/title_*`) are written into the
-  stage pak at their real paths. With `skip_intro`, the pack's other files are written too (boot logos, health
+- The chosen pack's title files are written into the stage pak at their real paths: its movies
+  (`natives/stm/streaming/product/gui/gm/ui10000/part/title_*`) and its title sound banks
+  (`natives/stm/product/sound/wwise/*title*.sbnk*`: `ui_title_m` the music, `narration_title_m` the narrator, as in
+  "Alpha 3 Alternative Intro"; `re_logo.sbnk` belongs to the boot logo and stays a startup file). With `skip_intro`, the pack's other files are written too (boot logos, health
   warning); with the game's own title, or a pack that has none, those of the first pack that has some.
 - The movies of every pack are in the stage pak, which is rebuilt at the first launch of a release with new title
   files, and when the packs change. The choice applies at the **next return to the title screen**, no relaunch.
+  A pack that lacks one of the three movies (`title_start`, `title_loop`, `title_end`; "Alpha 3 Startup" has only the
+  start) shows the game's own copy of what it lacks, as when it is the launch's pack; a pack without sound banks plays
+  the game's own music and narrator (their copies are read from `re_chunk_000.pak` once some pack has banks).
+  A pack's banks are checked against the game's sounds (the event banks `ui_title_es`, `narration_title_es`). Media in the
+  game's codec of another size get copies of the game's event banks with those sounds' in-memory size changed, served as
+  that pack's (`kAdaptTitleSizes`). Media in another codec are refused and the game's own music and narrator play: "Alpha 3"'s
+  PCM stayed silent in game even with the sounds and the channel field adapted (`kAdaptTitleCodec`, off); its music was
+  converted to the game's Wwise Vorbis instead. The log says which. `stagetest --check-title-banks <game dir> <bank>...` runs
+  the check offline. Such a pack is left out of Random's
+  draws while you stay on the title screen (that playlist needs the three movies of one pack); it can still be drawn at a
+  launch or a return to the title.
 - Random is drawn **without repeats**: a shuffled list, every background shows once before any comes again, never
   the same twice in a row. The list is kept across launches in `reframework/data/SF6_TitleSlots_Data/shuffle.json`.
   A new draw is made at the launch, at each return to the title screen, and while you stay on the title screen (each

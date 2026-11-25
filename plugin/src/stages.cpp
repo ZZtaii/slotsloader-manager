@@ -168,6 +168,8 @@ ApplyFn loader_apply() {
     return fn;
 }
 
+void train_loaded_forget();                                  // Training's record of the looks its stages are loaded with (below)
+
 // The only writer of state.json. apply_menu >= 0: that menu's choice (or `serve`, a choice made for this load: Random's
 // pick) becomes what the loader serves (told at once through its export when it changed); -1: the menus' choices are
 // saved, the served selection stays. Any thread (g_mx).
@@ -177,6 +179,7 @@ void save_state(int apply_menu = stagelogic::kClassic, const char* why = nullptr
     const std::string o = stagelogic::state_json(g_state);
     { int64_t pt = perf::begin(); if (!write_file(kState, o)) logf("stages: cannot write state.json"); perf::end(perf::StateWrite, pt); }
     if (apply_menu < 0 || g_state.active == g_applied) return;
+    if (apply_menu != stagelogic::kTraining) train_loaded_forget();   // Training's stage then loads with that choice
     g_applied = g_state.active;
     post(EV_STAGE_GRID);                                   // the frame loads its pictures ahead of the VS screen
     std::string what;
@@ -828,7 +831,7 @@ template <perf::Id ID> void post_vs(void**, REFrameworkTypeDefinitionHandle, uns
 constexpr const char* kCodecheckCache = "reframework/data/SF6_CostumeSlots_data/codecheck_stages.txt";
 
 enum Hook : size_t { kSetupList, kGetList, kConvert, kDecide, kUpdateList, kSelChanged, kBattleDesc, kTrainStage, kReplayDesc,
-                     kInitStageList, kButtonY, kHooks };
+                     kInitStageList, kButtonY, kTrainApply, kReloadSetup, kHooks };
 codecheck::Batch g_check;
 bool g_check_started = false, g_hooks_done = false;
 bool g_hooked[kHooks] = {};
@@ -838,6 +841,10 @@ TD* t_simple = nullptr;                                        // app.UIPartsSta
 API::Field *f_scroll = nullptr, *f_state = nullptr, *f_preview = nullptr, *f_is_matching = nullptr, *f_is_hub = nullptr;
 API::Field *f_decide = nullptr, *f_rand_off = nullptr;         // mDecideStageId, mListRandomDisable (List<Int32>)
 Method *m_owner = nullptr, *m_is_show = nullptr, *m_sel_index = nullptr, *m_items = nullptr, *m_list_index = nullptr;
+// app.UIPartsBase.get_Valid(): the game's own word that a part may still be used (its owner is still on a game object;
+// read 22/11 in the game's code: Owner non-null and the owner's game object non-null, the test UIPartsBase.Destroy makes
+// before it touches the part's control)
+Method* m_part_valid = nullptr;
 Method *m_list_count = nullptr, *m_list_item = nullptr, *m_list_insert = nullptr;   // List<UInt32>
 API::Field *f_map_desc = nullptr, *f_desc_stage = nullptr, *f_stage_id = nullptr, *f_desc_net = nullptr;   // replays
 API::Field *f_param_random = nullptr;                          // app.menu.UIFlowStageSelect.Param.IsRandom
@@ -862,7 +869,9 @@ struct GridState {
     bool logged = false;
 };
 GridState g_grid;                                              // g_mx
-struct Decided { bool pending = false; int menu = -1; uint32_t base = 0; std::string key, before; };
+// before: the menu's own choice for that stage until now; served: what the loader served for it until now (another menu's
+// choice when the stage was loaded from another screen: Training entered through the classic Stage Select)
+struct Decided { bool pending = false; int menu = -1; uint32_t base = 0; std::string key, before, served; };
 Decided g_decided;                                             // g_mx
 std::atomic<int> g_cycle_pending{0};
 std::atomic<bool> g_tick_all_pending{false};                   // Random Stage Settings' Y key pressed (grid_work)
@@ -950,9 +959,18 @@ std::string shown_pic(Obj* tex_ctrl) {
 // each new grid (the bindings may have changed)
 std::map<std::pair<int, int>, std::string> g_key_symbols;
 
+// The remembered grid, when it may still be read. A managed object outlives its screen: when Training reloads its stage the
+// menu's game object is destroyed, the grid's control with it, and the grid object stays in memory until it is collected
+// (5 to 246 frames, 22/11). Reading its control then was an access violation at every one of those frames (get_Control,
+// get_ActualVisible: 273 throws on 22/11, seen again the same evening at that very step). The game's own test says when.
+bool part_valid(Obj* o) {
+    if (!m_part_valid) return true;
+    const Ret r = call(m_part_valid, o);
+    return !r.exception_thrown && r.byte != 0;
+}
 Obj* grid_alive(uintptr_t p) {
     Obj* o = reinterpret_cast<Obj*>(p);
-    return p && alive(o) && o->get_type_definition() == t_simple ? o : nullptr;
+    return p && alive(o) && o->get_type_definition() == t_simple && part_valid(o) ? o : nullptr;
 }
 Obj* obj_field(Obj* o, API::Field* f) {
     void* p = o && f ? f->get_data_raw(o, false) : nullptr;
@@ -1203,7 +1221,9 @@ int pre_decide(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned
                 if (g_state.random[g_grid.menu] != (s.base == sl::kRandomStage)) g_state.random[g_grid.menu] = s.base == sl::kRandomStage;
                 auto& choice = g_state.menu[g_grid.menu];
                 const auto old = choice.find(s.base);
-                g_decided = { true, g_grid.menu, s.base, key, old != choice.end() ? old->second : std::string() };
+                const auto was = g_applied.find(s.base);
+                g_decided = { true, g_grid.menu, s.base, key, old != choice.end() ? old->second : std::string(),
+                              was != g_applied.end() ? was->second : std::string() };
                 // the game's "already chosen" test sees the choice from before (the mark moves at once, 05/11)
                 tl_decide = { g_grid.obj, s.base, g_decided.before, g_frame, true };
                 if (sl::decide_marks_now(g_grid.slots, s.base, g_decided.before, sel))
@@ -1294,10 +1314,153 @@ void post_battle_desc(void**, REFrameworkTypeDefinitionHandle, unsigned long lon
     } catch (...) { logf("stages: EXCEPTION serving Battle Settings' choice"); }
     perf::end(perf::HkStgApply, pt);
 }
+// Training: the look each stage was served with before the first choice made for it in Training's grid since the stage was
+// last loaded: the look that stage is loaded with, when it is the one loaded (g_mx). Emptied when the game applies a change
+// of stage, when Training sets its stage, and when another menu's choice is served.
+std::map<uint32_t, std::string> g_train_loaded;
+
+// Training reloads its stage when its menu applies a stage id that is not the saved one (tf_SelectMenu.ApplayShortCutSelect,
+// read 22/11 in the game's code: IsStageChange and _GameData.StageID != _tData.SelectMenu.SM_Stage_ID -> SM_Stage_ID
+// written, TrainingManager._IsReqRestart set). A tile or a variation keeps its stage's id: the choice was served and never
+// seen, the stage stayed as it was until Training was left (Wael 22/11; ChangeStage alone only sets IsStageChange). For that
+// one call the saved id is made to differ: the game writes it back and asks for its restart itself, as for any other stage.
+// The post hook puts the id back when the game did not.
+constexpr int32_t kNoStageId = 0x7FFFFFF0;
+// The stage whose files Training's restart has to load again (its look changed, its id did not), and the frame it was asked
+// at: the restart that follows is the one meant (pre_reload_setup_stage)
+std::atomic<int32_t> g_train_files{ -1 };
+std::atomic<uint32_t> g_train_files_at{ 0 };
+thread_local uintptr_t tl_train_menu = 0;                     // the SelectMenu whose saved id was changed for the call
+thread_local int32_t tl_train_id = 0;
+thread_local bool tl_train_applied = false;
+int pre_training_apply(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_train_menu = 0;
+    tl_train_applied = false;
+    if (argc < 2 || g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    try {
+        std::lock_guard<std::recursive_mutex> lk(g_mx);
+        if (g_train_loaded.empty()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        Obj* tf = reinterpret_cast<Obj*>(argv[1]);
+        Obj* gd = alive(tf) ? get_obj(tf, "_GameData") : nullptr;
+        Obj* td = gd ? get_obj(tf, "_tData") : nullptr;
+        Obj* sm = td ? get_obj(td, "SelectMenu") : nullptr;
+        int32_t want = -1, saved = -1;
+        bool change = false;
+        if (!sm || !get_i32(gd, "StageID", want) || !get_i32(sm, "SM_Stage_ID", saved) || !get_bool(gd, "IsStageChange", change)) {
+            logf("stages: Training: its menu's stage is not readable when it applies its changes (game update?): a new look of the "
+                 "stage loaded is seen at the stage's next load");
+            g_train_loaded.clear();
+            return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        }
+        if (!change) return REFRAMEWORK_HOOK_CALL_ORIGINAL;    // no stage chosen since the last time it applied
+        tl_train_applied = true;
+        const auto loaded = want >= 0 ? g_train_loaded.find(static_cast<uint32_t>(want)) : g_train_loaded.end();
+        const auto now = want >= 0 ? g_applied.find(static_cast<uint32_t>(want)) : g_applied.end();
+        const std::string served = now != g_applied.end() ? now->second : std::string();
+        if (want != saved) {
+            logf("stages: Training: stage %d -> %d: the game reloads it itself", saved, want);
+        } else if (loaded == g_train_loaded.end() || loaded->second == served) {
+            logf("stages: Training: stage %d keeps the look it is loaded with (%s): no reload", want, served.empty() ? "vanilla" : served.c_str());
+        } else if (set_i32(sm, "SM_Stage_ID", kNoStageId)) {
+            tl_train_menu = reinterpret_cast<uintptr_t>(sm);
+            tl_train_id = saved;
+            logf("stages: Training: stage %d, look %s -> %s: the game is shown a change of stage", want,
+                 loaded->second.empty() ? "vanilla" : loaded->second.c_str(), served.empty() ? "vanilla" : served.c_str());
+        }
+    } catch (...) { logf("stages: EXCEPTION before Training applies its menu"); }
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_training_apply(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    const uintptr_t p = tl_train_menu;
+    const bool applied = tl_train_applied;
+    tl_train_menu = 0;
+    tl_train_applied = false;
+    if (!applied || g_closing.load(std::memory_order_relaxed)) return;
+    try {
+        std::lock_guard<std::recursive_mutex> lk(g_mx);
+        g_train_loaded.clear();
+        Obj* sm = reinterpret_cast<Obj*>(p);
+        int32_t id = 0;
+        if (!p || !alive(sm) || !get_i32(sm, "SM_Stage_ID", id)) return;
+        if (id != kNoStageId) {
+            g_train_files.store(id);
+            g_train_files_at.store(g_frame);
+            logf("stages: Training: stage %d restarts for its new look (the game asked for its restart)", id);
+            return;
+        }
+        set_i32(sm, "SM_Stage_ID", tl_train_id);
+        logf("stages: Training: WARNING, the game did not take stage %d's new look as a change of stage: its saved id is put back, "
+             "no reload", tl_train_id);
+    } catch (...) { logf("stages: EXCEPTION after Training applied its menu"); }
+}
+
+void train_loaded_forget() {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    g_train_loaded.clear();
+}
+
+// The restart Training asked for goes through BattleFlowMap.SetupReloadBattleAsset(desc) (bBattleFlow.startRestartBattle,
+// read 22/11): it compares the battle's description with the new one, stage id and fighters, and with no difference no file
+// is loaded again: the battle restarts on the stage in memory (22/11, Wael: "it reloads but the stage does not change").
+// For that call the id of the stage in memory is made to differ: the game keeps the new description for its reload
+// (ReloadBattleAsset: the old stage's files unloaded by its id, put back here before, then the new one's asked for).
+thread_local uintptr_t tl_reload_stage = 0;                   // the StageDesc whose id was changed for the call
+thread_local int32_t tl_reload_id = 0;
+int pre_reload_setup_stage(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_reload_stage = 0;
+    const int32_t id = g_train_files.load();
+    if (id < 0 || argc < 3 || g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    try {
+        g_train_files.store(-1);
+        if (g_frame - g_train_files_at.load() > 1800) {
+            logf("stages: Training: stage %d's restart never came (asked %u frames ago): its files are not asked for again", id,
+                 g_frame - g_train_files_at.load());
+            return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        }
+        Obj* map = reinterpret_cast<Obj*>(argv[1]);
+        Obj* next = reinterpret_cast<Obj*>(argv[2]);
+        Obj* cur = alive(map) ? get_obj(map, "m_desc") : nullptr;
+        Obj* cs = cur ? obj_field(cur, f_desc_stage) : nullptr;
+        Obj* ns = alive(next) ? obj_field(next, f_desc_stage) : nullptr;
+        void* p = cs && f_stage_id ? f_stage_id->get_data_raw(cs, false) : nullptr;
+        const int32_t cid = cs ? i32_field(cs, f_stage_id, -1) : -1, nid = ns ? i32_field(ns, f_stage_id, -1) : -1;
+        if (!p || !ns) { logf("stages: Training: the restart's stage is not readable: stage %d's files are not loaded again", id); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+        if (cid != id || nid != id) {
+            logf("stages: Training: the restart is from stage %d to %d (stage %d's new look was waited for): left to the game", cid, nid, id);
+            return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        }
+        if (cs == ns) {
+            logf("stages: Training: WARNING, the restart's description holds the very stage object of the battle: stage %d's files "
+                 "cannot be shown as changed, they are not loaded again", id);
+            return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        }
+        const int32_t fake = kNoStageId;
+        memcpy(p, &fake, 4);
+        tl_reload_stage = reinterpret_cast<uintptr_t>(cs);
+        tl_reload_id = cid;
+    } catch (...) { logf("stages: EXCEPTION before the restart's reload setup"); }
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_reload_setup_stage(void** ret, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    const uintptr_t s = tl_reload_stage;
+    tl_reload_stage = 0;
+    if (!s) return;
+    try {
+        Obj* cs = reinterpret_cast<Obj*>(s);
+        void* p = alive(cs) && f_stage_id ? f_stage_id->get_data_raw(cs, false) : nullptr;
+        if (p) memcpy(p, &tl_reload_id, 4);
+        const bool taken = ret && (reinterpret_cast<uintptr_t>(*ret) & 0xFF) != 0;
+        logf("stages: Training: stage %d's files %s%s", tl_reload_id,
+             taken ? "are loaded again for its new look (the game's reload was shown a change of stage)"
+                   : "are NOT loaded again: the game's reload setup answered no", p ? "" : "; WARNING: its id could not be put back");
+    } catch (...) { logf("stages: EXCEPTION after the restart's reload setup"); }
+}
+
 int pre_training_stage(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin();
     try {
+        { std::lock_guard<std::recursive_mutex> lk(g_mx); g_train_loaded.clear(); }   // its stage loads with what is served now
         Obj* desc = argc >= 3 ? reinterpret_cast<Obj*>(argv[2]) : nullptr;
         serve_menu(sl::kTraining, desc && alive(desc) ? i32_field(desc, f_stage_id, -1) : -1, "Training sets its stage");
     } catch (...) { logf("stages: EXCEPTION serving Training's choice"); }
@@ -1337,9 +1500,20 @@ void post_replay_desc(void**, REFrameworkTypeDefinitionHandle, unsigned long lon
 // ---- the frame: keys of the grid's screen, cycle, Training's reload, pictures and names ----
 
 // Training: a choice on the stage already loaded (Training Room -> a tile over it) is no change of stage for the game
-// (it compares the ids: read 05/11), so its stage is set again through the menu's own ChangeStage.
+// (it compares the ids: read 05/11), so its stage is set again through the menu's own ChangeStage (the menu then applies
+// its changes when it closes), and the game is shown a change of stage when it does (pre_training_apply).
+// The look to compare with is the one the stage is loaded with, not Training's own last choice: Training entered through
+// the classic Stage Select is loaded with that screen's choice (22/11: Training Room loaded vanilla, the tile Training
+// remembered confirmed in its grid, "the same choice", nothing reloaded).
 void training_reload(const Decided& d) {
-    if (d.key == d.before) return;
+    std::string loaded;
+    {
+        std::lock_guard<std::recursive_mutex> lk(g_mx);
+        loaded = g_train_loaded.emplace(d.base, d.served).first->second;
+    }
+    if (d.key == loaded) return;
+    if (!g_hooked[kTrainApply])
+        logf("stages: Training: its menu's apply is not hooked: a new look of the stage loaded is seen at the stage's next load");
     auto* tm = api().get_managed_singleton("app.training.TrainingManager");
     Obj* func = tm ? call_obj(tm, "get_MenuFunc") : nullptr;
     Obj* gdata = func ? get_obj(func, "_gData") : nullptr;
@@ -1347,8 +1521,8 @@ void training_reload(const Decided& d) {
     if (!gdata || !get_i32(gdata, "StageID", cur)) { logf("stages: Training's stage not readable: no reload for the new choice"); return; }
     if (cur != static_cast<int32_t>(d.base)) return;          // another stage: the game changes it itself
     auto r = call(func, "ChangeStage", { arg_i32(cur) });
-    logf("stages: Training: stage %d chosen again with %s: %s", cur, d.key.empty() ? "the vanilla look" : d.key.c_str(),
-         r.exception_thrown ? "ChangeStage threw" : "reloaded when the menu closes");
+    logf("stages: Training: stage %d chosen again with %s (loaded with %s): %s", cur, d.key.empty() ? "the vanilla look" : d.key.c_str(),
+         loaded.empty() ? "the vanilla look" : loaded.c_str(), r.exception_thrown ? "ChangeStage threw" : "reloaded when the menu closes");
 }
 
 // One via.gui control under `root` (depth-first) of a type and for which `pred` holds
@@ -1977,6 +2151,11 @@ void hint_pass(const std::string& text) {
 }
 
 // Every frame the hint may be wanted: shown with `text`, or hidden
+// The step tick is at (step(): see stages.hpp). Written by the game thread only.
+const char* g_step = "idle";
+struct Step { explicit Step(const char* s) { g_step = s; } };
+#define STG_STEP(s) (g_step = (s))
+
 void hint_frame(bool want, const std::string& text, const char* why_not) {
     const int st = g_hint_status.load(std::memory_order_acquire);
     if (st != g_hint.status_log) {
@@ -2011,6 +2190,7 @@ bool grid_has_focus(Obj* grid, Obj* scroll) {
     return false;
 }
 uintptr_t g_grid_seen = 0;                                   // the grid the frame last looked at (a new one: symbols again)
+uintptr_t g_grid_gone = 0;                                   // the grid whose end was logged
 bool g_key_was = false;
 bool g_y_was = false, g_rnd_was = false;                     // Random Stage Settings' Y key: down, the state, last frame
 void grid_frame() {
@@ -2018,15 +2198,27 @@ void grid_frame() {
     int nvar = 0;
     {                                                        // the grid, under the lock
         std::lock_guard<std::recursive_mutex> lk(g_mx);
+        STG_STEP("grid frame: is the grid alive");
         Obj* grid = grid_alive(g_grid.obj);
+        if (!grid && g_grid.obj && g_grid.obj != g_grid_gone) {
+            g_grid_gone = g_grid.obj;
+            Obj* o = reinterpret_cast<Obj*>(g_grid.obj);
+            const bool there = alive(o) && o->get_type_definition() == t_simple;
+            logf("stages: grid (%s): no longer read (%s)", sl::menu_key(g_grid.menu),
+                 there ? "its owner left the scene: UIPartsBase.get_Valid false" : "its object is freed");
+        }
         if (grid && !g_grid.slots.empty()) {
             if (g_grid.obj != g_grid_seen) { g_grid_seen = g_grid.obj; g_key_symbols.clear(); }
+            STG_STEP("grid frame: is the grid on screen (get_Control, get_ActualVisible)");
             on = grid_visible(grid);
             if (on) {
+                STG_STEP("grid frame: is the grid activated (IsShow)");
                 Obj* scroll = obj_field(grid, f_scroll);
                 const Ret rv = m_is_show ? call(m_is_show, grid) : Ret{};
                 const bool active = !m_is_show || rv.exception_thrown || rv.byte != 0;   // activated: the cursor is in it
+                STG_STEP("grid frame: has the grid the focus");
                 focus = active && grid_has_focus(grid, scroll);
+                STG_STEP("grid frame: Random Stage Settings' state");
                 // Random Stage Settings: what the Y key does next (the bar's label), read every 10 frames
                 rnd_state = i32_field(grid, f_state, -1) == 1;
                 if (rnd_state && focus && (g_tick_label.grid != g_grid.obj || g_frame - g_tick_label.at >= 10)) {
@@ -2039,6 +2231,7 @@ void grid_frame() {
                     }
                 }
                 all_ticked = g_tick_label.grid == g_grid.obj && g_tick_label.all;
+                STG_STEP("grid frame: the scroll list's selected index");
                 const Ret rs = scroll ? call(m_sel_index, scroll) : Ret{};
                 const int sel = scroll && !rs.exception_thrown ? static_cast<int32_t>(rs.dword) : -1;
                 if (sel >= 0 && sel < static_cast<int>(g_grid.slots.size())) {
@@ -2048,6 +2241,7 @@ void grid_frame() {
                 }
                 // the preview lives while the focus stays on its entry (left without Confirm, or the grid left: the entry as
                 // it was)
+                STG_STEP("grid frame: the preview and the decided stage");
                 const sl::Preview p = focus ? sl::preview_follow(g_grid.preview, sel) : sl::Preview{};
                 if (!(p == g_grid.preview)) { g_grid.preview = p; open_grid_window(); }
                 // whether the menu's stage is Random (the game's random lands on a vanilla id: Random's pick, serve_menu)
@@ -2063,10 +2257,12 @@ void grid_frame() {
             }
         }
         // off screen: its name back at the game's place (the same text may come back with a stage of the game's)
+        STG_STEP("grid frame: the banner's stage name, grid off screen (mTextStageName)");
         if (grid && !on && g_grid.name_right == 1)
             if (Obj* prv = obj_field(grid, f_preview))
                 if (Obj* ptext = get_obj(prv, "mTextStageName")) { namescroll::release(ptext); name_layout(ptext, false); }
         // the banner's name, wider than the banner: it scrolls inside it (right-aligned with the banner's width: name_layout)
+        STG_STEP("grid frame: the banner's stage name, grid on screen (mTextStageName)");
         if (grid && on)
             if (Obj* prv = obj_field(grid, f_preview))
                 if (Obj* ptext = get_obj(prv, "mTextStageName")) {
@@ -2075,6 +2271,7 @@ void grid_frame() {
                 }
         // it came on screen (Battle Settings' tab, its Stage Settings row): the pictures and the banner at once
         if (on && !g_grid.on_screen) { g_grid.until = 0; open_grid_window(); }
+        STG_STEP("grid frame: Battle Settings' grid watch (its owner's agent)");
         if (g_grid_watch) {
             Obj* owner = grid && m_owner ? call_obj(m_owner, grid) : nullptr;
             g_watch_off = owner && agent_visible(owner) ? 0 : g_watch_off + 1;
@@ -2089,6 +2286,7 @@ void grid_frame() {
         g_grid.focused = on && focus;
     }
     // the key: one step per press, on a stage with variations
+    STG_STEP("grid frame: the variation and Random keys");
     const bool down = g_grid.focused && variation_key_now();
     if (down && !g_key_was && !tile && nvar > 0) {
         g_cycle_pending.fetch_add(1);
@@ -2107,6 +2305,7 @@ void grid_frame() {
     g_y_was = ydown;
     g_rnd_was = rnd_focus;
     // the hint: the grid's ("<Y> Tick all" in Random Stage Settings first, then the variation key), else the replay picker's
+    STG_STEP("grid frame: the guide bar's key symbols");
     const bool replay_asks = g_hint_replay_at && g_frame - g_hint_replay_at <= 1;
     const std::string sym = g_grid.focused ? symbol_of(sl::kVariationKeyId, guide_mode_now()) : std::string();
     const std::string replay_sym = replay_asks ? symbol_of(g_hint_replay_key, guide_mode_now()) : std::string();
@@ -2120,6 +2319,7 @@ void grid_frame() {
     const std::string var_text = grid_want ? sl::variation_hint_text(sym) : std::string();
     const std::string grid_text = tick_text.empty() ? var_text : var_text.empty() ? tick_text : tick_text + "     " + var_text;
     const char* why = !on ? "no stage grid on screen" : !g_grid.focused ? "the grid has not the focus" : tile ? "a tile" : "no variation";
+    STG_STEP("grid frame: the guide bar hint (hint_frame)");
     hint_frame(!grid_text.empty() || replay_want, !grid_text.empty() ? grid_text : sl::guide_hint_text(replay_sym, g_hint_replay_label), why);
 }
 // No stage slots here: only the entry Replays > Settings asks for
@@ -2152,9 +2352,11 @@ void grid_tick(uint32_t ev) {
     }
     if (d.pending) {
         logf("stages: grid (%s): stage %u -> %s", sl::menu_key(d.menu), d.base, d.key.empty() ? "vanilla look" : d.key.c_str());
+        STG_STEP("grid tick: Training's reload of a stage chosen again (ChangeStage)");
         if (d.menu == sl::kTraining) training_reload(d);
     }
     grid_frame();
+    STG_STEP("grid tick: the grid's pictures and names (grid_work)");
     if (!g_grid.until) return;
     if (g_frame >= g_grid.until || g_frame >= g_grid.cap) { g_grid.until = 0; return; }
     if (g_frame < g_grid.next) return;
@@ -2583,6 +2785,8 @@ void start_grid_check() {
     f_is_matching = t_simple ? field_of(t_simple, "IsMatchingSetting") : nullptr;
     f_is_hub = t_simple ? field_of(t_simple, "IsBattleHub") : nullptr;
     m_owner = t_base ? method_of(t_base, "get_Owner", 0) : nullptr;
+    m_part_valid = t_base ? method_of(t_base, "get_Valid", 0) : nullptr;
+    if (!m_part_valid) logf("stages: app.UIPartsBase.get_Valid not found: a grid whose screen is destroyed is read until it is freed");
     m_is_show = t_simple ? method_of(t_simple, "IsShow", 0) : nullptr;
     m_sel_index = t_scroll ? method_of(t_scroll, "get_SelectedIndex", 0) : nullptr;
     m_items = t_scroll ? method_of(t_scroll, "get_Items", 0) : nullptr;
@@ -2613,6 +2817,9 @@ void start_grid_check() {
     add(tdb->find_type("app.menu.UIFlowStageSelect.Param"), "InitStageList", 0, "app.menu.UIFlowStageSelect.Param.InitStageList()",
         !g_classic_tiles.empty() && m_list_item && m_list_insert && m_list_index);
     add(tdb->find_type("app.UIPartsMatchingSettingBattle"), "ButtonY", 0, "app.UIPartsMatchingSettingBattle.ButtonY()", grid_ok);
+    add(tdb->find_type("app.training.tf_SelectMenu"), "ApplayShortCutSelect", 0, "app.training.tf_SelectMenu.ApplayShortCutSelect()", true);
+    add(tdb->find_type("app.battle.BattleFlowMap"), "SetupReloadBattleAsset", 1, "app.battle.BattleFlowMap.SetupReloadBattleAsset(BattleDesc)",
+        f_desc_stage && f_stage_id);
     g_check.start(kCodecheckCache, "stage grids");
     g_check_started = true;
 }
@@ -2634,6 +2841,8 @@ void install_grid_hooks() {
         { kReplayDesc, pre_replay_desc, post_replay_desc },
         { kInitStageList, pre_init_stage, post_init_stage },
         { kButtonY, pre_button_y, nullptr },
+        { kTrainApply, pre_training_apply, post_training_apply },
+        { kReloadSetup, pre_reload_setup_stage, post_reload_setup_stage },
     };
     // the tiles need the list, its owner (SetupList) and Decide: one refused, none of the three
     const bool core = g_check.unique(kSetupList) && g_check.unique(kGetList) && g_check.unique(kDecide);
@@ -2806,14 +3015,20 @@ void preload_choices() {
     }
 }
 
+const char* step() { return g_step; }
+
 void tick(uint32_t ev) {
     if (!g_variant_count) {
         if (g_hint_replay_at) replay_hint_frame();
         return;
     }
+    STG_STEP("tick: the choices' files asked for ahead (preload_choices)");
     preload_choices();
+    STG_STEP("tick: the grid's hooks");
     if (g_check_started && !g_hooks_done && g_check.done()) install_grid_hooks();
+    STG_STEP("grid tick: the grid's events");
     grid_tick(ev);
+    STG_STEP("tick: the Stage Select screen's visibility");
     // The game calls BeforeHideObject while it sets the screen up, next to ShowedObject, and coming
     // back from the result screen the screen shows well after its events: a show or hide event, or
     // the game rewriting the screen while it is not followed, starts a check of its visibility for
@@ -2833,6 +3048,7 @@ void tick(uint32_t ev) {
     if (g_scr.active && !g_scr.check_until && g_frame % 30 == 0 && !shown(g_scr.agent)) screen_hidden();
     if (g_scr.active) {
         bool input = (ev & EV_STAGE_INPUT) != 0;
+        STG_STEP("tick: the Stage Select screen's list (classic_frame, screen_work, strip)");
         classic_frame();
         if (ev & EV_STAGE_DIRTY) { g_scr.settle = std::max(g_scr.settle, 1); g_scr.need = true; }
         if (input || g_scr.need || g_scr.settle > 0) screen_work(input);
@@ -2848,6 +3064,7 @@ void tick(uint32_t ev) {
     }
     // VS screen: shown again after every write of the game on it for 2 s, longer while the image
     // loads, never more than 10 s after the screen appeared
+    STG_STEP("tick: the VS screen's stage picture and name (vs_work)");
     if (ev & EV_VS) {
         if (!g_vs.until) g_vs.cap = g_frame + 600;
         g_vs.until = g_frame + 120;
@@ -2860,6 +3077,7 @@ void tick(uint32_t ev) {
             if (!vs_work()) g_vs.until = std::max(g_vs.until, g_frame + 30);
         }
     }
+    STG_STEP("done");
 }
 
 } // namespace slots::stages

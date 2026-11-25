@@ -296,6 +296,15 @@ void frame() {
         if (s == St::Idle) {
             if (!elected()) { set_state(St::Dormant); return; }
             log("this copy runs the updater (rank " + std::to_string(sf6suite_updater_rank()) + ")");
+            // the strips' hook now, at the start, never at the moment an install begins (update_game.hpp, ticker_prepare). Only in a
+            // session that can install: with the off switch, or on the Slotsloader Manager's installs (check_allowed, the same rule
+            // check_worker applies), nothing is fetched or offered, so the game's method is left as it is.
+            std::string off;
+            if (!check_allowed(load_state(*g_paths), manager_mode(g_paths->root), &off))
+                log("the ticker's hook is not placed: the check is " + off);
+            else
+                log(game::ticker_prepare() ? "the ticker's hook is placed (at the start)"
+                                           : "the ticker's hook could not be placed at the start: an install will show no progress on screen");
             set_state(St::Checking);
             spawn(check_worker);
             return;
