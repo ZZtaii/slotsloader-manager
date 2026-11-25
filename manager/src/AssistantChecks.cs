@@ -382,7 +382,9 @@ namespace SlotsInstaller
                     Use("toolu_v5", "delete_everything", new JsonObj()),
                     Use("toolu_v6", "check_outfit", new JsonObj().Add("mod_id", cammy).Add("option_ids", new[] { "Nope" }).Add("character", "Cammy")),
                     Use("toolu_v7", "search_mods", Search("", "Gouken")),
-                    Use("toolu_v8", "install_outfit", Install(cammy, new[] { "Main Files" }, "Cammy", "Missing color", "")),
+                    // 1.0.22: was "Main Files" without a colour; the fixture's "Select one color" is description wording, which
+                    // no longer makes a required choice (guesses never block; explicit rules: CompositionRegressionChecks).
+                    Use("toolu_v8", "install_outfit", Install(cammy, new[] { "Main Files", "Color/Black" }, "Juri", "Wrong fighter", "")),
                     Use("toolu_v9", "install_outfit", Install(cammy, new[] { "Main Files", "Color/Black" }, "Cammy", "bad/name", "")),
                     Use("toolu_v10", "set_outfit_enabled", new JsonObj().Add("installed_id", "out-nothing").Add("enabled", "yes"))));
                 return Done("Sorry.");
@@ -391,7 +393,7 @@ namespace SlotsInstaller
                 cammy = h.F.CammyPackId;
                 Require(h.Conv.Send("go", CancellationToken.None).Status == AssistantTurnStatus.Completed, "turn failed");
                 MockRequest req = h.Requests[1];
-                string[] expected = { "Missing required field", "Unknown mod_id", "must be one of", "Unexpected field 'force'", "Unknown tool", "Unknown option_id", "Unknown character", "Choose an option in 'Color'", "not a valid Windows folder name", "must be true or false" };
+                string[] expected = { "Missing required field", "Unknown mod_id", "must be one of", "Unexpected field 'force'", "Unknown tool", "Unknown option_id", "Unknown character", "not Juri", "not a valid Windows folder name", "must be true or false" };
                 for (int k = 0; k < expected.Length; k++)
                 {
                     var result = ToolResult(req, "toolu_v" + (k + 1), true);
