@@ -36,7 +36,8 @@ fight triggers none of these events: during a fight the plugin reads nothing but
 A slot chosen in Battle Settings is not a costume the other players have: the save data (and the network) keep one
 of the character's own outfits, the carrier, and the plugin dresses the player's own fighter in the slot on the
 player's screen only. The carrier is the player's choice, **Outfit 1** (costume 0, the default since Slots Loader
-1.15) or **DriveTech** (costume 4; Outfit 1 for a character without it, Arjun): Options > Interface > Other Settings >
+1.15) or **DriveTech** (costume 4; Outfit 1 for a character without it, Arjun, and since 24/11/2026 for a character
+whose DriveTech the account does not really own, or not known to): Options > Interface > Other Settings >
 "Outfit Others See" (core 0.9.0+), or `"online_outfit": "Outfit 1"` / `"DriveTech"` in
 `SF6_CostumeSlots_data\settings.json`. A change applies without a restart: outside Battle Settings the carriers are
 decided again and the saves that hold the former one for a slot are moved to the new one (from the next battle; a
@@ -50,6 +51,39 @@ When `reframework\data\SF6_TitleSlots_Data\registry.json` (written by the loader
 The title editor is full screen: the background's picture with the "OVERDRIVE EDITION" line and PRESS ANY BUTTON as the title screen shows them. X shows / hides the line, the directions move it, L3 / R3 centre it horizontally / vertically, LT / RT change its size, LB / RB go to the previous / next background, Y applies this background's setting to every background after the game's own Yes / No box. Place and size are shown in % of the screen. Each background keeps its own setting in `reframework\data\SF6_TitleSlots_Data\overdrive.json`, and the real title screen follows it. A background never set shows no line, except the game's own title, which shows it by default. Random's draw (without repeats) is kept in `shuffle.json` in the same folder. The pictures are each pack's modinfo screenshot, and `game_title.jpg` (same folder, shipped) for the game's own title; Random's editor picture is a live mosaic of the ticked backgrounds. The pack names come from `registry.json` (written by the loader at game start); a name too long for its place slides in it, never cut. `"title_pack"`, `"skip_intro"` and `"title_random_pool"` are in `settings.json`.
 
 When `reframework\data\SF6_UISlots_Data\registry.json` (written by the loader at game start, from the interface mods dropped in `reframework\ui_mods`) lists packs, Options > Interface gets one section per pack in its left list, just above "Other Settings", named as the pack (its description line: its author). Its rows are the game's own rows (Native Core 0.9.10, `opt_section_place_rows`; an older core: no section, the choices still apply at launch): a group of options of which one at a time can be used is one row, **Game's own** (the game's files) then its options, cycled with Left / Right; any other option is one row Off / On; a heading that holds other rows is a header row when the core has them, else its name goes in front of its rows'. The game draws them, moves the focus and shows each row's description (the mod's own, its literal `\n` as spaces). A long title or value keeps its size and slides in its place, as on every row of the Options screen. Under the rows, when there is room in the right panel, the picture of the focused row's value (an Off / On row: its option's; Game's own: none), else of the pack. Every change is written to `"ui_choices"` in `settings.json` (`{ "<pack key>": [ "<option id>", ... ] }`, the other keys kept) and handed to the loader at once (`SF6UISlots_Apply` in `amd_ags_x64.dll`), which serves the new files from then on; the textures the game keeps in memory are swapped on screen (`ui_retexture.cpp`). A loader without that export applies the choice at the next launch.
+
+**What the account really owns goes on the network as it is (Wael 24/11/2026).** One decision, `carrier.hpp` `decide`
+(unit test `tests/build_carrier_test.bat`), for every place the save or a battle description feeds the network, in every
+mode (ranked, casual, Battle Hub and its CPU battles, rooms, online training, team battle):
+- a slot never goes on the network: the carrier, in Color 1 or 2 (`net_colour`);
+- a game outfit the account really owns is sent as it is (Outfit 2 bought: the opponent sees Outfit 2); one only an
+  unlock-all script gives is worn on this PC only, over the carrier;
+- a colour from Color 3 on of an outfit sent as it is: sent when the account really owns it, else Color 1 goes on the
+  network and the colour is worn on this PC; on the carrier the colour is always Color 1 or 2;
+- not known (the ownership not read yet, no Steam to ask about a DLC, a number nobody knows): Color 1 of the carrier
+  (Outfit 1 unless DriveTech is asked for and known to be owned), never the save's value; an outfit known to be owned
+  whose colour is not known goes in Color 1.
+
+What the account owns is read by `src/true_owner.cpp`, never through the game's own lists (an unlock-all script forces
+`app.DlcManager.IsValidDlc / IsValidPackageDlc / IsValidDlcItem / IsNoPackageDlc / IsSubscribed / IsPlayGoMode` to true, so
+they count what the account does not have; online REFramework stops Lua and the server answers 50301-30003 when such an
+outfit or colour is sent): an outfit or a colour record is the account's when it is a default one, in the save
+(`CostumeInventory.ExistsSaveData`, `ColorInventory.get_SaveDataList`), given by no DLC, or given by a DLC
+(`DlcManager.DlcItemCostume` / `DlcItemColor` -> `DlcDataMain.SteamAppId`) the account owns on Steam (`steam_api64.dll`,
+`BIsSubscribedApp` / `BIsDlcInstalled`). The colour records are each outfit's `TableDataManager.GetFighterCostumeColors`.
+Read on the game thread at boot and at each screen that lists outfits; the hooks use the numbers kept. Log: `true owner:`
+lines (the tables once, then each change of what is bought / owned on Steam).
+
+The save is made to hold the decision whatever it held before: when Battle Settings closes, at the select screens, at
+every fighter profile the game builds or sends (`TemporarilyDataManager`, before the carriers are even decided), at
+boot, and after a battle was set up from a save that did not (a Battle Hub CPU battle's description holding a slot's
+number or an outfit / colour not owned is given the decision before its files are asked for, the alias wears the real
+choice). A slot's number, an outfit or a colour the network may not hold found there becomes the intent
+(`carrier::real_choice`); an older intent of an outfit the account owns goes back into the save as it is. Each decision
+is logged once per change: `[F13] online pick (safety net): the save held slot v06 colour 3; worn on this PC: slot v06
+colour 3; the network gets Outfit 1 colour 0 (a mod slot never goes on the network: the carrier)`. An outfit sent as it
+is in a colour worn on this PC only is dressed when the fighters are built (no files to ask for: the outfit's own), so
+the VS screen still shows Color 1 for that case.
 
 How (since 1.15): the battle description (`BattleFlowMap.m_desc`) has one `FighterDesc` per fighter, whose `Costume`
 is what the network holds; the game also keeps a local override per fighter (`SetOverwriteDesc` / `GetCostume`) and
@@ -101,8 +135,9 @@ word, `CommonMessage756`, in each language). It has one colour, which its Color 
   FighterDesc in Random gets its draw (`Costume`, `Color`), and the request in flight of Random's number asks for the
   drawn outfit's files (its argument; its unload too). A new draw at each load whose description holds Random.
 - Battle Settings (online, rooms, Battle Hub): the intent is Random and its next draw is made at once. A game outfit
-  drawn is what the save holds outside the menu and around the fighter profile (the opponent sees it); one of ours
-  leaves the carrier there and the alias wears it. A match's first managed load of the player's fighter takes the
+  drawn that the network may hold (the account owns it, in a colour it owns: the decision above) is what the save holds
+  outside the menu and around the fighter profile (the opponent sees it); one of ours, or a game outfit the account does
+  not really own, leaves the carrier there and the alias wears it. A match's first managed load of the player's fighter takes the
   draw for the set (rematches build the fighters again without asking for files: the same outfit) and makes the
   next; a game outfit drawn that the match does not hold (no profile sent since the draw) is worn on this PC only,
   through the alias, as ours are.
@@ -110,7 +145,16 @@ word, `CommonMessage756`, in each language). It has one colour, which its Color 
 
 ## Slots of outfits the player does not own
 
-A slot made from a character's Outfit 2 (or 3, 4) is shown only if the game counts that outfit as the player's.
+Normal mode follows `ownership.hpp` `kLimitToOwnedOutfits`, a switch in the code (no setting): **on since 24/11/2026**
+(Wael), as before 1.28.0; from 22/11 to 24/11/2026 it was off and every slot was shown whatever outfit it is made from
+(log then: `costumes: every slot shown and owned, whatever outfit it is made from`). Either way a slot never reaches the
+network (the carrier, above), only the slot's own record is given (`AddDlcSaveData`), never the base outfit's, and
+every slot has its 10 colours owned (boot).
+
+Normal mode (switch on) and Manager mode (the Slotsloader Manager installed the loader, its fork's rules; off with its
+opt-out marker; Outfit 1 and DriveTech slots always shown): a slot made from a character's Outfit 2 (or 3, 4) is shown
+only if the game counts that outfit as the player's (log once: `costumes: a slot is shown only while the game lists the
+outfit it is made from as the player's`).
 The plugin asks the game the question its own screens ask: `app.InventoryManager.CostumeInventory.GetCostumeNoList`
 (the costume numbers of a character the player can pick), which the character select screen
 (`app.UIFlowUI10505.Param.GetCostumeId`) and Battle Settings (`app.helper.hGUI.GetEnableFighterCostumeIdList`) list.
@@ -178,14 +222,23 @@ the rows follow the outfit shown on the Costume row, and a row at an end says ho
 
 ## Replay Outfits (`replay_outfits.cpp`, rules in `replay_outfits.hpp`)
 
-What each character wears in a replay, never in a live battle. **Default**: what the players really wore. The replay holds
-the carrier for the player's own fighter (online alias), so at the end of each online match one line goes to
-`SF6_CostumeSlots_data\replay_journal.jsonl` (numbers only: the replay's key, the player's side, both sides' outfit and
-colour as the replay holds them, the slot really worn, by its mod); a replay found there shows the player's side in that
-slot, the opponent as recorded; a replay not found there shows what it recorded. **Forced**
-(`SF6_CostumeSlots_data\replay_outfits.json`, written by the Replay Outfits tab, read again when it changed): the chosen
-outfit and colour on every side that plays that character, the player's own included. An extra outfit is named by its
-`mod_id` (registry.json): a mod that is gone leaves the character on Default.
+What each character wears in a replay, never in a live battle, per character in
+`SF6_CostumeSlots_data\replay_outfits.json` (written by Replays > Settings > Replay Outfit Settings, read again when it
+changed). **Off** (no entry; the default since 22/11, before it was My Own's journal): what the replay recorded, the game's
+data; since the online alias (1.49) that is Outfit 1 / DriveTech in Color 1 / 2 for the player's own fighter. **My Own**
+(`"mode": "own"`): what the player really wore in that match. The replay holds the carrier for the player's own fighter, so
+at the end of each online match one line goes to `SF6_CostumeSlots_data\replay_journal.jsonl` (numbers only: the replay's
+key, the player's side, both sides' outfit and colour as the replay holds them, the slot really worn, by its mod, and the
+Color Mod entry worn on colour 02); a replay found there shows the player's side in that slot and entry, the opponent as
+recorded; a replay not found there shows what it recorded. **Forced** (`"mode": "forced"`): the chosen outfit and colour on
+every side that plays that character, the player's own included. An extra outfit is named by its `mod_id` (registry.json):
+a mod that is gone leaves the character on what the replay recorded. **Random outfit** (the character's Random outfit) and
+**Random colour**: a draw at each playback from the replays' own rounds (`state.json` `"random_replay"`), the two sides of a
+mirror match in a random order; a draw that fails leaves that side as recorded. A Random outfit's draw wears the costume
+options saved for the outfit drawn, else the player's own; a forced outfit those saved for it, else its defaults. A side
+that shares its fighter and outfit with another side (a mirror match) asks the Color Mod for its own battle side
+(`SF6ColorMod_RequestSide`), so each keeps its entry and My Own's entry stays on the player; every other request is for any
+side. An older Color Mod has one request per fighter / outfit (said once in the log).
 
 - Music: the Replay Music row of the tab (`"bgm"` in the same file, `replay_bgm.hpp`), the game's values with Self as P1 and
   Opponent as P2, then Custom. A replay does not follow the online setting (the save's `MatchingSelectBgm`): its `BattleRule.BgmType` stays

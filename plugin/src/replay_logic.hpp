@@ -9,7 +9,8 @@
 //                                            "color_random":true (the Color row's Random: a draw at each playback; colour 0 then)}},
 //    "stage":{"mode":"forced","id":<StageDesc.StageId: a vanilla stage>,"entry":"<a stage slot's key: tile / variation>"},
 //    "bgm":{"mode":"character"}}
-// No entry = Default (the replay's own outfit); no "stage" = the replay's own stage. A fighter's costume options:
+//   "mode":"own": My Own, the Costume row's first value (what the player wore in each match: the journal, replay_outfits.hpp).
+// No entry = Off (the replay's own outfit); no "stage" = the replay's own stage. A fighter's costume options:
 // replay_options.hpp ("options" under its entry; "mode":"off" keeps them while it is not forced). The music: replay_bgm.hpp
 // (no "bgm" = Random, what a replay does by itself).
 #pragma once
@@ -48,7 +49,20 @@ struct Outfit {
     std::vector<ColorEntry> cm;       // the Color Mod's entries for it, its order (after the game colours on the page)
     bool random = false;              // the character's Random outfit (registry "random": true): the last one, its one colour
                                       // reads Random; a replay set to it wears a draw (costumes::replay_random), its preview Outfit 1
+    bool own = false;                 // My Own (Wael 22/11): the first value, costume kOwnCostume, its one colour reads My Own;
+                                      // a replay set to it wears what the player wore in that match (the journal), its preview Outfit 1
 };
+
+constexpr int kOwnCostume = -1;       // My Own's costume number in a Choice (no FighterDesc.Costume is negative)
+// The My Own value of every character's Costume row
+inline Outfit own_outfit() {
+    Outfit o;
+    o.costume = kOwnCostume;
+    o.own = true;
+    o.name = words::tr(words::W::ReplayMyOwn);
+    o.colors = { 0 };
+    return o;
+}
 
 struct Fighter {
     int fid = 0;
@@ -83,11 +97,13 @@ struct StageChoice {
 };
 
 // The outfit list of a fighter: game outfits first in costume order, then extra outfits by name (case-insensitive),
-// ties by costume number, the Random outfit last (as in the game's Costume row). Outfits without any colour are dropped.
+// ties by costume number, the Random outfit last (as in the game's Costume row), My Own first. Outfits without any colour are
+// dropped.
 inline void sort_outfits(std::vector<Outfit>& v) {
     auto lower = [](std::string s) { for (auto& c : s) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a'); return s; };
     v.erase(std::remove_if(v.begin(), v.end(), [](const Outfit& o) { return o.colors.empty(); }), v.end());
     std::stable_sort(v.begin(), v.end(), [&](const Outfit& a, const Outfit& b) {
+        if (a.own != b.own) return a.own;
         if (a.random != b.random) return !a.random;
         const bool ea = a.extra, eb = b.extra;
         if (ea != eb) return !ea;
@@ -132,13 +148,14 @@ inline Choice cycle_outfit(const Fighter& f, const Choice& c, int dir, bool keep
     if (c.forced && keep_color && !c.colormod.empty())        // a Color Mod entry: kept only when this outfit has it too
         for (const ColorEntry& e : o.cm)
             if (e.id == c.colormod && color_on(o, kColorModCarrier) == kColorModCarrier) { r.color = kColorModCarrier; r.colormod = e.id; }
-    if (c.forced && keep_color && c.random_color && !o.random) { r.color = 0; r.colormod.clear(); r.random_color = true; }
+    if (c.forced && keep_color && c.random_color && !o.random && !o.own) { r.color = 0; r.colormod.clear(); r.random_color = true; }
     return r;
 }
 
 // The colour key: the next (dir +1) or previous colour of the chosen outfit, wrapping: its game colours, then the
 // Color Mod's entries (each one rides on colour 1, the carrier, so only when the outfit has colour 1), then Random (a draw
-// at each playback; not on the Random outfit, whose one colour is Random already). Default stays.
+// at each playback; not on the Random outfit, whose one colour is Random already, nor on My Own, the journal's). Default
+// stays.
 inline Choice cycle_color(const Fighter& f, const Choice& c, int dir) {
     const int i = outfit_index(f, c);
     if (i < 0) return c;
@@ -146,7 +163,7 @@ inline Choice cycle_color(const Fighter& f, const Choice& c, int dir) {
     if (o.colors.empty()) return c;
     const bool carrier = color_on(o, kColorModCarrier) == kColorModCarrier;
     const int ng = static_cast<int>(o.colors.size()), nm = carrier ? static_cast<int>(o.cm.size()) : 0;
-    const int nr = o.random ? 0 : 1, n = ng + nm + nr;
+    const int nr = o.random || o.own ? 0 : 1, n = ng + nm + nr;
     int at = -1;
     if (c.random_color && nr) at = ng + nm;
     else if (!c.colormod.empty()) { for (int k = 0; k < nm; ++k) if (o.cm[static_cast<size_t>(k)].id == c.colormod) at = ng + k; }
@@ -175,8 +192,9 @@ inline std::string color_label(int color) {
 
 // A choice's colour as the page shows it: the game's name ("01", "EX 1", "DX 1"), or a Color Mod entry's own label
 // ("RW 3", "MC 1"); an entry the Color Mod no longer lists (or no Color Mod): what is worn then, the game's colour 1. The
-// Random outfit's one colour: Random (the game's word), as its Color row reads in the game.
+// Random outfit's one colour: Random (the game's word), as its Color row reads in the game. My Own's: My Own (the journal's).
 inline std::string choice_color_label(const Outfit& o, const Choice& c) {
+    if (o.own) return o.name;
     if (o.random || c.random_color) return words::game(words::G::Random);
     if (!c.colormod.empty())
         for (const ColorEntry& e : o.cm) if (e.id == c.colormod) return e.label;
@@ -222,6 +240,7 @@ inline LineParts summary_line_parts(const Fighter& f, const Choice& c) {
     const int i = outfit_index(f, c);
     if (i < 0) return line_parts(words::tr(words::W::FmtNameValue), { f.name, words::game(words::G::Default) });
     const Outfit& o = f.outfits[static_cast<size_t>(i)];
+    if (o.own) return line_parts(words::tr(words::W::FmtNameValue), { f.name, o.name });   // "Ryu: My Own"
     return line_parts(words::tr(words::W::FmtFighterOutfit), { f.name, o.name, choice_color_label(o, c) });
 }
 inline std::string summary_line(const Fighter& f, const Choice& c) { return summary_line_parts(f, c).whole(); }
@@ -288,11 +307,15 @@ inline std::string to_json(const Choices& cs, const StageChoice& stage = {}, con
         auto ci = cs.find(fid);
         if (ci != cs.end() && ci->second.forced) {
             const Choice& c = ci->second;
-            o += "\"mode\": \"forced\", \"costume\": " + std::to_string(c.costume);
-            if (!c.mod_id.empty()) o += ", \"mod_id\": \"" + json_escape(c.mod_id) + "\"";
-            o += ", \"color\": " + std::to_string(c.color);
-            if (!c.colormod.empty()) o += ", \"colormod\": \"" + json_escape(c.colormod) + "\"";
-            if (c.random_color) o += ", \"color_random\": true";
+            if (c.costume == kOwnCostume) {
+                o += "\"mode\": \"own\"";                // My Own: the journal decides, nothing else to keep
+            } else {
+                o += "\"mode\": \"forced\", \"costume\": " + std::to_string(c.costume);
+                if (!c.mod_id.empty()) o += ", \"mod_id\": \"" + json_escape(c.mod_id) + "\"";
+                o += ", \"color\": " + std::to_string(c.color);
+                if (!c.colormod.empty()) o += ", \"colormod\": \"" + json_escape(c.colormod) + "\"";
+                if (c.random_color) o += ", \"color_random\": true";
+            }
         } else {
             o += "\"mode\": \"off\"";                  // Off: only its options, kept for when it is On again
         }
@@ -311,7 +334,7 @@ inline std::string to_json(const Choices& cs, const StageChoice& stage = {}, con
     return o;
 }
 
-// false: not a file of this format (out left empty). Entries that are not "forced" or lack a costume are skipped.
+// false: not a file of this format (out left empty). Entries that are not "forced" (with a costume) or "own" are skipped.
 // `stage` (when given): the forced stage, Default when absent or not "forced". `options` (when given): every fighter's
 // costume options, whatever its mode. `bgm` (when given): the Battle BGM row, Random when absent.
 inline bool from_json(const std::string& text, Choices& out, StageChoice* stage = nullptr, OptionStore* options = nullptr, BgmChoice* bgm = nullptr) {
@@ -347,6 +370,13 @@ inline bool from_json(const std::string& text, Choices& out, StageChoice* stage 
         }
         const Json* mode = e.get("mode");
         const Json* cos = e.get("costume");
+        if (mode && mode->as_str() == "own") {
+            Choice c;
+            c.forced = true;
+            c.costume = kOwnCostume;
+            out[static_cast<int>(fid)] = c;
+            continue;
+        }
         if (!mode || mode->as_str() != "forced" || !cos || cos->kind != Json::Number) continue;
         Choice c;
         c.forced = true;

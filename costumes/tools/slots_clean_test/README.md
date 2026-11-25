@@ -15,6 +15,17 @@ purpose only); not a game folder. Every case also checks that `registry.json` / 
 files are gone, that `reframework\costume_mods`, other mods' data, the shipped `loader\` files, the logs and Fluffy's
 folder are byte for byte unchanged, and that the note about Fluffy's `ArchiveList.bin` appears only when it lists our paks.
 
+## Cache test (the stage loader, no game needed)
+
+`slots_clean_test.exe --caches <build dir> <scratch folder>` runs `stagetest.exe` (from `build\`) on a fake game folder it
+makes from nothing: a stand-in `re_chunk_000.pak` holding the three title movies and their resource files, a one-line stage
+index, a stage mod, two title packs ("Full Pack" with the three movies, "Alpha 3 Startup" with `title_start` alone) and a UI
+pack, all as stored zips, plus folders an earlier pass left in each `.cache`. Cases C1-C4: a pass that writes the pak keeps
+the entries of the archives installed and removes the others (stage, title and UI caches, the old picture), never a folder
+the loader does not make nor a junction's target; Alpha 3 Startup serves its start and the game's own loop and end on the
+switch, and is out of the playlist; up to date, nothing is looked at; mods removed, their entries go at the rebuild, also when
+no pak is needed any more. `mklink /J` must work (no admin rights needed).
+
 ## Row test (the loaders themselves)
 
 `slots_clean_test.exe --row <build dir> <scratch folder> <game folder> <costume mod archive>` runs the real
@@ -25,7 +36,9 @@ characters at most: the test writes its fixture files with plain paths, which st
 is a FAIL that says so. A deep folder fails cases 17 on for that reason alone. Mod paks (synthetic) appear and
 disappear above the loaders' paks, and after every run the patch paks must form an unbroken row from 001. A loader pak
 that has to stay below a mod pak becomes a marker-only placeholder (shown `c` / `s` in the output, `C` / `S` are the real
-paks) and is deleted once no mod pak is above it. A full run takes a few minutes.
+paks) and is deleted once no mod pak is above it. A full run takes a few minutes. Case 9 also checks the costume loader's
+archive cache: the removed mod's folder and an older one (a read-only file, a junction to a folder outside) are removed,
+the junction's target is not.
 
 Cases 16-22 check the fixes ported from ZZtaii's Slotsloader fork 1.10.5 - 1.10.9 (MIT; his `tests/*.py` describe the
 same cases on a synthetic game). Their fixtures are made of the game's own files, read from the base pak: an extra outfit

@@ -20,7 +20,7 @@
 
 namespace sf6up::host {
 
-constexpr uint32_t kUpdaterVersion = 5;          // raise when the updater's behaviour changes: the newest copy runs
+constexpr uint32_t kUpdaterVersion = 7;         // raise when the updater's behaviour changes: the newest copy runs
 constexpr uint32_t kRoleCore = 2, kRolePlugin = 1;
 
 struct HostInfo {

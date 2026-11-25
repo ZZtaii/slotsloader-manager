@@ -32,9 +32,43 @@ folder; the loader rewrites it at every launch where something changed.
 - 1.8.1, all of it: C. Viper Bayonetta (wings included), Ken SFV with Ken SFV Hair in one sub-folder (only the
   combined outfit), several mods of the same outfit installed together (colours no longer mixed).
 
-## Slots of outfits the player does not own (plugin), to check in game
+## What the account really owns goes online as it is (plugin, 24/11/2026), to check in game
 
-A slot made from an outfit the game does not count as the player's is hidden (see plugin/README.md). Before the
+None of this has run in game: compiled and unit-tested only (`plugin\tests\build_carrier_test.bat`). The log is
+`reframework\data\SF6_CostumeSlots_data\native_log.txt`; each decision is one `[F..] online pick (...)` line, the
+ownership reads are the `true owner:` lines.
+
+1. **Boot**: launch, leave the title screen. Log: `true owner: N DLCs, ...`, `true owner: N colours of the game's outfits
+   read`, `true owner (boot): ... Steam available: K of L DLC apps owned`; `a slot is shown only while the game lists the
+   outfit it is made from as the player's` (the switch on again).
+2. **Offline**: Combo Trials (character in Battle Settings) with a slot, with an owned Outfit 2, with Outfit 1 in an
+   unowned colour: each worn as chosen; `online pick` lines say what the network gets.
+3. **Online, an Outfit 2 really owned** (bought, or its DLC owned on Steam): casual or ranked: the opponent sees Outfit 2
+   (ask him, or a replay from his side); log `the network gets Outfit 2 colour .. (an outfit the account owns: sent as it
+   is)`; no 50301-30003.
+4. **Online, an outfit only an unlock-all script gives** (script in `autorun`, outfit not bought): worn on this PC, the
+   opponent sees Outfit 1 (or DriveTech, see 7); log `(an outfit the account does not really own ...: the carrier)`; no
+   50301-30003.
+5. **A mod slot**: online: worn on this PC, the opponent sees the carrier in Color 1 / 2.
+6. **Colours**: an owned Outfit 2 in a colour from Color 3 on that is unlocked for real: the opponent sees that colour;
+   one unlocked only by the script (or a DLC colour not owned): the opponent sees Color 1, this PC the colour (dressed
+   when the fighters are built: the VS screen shows Color 1).
+7. **DriveTech carrier**: "Outfit Others See" on DriveTech: a slot online goes as DriveTech only for a character whose
+   DriveTech the account really owns (`carriers now ...` line, `online pick ... the network gets DriveTech`); for one it
+   does not own, Outfit 1.
+8. **A stale save**: with the game closed, an older version's save holding a slot's number or an unowned outfit (or
+   choose one with the plugin removed, then put it back): at launch / the first fighter profile, `online pick (safety
+   net): the save held slot vNN ...` and the save gets the carrier; online the opponent never sees the number.
+9. **Battle Hub CPU battle** (V-Rival / exam / cabinet CPU, game modes 22 / 20 / 21) with a save that holds a slot's
+   number (the tester's `F13 c6` case): `online pick (a CPU battle set up from the save)`, the CPU battle line shows
+   `c6 -> c0 (the decision)` and `1 in a slot or an outfit worn on this PC only`; the slot is worn, not invisible.
+10. **Steam off / not known**: (if it can be tried) no Steam: `true owner: no Steam`, a DLC outfit goes as Outfit 1 in
+    Color 1.
+
+## Slots of outfits the player does not own (plugin: Manager mode, and normal mode again since 24/11/2026), to check in game
+
+In Manager mode, and in normal mode while `ownership.hpp` `kLimitToOwnedOutfits` is on (on since 24/11/2026), a slot made
+from an outfit the game does not count as the player's is hidden (see plugin/README.md). Before the
 tests: the new `SF6_CostumeSlotsNative.dll` in `reframework\plugins\` (game closed), an empty
 `reframework\data\SF6_CostumeSlots_data\ownership_probe.txt` (the log then shows each method's answer). The log is
 `reframework\data\SF6_CostumeSlots_data\native_log.txt`; `outfits.json` (`based_on`: 1 = Outfit 2, 2 = Outfit 3,

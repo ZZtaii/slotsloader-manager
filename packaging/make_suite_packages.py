@@ -547,6 +547,11 @@ def main():
     ap.add_argument("--without-report", action="store_true", help="no report_mod.dll in the Slots Loader's package (no local crsm/package/config.json)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    # the players' notes go into the Native Core's zip as changelog.json: checked before anything is built (a line or a
+    # release too long: make_manifest.py NOTES_MAX_RELEASE)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from make_manifest import check_notes_file
+    print("release notes: %d releases, lengths checked" % check_notes_file())
 
     core_v = version_in(os.path.join(REPO, "core", "src", "sf6core.cpp"), r'CORE_VERSION\s*=\s*"([^"]+)"')
     cm_v = version_in(os.path.join(REPO, "colormod", "src", "common.cpp"), r'kVersion\s*=\s*"([^"]+)"')

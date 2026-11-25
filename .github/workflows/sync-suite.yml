@@ -1,15 +1,20 @@
 name: Sync with the SF6 Mod Suite
 
 # Opens a pull request when Wael3rd/SF6-ModSuite publishes a release: the Slots Loader source
-# (.github/upstream-paths.txt) and dependencies.json move to it. Merging the pull request is the
-# approval; nothing reaches the Manager before that. See UPSTREAM.md.
+# (.github/upstream-paths.txt, read from the same tag in Wael3rd/SF6_ModSuite_Private) and
+# dependencies.json move to it. Merging the pull request is the approval; nothing reaches the
+# Manager before that. See UPSTREAM.md.
 #
-# Needs, once, in the repository settings: Actions > General > Workflow permissions >
-# "Allow GitHub Actions to create and approve pull requests".
+# Needs, once, in the repository settings:
+# - Actions > General > Workflow permissions > "Allow GitHub Actions to create and approve pull requests";
+# - the secret SUITE_SOURCE_TOKEN: a token of an account with read access to Wael3rd/SF6_ModSuite_Private
+#   (the workflow's own token cannot read another owner's private repository).
 
 on:
   schedule:
-    - cron: "17 6 * * *"
+    # Every 30 minutes (off the busy :00 and :30), so a new release is picked up soon after it is published. A run with
+    # nothing new stops after "Already synced", and one whose pull request already exists does nothing.
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
       release:
@@ -42,6 +47,7 @@ jobs:
         id: sync
         env:
           GH_TOKEN: ${{ github.token }}
+          SUITE_SOURCE_TOKEN: ${{ secrets.SUITE_SOURCE_TOKEN }}
           RELEASE: ${{ inputs.release }}
         run: |
           args=(--out "$RUNNER_TEMP/sync")

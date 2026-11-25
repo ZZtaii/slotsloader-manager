@@ -28,6 +28,12 @@ FORMAT = "sf6suite-manifest-1"
 # the Native Core's News tab and the update box's Details page; older updaters ignore the key). This release must have its own.
 NOTES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "release_notes.json")
 NOTES_FORMAT = "sf6suite-notes-1"
+# One release's notes, all its lines together. The Native Core up to 0.9.29 makes a release's text in the OverDrive Changelog
+# tab in one piece, and the game faults on a long one: 1.50.0's notes (14 lines, 2 246 characters) left the News screen
+# stuck for every player who opened the tab (23/11/2026; fixed in 0.9.30). Players on an older core still read the latest
+# manifest's notes, so the limit stays. 1 541 characters (1.46.0) is the longest that was shown without a fault.
+NOTES_MAX_LINE = 300
+NOTES_MAX_RELEASE = 1600
 # id, the file that proves the package is installed: the same table as updater/src/update_logic.cpp known_packages()
 KNOWN = [
     ("slots_loader", "reframework/plugins/SF6_CostumeSlotsNative.dll"),
@@ -146,12 +152,40 @@ def build_notes(version):
     rels = n["releases"]
     if not any(r.get("version") == version for r in rels):
         sys.exit("make_manifest: release_notes.json has no entry for %s: write the players' notes first" % version)
+    bad = notes_faults(rels)
+    if bad:
+        sys.exit("make_manifest: release_notes.json: " + "; ".join(bad))
+    return {"format": NOTES_FORMAT, "releases": rels}
+
+
+def notes_faults(rels):
+    """What is wrong with the releases' notes, one text per fault (none: []): a line too long or not plain ASCII, a release
+    whose lines together pass NOTES_MAX_RELEASE."""
+    bad = []
     for r in rels:
+        total = 0
         for k in ("new", "fixed", "modified"):
             for line in r.get(k, []):
-                if not isinstance(line, str) or len(line) > 300 or any(ord(c) > 126 for c in line):
-                    sys.exit("make_manifest: release_notes.json %s %s: a line too long or not plain ASCII: %r" % (r.get("version"), k, line))
-    return {"format": NOTES_FORMAT, "releases": rels}
+                if not isinstance(line, str) or len(line) > NOTES_MAX_LINE or any(ord(c) > 126 for c in line):
+                    bad.append("%s %s: a line over %d characters or not plain ASCII: %r" % (r.get("version"), k, NOTES_MAX_LINE, line))
+                else:
+                    total += len(line)
+        if total > NOTES_MAX_RELEASE:
+            bad.append("%s: %d characters in all, over the %d a release may hold (older cores fault on a longer text): shorten its lines"
+                       % (r.get("version"), total, NOTES_MAX_RELEASE))
+    return bad
+
+
+def check_notes_file():
+    """release_notes.json checked on its own: make_suite_packages.py calls it before it builds anything."""
+    with open(NOTES, encoding="utf-8") as f:
+        n = json.load(f)
+    if n.get("format") != NOTES_FORMAT or not isinstance(n.get("releases"), list):
+        sys.exit("release_notes.json: not %s" % NOTES_FORMAT)
+    bad = notes_faults(n["releases"])
+    if bad:
+        sys.exit("release_notes.json: " + "; ".join(bad))
+    return len(n["releases"])
 
 
 def build_tools(release):
