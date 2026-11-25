@@ -155,8 +155,31 @@ void on_late_update() {
             perf::end(perf::CostumesTick, pt);
         }
         {
+            // Its own guard: stages::tick threw at every frame of a Training stage reload (22/11, 273 frames, an access violation
+            // with no word of where), and every module after it in this frame was skipped with it (the costume options, the
+            // outfit's name, the summary, the Options rows). The step it was at is logged at the first throw, at each change of
+            // step, and with the count when the burst ends.
+            static uint32_t s_thrown = 0, s_first = 0;
+            static const char* s_step = nullptr;
             int64_t pt = perf::begin();
-            stages::tick(ev);
+            bool threw = false;
+            try { stages::tick(ev); }
+            catch (const std::exception& e) { threw = true; if (!s_thrown) logf("stages: EXCEPTION in its tick (%s) at step: %s", e.what(), stages::step()); }
+            catch (...) { threw = true; }
+            if (threw) {
+                const char* st = stages::step();
+                if (!s_thrown || st != s_step) {
+                    logf("stages: EXCEPTION in its tick, at step: %s (the frame's other modules go on)", st);
+                    if (!s_thrown) s_first = g_frame;
+                    s_step = st;
+                }
+                ++s_thrown;
+            } else if (s_thrown) {
+                logf("stages: its tick threw on %u frame(s), f%u to f%u, last at step: %s; it runs again", s_thrown, s_first, g_frame - 1,
+                     s_step ? s_step : "?");
+                s_thrown = 0;
+                s_step = nullptr;
+            }
             perf::end(perf::StagesTick, pt);
         }
         {

@@ -17,7 +17,10 @@
 //       entry, or for the game's own colours), then Random (the game's word: each playback draws one of the outfit's colours,
 //       as a Random colour does in a battle; previewed in 01). The character's Random outfit is the Costume row's last value, its Color row
 //       reading Random, previewed as Outfit 1: a replay set to it wears a draw of the character's pool at each playback (the
-//       Random outfit's rules, replay_outfits.cpp). For an outfit with costume options, R / pad X opens the same Costume
+//       Random outfit's rules, replay_outfits.cpp). The Costume row's first value, the one On starts on, is My Own (Wael 22/11):
+//       the outfit and colour the player really wore in each online match (the journal), its Color row reading My Own,
+//       previewed as Outfit 1; Off is the game's data (what the replay recorded, the opponent's view since the online
+//       alias). For an outfit with costume options, R / pad X opens the same Costume
 //       options menu as Edit Character (without its Player side row; the guide bar says "Costume options"), the choices
 //       kept per fighter and outfit for replays only. Back (Esc, pad B) goes back to the grid; Confirm and the tab
 //       keys do nothing there, as on the game's page;
@@ -589,6 +592,8 @@ void build_catalog() {
                 for (const colormod::Entry& e : colormod::entries(fid, o.costume)) o.cm.push_back({ e.id, e.label });
                 cm_entries += static_cast<int>(o.cm.size());
             }
+    // My Own (Wael 22/11): the Costume row's first value, what the player wore in each match (the journal), every character
+    for (auto& [fid, f] : by) f.outfits.push_back(own_outfit());
     g_cat.clear();
     for (auto& [fid, f] : by) {
         f.fid = fid;
@@ -1244,7 +1249,9 @@ Choice choice_of(const Fighter& f) {
 }
 // The options of the outfit the character's page shows: its slot when the fighter is On and that outfit has options, what is
 // saved for it (nullptr: nothing, its defaults)
-const rto::Slot* options_slot(const Fighter& f, const Choice& c) { return c.forced ? rto::outfit_slot(f.fid, c.costume) : nullptr; }
+const rto::Slot* options_slot(const Fighter& f, const Choice& c) {
+    return c.forced && c.costume != kOwnCostume ? rto::outfit_slot(f.fid, c.costume) : nullptr;   // My Own: the journal's, no options
+}
 const std::vector<std::string>* saved_options(const rto::Slot* s) {
     if (!s) return nullptr;
     auto fi = g_options.find(s->fighter);
@@ -2212,9 +2219,9 @@ void render_page(void* title, const Fighter* f) {
     if (on && c.forced) rto::replay_preview(slot, saved);
     else rto::replay_preview_end();
     // Off: no model at all, the room given back; On: the model once it shows the choice, nothing meanwhile. Random: Outfit 1,
-    // as the game previews it
+    // as the game previews it; My Own (a different outfit per match) too
     const bool forced = on && c.forced;
-    const bool rnd = forced && oi >= 0 && f->outfits[static_cast<size_t>(oi)].random;
+    const bool rnd = forced && (c.costume == kOwnCostume || (oi >= 0 && f->outfits[static_cast<size_t>(oi)].random));
     preview::want(forced ? f->fid : 0, forced && !rnd ? c.costume : 0, forced && !rnd ? c.color : 0, forced && !rnd ? c.colormod : std::string());
     const bool model = forced && preview::showing();
     g_model_shown = model;

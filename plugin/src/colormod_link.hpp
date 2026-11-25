@@ -24,6 +24,7 @@ struct Fns {
     SF6ColorMod_ClearRequestsFn clear = nullptr;
     SF6ColorMod_RandomChoiceFn random_choice = nullptr;   // a Color Mod with the Random value and the battle scopes, else null
     SF6ColorMod_FighterRandomFn fighter_random = nullptr; // one that keeps Fighter Settings' Random per fighter, else null
+    SF6ColorMod_RequestSideFn request_side = nullptr;     // one that takes a replay's request per battle side (22/11), else null
 };
 
 inline Fns link() {
@@ -45,6 +46,7 @@ inline Fns link() {
                 n.clear = reinterpret_cast<SF6ColorMod_ClearRequestsFn>(GetProcAddress(h, "SF6ColorMod_ClearRequests"));
                 n.random_choice = reinterpret_cast<SF6ColorMod_RandomChoiceFn>(GetProcAddress(h, "SF6ColorMod_RandomChoice"));
                 n.fighter_random = reinterpret_cast<SF6ColorMod_FighterRandomFn>(GetProcAddress(h, "SF6ColorMod_FighterRandom"));
+                n.request_side = reinterpret_cast<SF6ColorMod_RequestSideFn>(GetProcAddress(h, "SF6ColorMod_RequestSide"));
                 if (n.version && n.entries && n.request && n.clear) f = n;
             }
         }
@@ -86,6 +88,17 @@ inline void clear(int scope) {
     const Fns f = link();
     if (f.clear) f.clear(scope);
 }
+// A replay's request for one battle side (side 1 = P1 / team 0, 2 = P2 / team 1): the two fighters of a mirror match on the same
+// outfit each wear their own. false without the Color Mod or refused; sides_known() false: an older Color Mod (request() then,
+// a mirror's two sides share one request)
+inline bool sides_known() {
+    const Fns f = link();
+    return f.request_side && available();
+}
+inline bool request_side(int scope, int side, int fighter, int costume, const std::string& id, void* battle) {
+    const Fns f = link();
+    return f.request_side && available() && f.request_side(scope, side, fighter, costume, id.c_str(), battle) == 1;
+}
 
 // ---- the Random colour (the Color Mod's Random value; costumes.cpp draws) ----
 // The Color Mod can dress an entry drawn for a battle (scopes 3 / 4) and says where Random was chosen: a draw may take its
@@ -121,6 +134,18 @@ inline void clear_battle() {
     if (!battle_ok()) return;
     clear(SF6CM_SCOPE_BATTLE_P1);
     clear(SF6CM_SCOPE_BATTLE_P2);
+}
+
+// The entry the player's own fighter wears on colour 02 where Battle Settings decides (Fighter Settings' entry of that fighter
+// and outfit): "" none. known: the Color Mod can say (false: none, or an older one: what was worn is not known)
+inline std::string fighter_entry(int fighter, int costume, bool& known) {
+    known = false;
+    HMODULE h = GetModuleHandleW(L"SF6_ColorModNative.dll");
+    auto* fn = h ? reinterpret_cast<SF6ColorMod_FighterEntryFn>(GetProcAddress(h, "SF6ColorMod_FighterEntry")) : nullptr;
+    if (!fn || !available()) return {};
+    known = true;
+    char id[512] = {};
+    return fn(fighter, costume, id, static_cast<int>(sizeof id)) == 1 ? std::string(id) : std::string();
 }
 
 // How many entries are ticked for an outfit on Opponent Outfit Settings: 0 with no Color Mod or an older one

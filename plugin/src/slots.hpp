@@ -187,6 +187,7 @@ namespace costumes {
     int slot_by_name(int fighter, const std::string& name); // one of our outfits by its game name ("Outfit II"), else -1
     bool display_nsfw();              // settings.json "display_nsfw": NSFW outfits and options shown
     int random_outfit(int fighter);   // the fighter's Random outfit's costume number (registry "random": true), -1: none
+    bool registry_slot(int fighter, int costume);   // one of the loader's outfits (registry.json), not one of the game's
     void nsfw_row_present(bool on);   // the in-game row exists: settings.json is followed even with no NSFW content
     void set_display_nsfw(bool on);   // the row changed: settings.json written, applied on the next tick
     bool online_drivetech();          // settings.json "online_outfit": "DriveTech" (else Outfit 1) is the carrier
@@ -206,6 +207,9 @@ namespace costumes {
     // The slot the online alias dressed the player's fighter in: that FighterDesc's, else the last one dressed for `fid` still
     // alive (any thread); false: none
     bool dressed_slot(Obj* fd, int fid, int& slot, int& color);
+    // The Color Mod entry the player's fighter of `team` (0 / 1) wears with that outfit on colour 02: the one Random drew for
+    // this battle, else Fighter Settings' ("" none). known false: the Color Mod cannot say (none, or an older one)
+    std::string worn_entry(int team, int fid, int costume, int color, bool& known);
     // Replays > Settings: a replay fighter set to the character's Random outfit (`costume` its number) wears a draw of its pool,
     // the Random outfit's rules (random_logic.hpp: no repeat, never NSFW while hidden, the colour among the outfit's and the
     // Color Mod's entries). Any thread. The outfit and the game's colour drawn, the Color Mod's entry ("" a game colour);
@@ -277,6 +281,9 @@ namespace stages {
     void install_hooks();
     bool busy();
     void tick(uint32_t events);
+    // What tick was doing last (a fixed text, never null): the frame's guard names it when tick throws (main.cpp). 22/11: an
+    // access violation in tick at every frame of a Training stage reload, 273 lines "EXCEPTION (unknown)" with no word of where.
+    const char* step();
 }
 
 } // namespace slots

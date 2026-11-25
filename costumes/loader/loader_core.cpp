@@ -43,6 +43,7 @@
 #include <tlhelp32.h>
 #include <psapi.h>
 #pragma comment(lib, "bcrypt.lib")
+#include "cache_dirs.hpp"
 
 // ============================================================================
 // Logging
@@ -382,6 +383,11 @@ struct Possession {
 struct Registry {
     int version = 1;
     std::string fingerprint;
+    // The pak this registry describes, as the build left it in place: "<size>:<last write time>" (pak_identity). Another
+    // program can put back an older registry.json beside a pak it built itself (22/11: the Slotsloader Manager, removed,
+    // restored the registry of 17/11 21:56 and left its own pak of 23:20, made with the "Outfit" names and no options):
+    // the fingerprint then matches while the pak is not the one it names, and "Up to date" kept that pak for five days.
+    std::string pak_id;
     std::vector<RegSlot> slots;
     std::vector<Possession> possession;
 };
@@ -421,6 +427,12 @@ static Registry load_registry(const char* path) {
             auto q2 = txt.find('"', q1 + 1);
             if (q1 != std::string::npos && q2 != std::string::npos)
                 reg.fingerprint = txt.substr(q1 + 1, q2 - q1 - 1);
+        }
+        auto pk = txt.find("\"pak_id\"");
+        if (pk != std::string::npos) {
+            auto q1 = txt.find('"', txt.find(':', pk) + 1);
+            auto q2 = txt.find('"', q1 + 1);
+            if (q1 != std::string::npos && q2 != std::string::npos) reg.pak_id = txt.substr(q1 + 1, q2 - q1 - 1);
         }
     }
 
@@ -492,8 +504,9 @@ static void save_registry(const char* path, const Registry& reg) {
 
     FILE* f = fopen(path, "wb");
     if (!f) return;
-    fprintf(f, "{\n  \"version\": %d,\n  \"fingerprint\": \"%s\",\n  \"slots\": [\n",
-            reg.version, reg.fingerprint.c_str());
+    fprintf(f, "{\n  \"version\": %d,\n  \"fingerprint\": \"%s\",\n", reg.version, reg.fingerprint.c_str());
+    if (!reg.pak_id.empty()) fprintf(f, "  \"pak_id\": \"%s\",\n", reg.pak_id.c_str());
+    fprintf(f, "  \"slots\": [\n");
     for (size_t i = 0; i < reg.slots.size(); i++) {
         auto& s = reg.slots[i];
         fprintf(f, "    {\n");
@@ -524,6 +537,39 @@ static void save_registry(const char* path, const Registry& reg) {
     }
     fprintf(f, "  ]\n}\n");
     fclose(f);
+}
+
+// A pak file as found on the disk: "<size>:<last write time>", "" when it cannot be read. A move keeps both (the stage
+// loader renumbering the paks), any rewrite changes the time.
+static std::string pak_identity(const std::string& path) {
+    WIN32_FILE_ATTRIBUTE_DATA a{};
+    if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &a)) return {};
+    char b[64];
+    snprintf(b, sizeof(b), "%llu:%llu",
+             ((unsigned long long)a.nFileSizeHigh << 32) | a.nFileSizeLow,
+             ((unsigned long long)a.ftLastWriteTime.dwHighDateTime << 32) | a.ftLastWriteTime.dwLowDateTime);
+    return b;
+}
+
+// Is the pak in place the one the registry describes? With a pak_id: the same size and time. A registry from before
+// pak_id: the pak must not be newer than the registry (a build saves the registry after its pak is in place), with a
+// minute of slack; a pak written after its registry was written by another program.
+static bool pak_matches_registry(const Registry& reg, const std::string& reg_path, const std::string& pak_path,
+                                 std::string* why) {
+    const std::string now = pak_identity(pak_path);
+    if (now.empty()) { if (why) *why = "the pak cannot be read"; return false; }
+    if (!reg.pak_id.empty()) {
+        if (reg.pak_id == now) return true;
+        if (why) *why = "the pak in place (" + now + ") is not the one the registry names (" + reg.pak_id + ")";
+        return false;
+    }
+    WIN32_FILE_ATTRIBUTE_DATA r{}, p{};
+    if (!GetFileAttributesExA(reg_path.c_str(), GetFileExInfoStandard, &r)
+        || !GetFileAttributesExA(pak_path.c_str(), GetFileExInfoStandard, &p)) { if (why) *why = "no dates"; return false; }
+    auto t = [](const FILETIME& f) { return ((unsigned long long)f.dwHighDateTime << 32) | f.dwLowDateTime; };
+    if (t(p.ftLastWriteTime) <= t(r.ftLastWriteTime) + 600000000ull) return true;   // 60 s in 100 ns units
+    if (why) *why = "the pak in place was written after the registry (another program built it)";
+    return false;
 }
 
 // ============================================================================
@@ -6353,26 +6399,9 @@ static std::wstring a2w_path(const std::string& s) {
     return w;
 }
 
-static void delete_tree_w(const std::wstring& dir_in) {
-    std::wstring dir = (dir_in.size() > 2 && dir_in[1] == L':') ? L"\\\\?\\" + dir_in : dir_in;
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW(long_w((dir + L"\\*")).c_str(), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 ||
-                (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0))) continue;
-            std::wstring full = dir + L"\\" + fd.cFileName;
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                delete_tree_w(full);
-            } else {
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
-                    SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
-                DeleteFileW(full.c_str());
-            }
-        } while (FindNextFileW(h, &fd));
-        FindClose(h);
-    }
-    RemoveDirectoryW(dir.c_str());
+// A cache folder and all it holds; a link inside is removed itself, never followed (common/cache_dirs.hpp)
+static bool delete_tree_w(const std::wstring& dir, cache_dirs::Failure* fail = nullptr) {
+    return cache_dirs::remove_tree(dir, nullptr, fail);
 }
 
 // Returns the folder holding the archive's content, or "" when the archive cannot be used.
@@ -6441,23 +6470,26 @@ static std::string ensure_archive_extracted(const std::string& archive_path) {
     return final_dir;
 }
 
+// At the end of the scan (a rebuild): the cache folders no archive of this scan asked for go. Only folders, never a link
+// (common/cache_dirs.hpp). One that cannot be removed is said once, with what stayed and the Win32 error, and is tried again
+// at the next rebuild only: "removed" used to be logged whatever happened, and nothing said why a folder stayed.
 static void purge_stale_archive_cache() {
-    if (g_archive_cache_root.empty()) return;
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA((g_archive_cache_root + "\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-    std::vector<std::string> stale;
-    do {
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
-        std::string n = fd.cFileName;
-        if (n == "." || n == "..") continue;
-        if (!g_archive_cache_used.count(n)) stale.push_back(n);
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-    for (auto& n : stale) {
-        delete_tree_w(a2w_path(g_archive_cache_root + "\\" + n));
-        printf("  archive cache: removed %s (archive no longer installed)\n", n.c_str());
+    if (g_archive_cache_root.empty()) { printf("  archive cache: not looked at (no costume_mods folder)\n"); return; }
+    const cache_dirs::Pruned r = cache_dirs::prune(a2w_path(g_archive_cache_root),
+        [](const std::wstring&) { return true; },             // every folder there is an archive's, or an unfinished one's
+        [](const std::wstring& n) { return g_archive_cache_used.count(w2a(n.c_str())) > 0; });
+    if (!r.there) { printf("  archive cache: none (no archive unpacked)\n"); return; }
+    if (r.link) { printf("  WARN: archive cache: %s is a link to another folder: nothing removed there\n", g_archive_cache_root.c_str()); return; }
+    if (r.list_error) {
+        printf("  WARN: archive cache: %s cannot be listed (error %lu): nothing removed\n", g_archive_cache_root.c_str(), r.list_error);
+        return;
     }
+    for (auto& n : r.removed) printf("  archive cache: removed %s (archive no longer installed)\n", w2a(n.c_str()).c_str());
+    for (auto& [n, f] : r.failed)
+        printf("  WARN: archive cache: %s not removed (error %lu on %s): tried again at the next rebuild\n", w2a(n.c_str()).c_str(),
+               f.error, w2a(f.path.c_str()).c_str());
+    printf("  archive cache: %zu in use, %zu removed (%.1f MB)%s\n", r.kept, r.removed.size(), r.bytes / 1048576.0,
+           r.failed.empty() ? "" : (", " + std::to_string(r.failed.size()) + " could not be").c_str());
 }
 
 // ============================================================================
@@ -12925,8 +12957,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             logf("  variants.json missing: rebuilding\n");
         if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && (!meta_same || variants_missing)) {
             uint32_t target_entries = 0;
+            std::string why;
             if (our_paks.size() == 1 && _stricmp(our_paks[0].path.c_str(), target_path.c_str()) == 0
-                && classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
+                && classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1
+                && pak_matches_registry(reg_check, reg_path, target_path, &why)) {
                 keep_pak = true;
                 keep_entries = target_entries;
                 if (!meta_same)
@@ -12937,7 +12971,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && meta_same && !variants_missing) {
             // Check our pak exists (the real one: a marker-only placeholder holds no costume)
             uint32_t target_entries = 0;
-            if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
+            std::string why;
+            const bool ours = classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume
+                && target_entries != 1 && pak_matches_registry(reg_check, reg_path, target_path, &why);
+            if (!ours && !why.empty()) logf("  same fingerprint, but %s: rebuilding\n", why.c_str());
+            if (ours) {
                 sync_outfits_pak(registry_dir + "\\outfits.json", target_name);   // the stage loader may have moved it
                 if (g_rto_layout != RtoLayout::Off) sync_outfits_pak(registry_dir + "\\" + RTO_FILE, target_name);   // same "pak" key
                 if (g_manager_mode) log_asked_kept(asked_then, asked_now);
@@ -12948,7 +12986,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             }
             // Same mods, our pak one number off (the stage pak came or went below it): it only
             // has to move, the game reading the patch paks in an unbroken row from 001
-            if (our_paks.size() == 1 && MoveFileA(our_paks[0].path.c_str(), target_path.c_str())) {
+            // (a pak in place that is not the registry's: built again below)
+            if (why.empty() && our_paks.size() == 1 && pak_matches_registry(reg_check, reg_path, our_paks[0].path, &why)
+                && MoveFileA(our_paks[0].path.c_str(), target_path.c_str())) {
                 // it came from below a pak that stays: a placeholder takes its place, no hole in the row
                 if (our_paks[0].num < top_foreign)
                     write_marker_pak(our_paks[0].path.c_str(), PatchPakKind::Costume);
@@ -13602,6 +13642,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                  "to; %s)\n", asked.deciding(), asked.strict.size(), asked.exists.size(), GAME_LOOKUPS_FILE);
     }
     registry.fingerprint = new_fp + loose_probes_digest(g_loose_probes) + asked_fp + meta_tag;
+    registry.pak_id = pak_identity(target_path);   // the pak just put in place (or kept): what the next launch checks
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);

@@ -4,7 +4,7 @@
 // (from the files, never from a folder name), the stage loader whether it changes stages, holds a title screen or interface
 // files, the Color Mod's file rule whether it holds colours. In this order, the first that takes it wins:
 //   Costume      the costume loader finds costume files of a known outfit (whole outfits, or parts that become options)
-//   Title pack   a natives tree with title screen files (title_slots::is_title_file), or a .pak holding some (by their hashes)
+//   Title pack   a natives tree with title screen files (title_slots::is_title_movie), or a .pak holding some (by their hashes)
 //   Stage        files of the stage index outside the menus' pictures (the stage loader makes variants of it)
 //   Colours      colour files (esfFFF_CCC_cmd_KKK.user.2, not empty)
 //   Interface    a natives tree with interface files (natives/stm/[streaming/]product/gui/): ui_mods serves any Fluffy option

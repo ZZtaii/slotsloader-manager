@@ -478,6 +478,10 @@ bool ticker_hook() {
 
 }  // namespace
 
+bool ticker_prepare() {
+    try { return ticker_hook(); } catch (...) { return false; }
+}
+
 void ticker_text(const std::string& text) {
     std::lock_guard lk(g_tk_mx);
     g_tk_text = text;

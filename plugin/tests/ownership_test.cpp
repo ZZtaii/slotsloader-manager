@@ -1,4 +1,4 @@
-// Unit test of plugin/src/ownership.hpp: which slots the player sees from the game's answers.
+// Unit test of plugin/src/ownership.hpp: which slots the player sees (normal mode: all; Manager mode: from the game's answers).
 // Build and run: build_ownership_test.bat (prints "all ok" and exits 0 when every check passes).
 #include "../src/ownership.hpp"
 #include "../../common/manager_mode.hpp"
@@ -19,8 +19,37 @@ int main() {
     const int RYU = 1, KEN = 2;
     const int O1 = 0, O2 = 1, O3 = 2, DT = 4;
 
-    {
+    // Normal mode follows the switch (ownership.hpp kLimitToOwnedOutfits)
+    if (!slots::ownership::kLimitToOwnedOutfits) {
+        // off (22/11, the state shipped): every slot shown, nothing asked, whatever the game lists
         Book b;
+        check(!b.check(), "normal mode, switch off: no check");
+        b.answer(RYU, O2, {0, 4});
+        b.answer(RYU, O3, {0, 4});
+        b.answer(RYU, DT, {0, 1});
+        check(b.shown(RYU, O2) && b.shown(RYU, O3) && b.shown(RYU, DT), "normal mode, switch off: outfits not listed (not owned) -> still shown");
+        check(!b.open(RYU, O2) && !b.open(RYU, DT) && !b.open(KEN, O3), "normal mode, switch off: nothing asked");
+        check(b.state(RYU, O2) == State::Unknown, "normal mode, switch off: no answer kept");
+        check(b.shown(RYU, 9) && b.shown(RYU, -1), "normal mode, switch off: an unknown outfit, or none, shown");
+    } else {
+        // on: the rule of before 1.28.0, every outfit asked about, DriveTech too (no exemption outside Manager mode)
+        Book b;
+        check(b.check(), "normal mode, switch on: the check runs");
+        check(b.shown(RYU, O2) && b.open(RYU, O2), "normal mode, switch on: no answer yet -> shown and asked");
+        b.answer(RYU, O2, {0, 4});
+        b.answer(RYU, O3, {0, 2});
+        b.answer(RYU, DT, {0, 1});
+        check(!b.shown(RYU, O2) && b.state(RYU, O2) == State::NotOwned, "normal mode, switch on: Outfit 2 not listed -> hidden");
+        check(b.shown(RYU, O3) && b.state(RYU, O3) == State::Owned, "normal mode, switch on: Outfit 3 listed -> shown");
+        check(!b.shown(RYU, DT), "normal mode, switch on: DriveTech not listed -> hidden (no exemption outside Manager mode)");
+        check(b.shown(KEN, O2), "normal mode, switch on: another fighter is not affected");
+        check(b.shown(RYU, -1), "normal mode, switch on: an outfit not known (-1) stays shown");
+    }
+
+    // The check itself: Manager mode (its fork's rules), on outfits other than Outfit 1 and DriveTech
+    auto checking = [] { Book b; b.set_manager_rules(true); return b; };
+    {
+        Book b = checking();
         check(b.state(RYU, O2) == State::Unknown, "no answer yet: unknown");
         check(b.shown(RYU, O2), "no answer yet: shown (as before the check)");
         check(b.open(RYU, O2), "no answer yet: asked");
@@ -28,19 +57,15 @@ int main() {
         check(!b.open(RYU, -1), "outfit not known (-1): never asked");
     }
     {
-        Book b;
+        Book b = checking();
         b.answer(RYU, O2, {});
         check(b.state(RYU, O2) == State::Unknown && b.shown(RYU, O2), "empty list (inventory not loaded): no answer, shown");
         b.answer(RYU, O2, {4, 5});
         check(b.state(RYU, O2) == State::Unknown, "list without Outfit 1: no answer");
     }
     {
-        Book b;
-        b.answer(RYU, O1, {0, 4});
+        Book b = checking();
         b.answer(RYU, O2, {0, 4});
-        b.answer(RYU, DT, {0, 4});
-        check(b.shown(RYU, O1) && b.state(RYU, O1) == State::Owned, "Outfit 1 listed: owned, shown");
-        check(b.shown(RYU, DT) && !b.open(RYU, DT), "DriveTech listed: owned, not asked again");
         check(!b.shown(RYU, O2) && b.state(RYU, O2) == State::NotOwned, "Outfit 2 not listed: hidden");
         check(b.open(RYU, O2), "hidden outfit: asked again later");
         check(b.state(KEN, O2) == State::Unknown && b.shown(KEN, O2), "another fighter is not affected");
@@ -48,12 +73,12 @@ int main() {
         b.answer(RYU, O2, {});
         check(!b.shown(RYU, O2), "no answer afterwards: stays hidden");
         b.answer(RYU, O2, {0, 1, 4});
-        check(b.shown(RYU, O2) && b.state(RYU, O2) == State::Owned, "listed later (bought, DLC, unlock-all): shown");
+        check(b.shown(RYU, O2) && b.state(RYU, O2) == State::Owned && !b.open(RYU, O2), "listed later (bought, DLC, unlock-all): shown, not asked again");
         b.answer(RYU, O2, {0, 4});
         check(b.shown(RYU, O2), "not listed after being owned (online, Lua stopped): stays shown");
     }
     {
-        Book b;
+        Book b = checking();
         b.answer(RYU, O3, {0, 4}, false);
         check(b.state(RYU, O3) == State::Unknown && b.shown(RYU, O3), "before the login a missing outfit is not denied");
         b.answer(RYU, O3, {0, 2, 4}, false);
@@ -62,7 +87,7 @@ int main() {
         check(b.shown(RYU, O3), "owned before the login stays shown");
     }
     {
-        Book b;
+        Book b = checking();
         b.answer(RYU, 9, {0, 1, 4});
         check(!b.shown(RYU, 9), "an outfit the game does not have: hidden");
     }
@@ -109,11 +134,6 @@ int main() {
         b.set_manager_rules(false);   // the Manager's opt-out marker
         b.answer(RYU, O3, {0, 4});
         check(b.shown(RYU, O3) && !b.open(RYU, O3), "Manager mode, opt-out: every slot shown, nothing asked");
-    }
-    {
-        Book b;   // normal mode: unchanged (DriveTech asked like any outfit)
-        b.answer(RYU, DT, {0, 1});
-        check(!b.shown(RYU, DT), "normal mode: DriveTech not listed -> hidden, as before");
     }
     {
         using manager_mode::installed_by_manager;

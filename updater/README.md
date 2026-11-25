@@ -82,7 +82,8 @@ The game reads the key and installs nothing from it; an updater older than 1.34.
    time: each frame the host puts the request's `ElapsedSecond` back to zero (the game takes a strip away at `DisplaySecond`) and
    rewrites the text of the strip's `via.gui.Text` when the percentage changes (`update_game.cpp`, `ticker_keep`); the strip leaves by
    itself 3 s after the install. All of it on the game thread: the same calls from the render thread crash the game. A ticker that
-   cannot be used is logged and the install goes on without it. Since updater version 2 (suite 1.34.0): the update TO 1.34.0 is run
+   cannot be used is logged and the install goes on without it. The ticker's hook is placed at the start, and only in a session that
+   can install: with the off switch, or on the Slotsloader Manager's installs (`check_allowed`), the game's method is not hooked. Since updater version 2 (suite 1.34.0): the update TO 1.34.0 is run
    by the installed updater, without the strip.
    Once the swap is done, the zips are moved to `downloads/` (`keep_downloads`), for the players who install with Fluffy Mod Manager
    (it keeps its own copy of each zip, and puts the old version back when the mod is re-enabled): the last zip of each package
