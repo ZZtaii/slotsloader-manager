@@ -28,7 +28,31 @@ namespace SlotsInstaller
         private string AddonSourceLine(ModComponent component)
         {
             AddonPart part = component == null ? null : LibraryAddons.PartOf(package, component.Id);
-            return part == null ? "" : "\n\nAdd-on from " + part.FileName + ". Right-click the option to open it in Explorer.";
+            if (part == null) return "";
+            string own = part.OwnId(component.Id);
+            string line = "\n\nAdd-on from " + CopyLabel(part.SourcePath, part.Written) + ". Right-click the option to open it in Explorer.";
+            // 23 Nov 2026 (LibraryAddons.PickCopies): an option with the same files in other add-on files is shown once; one
+            // name with other files in another add-on file is shown from each, the older marked.
+            List<string> copies;
+            if (part.Copies != null && part.Copies.TryGetValue(own, out copies) && copies.Count > 0)
+                line += "\nThe same files are also in " + (copies.Count == 1 ? "another copy" : copies.Count + " other copies") + ", shown once: " + String.Join(", ", copies.Select(p => CopyLabel(p, DateTime.MinValue))) + ".";
+            if (part.Older != null && part.Older.Contains(own)) line += "\nOlder version: a newer add-on file has an option with this name and different files.";
+            else if (part.Newer != null && part.Newer.Contains(own)) line += "\nNewest version: an older add-on file has an option with this name and different files (marked older).";
+            return line;
+        }
+        // The add-on tag on an option row: "Add-on", or "Add-on · older" for an older version of a name shown twice.
+        private string AddonTagText(ModComponent component)
+        {
+            AddonPart part = component == null ? null : LibraryAddons.PartOf(package, component.Id);
+            return part != null && part.Older != null && part.Older.Contains(part.OwnId(component.Id)) ? AddonTag + " · older" : AddonTag;
+        }
+        private static string CopyLabel(string path, DateTime writtenUtc)
+        {
+            var notes = new List<string>();
+            string folder = Path.GetDirectoryName(path ?? "");
+            if (!String.IsNullOrEmpty(folder)) notes.Add("in " + folder);
+            if (writtenUtc > DateTime.MinValue) notes.Add("saved " + writtenUtc.ToLocalTime().ToString("d MMM yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture));
+            return Path.GetFileName(path ?? "") + (notes.Count == 0 ? "" : " (" + String.Join(", ", notes) + ")");
         }
         private ContextMenuStrip BuildOptionMenu()
         {
@@ -76,7 +100,7 @@ namespace SlotsInstaller
         }
 
         // A library row as the worker sees it (copied on the UI thread).
-        private sealed class AddonCandidate { internal string SourcePath, Name; internal List<string> OptionNames; }
+        private sealed class AddonCandidate { internal string SourcePath, Name; internal List<string> OptionNames; internal bool Installed; }
 
         // UI thread: the library's other archives with a known mod name and option names (the worker reads those named
         // like the open mod).
@@ -98,7 +122,10 @@ namespace SlotsInstaller
                 // robhal)", each read in full, about 18.7 s per open): an addon has an AddonFor= (LibraryAddons.IsAddonOf), so a
                 // mod known to have none is never read for this. Not known yet (an older index record): read, as before.
                 if (e.AddonFors != null && e.AddonFors.Count == 0) continue;
-                list.Add(new AddonCandidate { SourcePath = e.SourcePath, Name = e.DisplayName.Trim(), OptionNames = e.OptionNames.ToList() });
+                // Installed (a Replace record or an outfit's added part from this file): kept among copies (DropCopies).
+                bool used = gameRows.Any(r => r.Mod != null && ReplacePlanner.SameSource(r.Mod.SourcePath, e.SourcePath))
+                    || installed.Any(o => o != null && o.Parts != null && o.Parts.Any(g => ReplacePlanner.SameSource(g.SourcePath, e.SourcePath)));
+                list.Add(new AddonCandidate { SourcePath = e.SourcePath, Name = e.DisplayName.Trim(), OptionNames = e.OptionNames.ToList(), Installed = used });
             }
             return list;
         }
@@ -126,7 +153,16 @@ namespace SlotsInstaller
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }   // an unreadable addon: the main mod alone
             }
-            return addons.Count == 0 ? loaded : LibraryAddons.Merge(loaded, addons);
+            if (addons.Count == 0) return loaded;
+            // 23 Nov 2026: an option with the same files as one already shown (another copy of the addon) is shown once.
+            var used = new HashSet<string>(candidates.Where(c => c.Installed).Select(c => c.SourcePath), StringComparer.OrdinalIgnoreCase);
+            List<AddonPick> picks = LibraryAddons.PickCopies(loaded, addons, path => path != null && used.Contains(path), WrittenUtc);
+            return picks.Count == 0 ? loaded : LibraryAddons.Merge(loaded, picks);
+        }
+        private static DateTime WrittenUtc(string path)
+        {
+            try { return Directory.Exists(path) ? Directory.GetLastWriteTimeUtc(path) : File.GetLastWriteTimeUtc(path); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; return DateTime.MinValue; }
         }
 
         // 1.0.16 (PR #22 review, F1): the addon records whose ticks this open of the mod showed (restored when it opened,

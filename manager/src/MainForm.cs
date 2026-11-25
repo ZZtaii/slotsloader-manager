@@ -207,6 +207,7 @@ namespace SlotsInstaller
         {
             SuspendLayout();
             this.config = config;
+            StageMods.LibraryGameRoot = delegate { return this.config.GameRoot; };   // 25 Nov 2026: PAK stage mods are listed as Stage (StageMods.cs)
             assistantSettings = AssistantSettings.Load(AppConfig.DataDir); assistantKeys = new AssistantKeyStore(AppConfig.DataDir);
             assistantTabShown = AssistantSettings.ResolveShowTab(AppConfig.DataDir, assistantSettings);
             Text = "Slotsloader Manager · " + GetType().Assembly.GetName().Version.ToString(3);
@@ -941,7 +942,7 @@ namespace SlotsInstaller
             copyPathButton = Button("Copy path", false, 92, delegate { CopyInstalledPath(); }); copyPathButton.Dock = DockStyle.Right; copyPathButton.Font = Palette.Small; copyPathButton.Margin = Padding.Empty;
             installedPathRow.Controls.Add(installedDetail); installedPathRow.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); installedPathRow.Controls.Add(copyPathButton);
             installedActions = new Panel { Dock = DockStyle.Top, Height = 92, Padding = new Padding(0, 12, 0, 0) };
-            openInstalledButton = Button("Open folder", false, 200, delegate { GameModRow row = GetGameRowSelection(); if (row != null) { OpenPath(row.Fluffy != null ? row.Fluffy.Root : config.GameRoot); return; } InstalledOutfit outfit = GetInstalledSelection(); OutfitGroup group = GetGroupSelection(); if (group != null) outfit = group.Slots[0]; if (outfit != null) OpenPath(File.Exists(outfit.Folder) ? Path.GetDirectoryName(outfit.Folder) : outfit.Folder); });
+            openInstalledButton = Button("Open folder", false, 200, delegate { GameModRow row = GetGameRowSelection(); if (row != null) { OpenPath(row.Fluffy != null ? row.Fluffy.Root : row.Stage != null ? row.Stage.Folder : config.GameRoot); return; } InstalledOutfit outfit = GetInstalledSelection(); OutfitGroup group = GetGroupSelection(); if (group != null) outfit = group.Slots[0]; if (outfit != null) OpenPath(File.Exists(outfit.Folder) ? Path.GetDirectoryName(outfit.Folder) : outfit.Folder); });
             editInstalledButton = Button("Edit options", false, 200, delegate { EditOutfit(); });
             toggleInstalledButton = Button("Health", false, 200, InspectOrToggleInstalled);
             // 1.0.15: Health took the Enable/Disable button's place (read-only, Enable for a disabled entry); Disable is its own action.
@@ -1435,7 +1436,8 @@ namespace SlotsInstaller
             // option's description names the file and right-click opens it in Explorer (MainFormAddons.cs).
             ModPackage shown = package;
             bool fromAddon = shown != null && LibraryAddons.IsAddonId(shown, component.Id);
-            int addonTagWidth = fromAddon ? MeasuredWidth(AddonTag, Palette.Tiny) + Px(16) : 0;
+            string addonTag = fromAddon ? AddonTagText(component) : "";   // 23 Nov 2026: "Add-on · older" for an older version
+            int addonTagWidth = fromAddon ? MeasuredWidth(addonTag, Palette.Tiny) + Px(16) : 0;
             int available = Math.Max(1, row.Width - (textX - Px(3)) - Px(8) - (fromAddon ? addonTagWidth + Px(12) : 0));
             int pillWidth = 0; string pill = component.InferredChoice ? "Choose an option" : "Required · choose one";
             if (required) pillWidth = MeasuredWidth(pill, Palette.Tiny) + Px(20);
@@ -1455,7 +1457,7 @@ namespace SlotsInstaller
             {
                 var tag = new Rectangle(row.Right - Px(12) - addonTagWidth, row.Y + (row.Height - Px(20)) / 2, addonTagWidth, Px(20));
                 Glyphs.FillRounded(e.Graphics, selected || hovered ? Palette.Border : Palette.Raised, tag, tag.Height / 2F);
-                TextRenderer.DrawText(e.Graphics, AddonTag, Palette.Tiny, tag, Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(e.Graphics, addonTag, Palette.Tiny, tag, Palette.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             if (selected && componentTree.Focused) Glyphs.DrawRounded(e.Graphics, Color.FromArgb(170, Palette.Accent), Math.Max(1F, DeviceDpi / 96F), new RectangleF(Px(4), row.Y + Px(2), Math.Max(1, row.Width - Px(8)), row.Height - Px(4)), Px(4));
             }
@@ -2211,7 +2213,7 @@ namespace SlotsInstaller
             return String.IsNullOrEmpty(entry.Character) ? "No character detected" : entry.Character;
         }
 
-        private sealed class PackageResult : IDisposable { internal ModPackage Package; internal PreviewImageResult Preview; internal List<string> Defaults; internal string Stamp; public void Dispose() {if(Preview!=null)Preview.Dispose();} }
+        private sealed class PackageResult : IDisposable { internal ModPackage Package; internal PreviewImageResult Preview; internal List<string> Defaults; internal string Stamp; internal StageInfo Stage; public void Dispose() {if(Preview!=null)Preview.Dispose();} }
 
         // 1.0.3 (the user): a mod opened from the library shows the options it is installed with. The newest record from
         // this source (enabled first) in the shown mode is used (a replacement in Replace original, a Manager extra outfit
@@ -2222,6 +2224,11 @@ namespace SlotsInstaller
         {
             if (pkg == null || String.IsNullOrEmpty(pkg.SourcePath)) return null;
             Func<string, bool> same = source => String.Equals(source, pkg.SourcePath, StringComparison.OrdinalIgnoreCase);
+            if (StageMode)   // 25 Nov 2026: the options this mod is installed with as an extra stage
+            {
+                List<string> staged = InstalledStageIds(pkg);
+                if (staged != null) return staged;
+            }
             List<string> replaced = gameRows.Where(r => r.Mod != null && same(r.Mod.SourcePath) && r.Mod.SelectedIds != null && r.Mod.SelectedIds.Count > 0)
                 .Select(r => r.Mod).OrderByDescending(m => m.Enabled).ThenByDescending(m => m.InstalledUtc ?? "", StringComparer.Ordinal).Select(m => m.SelectedIds).FirstOrDefault();
             InstalledOutfit extraOutfit = installed.Where(o => o.Managed && same(o.SourcePath) && o.SelectedIds != null && o.SelectedIds.Count > 0)
@@ -2272,22 +2279,24 @@ namespace SlotsInstaller
             // 1.0.16: addon archives of this mod in the library show inside it (MainFormAddons.cs); Edit options of one
             // installed record shows that record's mod alone.
             string openedName = ""; List<AddonCandidate> addonCandidates =restore == null && restoreReplace == null ? AddonCandidates(entry, out openedName) : null;
+            string gameRoot = config.GameRoot;
             OpenWork(entry.SourcePath, delegate
             {
                 string stamp = SourceStamp(entry.SourcePath);   // before reading: a change while reading is seen next time
                 ModPackage loaded = WithAddons(ReadOpenPackage(entry.SourcePath, stamp, sevenZip), openedName, addonCandidates, sevenZip);
-                List<string> defaults = Composer.DefaultSelection(loaded, replaceLoad || IsToolPackage(loaded));
+                StageInfo stage = restore == null && restoreReplace == null ? DetectStage(loaded, gameRoot, sevenZip) : null;   // 25 Nov 2026 (MainFormStages.cs)
+                List<string> defaults = stage != null && !replaceLoad ? StageDefaults(loaded) : Composer.DefaultSelection(loaded, replaceLoad || IsToolPackage(loaded));
                 byte[] image = null;
-                try { image = loaded.PreviewBytes(defaults.FirstOrDefault(), sevenZip); } catch { }
-                return new PackageResult { Package = loaded, Preview = PreviewImageResult.Decode(image), Defaults = defaults, Stamp = stamp };
+                try { image = loaded.PreviewBytes(defaults.FirstOrDefault() ?? loaded.Components.Where(c => !c.IsDummy && c.HasFiles(true)).Select(c => c.Id).FirstOrDefault(), sevenZip); } catch { }
+                return new PackageResult { Package = loaded, Preview = PreviewImageResult.Decode(image), Defaults = defaults, Stamp = stamp, Stage = stage };
             }, delegate(PackageResult result)
             {
                 if (reload == null) CollapseInspectorDetails();   // 1.0.8: another mod opens with compact details (1.0.12: when it shows)
-                package = result.Package; plan = null; replacePlan = null; packageStamp = result.Stamp;
+                package = result.Package; plan = null; replacePlan = null; packageStamp = result.Stamp; stageInfo = result.Stage;
                 // 1.0.1 (the user): INSTALL AS is what you last clicked. A PAK-only or tool mod shows Replace original with
                 // Extra outfit faded, only while it is open (never remembered); Edit options opens in the edited outfit's
-                // own mode for that edit only.
-                forcedReplaceReason = IsPakPackage(package) ? PakModReason : IsToolPackage(package) ? "Tool mods install into the game folder" : restoreReplace != null ? "Editing an installed replacement" : null;
+                // own mode for that edit only. 25 Nov 2026: a stage mod shipped as a PAK may be an Extra stage too.
+                forcedReplaceReason = IsPakPackage(package) && stageInfo == null ? PakModReason : IsToolPackage(package) ? "Tool mods install into the game folder" : restoreReplace != null ? "Editing an installed replacement" : null;
                 string wantedMode = forcedReplaceReason != null ? InstallModes.Replace : restore != null ? InstallModes.Slot : reload != null ? reload.Mode : remembered;
                 if (installMode != wantedMode) SetInstallMode(wantedMode, false);
                 editingReplacement = restoreReplace;
@@ -2347,7 +2356,7 @@ namespace SlotsInstaller
                 // 1.0.12: the health check (extraction, fixes) waits until browsing settles on this mod; the merged-files
                 // review of Extra outfit is only a composition and keeps the short delay.
                 if (IsReplaceMode) RequestReview(BrowseReviewDelay);
-                previewButton.Enabled = true; UpdateLibraryUninstall(); SetPageStatus(libraryPage, savedNote.Length > 0 ? savedNote : "Ready to compose " + package.Name);
+                previewButton.Enabled = !StageMode; UpdateLibraryUninstall(); SetPageStatus(libraryPage, savedNote.Length > 0 ? savedNote : StageMode ? "Tick the options to add as variants of " + StagesText(2) : "Ready to compose " + package.Name);
                 if (reload == null) ShowPage(libraryPage);   // 2.4.1: a reload in the background keeps the page you are on
                 if (reload != null) ApplyReload(reload);
                 componentTree.BeginInvoke((MethodInvoker)delegate { if (package.Components.Count <= 40) componentTree.ExpandAll(); else { foreach (OptionNode root in componentTree.Nodes) root.Expand(); foreach (string id in selectedOrder) foreach (OptionNode ancestor in Ancestors(componentNodes[id])) ancestor.Expand(); } if (componentTree.Nodes.Count > 0) componentTree.TopNode = componentTree.Nodes[0]; });
@@ -2365,7 +2374,7 @@ namespace SlotsInstaller
         {
             package.PrepareChoices();
             missingRestoredOptions.Clear();
-            missingRestoredOptions.AddRange(defaults.Where(id => { var c=package.Find(id); return c==null || c.IsDummy || !c.HasFiles(IsReplaceMode); }).Distinct(StringComparer.OrdinalIgnoreCase));
+            missingRestoredOptions.AddRange(defaults.Where(id => { var c=package.Find(id); return c==null || c.IsDummy || !c.HasFiles(WithRootFiles); }).Distinct(StringComparer.OrdinalIgnoreCase));
             changingChecks = true; componentTree.BeginUpdate(); componentTree.Nodes.Clear(); componentNodes.Clear(); selectedOrder.Clear();
             foreach (ModComponent c in package.Components)
             {
@@ -2431,7 +2440,7 @@ namespace SlotsInstaller
 
         private void EnforceBranchChoice(OptionNode node)
         {
-            if (node.Parent==null) return;
+            if (node.Parent==null || StageMode) return;   // 25 Nov 2026: in Extra stage every ticked option is a variant of its own
             var parent=node.Parent.Tag as ModComponent;
             if (parent==null || !package.IsChoiceBranch(parent,node.Tag as ModComponent)) return;
             foreach (OptionNode sibling in node.Parent.Nodes) if (sibling!=node && package.IsChoiceBranch(parent,sibling.Tag as ModComponent)) UncheckBranch(sibling);
@@ -2460,14 +2469,14 @@ namespace SlotsInstaller
                 {
                     EnforceBranchChoice(ancestor);
                     ModComponent c = ancestor.Tag as ModComponent;
-                    if (c != null && !c.IsDummy && c.HasFiles(IsReplaceMode) && !ancestor.Checked) { ancestor.Checked = true; leftOut.Remove(c.Id); if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
+                    if (c != null && !c.IsDummy && c.HasFiles(WithRootFiles) && !ancestor.Checked) { ancestor.Checked = true; leftOut.Remove(c.Id); if (!selectedOrder.Contains(c.Id)) selectedOrder.Insert(0, c.Id); }
                 }
                 // 1.0.16: an addon option's Requirement=Main files ticks the main mod's option of that name.
                 // 1.0.18: and a Requirement= naming an option of the same archive ticks that option.
                 foreach (ModComponent need in LibraryAddons.IsAddonId(package, component.Id) ? LibraryAddons.Requirements(package, component) : package.RequiredOptions(component))
                     {
                         OptionNode required;
-                        if (need.HasFiles(IsReplaceMode) && !leftOut.Contains(need.Id) && componentNodes.TryGetValue(need.Id, out required) && !required.Checked) { required.Checked = true; if (!selectedOrder.Contains(need.Id)) selectedOrder.Insert(0, need.Id); }
+                        if (need.HasFiles(WithRootFiles) && !leftOut.Contains(need.Id) && componentNodes.TryGetValue(need.Id, out required) && !required.Checked) { required.Checked = true; if (!selectedOrder.Contains(need.Id)) selectedOrder.Insert(0, need.Id); }
                     }
                 selectedOrder.Remove(component.Id); selectedOrder.Add(component.Id);
             }
@@ -2482,7 +2491,7 @@ namespace SlotsInstaller
                 }
             }
             if (package.HasBundleLayout)
-                foreach (var needed in Composer.RequiredForSelection(package,selectedOrder,IsReplaceMode,leftOut))
+                foreach (var needed in Composer.RequiredForSelection(package,selectedOrder,WithRootFiles,leftOut))
                 {
                     componentNodes[needed.Id].Checked=true;
                     selectedOrder.Add(needed.Id);
@@ -2774,10 +2783,10 @@ namespace SlotsInstaller
         // ---- Required choices and the footer -----------------------------------
         private void UpdateRequiredChoices(bool fill = false)
         {
-            unresolvedChoices = package == null ? new List<ModComponent>() : Composer.UnresolvedChoiceGroups(package, selectedOrder, IsReplaceMode);
+            unresolvedChoices = package == null ? new List<ModComponent>() : Composer.UnresolvedChoiceGroups(package, selectedOrder, WithRootFiles);
             unresolvedIds.Clear(); foreach (ModComponent group in unresolvedChoices) unresolvedIds.Add(group.Id);
             // 1.0.19: with something ticked, an empty required group is a note under the picture, not a stop.
-            choicesBlock = unresolvedChoices.Count > 0 && !selectedOrder.Any(id => { ModComponent c = package.Find(id); return c != null && !c.IsDummy && c.HasFiles(IsReplaceMode); });
+            choicesBlock = unresolvedChoices.Count > 0 && !selectedOrder.Any(id => { ModComponent c = package.Find(id); return c != null && !c.IsDummy && c.HasFiles(WithRootFiles); });
             UpdateNeeds(fill);
             componentTree.Invalidate();
             UpdateFooter();
@@ -2812,6 +2821,7 @@ namespace SlotsInstaller
             if (planSummary == null) return;
             if (openRecipe != null && package == null) { UpdateRecipeFooter(); return; }   // 1.0.18
             if (IsReplaceMode && package != null) { UpdateReplaceFooter(); return; }
+            if (StageMode) { UpdateStageFooter(); return; }   // 25 Nov 2026 (MainFormStages.cs)
             string tip = ""; Color detailColor = Palette.Muted;
             if (conflictView != null) UpdateConflictView();
             if (package == null)
@@ -2928,6 +2938,7 @@ namespace SlotsInstaller
             UpdateAddPartsButton();   // 1.0.6
             if (openRecipe != null && package == null) { UpdateRecipeButtons(); UpdateSlotHint(); return; }   // 1.0.18: a recipe is open (RecipesForm.cs)
             if (IsReplaceMode) { UpdateReplaceButtons(); UpdateSlotHint(); return; }
+            if (StageMode) { UpdateStageInstallButton(); return; }   // 25 Nov 2026 (MainFormStages.cs)
             UpdateSlotHint();
             if (installButton != null) installButton.Enabled = !busy && !ReviewPending && missingRestoredOptions.Count==0 && plan != null && plan.CanInstall && targetCharacter.SelectedIndex >= 0 && !String.IsNullOrWhiteSpace(outfitName.Text);
             // Since 2.0.1 the review runs automatically: Review files is a view, never a required step.
@@ -2940,7 +2951,7 @@ namespace SlotsInstaller
             if (busy || package == null || ReviewPending) return;
             WithFreshPackage(delegate
             {
-                if (IsReplaceMode) InstallReplacement(); else InstallSlot();
+                if (IsReplaceMode) InstallReplacement(); else if (StageMode) InstallStage(); else InstallSlot();
             });
         }
 
@@ -3151,10 +3162,10 @@ namespace SlotsInstaller
                 editInstalledButton.Visible = toggleInstalledButton.Visible = own;
                 // 2.2.0: Fluffy's mods can be uninstalled here too (normal installs, with Fluffy closed).
                 // 1.0.11: a leftover patch PAK has Remove PAK (refused inline while SF6 or the external manager runs).
-                bool leftover = gameRow.Leftover != null;
-                removeInstalledButton.Visible = own || gameRow.Fluffy != null || leftover;
+                bool leftover = gameRow.Leftover != null, stage = gameRow.Stage != null;   // 25 Nov 2026: an extra stage has Uninstall (MainFormStages.cs)
+                removeInstalledButton.Visible = own || gameRow.Fluffy != null || leftover || stage;
                 string fluffyBlocker = gameRow.Fluffy != null ? FluffyUninstallBlocker(gameRow.Fluffy) : leftover ? LeftoverBlocker : null;
-                editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = own && !busy && (gameRow.Mod.Enabled || idle); removeInstalledButton.Enabled = own ? idle : leftover ? !busy : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
+                editInstalledButton.Enabled = idle && own; toggleInstalledButton.Enabled = own && !busy && (gameRow.Mod.Enabled || idle); removeInstalledButton.Enabled = own ? idle : leftover || stage ? !busy : gameRow.Fluffy != null && fluffyBlocker == null; removeInstalledButton.AccessibleDescription = fluffyBlocker ?? "";
                 editInstalledButton.Text = "Edit options"; toggleInstalledButton.Text = own && gameRow.Mod.Enabled ? "Health" : "Enable"; removeInstalledButton.Text = leftover ? LeftoverRemoveText : "Uninstall";
                 disableInstalledButton.Visible = own && gameRow.Mod.Enabled; disableInstalledButton.Enabled = idle && own; disableInstalledButton.Text = "Disable";
                 reinstallButton.Visible = own && SourceChanged(gameRow.Mod.SourcePath); reinstallButton.Enabled = idle && own;
@@ -3169,7 +3180,7 @@ namespace SlotsInstaller
                 installedSelectionCount.Text = count + " selected · " + installedList.Items.Count + " visible";
                 installedTitle.Text = count + " entries selected";
                 installedDetail.Text = ReplacePlanner.N(selectedGameRows.Count(r => r.Mod != null), "replacement") + " · " + ReplacePlanner.N(selected.Count, "extra outfit");
-                string blocker = supported ? ReplacementUninstallBlocker(selectedGameRows) : "Deselect external mods and leftover PAKs to uninstall this selection.";
+                string blocker = supported ? ReplacementUninstallBlocker(selectedGameRows) : "Deselect external mods, leftover PAKs and extra stages to uninstall this selection.";
                 installedHelp.Text = blocker ?? "Uninstall the selected copies from the game. Their library sources stay available.";
                 installedChips.SetChips(new ChipStrip.Chip[0]);
                 removeInstalledButton.Visible = true; removeInstalledButton.Text = "Uninstall selection"; removeInstalledButton.Enabled = !busy && blocker == null;
@@ -3298,7 +3309,7 @@ namespace SlotsInstaller
             if (button == loadOrderButton) return count == 1 && gameRow == null && (outfit != null || GetGroupSelection() != null);   // any extra outfit, or a group of slots
             if (button == reinstallButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && SourceChanged(gameRow.Mod.SourcePath) : outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath));
             if (button == disableInstalledButton) return count == 1 && (gameRow != null ? gameRow.Mod != null && gameRow.Mod.Enabled : outfit != null && outfit.Managed && outfit.Enabled);
-            if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && (gameRow.Fluffy != null || gameRow.Leftover != null));
+            if (gameRow != null) return gameRow.Mod != null || (button == removeInstalledButton && (gameRow.Fluffy != null || gameRow.Leftover != null || gameRow.Stage != null));
             if (button == moveUpButton || button == moveDownButton) return false;
             if (button == removeInstalledButton) return count > 0;
             return outfit != null && outfit.Managed;
@@ -3484,6 +3495,14 @@ namespace SlotsInstaller
                 return;
             }
             string source = package == null ? null : package.SourcePath;
+            if (StageMode)   // 25 Nov 2026: Extra stage: Uninstall removes this mod's stage folder, shown only when there is one
+            {
+                bool staged = LinkedStageRows(source).Count > 0;
+                libraryUninstallButton.Visible = staged; libraryUninstallButton.Text = "Uninstall";
+                libraryUninstallButton.Enabled = !busy && staged; libraryUninstallButton.AccessibleDescription = "Shortcut: tap Ctrl";
+                UpdateAllVariants();
+                return;
+            }
             int outfits = LinkedOutfits(source).Count; List<GameModRow> replacements = LinkedReplacements(source);
             string blocker = replacements.Count > 0 ? ReplacementUninstallBlocker(replacements) : null;
             // Extra outfit mode always shows the button; Replace mode only when this source is installed (either way).
@@ -3534,6 +3553,7 @@ namespace SlotsInstaller
         {
             if (!busy && package == null && openRecipe != null) { UninstallRecipe(openRecipe); return; }   // 1.0.18
             if (busy || package == null) return;
+            if (StageMode && LinkedStageRows(package.SourcePath).Count > 0) { UninstallStageRow(LinkedStageRows(package.SourcePath)[0]); return; }   // 25 Nov 2026 (MainFormStages.cs)
             if (LibraryUninstallsReplacements(LinkedOutfits(package.SourcePath).Count, LinkedReplacements(package.SourcePath).Count)) UninstallAllReplacements(package.SourcePath);
             else UninstallAllOutfits(package.SourcePath);
         }

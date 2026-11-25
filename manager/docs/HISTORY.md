@@ -1,5 +1,72 @@
 # Development history
 
+## 1.0.22: Slots Loader 1.28.1, Extra stage, outdated stage mods fixed, guesses never block Install, add-on copies shown once, AGS mods-off fix, a mod's own data files, Keep changes
+
+- `dependencies.json` approves Slots Loader 1.28.1 (SF6 Mod Suite v1.50.3, PR ZZtaii/slotsloader-manager#47, tested in game by the user on 26 Nov 2026 before the merge): the online outfit and colour by what the account owns, Replays "My Own", V-Rival, Random and Training stage fixes. Slim zip `slotsloader-v1.28.1`, 3,282,432 bytes.
+
+### Replace original warns about extra outfits that share the replaced files (26 Nov 2026)
+
+- Seen: "Ingrid with a Hat zz" installed with Replace original over Ingrid Outfit 1 put its hat, head chain and colours on the "Ingrid C1 Bare Legs Bundle" extra outfits. Their C1 Shoes and Barefoot options ship no head mesh (`esf032_001_02.mesh`) and no head chain, so they read Outfit 1's own path, where the replacement now is; the loader also takes the replacement's loose colour files for them (loose_probes.tsv). Not a loader change: an extra outfit has always shared what it doesn't ship.
+- The user: "Add the warning". `SharedOutfitFiles.Warnings` (ReplacePlanner, after `Affects`): the replaced files by game outfit folder (`esfNNN/FFF`, not `000`; `GameReference.CostumeByFolder` for the costume number), the last build's `outfits.json` rows with that `fighter_dir` and `based_on`, grouped by source. A source in `costume_mods` or `costume_mods_nsfw` (also as the loader wrote it in ANSI, `LoaderResults.AsLoaderWrote`) that is a folder or ZIP shipping every replaced file of that folder is left out; a file shipped by any of its options counts, so a bundle whose options differ can be missed, never wrongly named. RAR, 7Z and sources not on disk are named. One "warn" per game outfit, never an error; any failure logs and gives no line.
+- Check: `replace` "extra outfits sharing a replaced outfit's files (1.0.22)" (`ReplaceChecks.SharedOutfits`). Help: "Replace original and extra outfits".
+
+### Extra stage (25 Nov 2026)
+
+- The user: "since we use wael's slotsloader now ... we can install stages as extra ... start allowing it"; "if a mod has only one file then its fine to tick it by default"; "i would love to support a search for stage".
+- `StageMods` (detect, PAK hash read against `SF6_StageSlots_Data\loader\stage_paths.txt`, Install to `reframework\stage_mods\<mod>\<option>\` with a modinfo.ini and a `.slotsloader-manager.json` record, List, Uninstall), `MainFormStages` (INSTALL AS "Extra stage", footer, Installed rows). Each option is a variant of its stage (UP / DOWN on Versus stage select, original kept) or a tile of its own, as the loader reads it (stages/README.md).
+- Default ticks: one option ticked, several none. Choose-one groups don't untick in Extra stage.
+- `Core`: index record `PakStagesChecked`; PAK-only mods whose entries match stage_paths become Misc kind Stage, so the library search "stage" finds them.
+- Checks: `StageModChecks` (engine check in `replace`, `ExtraStageUi` in `replace-ui`).
+
+### Outdated stage mods: stale type signatures fixed (25 Nov 2026)
+
+- Seen with "Aokigahara - no NPC" (Training Room `ess0000_00`, one .pak): `ess0000_00_level.scn.20` had four `app.worldtour.om.WTCityOMSetter` with the signature of before a game update; the fields were unchanged, so the game refused only the signature.
+- `PakModFixes`: a migration table (type, old signature, current one, game files that prove the current one). `UpgradePak` rewrites only the changed entries of an unencrypted v4 PAK; `UpgradeFile` does loose scn/user/pfb; `FixFolder` + `Reference(gameRoot)` for Extra stage (no reference, no fixes). Hooked into `ModFixes.UpgradeModFile`, `ReplacePlanner` and `StageMods.Install`. A migration row is added only after proving the layout unchanged.
+- `ReplaceEngine.RefixStore` (Reapply after a game update) also takes patch PAKs (up to 512 MB) and `.pfb.17`.
+- Checks: `PakModFixChecks` (replace group, `Refix` included).
+
+### Guesses never block Install (23 and 25 Nov 2026)
+
+- The user: "when we are guessing things, we shouldn't refuse installs"; then "what if we remove choose one from guesses entirely".
+- 23 Nov: a prose guess refused installs of three Barefoot C. Viper bundles. 25 Nov: the Ingrid C1 Bare Legs Bundle showed "Required · choose one" on Barefoot with a C1 Shoes outfit ticked, and ticked an outfit by itself.
+- Only an explicit bundle rule (Reorder bundle: "Required", "Choose one", "Choose up to one") may add a plan error. `ModComponent.IsChoiceGroup` is the explicit rule only; `RequiresChoice` is "Choose one". Description wording ("Choose one outfit.", "Pick one option") no longer makes a group, a Required pill or a default tick. Shared-file inference still groups alternatives (radio, never required or ticked). A choose-one group in the branch not taken of a parent choose-one asks for nothing (`Composer.InUnpickedBranch`).
+- Found by the 1.0.22 release run (`replace-ui` addon archives): add-on fill-ins (`LibraryAddons.Split`) were made only for required groups, so after this change a main mod whose guessed "Outfit" group an add-on option answered (Barefoot) lost its fill-in. In Extra outfit the outfit then had no mesh ("The selection has no outfit mesh"), and with Main files unticked the main record was empty. Now a fill-in is also made, for every choice group an add-on option answers, whenever the main record could not install alone (`Composer.Plan(main, …).CanInstall`); a main record that installs alone gets none. Checks: `AddonRules` (no fill-in with Main files ticked in Replace original, Full with an explicit "Choose one"), the addon UI flows.
+
+### Add-on copies shown once (23 Nov 2026)
+
+- Seen: Barefoot / Swimsuit Legs options three times in "Sakura as Ryu C1", from three library copies of its add-on zip (two byte-identical, one a different build).
+- `NativeAsset.Crc` from the ZIP central directory / 7-Zip listing (already cached by archive size and write time); `LibraryAddons.OptionKey` + `PickCopies` hide an add-on option whose files equal one already shown. Kept copy: the installed file first, else the newest. An installed file's options are never hidden. Same name with other files stays; the older one is tagged "Add-on · older" with a description line. Folder sources have no CRC and are never deduped.
+
+### Turn outfit mods off: the genuine amd_ags_x64.dll put back (23 Nov 2026)
+
+- Seen: after "Turn outfit mods off" SF6 would not start. The Manager had taken over a Slotsloader installed by hand (plugin already gone, a proxy build not in `KnownBuilds`), so the proxy was kept as "the original" amd_ags_x64.dll and `amd_ags_x64_real.dll` was removed.
+- `ReplaceEngine.IsGenuineAgs` (known hash or FileDescription "AMD GPU Services"); `OutsideLoaderProxy` is also true when `_real` is genuine and the current file is not; `GenuineAgsInstead` puts the genuine file back when a loader record's amd_ags_x64.dll is removed (logged).
+- Check: `UpdateChecks.TakeoverWithoutPlugin`.
+
+### A mod's own data files are not "changed game files"; Keep changes (20 Nov 2026)
+
+- The user, 20 Nov 2026: the tool mod MMDK ships `reframework/data/MMDK/PlayerData/<fighter>/<fighter> Names.json` and its script rewrites that file with `json.dump_file` at every fighter load. After every session the Manager said "Game files changed. Reapply your replacements (1 installed files changed: … (by another tool))", and Reapply put the shipped copy back and removed the mod's version, which the mod rewrote at the next run. Any other install, disable or move was refused until then (a changed file blocks every change that does not decide about it).
+- Rule (`ReplaceEngine.IsModData`, `WritesOwnData`): `reframework/data/` is the folder REFramework lets scripts write to, so a file a mod ships there is that mod's working data. For such a file whose bytes differ from the installed ones:
+  - `Status()` counts it in `GameFilesStatus.OwnDataChanged`, never in `FilesChanged`: no banner, no notice, `replace-status` says `Status: OK` and adds "Data files updated by their own mod: N (left as they are)". The health check counts it as verified with one info row, "Updated by the mod · N data files · …".
+  - `Reconcile` keeps the mod's version while the same shipped file is wanted at that path: Reapply, another mod's change, a reinstall of the same files (the record changes, the file stays).
+  - It leaves with the mod on uninstall and disable with no question, and it gives way to another shipped file (an update that ships new data, another mod winning the path). The copy made of it serves only that change's rollback and is deleted after the commit, as for every uninstalled file.
+- Unchanged, on purpose: a missing data file is still reported and Reapply puts the shipped one back; `natives/`, `reframework/autorun/`, `reframework/plugins/`, game-folder files and PAKs keep the strict check; so do all files of a Slotsloader record (`LoaderCostumePak.IsLoaderMod`), its data included. A file kept earlier with "Keep current file" stays kept. A mod whose archive is gone still gets the missing-copy notice for a data file it rewrote (the installed bytes no longer match the record, so they can't be taken as its stored copy).
+- Keep changes (the user, 20 Nov 2026: "ignore the message ... move the new detected files to unmanaged"; then "ok both"): the manual way for a changed file the rule misses.
+  - Record: `ReplaceState.KeptChanged` (paths) and `ReplaceMod.KeepChanges` (a whole mod). `ReplaceEngine.KeepsChanges` treats such a file exactly like a mod's own data file (`LeftAsChanged`): not counted, blocks no change, stays through Reapply and a reinstall of the same files.
+  - It stays the mod's file, unlike "Keep current file" (which lets go of the path, leaves the file behind after an uninstall, and is taken back by Reapply): uninstall and disable remove it with no question, a different shipped file replaces it. The per-file choice follows the path through updates and ends when no installed mod ships that path; the whole-mod choice moves to the new record on an update in place.
+  - Never for `natives/` files (their PAK entries must follow the file, and a change there is another tool taking a game file), patch PAKs or a Slotsloader record (`CanKeepChanges`).
+  - Window: **Keep changes** on the Installed banner and on the notice of the other pages, only while a changed file may be kept (`GameFilesStatus.KeepableChanged`). One click keeps every such file changed right now; no dialog, Undo checks them again. Nothing in the game folder changes, so it works while SF6 runs. The whole-mod choice has no button yet (CLI only).
+  - CLI: `replace-keep-changes [<path> | --all | --mod <id or name>] [--check-again]`; `replace-status` lists kept paths and mods. The health check shows "Changed, kept as it is · N files · …".
+- Checks: `replace` "a mod's own data (1.0.22)" (`ReplaceChecks.ModData`) and "Keep changes (1.0.22)" (`ReplaceChecks.KeepChanges`); `replace-ui` "Keep changes (1.0.22)" (`ReplaceUiChecks.KeepChangesUi`).
+
+### Loaded slots with "·" or "é" in the folder name read "Not loaded by Slotsloader"
+
+- Seen 22 Nov 2026: three slots the Manager named "Manon Outfit 3 Barefoot · Outfit 1 Feet - …" were in the game (the loader's log lists them) but the Installed page said "Not loaded by Slotsloader"; the slot without a "·" said "Loaded".
+- Cause: Slotsloader lists `costume_mods` with the ANSI code page (`FindFirstFileA`) and writes `outfits.json` `"source"` in those bytes (`·` = `B7`), while `"label"` and the rest of the file are UTF-8 (`C2 B7`). The Manager reads the file as UTF-8, so the source became "Manon/… � Outfit 1 …" and never equalled the folder path.
+- Fix: `LoaderResults.AsLoaderWrote` puts an installed path through the same round trip (ANSI bytes read as UTF-8); a source matches either way (`LoaderResults.Reported`). The Installed page status and Load order's "waiting for SF6" list use it. Plain ASCII names are unchanged. If the loader ever writes UTF-8 sources, the first lookup matches.
+- Not changed: variant toggles (`variants.json`, `variant_choices.json`) for a manual archive with such a name, since the loader reads the choices back with its own bytes; that needs the loader to write UTF-8.
+- Check: `generated` "loader mapping … ANSI-written sources" (`LoaderResultChecks`).
+
 ## 1.0.21: Slots Loader 1.27.5, a smaller loader download, loader files the game doesn't need left out, the loader zip never refused for a file
 
 - `dependencies.json` approves Slots Loader 1.27.5 (SF6 Mod Suite v1.46.0, PR ZZtaii/slotsloader-manager#38): Random outfit on the select screens of Arcade, Training and Versus gives a real random outfit and colour; the zip carries a cover picture.

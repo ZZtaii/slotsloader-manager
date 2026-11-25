@@ -230,7 +230,9 @@ namespace SlotsInstaller
             menu = package.Components.Single(c => c.Name == "Swimsuit Test"); main = package.Components.Single(c => c.Name == "Swimsuit C2");
             ModComponent alt1 = package.Components.Single(c => c.Name == "Alt hairstyle"), alt2 = package.Components.Single(c => c.Name == "Short hairstyle");
             Require(package.IsChoice(menu) && !package.IsChoiceBranch(menu, main) && package.IsChoiceBranch(menu, alt1) && package.IsChoiceBranch(menu, alt2), "two overlays of one main: choice " + package.IsChoice(menu) + " main " + package.IsChoiceBranch(menu, main));
-            Require(Composer.Plan(package, new[] { main.Id, alt2.Id }, true).CanInstall && !Composer.Plan(package, new[] { main.Id, alt1.Id, alt2.Id }, true).CanInstall, "two overlays of one main: plans");
+            // 2026-11-23: guessed from shared files, so both hairstyles warn (the Assistant still refuses), never block.
+            var bothHair = Composer.Plan(package, new[] { main.Id, alt1.Id, alt2.Id }, true);
+            Require(Composer.Plan(package, new[] { main.Id, alt2.Id }, true).CanInstall && bothHair.CanInstall && bothHair.Warnings.Any(w => w.Contains("looks like a choose-one group")) && bothHair.StrictErrors().Count > 0, "two overlays of one main: plans");
         }
         // 1.0.18: "Ingrid C1 Loose Hair 1.01": the whole mod at the top of the archive and again in "C1 Loose Hair/" (that
         // copy adds a chain file). Every group name was ambiguous, so all options were loose and all ticked. Two outfits
@@ -259,7 +261,9 @@ namespace SlotsInstaller
             ModComponent outfit = package.Components.Single(c => c.Name == "01) Outfit variations"), hair = package.Components.Single(c => c.Name == "02) Hair Variations");
             Require(package.IsChoice(outfit) && package.IsChoice(hair) && package.Components.Where(c => !c.IsDummy).All(c => c.ParentId == outfit.Id || c.ParentId == hair.Id), "packed twice: groups not resolved");
             Require(Composer.DefaultSelection(package, true).Count == 0, "packed twice: options were ticked for the user: " + String.Join(", ", Composer.DefaultSelection(package, true)));
-            Require(!Composer.Plan(package, package.Components.Where(c => c.ParentId == outfit.Id).Select(c => c.Id), true).CanInstall, "packed twice: both collars at once were accepted");
+            // 2026-11-23: a guessed choose-one: both collars warn (the Assistant still refuses), never block.
+            var bothCollars = Composer.Plan(package, package.Components.Where(c => c.ParentId == outfit.Id).Select(c => c.Id), true);
+            Require(bothCollars.CanInstall && bothCollars.Warnings.Any(w => w.Contains("looks like a choose-one group")) && bothCollars.StrictErrors().Count > 0, "packed twice: both collars at once: " + String.Join(" / ", bothCollars.Errors));
             Require(Composer.Plan(package, new[] { package.Components.Single(c => c.Name == "Closed Collar").Id, package.Components.Single(c => c.Name == "Loose Hair (with Bangs)").Id }, true).Files.Count == 3, "packed twice: a collar and a hairstyle don't install from the fuller copy");
             // Two outfits, same option names, other files: both stay.
             string costumes = Path.Combine(root, "..", "packed-costumes");
@@ -288,16 +292,18 @@ namespace SlotsInstaller
             option("2 Collar closed", "name=B Collar closed\n", new[] { "01/body.mesh.230110883" });
             option("3 Nails", "name=C Nails\n", new[] { "01/nails_albd.tex.241101895" });
             option("4 Collar fix", "name=D Collar fix\nRequirement=A Collar open\n", new[] { "01/body.mesh.230110883", "01/fix.tex.241101895" });
-            // A "Required · choose one" group gets its first option ticked (the user: required ones ticked by default).
+            // 2026-11-25 (the user: "remove choose one from guesses entirely"): "Choose one color" in a description is no
+            // required group and ticks nothing; the two colours sharing a file are still alternatives (inferred), unticked.
             option("5 Color", "name=Color\nDummyMod=true\ndescription=Choose one color\n", new string[0]);
             option("6 Red", "name=Color Red\nAddonFor=Color\n", new[] { "01/body_albd.tex.241101895" });
             option("7 Blue", "name=Color Blue\nAddonFor=Color\n", new[] { "01/body_albd.tex.241101895" });
             var package = PackageReader.Load(root, "");
-            Require(package.Find("5 Color").RequiresChoice && package.IsChoice(package.Find("5 Color")), "fixture: Color is not a required choose-one");
+            Require(!package.Find("5 Color").RequiresChoice && !package.Find("5 Color").IsChoiceGroup && package.IsChoice(package.Find("5 Color")), "fixture: Color should be an inferred, not required, choice");
             var picked = Composer.DefaultSelection(package, true).Select(id => package.Find(id).Name).OrderBy(n => n, StringComparer.Ordinal).ToList();
-            Require(picked.SequenceEqual(new[] { "A Collar open", "C Nails", "Color Blue", "D Collar fix" }), "default alternatives: " + String.Join(", ", picked));
+            Require(picked.SequenceEqual(new[] { "A Collar open", "C Nails", "D Collar fix" }), "default alternatives: " + String.Join(", ", picked));
             Require(Composer.Plan(package, Composer.DefaultSelection(package, true), true).CanInstall, "default alternatives: the default selection can't install");
-            // Only a menu with a required group (nothing ticked otherwise): its first option is ticked.
+            // Only a menu with a hair group whose description says "Select one hairstyle": a wording, so nothing is ticked
+            // for the user (2026-11-25); with "Choose one" set in Reorder bundle its first option is.
             string menu = Path.Combine(root, "..", "default-required-menu");
             ReplaceChecks.Put(menu, "0 Menu/modinfo.ini", Encoding.UTF8.GetBytes("name=Hair pack\r\nDummyMod=true\r\n"));
             ReplaceChecks.Put(menu, "1 Hair/modinfo.ini", Encoding.UTF8.GetBytes("name=Hair\r\nAddonFor=Hair pack\r\nDummyMod=true\r\ndescription=Select one hairstyle\r\n"));
@@ -307,10 +313,12 @@ namespace SlotsInstaller
                 ReplaceChecks.Put(menu, "2 " + h + "/" + model + "02/hair.mesh.230110883", Encoding.ASCII.GetBytes(h));
             }
             var hairs = PackageReader.Load(menu, "");
+            Require(Composer.DefaultSelection(hairs, true).Count == 0, "worded hair group ticked: " + String.Join(", ", Composer.DefaultSelection(hairs, true)));
+            hairs.Components.First(c => c.Name == "Hair").BundleRule = "Choose one"; hairs.PrepareChoices();
             var hairPick = Composer.DefaultSelection(hairs, true).Select(id => hairs.Find(id).Name).ToList();
             Require(hairPick.SequenceEqual(new[] { "Hair long" }) && Composer.Plan(hairs, Composer.DefaultSelection(hairs, true), true).CanInstall, "required menu: " + String.Join(", ", hairPick));
-            // 1.0.21: a "Choose ONE" group whose only options are named "(Optional)" is one or none, not required
-            // (Ingrid C1 Barefoot Stockings from the Mod Packager: "02 Add-ons" holding only "Painted Nails (Optional)").
+            // "Choose ONE" in the description of a group holding only "Painted Nails (Optional)" (Ingrid C1 Barefoot
+            // Stockings from the Mod Packager): never required; since 2026-11-25 no choose-one group at all.
             string nails = Path.Combine(root, "..", "optional-choose-one");
             ReplaceChecks.Put(nails, "00 Menu/modinfo.ini", Encoding.UTF8.GetBytes("name=Stockings\r\nDummyMod=true\r\n"));
             ReplaceChecks.Put(nails, "01 Base/modinfo.ini", Encoding.UTF8.GetBytes("name=Base\r\nAddonFor=Stockings\r\n"));
@@ -320,14 +328,15 @@ namespace SlotsInstaller
             ReplaceChecks.Put(nails, "02A Nails/" + model + "01/nails_albd.tex.241101895", Encoding.ASCII.GetBytes("nails"));
             var optional = PackageReader.Load(nails, "");
             var addons = optional.Components.First(c => c.Name == "02 Add-ons");
-            Require(optional.IsChoice(addons) && !addons.RequiresChoice, "(Optional) options: the group should be choose-one but not required");
+            Require(!optional.IsChoice(addons) && !addons.RequiresChoice, "(Optional) options: a worded group should be neither choose-one nor required");
             var baseOnly = optional.Components.Where(c => c.Name == "Base").Select(c => c.Id).ToList();
             Require(Composer.Plan(optional, baseOnly, true).CanInstall, "(Optional) options: Base alone can't install");
-            // One option without "(Optional)" keeps the group required.
+            // Two options writing the same file: alternatives the Manager infers, still not required.
             ReplaceChecks.Put(nails, "02B Toes/modinfo.ini", Encoding.UTF8.GetBytes("name=Painted Toes\r\nAddonFor=02 Add-ons\r\n"));
             ReplaceChecks.Put(nails, "02B Toes/" + model + "01/nails_albd.tex.241101895", Encoding.ASCII.GetBytes("toes"));
             var mixed = PackageReader.Load(nails, "");
-            Require(mixed.Components.First(c => c.Name == "02 Add-ons").RequiresChoice, "mixed options: the group should stay required");
+            var mixedGroup = mixed.Components.First(c => c.Name == "02 Add-ons");
+            Require(mixed.IsChoice(mixedGroup) && !mixedGroup.RequiresChoice, "mixed options: an inferred choice, not required");
         }
         // 1.0.18: an install of an installed mod with other options goes to the top like a new install; the same options
         // from an edited source (keepPlace) stay; SetOrder saves several Move clicks as one change.
@@ -363,7 +372,9 @@ namespace SlotsInstaller
             Require(!group.IsChoiceGroup && package.IsChoice(group), "inferred choice acquired required prose semantics");
             Require(Composer.DefaultSelection(package, true).Count == 0 && BatchDefaults.Selection(package, true).Count == 0, "GUI/queue guessed a level");
             Require(Composer.UnresolvedChoiceGroups(package, new string[0], true).Single() == group && Composer.Plan(package, new string[0], true).Errors.Any(e => e.Contains("Choose an option")), "empty package needs an actionable choice");
-            Require(!Composer.Plan(package, ids, true).CanInstall, "fresh all-five selection accepted");
+            // 2026-11-23: the levels are a choose-one the Manager guessed: the user's all-five pick warns, the Assistant's is refused.
+            var allFive = Composer.Plan(package, ids, true);
+            Require(allFive.CanInstall && allFive.Warnings.Any(w => w.Contains("looks like a choose-one group")) && allFive.StrictErrors().Any(e => e.StartsWith("Choose one option in")), "fresh all-five selection: " + String.Join(" / ", allFive.Errors));
             string cliReport = Path.Combine(Path.GetDirectoryName(root), "root-options.json");
             Require(CommandLine.Run(new[] { "list-options", root, "--json", cliReport }) == 0, "CLI list-options failed");
             var listed = Json.Serializer().Deserialize<ModCheckReport>(File.ReadAllText(cliReport));
@@ -398,7 +409,7 @@ namespace SlotsInstaller
             Require(package.Components.Count(c => c.InferredChoice) == 1 && group.Id == oldGroupId, "inference is not idempotent");
             var roots = new ModPackage { Components = new List<ModComponent> { Peer("a", "Pack", "addon.pak", true), Peer("b", "pack", "ADDON.PAK", true) } };
             RootOptionChoices.Add(roots); roots.PrepareChoices();
-            Require(!Composer.Plan(roots, new[] { "a", "b" }, true).CanInstall && Composer.Plan(roots, new[] { "a" }, true).CanInstall, "root-only/case-insensitive alternatives");
+            Require(Composer.Plan(roots, new[] { "a", "b" }, true).StrictErrors().Count > 0 && Composer.Plan(roots, new[] { "a" }, true).CanInstall, "root-only/case-insensitive alternatives");
             roots.Components.Add(Peer("x", "Second", "second.pak", true)); roots.Components.Add(Peer("y", "Second", "second.pak", true));
             RootOptionChoices.Add(roots); roots.PrepareChoices();
             Require(roots.Components.Count(c => c.InferredChoice) == 2 && Composer.Plan(roots, new[] { "a" }, true).CanInstall && Composer.UnresolvedChoiceGroups(roots, new[] { "a" }, true).Count == 0, "one optional cohort forced the other");

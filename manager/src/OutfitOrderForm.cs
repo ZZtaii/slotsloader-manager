@@ -38,7 +38,7 @@ namespace SlotsInstaller
             {
                 var sources = new HashSet<string>(slots.Select(s => s.Source.Replace('\\', '/').TrimEnd('/')), StringComparer.OrdinalIgnoreCase);
                 return (installed ?? new List<InstalledOutfit>()).Where(o => o.Enabled && String.Equals(o.Character, fighter, StringComparison.OrdinalIgnoreCase)
-                    && !sources.Contains(o.Character + "/" + System.IO.Path.GetFileName((o.Folder ?? "").TrimEnd('\\', '/')))).Select(o => o.Name).ToList();
+                    && !LoaderResults.Reported(sources, o.Character + "/" + System.IO.Path.GetFileName((o.Folder ?? "").TrimEnd('\\', '/')))).Select(o => o.Name).ToList();
             };
             string fighterDir; List<int> order;
             if (!OutfitOrderForm.Choose(this, game, start, GridFighters(), filterPanel.Grid.Cards, counts, waiting, running, out fighterDir, out order)) return;

@@ -180,6 +180,56 @@ namespace SlotsInstaller
             }
             finally { ReplaceEngine.ForkLeftovers.Extra.Clear(); CleanState(config); GameProcesses.Probe = previousProbe; }
         }
+        // 1.0.22 (the user's SF6 would not start, 2026-11-23): a Slotsloader left in the game folder without its plugin (a
+        // "Restore to vanilla" removes it) and with a proxy build not in KnownBuilds. Taken over, then "Turn outfit mods
+        // off": the game must get AMD's own amd_ags_x64.dll back, never the old proxy without its amd_ags_x64_real.dll.
+        private static void TakeoverWithoutPlugin(string root)
+        {
+            ReplaceChecks.Fixture f = ReplaceChecks.Create(Path.Combine(root, "takeover-noplugin"), true, ReplaceMethods.Loose);
+            var config = new AppConfig { GameRoot = f.Game, Libraries = new List<string>(), SevenZipPath = "" };
+            var probe = new FakeProcessProbe(); IProcessProbe previousProbe = GameProcesses.Probe; GameProcesses.Probe = probe;
+            try
+            {
+                ReplaceEngine engine = ReplaceEngine.ForConfig(config);
+                string ignored; foreach (ReplaceMod m in engine.LoadState().Mods.ToList()) engine.Uninstall(m.Id, false, out ignored);
+                string genuine = GameText(f.Game, "amd_ags_x64.dll"), handProxy = "fixture loader proxy, a build no table knows" + new string('y', 4096);
+                Action handInstall = delegate
+                {
+                    File.WriteAllText(Path.Combine(f.Game, "amd_ags_x64.dll"), handProxy);
+                    File.WriteAllText(Path.Combine(f.Game, "amd_ags_x64_real.dll"), genuine);
+                    string data = Path.Combine(f.Game, @"reframework\data\SF6_Costumes_Data\loader"); Directory.CreateDirectory(data); File.WriteAllText(Path.Combine(data, "version.txt"), "1.27.3.14");
+                    Require(!File.Exists(Path.Combine(f.Game, LoaderCostumePak.PluginPath.Replace('/', '\\'))), "the fixture's hand install has no plugin");
+                };
+                string approvedZip = Path.Combine(root, "takeover-noplugin-zips", "SF6_SlotsLoader_v1.27.5.zip"); Directory.CreateDirectory(Path.GetDirectoryName(approvedZip)); File.WriteAllBytes(approvedZip, LoaderZip("1.27.5"));
+
+                // A record made by the 1.0.21 rule (the genuine library not recognised): its kept "original" is the proxy.
+                handInstall();
+                ReplaceMod record = InstallZip(engine, approvedZip, "SF6 Slots Loader");
+                ReplaceState st = engine.LoadState();
+                Require(st.Originals.Count == 1 && File.ReadAllText(st.Originals[0].Backup) == handProxy, "fixture: without the genuine library known, the old rule keeps the proxy as the original");
+                KnownBuilds.Extra[ReplaceEngine.Sha(B(genuine))] = "the game's own amd_ags_x64.dll (fixture)";
+                engine.SetModsOff(true);
+                Require(GameText(f.Game, "amd_ags_x64.dll") == genuine && GameText(f.Game, "amd_ags_x64_real.dll") == null, "outfit mods off with the old record: AMD's own amd_ags_x64.dll must be back, not the proxy without its _real file: " + (GameText(f.Game, "amd_ags_x64.dll") ?? "(none)").Substring(0, 20));
+                Require(File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("is put back from the genuine amd_ags_x64_real.dll"), "the fallback must be logged");
+                engine.SetModsOff(false);
+                st = engine.LoadState();
+                Require(GameText(f.Game, "amd_ags_x64.dll") != genuine && GameText(f.Game, "amd_ags_x64_real.dll") == genuine && st.Originals.Count == 1 && File.ReadAllText(st.Originals[0].Backup) == genuine, "back on: the loader's proxy in place and the genuine library kept as the original");
+                engine.Uninstall(record.Id, false, out ignored);
+                Require(GameText(f.Game, "amd_ags_x64.dll") == genuine, "uninstall after back on: the game's own library");
+
+                // The new rule: the genuine amd_ags_x64_real.dll beside an unknown non-AMD file marks an outside proxy.
+                handInstall();
+                record = InstallZip(engine, approvedZip, "SF6 Slots Loader");
+                st = engine.LoadState();
+                Require(st.Originals.Count == 1 && File.ReadAllText(st.Originals[0].Backup) == genuine, "takeover without the plugin: the genuine library must be the original");
+                engine.SetModsOff(true);
+                Require(GameText(f.Game, "amd_ags_x64.dll") == genuine && GameText(f.Game, "amd_ags_x64_real.dll") == null, "outfit mods off: the game's own library");
+                engine.SetModsOff(false);
+                engine.Uninstall(record.Id, false, out ignored);
+                Require(GameText(f.Game, "amd_ags_x64.dll") == genuine && engine.LoadState().Originals.Count == 0, "uninstall: the game's own library, no original left");
+            }
+            finally { KnownBuilds.Extra.Clear(); CleanState(config); GameProcesses.Probe = previousProbe; }
+        }
         // The engine's state is this run's one Data folder: what a check installed is uninstalled again (or the record
         // dropped), so the next check can use another fixture game.
         private static void CleanState(AppConfig config)
@@ -353,7 +403,8 @@ namespace SlotsInstaller
                     Require(s.Due(DateTime.UtcNow) && new UpdateSettings().Due(DateTime.UtcNow), "25 h ago / never must be due");
                 });
                 check("1.0.19 replacing one Slotsloader record with another (the fork to the suite line) never brings back files from before the first loader install (the old SlotsloaderOpponentOutfitSummary.lua); the genuine amd_ags_x64.dll stays backed up; an uninstall still restores originals; an ordinary mod's originals come back as before", delegate { LoaderSwitch(root); });
-                check("1.0.19 a Slotsloader installed outside the Manager is taken over: its files at the loader's paths are replaced, not kept as originals (the genuine amd_ags_x64.dll is, from its amd_ags_x64_real.dll); costume_mods and the loader's settings are kept; a hand-installed fork's files the new loader does not ship are removed only with a known fork file's exact bytes (a copy kept, logged); an uninstall leaves the game's own library", delegate { Takeover(root); });                check("downloads are verified: a wrong published digest is refused and nothing is kept; a correct one lands in Data\\downloads", delegate
+                check("1.0.19 a Slotsloader installed outside the Manager is taken over: its files at the loader's paths are replaced, not kept as originals (the genuine amd_ags_x64.dll is, from its amd_ags_x64_real.dll); costume_mods and the loader's settings are kept; a hand-installed fork's files the new loader does not ship are removed only with a known fork file's exact bytes (a copy kept, logged); an uninstall leaves the game's own library", delegate { Takeover(root); });
+                check("1.0.22 a Slotsloader left without its plugin and with an unknown proxy build: the takeover keeps the genuine amd_ags_x64_real.dll as the original, and turning outfit mods off (also with a record made by the old rule) puts AMD's own amd_ags_x64.dll back, never the proxy", delegate { TakeoverWithoutPlugin(root); });                check("downloads are verified: a wrong published digest is refused and nothing is kept; a correct one lands in Data\\downloads", delegate
                 {
                     string dir = Path.Combine(root, "dl");
                     DownloadFailure failure = null;

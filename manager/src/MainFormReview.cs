@@ -219,6 +219,7 @@ namespace SlotsInstaller
             reviewGeneration++;
             if (package == null) { appliedGeneration = reviewGeneration; return; }
             if (reviewCancel != null) try { reviewCancel.Cancel(); } catch (ObjectDisposedException) { }
+            if (StageMode) { if (reviewTimer != null) reviewTimer.Stop(); appliedGeneration = reviewGeneration; return; }   // 25 Nov 2026: Extra stage copies the ticked options as they are; nothing to compose
             EnsureReviewTimer();
             reviewTimer.Stop(); reviewTimer.Interval = Math.Max(1, delay); reviewTimer.Start();
             reviewDue = Environment.TickCount + Math.Max(1, delay);

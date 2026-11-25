@@ -16,8 +16,24 @@ namespace SlotsInstaller
     {
         internal string Prefix, SourcePath;
         internal ModPackage Package;
+        internal DateTime Written;
+        // 23 Nov 2026 (LibraryAddons.PickCopies), by the addon's own option ids: other files with the same files, not shown;
+        // options another addon file has a newer one of the same name with other files (Older), and the newest of those (Newer).
+        internal Dictionary<string, List<string>> Copies = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        internal HashSet<string> Older = new HashSet<string>(StringComparer.OrdinalIgnoreCase), Newer = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         internal string FileName { get { return Path.GetFileName(SourcePath ?? ""); } }
         internal string RecordName { get { return Path.GetFileNameWithoutExtension(SourcePath ?? ""); } }
+        internal string OwnId(string mergedId) { return mergedId != null && mergedId.StartsWith(Prefix, StringComparison.Ordinal) ? mergedId.Substring(Prefix.Length) : mergedId; }
+    }
+
+    // An addon file as PickCopies leaves it: its options shown by a copy instead (Hidden) and the notes of AddonPart.
+    internal sealed class AddonPick
+    {
+        internal ModPackage Package;
+        internal DateTime Written;
+        internal HashSet<string> Hidden = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        internal Dictionary<string, List<string>> Copies = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        internal HashSet<string> Older = new HashSet<string>(StringComparer.OrdinalIgnoreCase), Newer = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
     // A merged selection split into what each archive installs.
@@ -69,21 +85,27 @@ namespace SlotsInstaller
         // go under the main's root); an option with an unresolved AddonFor goes under the main option it names.
         internal static ModPackage Merge(ModPackage main, IList<ModPackage> addons)
         {
-            if (main == null || addons == null || addons.Count == 0) return main;
+            return Merge(main, (addons ?? new ModPackage[0]).Select(a => new AddonPick { Package = a }).ToList());
+        }
+        // 23 Nov 2026: with the options PickCopies leaves out.
+        internal static ModPackage Merge(ModPackage main, IList<AddonPick> picks)
+        {
+            if (main == null || picks == null || picks.Count == 0) return main;
             var merged = new ModPackage { SourcePath = main.SourcePath, Name = main.Name, Character = main.Character, CharacterCodes = main.CharacterCodes.ToList(), Warnings = main.Warnings.ToList(),
                 RootFilesIgnored = main.RootFilesIgnored, PreviewEntries = main.PreviewEntries, PreviewSourceStamp = main.PreviewSourceStamp, MergedFrom = main, AddonParts = new List<AddonPart>() };
             merged.Components.AddRange(main.Components);
             List<ModComponent> mainRoots = main.Components.Where(c => c.IsDummy && c.ParentId == null && SameName(c.Name, main.Name)).ToList();
             string mainRoot = mainRoots.Count == 1 ? mainRoots[0].Id : null;
-            for (int n = 0; n < addons.Count; n++)
+            for (int n = 0; n < picks.Count; n++)
             {
-                ModPackage addon = addons[n];
-                var part = new AddonPart { Prefix = PrefixHead + n + ":", SourcePath = addon.SourcePath, Package = addon };
+                AddonPick pick = picks[n];
+                ModPackage addon = pick.Package;
+                var part = new AddonPart { Prefix = PrefixHead + n + ":", SourcePath = addon.SourcePath, Package = addon, Written = pick.Written, Copies = pick.Copies, Older = pick.Older, Newer = pick.Newer };
                 merged.AddonParts.Add(part);
                 HashSet<string> dropped = DroppedRoots(main, addon);
                 foreach (ModComponent c in addon.Components)
                 {
-                    if (dropped.Contains(c.Id)) continue;
+                    if (dropped.Contains(c.Id) || pick.Hidden.Contains(c.Id)) continue;
                     string parent;
                     ModComponent target = c.ParentId == null ? Target(main, c.AddonFor) : null;
                     if (target != null) parent = target.Id;
@@ -97,6 +119,75 @@ namespace SlotsInstaller
             }
             merged.PrepareChoices();
             return merged;
+        }
+
+        // 23 Nov 2026 (the user: three copies of "Sakura as Ryu C1 - Barefoot Addons.zip" in the library showed Barefoot and
+        // the Swimsuit Legs options three times in Outfit; "if the files are byte same", show them once, not by file
+        // names): what an option installs, its (destination, size, CRC-32) list, sorted. Names, descriptions, previews and
+        // the archive's own name don't count. The CRCs come from the archive's listing (ZIP
+        // central directory, 7-Zip), so nothing extra is read, and the listing follows the archive's size and write time,
+        // so a changed copy is compared again. Null (never a copy of anything) when a file has no listed CRC (a folder).
+        internal static string OptionKey(ModComponent c)
+        {
+            if (c == null || !c.HasFiles(true)) return null;
+            var files = new List<string>();
+            foreach (var a in c.Assets.Select(x => new { Kind = "n", Asset = x }).Concat(c.RootAssets.Select(x => new { Kind = "r", Asset = x })))
+            {
+                if (!a.Asset.Crc.HasValue) return null;
+                files.Add(a.Kind + ":" + (a.Asset.DestinationPath ?? "").Replace('\\', '/').ToLowerInvariant() + "|" + a.Asset.Size + "|" + a.Asset.Crc.Value.ToString("X8"));
+            }
+            files.Sort(StringComparer.Ordinal);
+            return String.Join("\n", files);
+        }
+
+        // Which addon options show. An option with the same files as one of the main mod, or as one shown from another
+        // addon file, is left out (Hidden) and named on the shown one (Copies). The shown one comes from an installed file
+        // first (its record reopens with its ticks), else the newest file (the latest names and descriptions), else the
+        // first path. An installed file's options always show, and an addon file with nothing left to show is left out.
+        // A name shown from two files with other files is kept twice: the older file's is marked (Older), the newest one's
+        // names it (Newer); hiding a version is not guessed. Order of the files kept.
+        internal static List<AddonPick> PickCopies(ModPackage main, IList<ModPackage> addons, Func<string, bool> installed, Func<string, DateTime> written)
+        {
+            var picks = (addons ?? new ModPackage[0]).Where(a => a != null).Select(a => new AddonPick { Package = a, Written = written == null ? DateTime.MinValue : written(a.SourcePath) }).ToList();
+            Func<AddonPick, bool> used = p => installed != null && installed(p.Package.SourcePath);
+            List<AddonPick> ranked = picks.OrderByDescending(used).ThenByDescending(p => p.Written).ThenBy(p => p.Package.SourcePath ?? "", StringComparer.OrdinalIgnoreCase).ToList();
+            var mainKeys = new HashSet<string>((main == null ? new List<ModComponent>() : main.Components).Select(OptionKey).Where(k => k != null), StringComparer.Ordinal);
+            var shown = new Dictionary<string, KeyValuePair<AddonPick, ModComponent>>(StringComparer.Ordinal);
+            foreach (AddonPick p in ranked)
+                foreach (ModComponent c in p.Package.Components)
+                {
+                    string key = OptionKey(c);
+                    if (key == null) continue;
+                    if (mainKeys.Contains(key)) { if (!used(p)) p.Hidden.Add(c.Id); continue; }
+                    KeyValuePair<AddonPick, ModComponent> first;
+                    if (!shown.TryGetValue(key, out first)) { shown[key] = new KeyValuePair<AddonPick, ModComponent>(p, c); continue; }
+                    if (used(p) || first.Key == p) continue;   // an installed file's options; two options of one file are the author's
+                    p.Hidden.Add(c.Id);
+                    List<string> copies;
+                    if (!first.Key.Copies.TryGetValue(first.Value.Id, out copies)) first.Key.Copies[first.Value.Id] = copies = new List<string>();
+                    if (!copies.Contains(p.Package.SourcePath, StringComparer.OrdinalIgnoreCase)) copies.Add(p.Package.SourcePath);
+                }
+            // A group of the addon whose options are all left out goes too.
+            foreach (AddonPick p in picks)
+                for (bool changed = true; changed; )
+                {
+                    changed = false;
+                    foreach (ModComponent g in p.Package.Components.Where(c => c.IsDummy && !c.HasFiles(true) && !p.Hidden.Contains(c.Id)).ToList())
+                    {
+                        List<ModComponent> kids = p.Package.Components.Where(k => String.Equals(k.ParentId, g.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+                        if (kids.Count > 0 && kids.All(k => p.Hidden.Contains(k.Id))) { p.Hidden.Add(g.Id); changed = true; }
+                    }
+                }
+            List<AddonPick> result = picks.Where(p => p.Package.Components.Any(c => c.HasFiles(true) && !p.Hidden.Contains(c.Id))).ToList();
+            var named = result.SelectMany(p => p.Package.Components.Where(c => !c.IsDummy && c.HasFiles(true) && !p.Hidden.Contains(c.Id)).Select(c => new { Pick = p, Option = c, Key = OptionKey(c) }))
+                .GroupBy(x => Clean(String.IsNullOrWhiteSpace(x.Option.AddonFor) ? x.Option.ParentId : x.Option.AddonFor).ToLowerInvariant() + "|" + Clean(x.Option.Name).ToLowerInvariant(), StringComparer.Ordinal);
+            foreach (var same in named)
+            {
+                if (same.Count() < 2 || same.Select(x => x.Key ?? Guid.NewGuid().ToString()).Distinct(StringComparer.Ordinal).Count() < 2) continue;
+                var newest = same.OrderByDescending(x => x.Pick.Written).ThenBy(x => x.Pick.Package.SourcePath ?? "", StringComparer.OrdinalIgnoreCase).First();
+                foreach (var x in same.Where(x => x != newest && (x.Key == null || x.Key != newest.Key))) { x.Pick.Older.Add(x.Option.Id); newest.Pick.Newer.Add(newest.Option.Id); }
+            }
+            return result;
         }
 
         // An addon's dummy roots named like the main mod ("00 Menu"): its options go under the main's root instead.
@@ -171,7 +262,13 @@ namespace SlotsInstaller
             merged.PrepareChoices(); main.PrepareChoices();
             var fillAt = new Dictionary<int, string>();
             List<string> defaults = Composer.DefaultSelection(main, replace);
-            foreach (ModComponent group in Composer.UnresolvedChoiceGroups(main, mainIds, replace))
+            List<ModComponent> groups = Composer.UnresolvedChoiceGroups(main, mainIds, replace);
+            // 1.0.22: description wording no longer makes a required choice (guesses never block), so a guessed group gets
+            // no fill-in while the main record installs alone. When it can't (only an addon option ticked; in Extra outfit
+            // the outfit mesh is in the branch the addon replaces), every choice group an addon option answers gets one.
+            if (split.Parts.Any(p => p.Value.Count > 0) && !Composer.Plan(main, mainIds, replace).CanInstall)
+                groups.AddRange(main.Components.Where(g => g.IsDummy && !groups.Contains(g) && merged.Find(g.Id) != null && merged.IsChoice(merged.Find(g.Id))));
+            foreach (ModComponent group in groups)
             {
                 ModComponent shown = merged.Find(group.Id);
                 if (shown == null || !merged.IsChoice(shown)) continue;

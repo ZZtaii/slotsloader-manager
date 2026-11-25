@@ -79,10 +79,12 @@ namespace SlotsInstaller
                         full("footer and inspector fit without overlap in both modes at 1232x640 and 1110x610", delegate { Layout(form, root); });
                         check("install a replacement; Installed page lists it with priority and a read-only external manager row; the Extra / Installed type filter (1.0.1)", delegate { InstallAndList(form, f, fluffy); });
                         check("game-file change banner appears and Reapply clears it", delegate { Banner(form, f); });
+                        check("Keep changes (1.0.22): shown on the banner and the notice only when a changed file may be kept; one click keeps it with no dialog and clears the notice, the file is untouched; Undo reports it again", delegate { KeepChangesUi(form, f); });
                         full("Reapply notice (1.0.10): the game-file change is a toast on the other pages (not on Installed, where the banner is) with Reapply, Show details and ✕ (back when the notice changes or at Launch); Launch SF6 says so first and starts on a second click; Reapply from the toast clears it and Launch starts at once", delegate { ReapplyNotice(form, f, launcher); });
                         full("Launch SF6 uses the launcher; the running indicator disables replacement changes", delegate { Launch(form, probe, launcher); });
                         check("Uninstall from the Installed page restores the clean game folder", delegate { Uninstall(form, f, clean); });
                         full("leftover PAK row (1.0.11): the fixture's unlisted patch PAK is a 'Leftover PAK' row ('not listed by any mod manager · size · name') with Remove PAK; SF6 running refuses inline; Remove PAK takes it out with no popup and offers Undo; Undo puts it back byte for byte; an Undo that ends unused sends its copy to the Recycle Bin", delegate { LeftoverPakRow(form, f, probe, clean); });
+                        check("Extra stage (25 Nov 2026): a stage mod opens with INSTALL AS 'Extra stage', no character or outfit name, no Health; several options start unticked, alternatives can both be ticked, Install puts them in stage_mods and the library shows Uninstall; reopened, its installed options are ticked; Replace original keeps the label; a one-option mod starts ticked; the Installed page has an Extra stage row (not under Installed) whose Uninstall deletes only its folder", delegate { ExtraStageUi(form, f, root); });
                         full("library uninstall (2.0.3): right-click and footer offer Uninstall replacement for a source installed as a replacement, disabled with the reason while Fluffy runs, uninstall for good (no copy kept, 1.0.1); extra-outfit entries unchanged", delegate { LibraryReplacementUninstall(form, f, probe, clean); });
                         full("Settings: Game files & replacements tab shows method, store, Fluffy and tool status without hiding General", delegate { SettingsTab(form, root); });
                         full("Extra outfit mode warns when Slotsloader is missing (1.0.8: after REFramework, which comes first)", delegate { SlotsLoaderNotice(form, f); });
@@ -672,6 +674,51 @@ namespace SlotsInstaller
             Require(banner.Visible && Get<Label>(form, "gameBannerText").Text.StartsWith("Game files changed") && Get<FlatButton>(form, "bannerReapply").Visible, "banner not shown");
             Get<FlatButton>(form, "bannerReapply").PerformClick(); WaitIdle(form);
             Require(!banner.Visible && File.Exists(Path.Combine(f.Game, ReplaceChecks.V2.Replace('/', '\\'))), "Reapply did not repair and clear the banner");
+        }
+
+        // 1.0.22: Keep changes on the banner and the notice (MainFormReplace.cs, KeepChangedFiles).
+        private static void KeepChangesUi(MainForm form, ReplaceChecks.Fixture f)
+        {
+            Panel library = Get<Panel>(form, "libraryPage"), installed = Get<Panel>(form, "installedPage");
+            var engine = (ReplaceEngine)Call(form, "Engine");
+            const string script = "reframework/autorun/keep_ui.lua";
+            ReplaceChecks.Put(f.Mods, "keepUi/Keep Tool/modinfo.ini", Encoding.UTF8.GetBytes("name=Keep Tool\r\n"));
+            ReplaceChecks.Put(f.Mods, "keepUi/Keep Tool/" + script, Encoding.UTF8.GetBytes("-- shipped"));
+            ModPackage package = PackageReader.Load(f.Mod("keepUi"), "");
+            ReplacePlan plan;
+            ReplaceMod tool = ReplacePlanner.PrepareAndInstall(Composer.Plan(package, Composer.DefaultSelection(package, true), true), "", engine, "Keep Tool", false, null, out plan);
+            string full = Path.Combine(f.Game, script.Replace('/', '\\'));
+            try
+            {
+                Call(form, "ShowPage", installed); Application.DoEvents();
+                Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                FlatButton keep = Get<FlatButton>(form, "bannerKeep");
+                Require(!keep.Visible, "Keep changes shown with nothing changed");
+                File.WriteAllText(full, "-- edited by hand");
+                Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                Require(Get<Panel>(form, "gameBanner").Visible && Get<Label>(form, "gameBannerText").Text.StartsWith("Game files changed") && keep.Visible && keep.Enabled && keep.Text == "Keep changes" && keep.AccessibleName == MainForm.KeepChangesName && Get<FlatButton>(form, "bannerReapply").Visible, "banner with Keep changes: " + Get<Label>(form, "gameBannerText").Text);
+                Call(form, "ShowPage", library); Application.DoEvents();
+                Panel toast = form.UpdateToast(MainForm.GameFilesToast);
+                List<FlatButton> buttons = toast == null ? new List<FlatButton>() : toast.Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<FlatButton>().ToList();
+                Require(buttons.Select(b => b.Text).SequenceEqual(new[] { "Reapply", "Keep changes", "Show details", "✕" }) && buttons.All(b => !String.IsNullOrEmpty(b.AccessibleName)) && buttons.Last().Right <= toast.ClientSize.Width, "notice buttons: " + String.Join(", ", buttons.Select(b => b.Text)));
+                // The click keeps the file: no dialog, the notice goes, the file is untouched, Undo is offered.
+                buttons[1].PerformClick(); WaitIdle(form);
+                Require(form.UpdateToast(MainForm.GameFilesToast) == null && File.ReadAllText(full) == "-- edited by hand" && engine.LoadState().KeptChanged.SequenceEqual(new[] { script }) && form.UndoAvailable && form.UndoLabel == "Kept 1 changed file", "Keep changes from the notice: undo '" + form.UndoLabel + "', kept " + String.Join(", ", engine.LoadState().KeptChanged));
+                Call(form, "ShowPage", installed); Application.DoEvents();
+                Require(!keep.Visible && !Get<Label>(form, "gameBannerText").Text.StartsWith("Game files changed"), "the banner still reports the kept file");
+                // Undo: checked again, reported again.
+                form.PerformUndo(); WaitIdle(form);
+                Require(engine.LoadState().KeptChanged.Count == 0 && keep.Visible && Get<Label>(form, "gameBannerText").Text.StartsWith("Game files changed"), "Undo of Keep changes");
+                keep.PerformClick(); WaitIdle(form);
+                Require(!keep.Visible && engine.LoadState().KeptChanged.Count == 1 && File.ReadAllText(full) == "-- edited by hand", "Keep changes from the banner");
+            }
+            finally
+            {
+                engine.Uninstall(tool.Id, DriftChoice.RestoreOriginal);
+                Call(form, "RefreshInstalled", (string)null); WaitIdle(form);
+                Call(form, "ShowPage", library); Application.DoEvents();
+            }
+            Require(!File.Exists(full) && engine.LoadState().KeptChanged.Count == 0, "uninstall left the kept file or the choice");
         }
 
         private static void ReapplyNotice(MainForm form, ReplaceChecks.Fixture f, RecordingLauncher launcher)

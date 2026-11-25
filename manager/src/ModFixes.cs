@@ -403,6 +403,11 @@ namespace SlotsInstaller
         internal static List<FixResult> UpgradeModFile(ref byte[] data, GameReference reference, string path)
         {
             var results = new List<FixResult>();
+            // 25 Nov 2026: a PAK mod (staged as its patch PAK) and loose scene, user and prefab files: documented
+            // signature migrations (PakModFixes.cs). Their types are not the colour types, so the repairs below still apply.
+            if (path != null && ReplaceEngine.IsPatchPakPath(path)) return PakModFixes.UpgradePak(ref data, reference);
+            if (path != null && PakModFixes.IsSceneLike(path)) results.AddRange(PakModFixes.UpgradeFile(ref data, reference));
+            if (path != null && path.EndsWith(".pfb.17", StringComparison.OrdinalIgnoreCase)) return results;
             if (path != null && path.EndsWith(".scn.20", StringComparison.OrdinalIgnoreCase))
             {
                 FixResult scene = reference != null ? SwapRepairs.RepairScene(ref data, reference, ModFixes.NormalizeNativePath(path)) : null;

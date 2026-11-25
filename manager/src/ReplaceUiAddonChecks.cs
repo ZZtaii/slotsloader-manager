@@ -72,18 +72,101 @@ namespace SlotsInstaller
             ModComponent outfit = merged.Components.Single(c => c.Name == "Outfit"), full = merged.Components.Single(c => c.Name == "Full"), bare = merged.Components.Single(c => c.Name == "Barefoot");
             Require(bare.ParentId == outfit.Id && merged.IsChoiceBranch(outfit, bare) && merged.IsChoiceBranch(outfit, full) && !merged.Components.Any(c => c.Id.StartsWith(LibraryAddons.PrefixHead) && c.IsDummy), "merged tree: Barefoot " + bare.ParentId);
             string mainFiles = merged.Components.Single(c => c.Name == "Main files").Id, shortHair = merged.Components.Single(c => c.Name == "Short").Id;
+            // 1.0.22 (guesses never block): "Outfit" is a choose-one only by its description, so nothing requires a choice
+            // there and the main record needs no fill-in; with an explicit "Choose one" (Reorder bundle) Full stands in.
             AddonSplit split = LibraryAddons.Split(merged, new[] { mainFiles, bare.Id, shortHair }, true);
-            Require(String.Join("|", split.MainIds) == mainFiles + "|" + full.Id + "|" + shortHair && split.Parts.Single().Value.SequenceEqual(new[] { "04 Barefoot" }) && split.Warnings.Count == 0 && split.Notes.Single() == "Also installs Barefoot from " + Path.GetFileName(addon) + " on top.",
+            Require(String.Join("|", split.MainIds) == mainFiles + "|" + shortHair && split.FillIns.Count == 0 && split.Parts.Single().Value.SequenceEqual(new[] { "04 Barefoot" }) && split.Warnings.Count == 0 && split.Notes.Single() == "Also installs Barefoot from " + Path.GetFileName(addon) + " on top.",
                 "split: main " + String.Join("|", split.MainIds) + " addon " + String.Join("|", split.Parts.Single().Value) + " warnings " + String.Join(" / ", split.Warnings));
             Require(Composer.Plan(m, split.MainIds, true).CanInstall && Composer.Plan(a, split.Parts.Single().Value, true).CanInstall, "a split record is not valid alone");
-            Require(Composer.Plan(merged, new[] { mainFiles, full.Id, bare.Id, shortHair }, true).Errors.Contains("Choose one option in 'Outfit'."), "two picks in Outfit were not an error");
+            Func<ModPackage, ModPackage> chooseOne = p => { p.Components.Single(c => c.Name == "Outfit").BundleRule = "Choose one"; p.PrepareChoices(); return p; };
+            ModPackage ruled = LibraryAddons.Merge(chooseOne(PackageReader.Load(main, "")), new List<ModPackage> { a });
+            AddonSplit ruledSplit = LibraryAddons.Split(ruled, new[] { mainFiles, ruled.Components.Single(c => c.Name == "Barefoot").Id, shortHair }, true);
+            Require(String.Join("|", ruledSplit.MainIds) == mainFiles + "|" + full.Id + "|" + shortHair && ruledSplit.FillIns.SequenceEqual(new[] { full.Id }) && ruledSplit.Warnings.Count == 0,
+                "split with an explicit Choose one: main " + String.Join("|", ruledSplit.MainIds) + " warnings " + String.Join(" / ", ruledSplit.Warnings));
+            Require(Composer.Plan(ruled.MergedFrom, ruledSplit.MainIds, true).CanInstall, "the main record with its fill-in is not valid alone");
+            // 2026-11-23: "Outfit" is a choose-one only by its description, a guess: two picks warn, never block.
+            CompositionPlan twoOutfits = Composer.Plan(merged, new[] { mainFiles, full.Id, bare.Id, shortHair }, true);
+            Require(twoOutfits.CanInstall && twoOutfits.Warnings.Any(w => w.StartsWith("'Outfit' looks like a choose-one group")), "two picks in a guessed Outfit group: " + String.Join(" / ", twoOutfits.Errors));
             List<string> restored = LibraryAddons.Restore(merged, new List<string> { mainFiles, full.Id, shortHair }, new[] { new KeyValuePair<AddonPart, List<string>>(merged.AddonParts[0], new List<string> { "04 Barefoot" }) });
             Require(restored.Contains(bare.Id) && !restored.Contains(full.Id) && restored.Contains(shortHair), "restore: " + String.Join("|", restored));
             // Only Shorts to stand in: it is the fill-in and its texture Barefoot doesn't replace is named.
-            ModPackage shortsOnly = PackageReader.Load(main, ""); shortsOnly.Components.RemoveAll(c => c.Name == "Full"); shortsOnly.RebuildIndexes(); shortsOnly.PrepareChoices();
+            ModPackage shortsOnly = PackageReader.Load(main, ""); shortsOnly.Components.RemoveAll(c => c.Name == "Full"); shortsOnly.RebuildIndexes(); chooseOne(shortsOnly);
             ModPackage merged2 = LibraryAddons.Merge(shortsOnly, new List<ModPackage> { a });
             AddonSplit split2 = LibraryAddons.Split(merged2, new[] { mainFiles, merged2.Components.Single(c => c.Name == "Barefoot").Id }, false);
             Require(split2.MainIds.Contains(merged2.Components.Single(c => c.Name == "Shorts").Id) && split2.Warnings.Count == 1 && split2.Warnings[0].Contains("shorts.tex.241101895") && split2.Warnings[0].Contains("Barefoot"), "leftover note: " + String.Join(" / ", split2.Warnings));
+            AddonCopies(addon);
+        }
+
+        // 23 Nov 2026 (the user's three copies of "Sakura as Ryu C1 - Barefoot Addons.zip" showed every option three times):
+        // copies with the same files are shown once, whatever their names and modinfo text; the installed copy, else the
+        // newest, is the one shown; other files, or files without a listed CRC (a folder), are never taken for a copy.
+        private static void AddonCopies(string addon)
+        {
+            string folder = Path.Combine(Path.GetDirectoryName(addon), "copies");
+            Directory.CreateDirectory(folder);
+            string bytes = Path.Combine(folder, "Barefoot copy_2.zip"); File.Copy(addon, bytes, true);
+            string reworded = Path.Combine(folder, "Barefoot reworded.zip"), changed = Path.Combine(folder, "Barefoot changed.zip");
+            WriteZip(reworded, new Dictionary<string, byte[]> {
+                { "00 Menu/modinfo.ini", Ini("name=" + AddonTestName + "\nDummyMod=true\ndescription=Another text\n") },
+                { "Bare/modinfo.ini", Ini("name=No shoes\nAddonFor=Outfit\ndescription=Reworded copy\n") },
+                { "Bare/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes("barefoot mesh") } });
+            WriteZip(changed, new Dictionary<string, byte[]> {
+                { "00 Menu/modinfo.ini", Ini("name=" + AddonTestName + "\nDummyMod=true\ndescription=Fixture main mod\n") },
+                { "04 Barefoot/modinfo.ini", Ini("name=Barefoot\nAddonFor=Outfit\nRequirement=Main files\nMenuPriority=100\n") },
+                { "04 Barefoot/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes("barefoot mesh v2") } });
+            string loose = Path.Combine(folder, "Barefoot folder");
+            if (Directory.Exists(loose)) Directory.Delete(loose, true);
+            ReplaceChecks.Put(loose, "04 Barefoot/modinfo.ini", Ini("name=Barefoot\nAddonFor=Outfit\n"));
+            ReplaceChecks.Put(loose, "04 Barefoot/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes("barefoot mesh"));
+            // Like the user's: one older copy has Barefoot the same and its Legs option with other bytes.
+            string older = Path.Combine(folder, "Barefoot older.zip");
+            WriteZip(older, new Dictionary<string, byte[]> {
+                { "00 Menu/modinfo.ini", Ini("name=" + AddonTestName + "\nDummyMod=true\n") },
+                { "04 Barefoot/modinfo.ini", Ini("name=Barefoot\nAddonFor=Outfit\n") },
+                { "04 Barefoot/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes("barefoot mesh") },
+                { "21 Legs/modinfo.ini", Ini("name=Legs\nAddonFor=Outfit\n") },
+                { "21 Legs/" + AddonModel + "legs.tex.241101895", Encoding.ASCII.GetBytes("legs v1") } });
+            string newer = Path.Combine(folder, "Barefoot newer.zip");
+            WriteZip(newer, new Dictionary<string, byte[]> {
+                { "00 Menu/modinfo.ini", Ini("name=" + AddonTestName + "\nDummyMod=true\n") },
+                { "04 Barefoot/modinfo.ini", Ini("name=Barefoot\nAddonFor=Outfit\n") },
+                { "04 Barefoot/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes("barefoot mesh") },
+                { "21 Legs/modinfo.ini", Ini("name=Legs\nAddonFor=Outfit\n") },
+                { "21 Legs/" + AddonModel + "legs.tex.241101895", Encoding.ASCII.GetBytes("legs v2") } });
+            ModPackage main = PackageReader.Load(Path.Combine(Path.GetDirectoryName(addon), AddonTestName + ".zip"), "");
+            var packages = new[] { addon, bytes, reworded, changed, loose }.Select(p => PackageReader.Load(p, "")).ToList();
+            Func<int, string> bare = i => LibraryAddons.OptionKey(packages[i].Components.First(c => c.HasFiles(true)));
+            Require(packages[0].Components.SelectMany(c => c.Assets).All(x => x.Crc.HasValue), "a ZIP's files have no CRC from the central directory");
+            Require(bare(0) != null && bare(0) == bare(1) && bare(0) == bare(2) && bare(0) != bare(3) && bare(4) == null,
+                "option keys: copy " + (bare(0) == bare(1)) + ", reworded " + (bare(0) == bare(2)) + ", changed " + (bare(0) != bare(3)) + ", folder " + (bare(4) == null));
+            var written = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase) { { addon, new DateTime(2026, 11, 1) }, { bytes, new DateTime(2026, 11, 3) }, { reworded, new DateTime(2026, 11, 2) }, { older, new DateTime(2026, 11, 12, 4, 4, 0) }, { newer, new DateTime(2026, 11, 12, 4, 5, 0) } };
+            Func<string, DateTime> when = p => written.ContainsKey(p) ? written[p] : DateTime.MinValue;
+            Func<List<AddonPick>, string> describe = list => String.Join(" | ", list.Select(k => Path.GetFileName(k.Package.SourcePath) + " hidden " + k.Hidden.Count + " copies " + k.Copies.Values.Sum(v => v.Count) + " older " + k.Older.Count + " newer " + k.Newer.Count));
+            // Byte copies: the newest file shows the option and names the others; other bytes and a folder (no CRCs) stay.
+            List<AddonPick> kept = LibraryAddons.PickCopies(main, packages, p => false, when);
+            Require(kept.Count == 3 && kept[0].Package == packages[1] && kept[0].Copies.Values.Single().Count == 2 && kept[1].Package == packages[3] && kept[2].Package == packages[4] && kept.All(k => k.Older.Count == 0 || k.Package == packages[3] || k.Package == packages[4]),
+                "copies, newest kept: " + describe(kept));
+            // The installed copy is the one shown.
+            kept = LibraryAddons.PickCopies(main, packages, p => ReplacePlanner.SameSource(p, reworded), when);
+            Require(kept.Count == 3 && kept[0].Package == packages[2] && kept[0].Copies.Values.Single().Count == 2, "copies, the installed one kept: " + describe(kept));
+            // An installed file's options always show, even when another installed file has the same files.
+            kept = LibraryAddons.PickCopies(main, packages, p => ReplacePlanner.SameSource(p, reworded) || ReplacePlanner.SameSource(p, addon), when);
+            Require(kept.Count == 4 && kept.Any(k => k.Package == packages[0] && k.Hidden.Count == 0) && kept.Any(k => k.Package == packages[2] && k.Hidden.Count == 0), "two installed copies: " + describe(kept));
+            // The user's case: Barefoot the same in both (shown once, from the newer), Legs with other bytes shown from each, the older marked.
+            ModPackage o = PackageReader.Load(older, ""), n = PackageReader.Load(newer, "");
+            kept = LibraryAddons.PickCopies(main, new List<ModPackage> { o, n }, p => false, when);
+            Require(kept.Count == 2 && kept[0].Package == o && kept[0].Hidden.SetEquals(new[] { "04 Barefoot" }) && kept[0].Older.SetEquals(new[] { "21 Legs" }) && kept[1].Newer.SetEquals(new[] { "21 Legs" }) && kept[1].Hidden.Count == 0 && kept[1].Copies["04 Barefoot"].Single() == older,
+                "older and newer: " + describe(kept));
+            ModPackage merged = LibraryAddons.Merge(main, kept);
+            Require(merged.Components.Count(c => c.Name == "Barefoot") == 1 && merged.Components.Count(c => c.Name == "Legs") == 2 && merged.AddonParts.Count == 2 && LibraryAddons.PartOf(merged, merged.Components.Single(c => c.Name == "Barefoot").Id).SourcePath == newer,
+                "merged: " + String.Join(", ", merged.Components.Select(c => c.Id)));
+            ModComponent outfit = merged.Components.Single(c => c.Name == "Outfit");
+            Require(merged.Components.Where(c => c.Name == "Legs" || c.Name == "Barefoot").All(c => c.ParentId == outfit.Id), "copies not in Outfit");
+            // Barefoot the same as one of the main mod's own options: left out.
+            ModPackage withBare = PackageReader.Load(Path.Combine(Path.GetDirectoryName(addon), AddonTestName + ".zip"), "");
+            withBare.Components.Single(c => c.Name == "Shorts").Assets = o.Components.Single(c => c.Name == "Barefoot").Assets;
+            kept = LibraryAddons.PickCopies(withBare, new List<ModPackage> { o }, p => false, when);
+            Require(kept.Count == 1 && kept[0].Hidden.Contains("04 Barefoot") && !kept[0].Hidden.Contains("21 Legs"), "same as a main option: " + describe(kept));
         }
 
         private static void AddonArchives(MainForm form, ReplaceChecks.Fixture f, string folder)
@@ -170,11 +253,12 @@ namespace SlotsInstaller
                 Require(ticked("Barefoot") && !ticked("Full") && ticked("Main files") && ticked("Short"), "ticks after Barefoot: " + state());
                 ReplacePlan health = Get<ReplacePlan>(form, "replacePlan");
                 Require(health != null && health.CanInstall && health.Items.Any(i => i.Text == "Also installs Barefoot from " + Path.GetFileName(addon) + " on top.") && Get<FlatButton>(form, "installButton").Enabled, "health: " + state() + (health == null ? "" : " / " + String.Join(" / ", health.Items.Select(i => i.Text))));
-                // Install: two records, the addon directly above the main one; the main record is valid alone with Full.
+                // Install: two records, the addon directly above the main one; the main record is valid alone. 1.0.22: with
+                // Main files ticked and Outfit a choose-one only by its description, it carries no fill-in (no Full).
                 Call(form, "InstallCurrent"); WaitIdle(form); WaitReview(form);
                 List<ReplaceMod> mods = engine.LoadState().Mods;
                 ReplaceMod mainMod = mods.Single(m => isMain(m.SourcePath)), addonMod = mods.Single(m => isAddon(m.SourcePath));
-                Require(mods.IndexOf(addonMod) == mods.IndexOf(mainMod) - 1 && addonMod.Name == AddonTestName + " Addon" && addonMod.SelectedIds.SequenceEqual(new[] { "04 Barefoot" }) && mainMod.SelectedIds.Contains(full.Id) && !mainMod.SelectedIds.Any(id => id.StartsWith(LibraryAddons.PrefixHead)),
+                Require(mods.IndexOf(addonMod) == mods.IndexOf(mainMod) - 1 && addonMod.Name == AddonTestName + " Addon" && addonMod.SelectedIds.SequenceEqual(new[] { "04 Barefoot" }) && !mainMod.SelectedIds.Contains(full.Id) && !mainMod.SelectedIds.Any(id => id.StartsWith(LibraryAddons.PrefixHead)),
                     "records: " + String.Join(" / ", mods.Select(m => m.Name + " [" + String.Join(",", m.SelectedIds) + "]")) + " / " + state());
                 Require(Composer.Plan(PackageReader.Load(main, ""), mainMod.SelectedIds, true).CanInstall, "the main record is not valid alone");
                 Require(engine.LoadState().Deployment(ReplaceChecks.V5).Owner == addonMod.Id, "Barefoot's mesh does not win in game");
@@ -303,8 +387,9 @@ namespace SlotsInstaller
                 {
                     // F2: the addon record is switched in place and moved above the new main record in its own install (no Move).
                     Require(engine.LoadState().Generation == generation + 2, "changes for main + addon: " + (engine.LoadState().Generation - generation) + " (a Move is one more)");
-                    // L3: the main record's name shows Barefoot (the addon), not Full (the fill-in it carries).
-                    Require(mainMod.Name == AddonTestName + " · Short + Barefoot (addon)", "main record name: " + mainMod.Name);
+                    // L3: the main record's name never shows Full. 1.0.22: the fixture's Outfit is a choose-one only by its
+                    // description, so the main record carries no fill-in and is named after its own ticks.
+                    Require(mainMod.Name == AddonTestName + " · Short" && !mainMod.SelectedIds.Any(id => id.EndsWith("Full")), "main record name: " + mainMod.Name + " [" + String.Join(",", mainMod.SelectedIds) + "]");
                     // F3 (Replace original): Full instead of Barefoot is not "already installed".
                     Require(Call(form, "SameInstalledReplacement") != null, "the same ticks are not the installed replacement: " + state());
                     node("Full").Checked = true; WaitReview(form);

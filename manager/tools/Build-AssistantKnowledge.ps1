@@ -9,8 +9,9 @@ $ErrorActionPreference = 'Stop'
 # 1.0.21: the size cap of the pack (at 4 characters per token), checked here so the build fails; it was the Assistant
 # check's. 1.0.18: 26,000 to 26,250 tokens for the Help of Outfit order and Turn outfit mods off; to 26,750 for the
 # outfit recipes lines of What changed; 1.0.20: to 27,400 for the Help of Convert RAR and 7Z to ZIP (108,837 characters
-# then). Raise it here, on this one line.
-$maxPackTokens = 27400
+# then); 1.0.22: to 27,900 for the Help of Extra stage, of Replace original and extra outfits, and the loader README of
+# zztaii.com/modmanager (110,766 characters then). Raise it here, on this one line.
+$maxPackTokens = 27900
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 function Read-Doc([string]$path) { if (-not (Test-Path -LiteralPath $path)) { return $null }; return ([IO.File]::ReadAllText($path, $utf8)).Replace("`r`n", "`n").Replace("`r", "`n") }
 $versionBullet = '^- (\d+\.\d+\.\d+)( |\(|:)'   # 1.0.11: the README writes "- 1.0.11:" (the colon wasn't matched, so no version was ever left out)

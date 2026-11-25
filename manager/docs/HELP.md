@@ -90,6 +90,9 @@ Choose in **Settings → Game files & replacements → Replacement method**:
 
 Changing the method converts installed replacements; **Undo** converts them back.
 
+### Replace original and extra outfits
+An extra outfit is made from one of the fighter's outfits and uses that outfit's own files wherever it doesn't bring its own. A replacement over that outfit shows on those extra outfits too. The Health report warns and names them; to leave them as they are, install the mod as an Extra outfit instead.
+
 ### Priority and conflicts
 - On the Installed page, the **Installed** type lists replacements and tool mods in priority order: **#1** is on top and wins files that several mods share, like the mod loaded last in other mod managers. What you install last goes to #1; **Move up** and **Move down** change the order (the row moves at once and the order is saved a moment after your last click).
 - Before you install, **REPLACES** in the inspector and the footer name any installed mod for the same outfit. The link **Uninstall 'name'** removes that other mod.
@@ -120,6 +123,7 @@ Mods are made for the game as it was on the day they were published. Every **Rep
 - Textures with the old `.tex.143230113` suffix, and meshes with an older suffix, are renamed to the current version.
 - Texture mip tables with a wrong row pitch are repaired.
 - Outdated select-screen colour swatch files are rebuilt from the game's current file, keeping the mod's colours.
+- Stage and scene files with a type signature from before a game update get the current one, inside the mod's `.pak` too, when the game's own files show the layout is unchanged. Extra stage installs get the same fix.
 
 ### Where you see them
 The footer counts them ("3 auto-fixed"). The Health report lists them under **Fixed automatically** and per file. On the Installed page, a replacement's details list each file with its fix.
@@ -153,6 +157,13 @@ Extra outfits need REFramework and Slotsloader in the game folder. In Extra outf
 ### Install all variants
 For an archive with several options, **Install all variants** copies the whole archive into `reframework\costume_mods\<Character>\`, as if you dropped it there yourself. Slotsloader then builds usually one outfit per combination (up to 50 per mod). Mods made for an external mod manager get one per shape option.
 When a ZIP mod shows options from an add-on archive (marked **Add-on** in the list), the copy includes them, so their combinations are built too. Right-click an option to open its archive in Explorer.
+
+### Extra stage
+A stage mod opens with **INSTALL AS** showing **Extra stage** (needs Wael's Slots Loader) and **Replace original**.
+- Each ticked option becomes a variant of its stage: UP / DOWN on the stage select picks it, and the original stays a choice. A whole new stage gets its own cell in Battle Settings, Training and Replays.
+- One option starts ticked; with several, tick the variants you want (all of them if you like).
+- It goes to `reframework\stage_mods\<Mod name>\`; installing again updates it. The Installed page shows an **Extra stage** row whose **Uninstall** deletes it.
+- Stage mods that come as a `.pak` are found by the library search "stage" too.
 
 ### Add to outfit
 **Add to outfit** copies only the ticked options (one hair option of a bundle, for example) into an extra outfit the Manager already installed. Files with the same names are replaced and nothing else changes. Files made for another outfit slot can't go on it, so those outfits can't be picked. The Installed page shows what was added; **Added parts** reorders or removes them (the top one wins).
@@ -397,6 +408,10 @@ It then puts back the game entries mods invalidated. Your extra outfits stay, an
 
 ### When another tool changed a file
 If another tool replaced or deleted a file the Manager installed, uninstalling or restoring asks "Game files changed by another tool". **Restore original** brings the game's file back, **Keep current file** leaves the other tool's file, and **Cancel** changes nothing.
+
+A tool mod's own data is not part of this. Files a mod ships under `reframework/data` are that mod's settings and saved data, and the mod may rewrite them while SF6 runs. The Manager leaves them as the mod wrote them: no notice, and **Reapply** keeps them. Uninstalling or disabling the mod removes them with it. A missing one is still put back by **Reapply**.
+
+For any other changed file of a tool mod that you want to stay as it is (a script you edited, for example), click **Keep changes** on the "Game files changed" notice. The Manager then leaves that file alone: no notice, and **Reapply** keeps it. It is still the mod's file, so uninstalling or disabling the mod removes it, and an update that ships a new version of it replaces it. **Undo** reports it again. **Keep changes** is not offered for replaced game files (`natives`) or for Slotsloader's files: there, a change means another tool took the file, and **Reapply** or uninstalling decides.
 
 # Reference
 

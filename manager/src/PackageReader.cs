@@ -59,7 +59,7 @@ namespace SlotsInstaller
                         p.Components.Add(c); componentsById.Add(owner,c);
                     }
                     string dst="natives/"+String.Join("/",parts.Skip(natives+1));
-                    c.Assets.Add(new NativeAsset {EntryPath=e.Path,DestinationPath=dst,Size=e.Size});
+                    c.Assets.Add(new NativeAsset {EntryPath=e.Path,DestinationPath=dst,Size=e.Size,Crc=e.ZipChecksum ?? e.ListedCrc});
                     identity.AddNative("/"+dst.Substring("natives/".Length));
                 }
                 // Keep the listing's fighter identity when opening, including REFramework colour data.
@@ -185,7 +185,7 @@ namespace SlotsInstaller
                     c = new ModComponent { Id = owner, Name = Last(owner, p.Name), Description = "Game files (no modinfo.ini)", Author = "", Version = "", AddonFor = "" };
                     p.Components.Add(c); componentsById.Add(owner, c);
                 }
-                c.RootAssets.Add(new NativeAsset { EntryPath = e.Path, DestinationPath = rel, Size = e.Size });
+                c.RootAssets.Add(new NativeAsset { EntryPath = e.Path, DestinationPath = rel, Size = e.Size, Crc = e.ZipChecksum ?? e.ListedCrc });
             }
             // A costume option's other files are usually notes or tool leftovers (colour-tool backups):
             // only REFramework files accompany native files into the game folder.

@@ -210,6 +210,10 @@ namespace SlotsInstaller
         // without them is listed again once.
         public string DisplayName;
         public List<string> OptionNames;
+        // 25 Nov 2026 (still index v4, additive): the mod's .pak files were matched against the suite loader's stage path
+        // list (StageMods.PakStagesOf), so a stage mod shipped as a PAK is a Stage mod. Null = not yet (no list then, or
+        // a record from before): checked once in the background when the list is there.
+        public bool? PakStagesChecked;
     }
     public enum LibraryInstallState { None, Partial, Full, Disabled }
     public static class Library
@@ -397,12 +401,13 @@ namespace SlotsInstaller
             string tool = null;
             try { tool = ToolStamp(sevenZipPath); }
             catch (Exception ex) { if (!IsSourceError(ex)) throw; }
+            Dictionary<ulong, string> stages = StageMods.LibraryTable();
             foreach (LibraryEntry entry in result)
             {
                 OperationContext.ThrowIfCancellationRequested();
                 if (entry.Detection == "Error") continue;
                 if (!ApplyCached(entry, tool)) { MarkPending(entry); pending.Add(entry); }
-                else if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null || entry.FileMix == null) pending.Add(entry); // retain identity while backfilling the payload fact (1.0.16: or the code kinds; 1.0.19: or the file mix)
+                else if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null || entry.FileMix == null || PakStageCheckDue(entry.SourcePath, stages)) pending.Add(entry); // retain identity while backfilling the payload fact (1.0.16: or the code kinds; 1.0.19: or the file mix; 25 Nov 2026: or the PAK's stages)
                 else if (entry.NamesPending || entry.AddonFors == null) namesPending.Add(entry);   // 17 Nov 2026: or the AddonFors (the names stay shown meanwhile)
             }
             SaveIdentityCache();   // Added times filled in from this listing
@@ -437,6 +442,29 @@ namespace SlotsInstaller
         // review: one without natives options is read once, as an .asi or ReShade preset (ReShade.ini, reshade-shaders/)
         // is an injector with no DLL. Left: a natives mod that also ships one of those stays without the kind until its
         // archive changes.
+        // 25 Nov 2026: a PAK-only mod (no fighter files, no stage paths of its own) whose .pak files were never matched
+        // against the stage path list, while that list is there.
+        private static bool PakStageCheckDue(string source, Dictionary<ulong, string> stages)
+        {
+            if (stages == null || String.IsNullOrEmpty(source)) return false;
+            lock (CacheLock)
+            {
+                LibraryIdentityRecord r;
+                return IdentityCache.TryGetValue(source, out r) && PakStageCheckDue(r, stages);
+            }
+        }
+        private static bool PakStageCheckDue(LibraryIdentityRecord r, Dictionary<ulong, string> stages)
+        {
+            return stages != null && r != null && r.HasPakPayload == true && r.PakStagesChecked != true && (r.StageIds == null || r.StageIds.Count == 0) && (r.CharacterCodes == null || r.CharacterCodes.Count == 0);
+        }
+        // A PAK mod's stages: its stage numbers, and Misc kind Stage in place of "PAK only".
+        internal static void ApplyPakStages(LibraryEntry entry, List<string> keys)
+        {
+            if (keys == null || keys.Count == 0) return;
+            entry.StageIds = StageMods.Sorted((entry.StageIds ?? new List<string>()).Concat(keys));
+            if (entry.MiscAreas != null && entry.MiscAreas.Count > 0)
+                entry.MiscAreas = ModCategories.SortLabels(entry.MiscAreas.Where(l => l != ModCategories.LabelPak).Concat(new[] { ModCategories.LabelStage }));
+        }
         private static List<string> CachedCodeKinds(LibraryIdentityRecord cached)
         {
             if (cached.CodeKinds == null && cached.ToolKinds != null && cached.ToolKinds.Count == 0 && cached.OptionCount > 0) { cached.CodeKinds = new List<string>(); cacheDirty = true; }
@@ -687,9 +715,12 @@ namespace SlotsInstaller
                 List<string> codes;
                 if (cached != null) { codes = new List<string>(cached.CharacterCodes); entry.OptionCount = cached.OptionCount.Value; entry.OptionIds = new List<string>(cached.OptionIds); entry.CostumeKeys = new List<string>(cached.CostumeKeys); entry.ToolKinds = new List<string>(cached.ToolKinds); entry.StageIds = new List<string>(cached.StageIds); entry.MiscAreas = new List<string>(cached.MiscAreas); entry.HasPakPayload = cached.HasPakPayload;
                     lock (CacheLock) { entry.CodeKinds = CachedCodeKinds(cached); entry.FileMix = CachedFileMix(cached); }
-                    if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null || entry.FileMix == null)
+                    Dictionary<ulong, string> stages = StageMods.LibraryTable(); bool pakStages;
+                    lock (CacheLock) pakStages = PakStageCheckDue(cached, stages);
+                    if (!entry.HasPakPayload.HasValue || entry.CodeKinds == null || entry.FileMix == null || pakStages)
                     {
                         bool pak = !entry.HasPakPayload.HasValue;   // 1.0.16: one listing backfills both
+                        List<string> pakKeys = null;
                         try
                         {
                             using (var reader = new SourceReader(entry.SourcePath, sevenZipPath))
@@ -697,10 +728,17 @@ namespace SlotsInstaller
                                 if (pak) entry.HasPakPayload = ReadPakPayload(entry.SourcePath, reader);
                                 if (entry.CodeKinds == null) entry.CodeKinds = LibraryCode.Classify(reader.Entries.Keys, entry.Name);
                                 if (entry.FileMix == null) entry.FileMix = CountFileMix(reader.Entries.Keys);   // 1.0.19
+                                if (pakStages) pakKeys = StageMods.PakStagesOf(reader, stages);   // 25 Nov 2026
                             }
                         }
                         catch (Exception ex) { if (ex is OutOfMemoryException || ex is OperationCanceledException) throw; Program.Log(ex); } // optional backfill cannot erase known identity
-                        lock (CacheLock) { if (pak) cached.HasPakPayload = entry.HasPakPayload; if (entry.CodeKinds != null) cached.CodeKinds = new List<string>(entry.CodeKinds); if (entry.FileMix != null) cached.FileMix = new List<int>(entry.FileMix); cacheDirty = true; }
+                        if (pakKeys != null) ApplyPakStages(entry, pakKeys);
+                        lock (CacheLock)
+                        {
+                            if (pak) cached.HasPakPayload = entry.HasPakPayload; if (entry.CodeKinds != null) cached.CodeKinds = new List<string>(entry.CodeKinds); if (entry.FileMix != null) cached.FileMix = new List<int>(entry.FileMix);
+                            if (pakKeys != null) { cached.PakStagesChecked = true; cached.StageIds = new List<string>(entry.StageIds); cached.MiscAreas = new List<string>(entry.MiscAreas); }
+                            cacheDirty = true;
+                        }
                     }
                     if (NamesKnown(cached)) { entry.Authors = new List<string>(cached.Authors); entry.DisplayName = cached.DisplayName; entry.OptionNames = new List<string>(cached.OptionNames); entry.AddonFors = cached.AddonFors == null ? null : new List<string>(cached.AddonFors); entry.NamesPending = false; }
                     else if (readNames) IndexNames(entry, sevenZipPath);   // a names failure costs only the names
@@ -715,6 +753,7 @@ namespace SlotsInstaller
                     var tools = new HashSet<string>(StringComparer.Ordinal);
                     var categories = new ModCategories.Collector();
                     var artFiles = new List<string>();
+                    List<string> pakStageKeys = null; bool? pakStagesChecked = null;
                     using (var reader = new SourceReader(entry.SourcePath, sevenZipPath))
                     {
                         foreach (string path in reader.Entries.Keys)
@@ -739,6 +778,12 @@ namespace SlotsInstaller
                             categories.AddNative(native, fileIdentity.Fighter);
                         }
                         entry.HasPakPayload = ReadPakPayload(entry.SourcePath, reader);
+                        // 25 Nov 2026: a PAK mod's stages, matched against the suite loader's stage path list when it is there.
+                        if (entry.HasPakPayload == true && categories.Stages.Count == 0 && !categories.AnyFighter)
+                        {
+                            Dictionary<ulong, string> stages = StageMods.LibraryTable();
+                            if (stages != null) { pakStageKeys = StageMods.PakStagesOf(reader, stages); pakStagesChecked = true; }
+                        }
                         entry.CodeKinds = LibraryCode.Classify(reader.Entries.Keys, entry.Name);   // 1.0.16
                         entry.FileMix = CountFileMix(reader.Entries.Keys);   // 1.0.19
                         if (readNames) { ModInfoSummary info = ReadModInfo(reader); entry.Authors = info.Authors; entry.DisplayName = info.DisplayName; entry.OptionNames = info.OptionNames; entry.AddonFors = info.AddonFors; entry.NamesPending = false; }
@@ -752,11 +797,12 @@ namespace SlotsInstaller
                     entry.ToolKinds = ToolKindOrder.Where(tools.Contains).ToList();
                     entry.StageIds = categories.StageList();
                     entry.MiscAreas = categories.MiscList(LibrarySearch.IsToolMod(entry));
+                    ApplyPakStages(entry, pakStageKeys);
                     if (!folder)
                     {
                         lock (CacheLock)
                         {
-                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, HasPakPayload = entry.HasPakPayload, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), CodeKinds = new List<string>(entry.CodeKinds), FileMix = new List<int>(entry.FileMix), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = readNames ? new List<string>(entry.Authors) : null, CodesVersion = CodesVersion, DisplayName = readNames ? entry.DisplayName ?? "" : null, OptionNames = readNames ? new List<string>(entry.OptionNames) : null, AddonFors = readNames && entry.AddonFors != null ? new List<string>(entry.AddonFors) : null };
+                            IdentityCache[entry.SourcePath] = new LibraryIdentityRecord { SourcePath = entry.SourcePath, Stamp = stamp, HasPakPayload = entry.HasPakPayload, CharacterCodes = new List<string>(codes), OptionCount = entry.OptionCount, OptionIds = new List<string>(entry.OptionIds), CostumeKeys = new List<string>(entry.CostumeKeys), ToolKinds = new List<string>(entry.ToolKinds), CodeKinds = new List<string>(entry.CodeKinds), FileMix = new List<int>(entry.FileMix), StageIds = new List<string>(entry.StageIds), MiscAreas = new List<string>(entry.MiscAreas), AddedUtc = AddedStamp(entry.AddedUtc), Authors = readNames ? new List<string>(entry.Authors) : null, CodesVersion = CodesVersion, DisplayName = readNames ? entry.DisplayName ?? "" : null, OptionNames = readNames ? new List<string>(entry.OptionNames) : null, AddonFors = readNames && entry.AddonFors != null ? new List<string>(entry.AddonFors) : null, PakStagesChecked = pakStagesChecked };
                             cacheDirty = true;
                         }
                     }

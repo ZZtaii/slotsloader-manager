@@ -219,7 +219,8 @@ namespace SlotsInstaller
                 string low = pair.Key.ToLowerInvariant();
                 List<FixResult> quick;
                 if (prepared.Native && low.Contains(".tex.") && ModFixes.TextureFileOk(staged, out quick)) prepared.Fixes = quick;   // 1.0.1: header only
-                else if (prepared.Native && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && low.EndsWith(".scn.20"))) && prepared.Size <= 256L * 1024 * 1024)
+                else if ((prepared.Native && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && (low.EndsWith(".scn.20") || low.EndsWith(".pfb.17")))) && prepared.Size <= 256L * 1024 * 1024)
+                    || (reference != null && ReplaceEngine.IsPatchPakPath(pair.Key) && prepared.Size <= PakModFixes.PakReadLimit))   // 25 Nov 2026: PakModFixes.cs
                 {
                     byte[] data = File.ReadAllBytes(staged);
                     prepared.Fixes = ModFixes.UpgradeModFile(ref data, reference, pair.Key);
@@ -299,6 +300,9 @@ namespace SlotsInstaller
                 }
             }
             plan.Affects = affects;
+            // 1.0.22: extra outfits made from a replaced outfit read its files where they don't ship their own.
+            foreach (string shared in SharedOutfitFiles.Warnings(engine.GameRoot, plan.Files.Where(f => f.Native).Select(f => f.Path), reference))
+                plan.Items.Add(new HealthItem("warn", shared));
             foreach (string folder in newUnknownFolders)
                 plan.Items.Add(new HealthItem("warn", folder + " is not a vanilla outfit folder, so a replacement there never loads. Use Extra outfit mode, or check the folder number."));
             if (newOther > 0) plan.Items.Add(new HealthItem("info", N(newOther, "new file") + " the game doesn't ship (custom textures or materials the mod uses)."));
@@ -735,7 +739,8 @@ namespace SlotsInstaller
                         string low = pair.Key.ToLowerInvariant();
                         List<FixResult> quick;
                         if (low.StartsWith("natives/") && low.Contains(".tex.") && ModFixes.TextureFileOk(file, out quick)) item.Fixes = quick;   // 1.0.1: header only
-                        else if (low.StartsWith("natives/") && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && low.EndsWith(".scn.20"))) && item.Size <= 256L * 1024 * 1024)
+                        else if ((low.StartsWith("natives/") && (low.Contains(".user.") || low.Contains(".tex.") || (reference != null && (low.EndsWith(".scn.20") || low.EndsWith(".pfb.17")))) && item.Size <= 256L * 1024 * 1024)
+                            || (reference != null && ReplaceEngine.IsPatchPakPath(pair.Key) && item.Size <= PakModFixes.PakReadLimit))   // 25 Nov 2026: PakModFixes.cs
                         {
                             byte[] data = System.IO.File.ReadAllBytes(file);
                             item.Fixes = ModFixes.UpgradeModFile(ref data, reference, pair.Key);

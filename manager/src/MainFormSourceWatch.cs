@@ -179,7 +179,7 @@ namespace SlotsInstaller
         {
             if (reviewCancel != null) try { reviewCancel.Cancel(); } catch (ObjectDisposedException) { }
             CloseRecipe();
-            package = null; plan = null; replacePlan = null; packageStamp = null; editingReplacement = null; forcedReplaceReason = null;
+            package = null; plan = null; replacePlan = null; packageStamp = null; editingReplacement = null; forcedReplaceReason = null; stageInfo = null;
             changingChecks = true;
             try { componentTree.BeginUpdate(); componentTree.Nodes.Clear(); componentTree.EndUpdate(); }
             finally { changingChecks = false; }

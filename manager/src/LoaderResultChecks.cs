@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace SlotsInstaller
 {
@@ -34,7 +35,22 @@ namespace SlotsInstaller
             listed=Installer.ListInstalled(costume);
             Require(listed.Count==2 && listed.All(o=>o.LoaderStatus=="Slotsloader result unreadable"),"Broken loader result blocked installed outfit list");
             Require(File.ReadAllText(Path.Combine(folder,"manual.txt"))=="manual source preserved","Manual source changed");
-            Console.WriteLine("PASS loader mapping: exact source, multiple archive outfits, stale/disabled states, malformed results and manual source protection");
+            // 1.0.22: the loader writes "source" in the ANSI code page and the rest of outfits.json in UTF-8. A slot the
+            // Manager named "Mod · Option" was loaded but read "Not loaded by Slotsloader".
+            string dottedName="Same label · Feet", dotted=Path.Combine(ch,dottedName), dottedSource="Ingrid/"+dottedName;
+            Directory.CreateDirectory(dotted); File.WriteAllText(Path.Combine(dotted,"manual.txt"),"dotted");
+            string json="{\n  \"generated\": \"2026-11-22 04:26\",\n  \"loader\": \"fixture\",\n  \"outfits\": [\n    {\"fighter\": 32, \"fighter_dir\": \"esf032\", \"costume_no\": 6, \"name\": \"Outfit VI\", \"based_on\": 0, \"label\": \""+dottedName+"\", \"kind\": \"folder\", \"source\": \"@SOURCE@\"}\n  ],\n  \"left_out\": []\n}\n";
+            int at=json.IndexOf("@SOURCE@",StringComparison.Ordinal); var utf8=new UTF8Encoding(false);
+            var bytes=new List<byte>(utf8.GetBytes(json.Substring(0,at)));
+            bytes.AddRange(Encoding.Default.GetBytes(dottedSource)); bytes.AddRange(utf8.GetBytes(json.Substring(at+"@SOURCE@".Length)));
+            File.WriteAllBytes(report,bytes.ToArray());
+            listed=Installer.ListInstalled(costume);
+            var feet=listed.Single(o=>o.Folder==dotted);
+            Require(feet.LoaderOutfitName=="Outfit VI" && feet.LoaderStatus=="Loaded","A loaded folder with a non-ASCII name read as not loaded: "+feet.LoaderStatus+" '"+feet.LoaderOutfitName+"'");
+            Require(listed.Single(o=>o.Folder==folder).LoaderStatus=="Not loaded by Slotsloader","A folder the loader did not report was matched");
+            var reported=new HashSet<string>(new[]{Encoding.UTF8.GetString(Encoding.Default.GetBytes(dottedSource))},StringComparer.OrdinalIgnoreCase);
+            Require(LoaderResults.Reported(reported,dottedSource) && LoaderResults.Reported(new HashSet<string>(new[]{dottedSource},StringComparer.OrdinalIgnoreCase),dottedSource) && !LoaderResults.Reported(reported,"Ingrid/Same label"),"Load order: the waiting list misreads the loader's sources");
+            Console.WriteLine("PASS loader mapping: exact source, multiple archive outfits, stale/disabled states, malformed results, manual source protection and ANSI-written sources");
         }
         private static void Require(bool condition,string message) { if (!condition) throw new Exception(message); }
     }

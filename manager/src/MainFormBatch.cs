@@ -371,6 +371,19 @@ namespace SlotsInstaller
         {
             ModPackage p = PackageReader.Load(entry.SourcePath, ctx.SevenZip);
             if (IsSlotsLoaderPackage(p)) { state = BatchStates.Skipped; detail = "Slotsloader installs on its own: open it and press Install"; return; }
+            // 25 Nov 2026: a stage mod in an Extra queue is an Extra stage (StageMods.cs): its one option, else it waits for
+            // the user to tick the variants (no guess which of several they want).
+            StageInfo stage = ctx.Replace ? null : DetectStage(p, ctx.Game, ctx.SevenZip);
+            if (stage != null)
+            {
+                if (!StageMods.LoaderReady(ctx.Game)) { state = BatchStates.Skipped; detail = "Stage mod: Extra stage needs Wael's Slots Loader in the game folder"; return; }
+                if (StageMods.Of(ctx.Game, entry.SourcePath).Count > 0) { state = BatchStates.Skipped; detail = "Already installed as an extra stage"; return; }
+                List<string> picked = StageDefaults(p);
+                if (picked.Count == 0) { state = BatchStates.Skipped; detail = "Stage mod with several options: open it and tick the variants you want"; return; }
+                InstallResult staged = StageMods.Install(p, picked, ctx.Game, ctx.SevenZip, StageModName(p));
+                state = BatchStates.Installed; detail = "Extra stage · " + ReplacePlanner.N(staged.FileCount, "file");
+                return;
+            }
             bool replace = ctx.Replace || IsToolPackage(p) || IsPakPackage(p);
             if (replace ? ctx.ReplacedSources.Contains(entry.SourcePath) : ctx.ExtraSources.Contains(entry.SourcePath)) { state = BatchStates.Skipped; detail = replace ? "Already installed (Replace original)" : "Already installed as an extra outfit"; return; }
             List<string> ids = BatchDefaults.Selection(p, replace);
