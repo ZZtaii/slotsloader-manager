@@ -1,4 +1,4 @@
-# Slotsloader Manager 1.0.21
+# Slotsloader Manager 1.0.22
 
 A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR, 7Z and folder libraries two ways:
 - as **extra outfits** through Slotsloader;
@@ -11,6 +11,17 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 **Keep the `Data` folder** when you update: it holds your settings and the backups of replaced game files. The whole app folder can be moved or renamed; see [Move the app folder](#move-the-app-folder).
 
 ## What changed
+
+- 1.0.22:
+  - Slotsloader 1.28.1: others see an outfit or colour online only if your account owns it; Replays has a My Own costume; V-Rival, Random and Training stage fixes.
+  - Extra stage: stage mods install as extra stages (UP / DOWN on stage select, original kept). Search "stage" finds `.pak` stage mods.
+  - Older stage mods load again: outdated signatures in their files are fixed on install and on Reapply.
+  - Description wording ("choose one") no longer makes a required choice or ticks options; only a bundle's own rules can.
+  - An add-on in several library copies is listed once.
+  - Replace original warns when the mod will also show on extra outfits made from the outfit it replaces.
+  - Turn outfit mods off puts the game's own amd_ags_x64.dll back after a takeover of a hand-installed Slotsloader.
+  - Data files a mod rewrites itself no longer say "Game files changed"; **Keep changes** leaves other changed files as they are.
+  - Slots with "·" or accents in their name show Loaded again.
 
 - 1.0.21:
   - Slotsloader 1.27.5: Random outfit in Arcade, Training and Versus now gives a real random outfit and colour.

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 
@@ -153,7 +154,8 @@ namespace SlotsInstaller
                 full("rows restored by another tool are detected and re-invalidated by Reapply; a file another tool changed is replaced with no copy kept after the change (1.0.1)", delegate { RowsRestored(Path.Combine(run, "rows")); });
                 check("tool/root mods: genuine files backed up and restored exactly, previews/readme skipped, protected paths refused", delegate { ToolMods(Path.Combine(run, "tools")); });
                 check("a mod's own data (1.0.22): a file under reframework/data that its mod rewrote is not a changed game file (status, health check, replace-status), blocks no other change and stays through Reapply and a reinstall; it leaves on disable and uninstall without a question and gives way to a new shipped file; a missing one, a changed script, a changed natives file and Slotsloader's own data are still reported", delegate { ModData(Path.Combine(run, "mod-data")); });
-                check("Keep changes (1.0.22): a changed script the user keeps is no longer reported, stays through Reapply and a reinstall, and is still removed with its mod; per file, all changed files, or a whole mod; Check again undoes it; never a natives file or a Slotsloader file; replace-keep-changes", delegate { KeepChanges(Path.Combine(run, "keep-changes")); });
+                check("extra outfits sharing a replaced outfit's files (1.0.22): one warning per game outfit names the extra outfits made from it that don't ship the replaced files (folder, ZIP, not on disk, a name the loader wrote in ANSI); one that ships them all, another outfit or fighter, or no outfits.json gives none; never an error", delegate { SharedOutfits(Path.Combine(run, "shared-outfits")); });
+                check("Keep changes (1.0.22):a changed script the user keeps is no longer reported, stays through Reapply and a reinstall, and is still removed with its mod; per file, all changed files, or a whole mod; Check again undoes it; never a natives file or a Slotsloader file; replace-keep-changes", delegate { KeepChanges(Path.Combine(run, "keep-changes")); });
                 check("Slotsloader costume pak (2.4.0): uninstalling Slotsloader removes its generated pak (the sole patch pak), clears the registry stamp (slots kept), leaves costume_mods and the opt-out file; a reinstall finds no pak and an empty stamp", delegate { LoaderPakChecks.SolePak(Path.Combine(run, "loaderpak-sole")); });
                 full("Slotsloader costume pak (2.4.0): with another mod's pak above it, a marker-only placeholder keeps the patch row unbroken; foreign and stage paks stay byte-identical", delegate { LoaderPakChecks.Placeholder(Path.Combine(run, "loaderpak-placeholder")); });
                 full("Slotsloader costume pak (1.0.18): an outfit's copy of a shared path (new or vanilla) in it never refuses a PAK-method install, update, disable, enable or uninstall; the health check says what the game reads (older loader: a warning); the pak never changes; a slot table it rewrites is refused with that reason; without the loader, a stage pak and a Manager PAK mod carrying the marker keep the old rules", delegate { LoaderPakChecks.SharedPaths(Path.Combine(run, "loaderpak-shared")); });
@@ -918,6 +920,48 @@ namespace SlotsInstaller
         // 1.0.22 (the user, 20 Nov 2026): MMDK ships reframework/data/MMDK/PlayerData/<fighter>/<fighter> Names.json and its
         // script rewrites it at every fighter load. The Manager asked for Reapply after every session and Reapply put
         // the shipped copy back. ReplaceEngine.IsModData.
+        // 1.0.22 (SharedOutfitFiles): modB replaces Cammy Outfit 2 (esf009/002): its cmd_000 and its 01 mesh.
+        private static void SharedOutfits(string root)
+        {
+            Fixture f = Create(root, true, ReplaceMethods.Pak);
+            const string cmd = "natives/stm/product/model/esf/esf009/002/esf009_002_cmd_000.user.2", mesh = "natives/stm/product/model/esf/esf009/002/01/esf009_002_01.mesh.230110883";
+            Func<ReplacePlan, List<HealthItem>> shared = p => p.Items.Where(i => i.Text.StartsWith("Extra outfits made from ")).ToList();
+            Require(shared(Check(f, "modB")).Count == 0, "no outfits.json: no warning");
+            string mods = Path.Combine(f.Game, "reframework", "costume_mods", "Cammy");
+            Put(mods, "Legs Only/natives/stm/product/model/esf/esf009/002/01/esf009_002_01_legs.mesh.230110883", Bytes("legs"));
+            Put(mods, "Colours Too/natives/stm/product/model/esf/esf009/002/esf009_002_cmd_000.user.2", Bytes("own colours"));   // the mesh still falls back
+            Put(mods, "Mod · Option/natives/stm/product/model/esf/esf009/002/01/esf009_002_01_hand.mesh.230110883", Bytes("hand"));
+            Put(mods, "Other Base/natives/stm/product/model/esf/esf009/001/01/esf009_001_01.mesh.230110883", Bytes("outfit 1"));
+            using (var zip = ZipFile.Open(Path.Combine(mods, "Full.zip"), ZipArchiveMode.Create))
+                foreach (string p in new[] { cmd, mesh })
+                    using (var w = new StreamWriter(zip.CreateEntry("Full/Main/" + p).Open())) w.Write("full");
+            string ansi = LoaderResults.AsLoaderWrote("Cammy/Mod · Option");
+            Func<string, int, int, string, string> row = (dir, no, basedOn, source) => "{\"fighter\": " + Int32.Parse(dir.Substring(3)) + ", \"fighter_dir\": \"" + dir + "\", \"costume_no\": " + no + ", \"name\": \"Outfit " + no + "\", \"based_on\": " + basedOn + ", \"label\": \"x\", \"kind\": \"folder\", \"source\": \"" + source.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"}";
+            string report = "{\"generated\": \"fixture\", \"loader\": \"fixture\", \"outfits\": [" + String.Join(", ", new[] {
+                row("esf009", 6, 1, "Cammy/Legs Only"), row("esf009", 7, 1, "Cammy/Colours Too"), row("esf009", 8, 1, "Cammy/Full.zip"),
+                row("esf009", 9, 1, "Cammy/Full.zip"), row("esf009", 10, 1, "Cammy/Gone Now"), row("esf009", 11, 1, ansi),
+                row("esf009", 12, 0, "Cammy/Other Base"), row("esf010", 6, 1, "Chun-Li/Legs Only") }) + "], \"left_out\": []}";
+            Put(Path.Combine(f.Game, "reframework", "data", "SF6_Costumes_Data"), "outfits.json", Bytes(report));
+            ReplacePlan plan = Check(f, "modB");
+            List<HealthItem> lines = shared(plan);
+            Require(lines.Count == 1 && lines[0].Level == "warn", "one warning for Cammy Outfit 2: " + String.Join(" | ", lines.Select(i => i.Level + " " + i.Text)));
+            string text = lines[0].Text;
+            Require(text.StartsWith("Extra outfits made from Cammy Outfit 2 (esf009/002) show this mod's files wherever they don't bring their own: "), "names the game outfit: " + text);
+            foreach (string named in new[] { "Legs Only", "Colours Too", "Gone Now", "Mod · Option" }) Require(text.Contains(named), "names " + named + ": " + text);
+            Require(!text.Contains("Full") && !text.Contains("Other Base") && !text.Contains("Chun-Li"), "leaves out the one that ships both files, another outfit and another fighter: " + text);
+            Require(text.EndsWith("To leave them as they are, install this mod as an Extra outfit instead."), "says how to keep them: " + text);
+            Require(!plan.Items.Any(i => i.Level == "error" && i.Text.Contains("Extra outfits made from")), "never an error");
+            // Only the one that ships every replaced file left: nothing to say.
+            report = "{\"generated\": \"fixture\", \"loader\": \"fixture\", \"outfits\": [" + row("esf009", 8, 1, "Cammy/Full.zip") + "], \"left_out\": []}";
+            Put(Path.Combine(f.Game, "reframework", "data", "SF6_Costumes_Data"), "outfits.json", Bytes(report));
+            Require(shared(Check(f, "modB")).Count == 0, "an extra outfit that ships every replaced file: no warning");
+            // One extra outfit: the sentence says "it".
+            report = "{\"generated\": \"fixture\", \"loader\": \"fixture\", \"outfits\": [" + row("esf009", 6, 1, "Cammy/Legs Only") + "], \"left_out\": []}";
+            Put(Path.Combine(f.Game, "reframework", "data", "SF6_Costumes_Data"), "outfits.json", Bytes(report));
+            lines = shared(Check(f, "modB"));
+            Require(lines.Count == 1 && lines[0].Text.EndsWith(": Legs Only. To leave it as it is, install this mod as an Extra outfit instead."), "one extra outfit: " + String.Join(" | ", lines.Select(i => i.Text)));
+        }
+
         private static void ModData(string root)
         {
             Fixture f = Create(root, false, ReplaceMethods.Pak);

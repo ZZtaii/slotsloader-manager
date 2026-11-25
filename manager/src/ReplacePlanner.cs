@@ -300,6 +300,9 @@ namespace SlotsInstaller
                 }
             }
             plan.Affects = affects;
+            // 1.0.22: extra outfits made from a replaced outfit read its files where they don't ship their own.
+            foreach (string shared in SharedOutfitFiles.Warnings(engine.GameRoot, plan.Files.Where(f => f.Native).Select(f => f.Path), reference))
+                plan.Items.Add(new HealthItem("warn", shared));
             foreach (string folder in newUnknownFolders)
                 plan.Items.Add(new HealthItem("warn", folder + " is not a vanilla outfit folder, so a replacement there never loads. Use Extra outfit mode, or check the folder number."));
             if (newOther > 0) plan.Items.Add(new HealthItem("info", N(newOther, "new file") + " the game doesn't ship (custom textures or materials the mod uses)."));
