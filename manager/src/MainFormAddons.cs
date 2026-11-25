@@ -113,18 +113,22 @@ namespace SlotsInstaller
             LibraryEntry listed = library.FirstOrDefault(e => e != null && String.Equals(e.SourcePath, opened.SourcePath, StringComparison.OrdinalIgnoreCase));
             string known = listed != null && !String.IsNullOrWhiteSpace(listed.DisplayName) ? listed.DisplayName : opened.DisplayName;
             openedName = (known ?? "").Trim();
-            List<string> openedOptions = (listed != null && listed.OptionNames != null && listed.OptionNames.Count > 0 ? listed.OptionNames : opened.OptionNames) ?? new List<string>();
-            var ownOptions = new HashSet<string>(openedOptions.Select(n => (n ?? "").Trim()).Where(n => n.Length > 0), StringComparer.OrdinalIgnoreCase);
-            if (openedName.Length > 0) ownOptions.Add(openedName);
+            LibraryAddonIndex index = null;
             foreach (LibraryEntry e in library)
             {
                 if (e == null || String.IsNullOrEmpty(e.SourcePath) || e.NamesPending || e.OptionNames == null || e.OptionNames.Count == 0) continue;
                 if (String.Equals(e.SourcePath, opened.SourcePath, StringComparison.OrdinalIgnoreCase)) continue;
                 // 26 Nov 2026: a row without a mod name (an add-on archive with no menu folder, like "Bison Cammy Barefoot
-                // Addon.zip") is a candidate when an AddonFor= of it names the open mod or one of its options; the package
-                // check (LibraryAddons.IsNameless, IsAddonOf) decides once it is read.
+                // Addon.zip") is a candidate when the index gives it one main mod and that is the open mod's name (a
+                // generic AddonFor=Outfit several mods have joins none); the package check (LibraryAddons.IsNameless,
+                // IsAddonOf) decides once it is read.
                 bool nameless = String.IsNullOrWhiteSpace(e.DisplayName);
-                if (nameless && (e.AddonFors == null || !e.AddonFors.Any(a => ownOptions.Contains((a ?? "").Trim())))) continue;
+                if (nameless)
+                {
+                    if (openedName.Length == 0 || e.AddonFors == null || e.AddonFors.Count == 0) continue;
+                    if (index == null) index = new LibraryAddonIndex(library);
+                    if (!String.Equals(index.NamelessMain(e), openedName, StringComparison.OrdinalIgnoreCase)) continue;
+                }
                 // A known name: only rows named the same (the package name is checked again once it is read).
                 if (!nameless && openedName.Length > 0 && !String.Equals(e.DisplayName.Trim(), openedName, StringComparison.OrdinalIgnoreCase)) continue;
                 // 17 Nov 2026 (the user's Mod library was slow on robhal's base packs: 20 archives named "!BASE FILES (for swap by

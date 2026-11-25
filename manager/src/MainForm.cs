@@ -37,6 +37,8 @@ namespace SlotsInstaller
         // 1.0.6: library rows show "name" (modinfo.ini) or "file" names (missing = file); Deep search on/off.
         public string LibraryNames = "";
         public bool DeepSearch;
+        // 26 Nov 2026: Settings > Hide add-ons (LibraryAddons.AddonRows); missing in older files = shown.
+        public bool HideAddons;
         // 1.0.8: MY FILTERS chips showing only their matches / hiding them, by filter id (LibraryFilters.cs).
         public List<string> FiltersOnly = new List<string>(), FiltersHidden = new List<string>();
         // 1.0.11: the welcome (WelcomeForm) was shown; missing in older files, so updating users see it once too.
@@ -380,7 +382,7 @@ namespace SlotsInstaller
                 Fighters=filterPanel.Grid.Selected.OrderBy(c=>c,StringComparer.Ordinal).ToList(),
                 Kinds=new[]{FilterPanel.ToolsKind,FilterPanel.MiscKind}.Where(k=>filterPanel.Kinds.Selected.Contains(k)).ToList(),SelectedLibraries=filterPanel.LibrariesSelected.OrderBy(k=>k,StringComparer.OrdinalIgnoreCase).ToList(),MiscAreas=MiscKindsSelectedOrPending().ToList(),
                 CodeKinds=LibraryCode.Order.Where(CodeKindsSelectedOrPending().Contains).ToList(),
-                LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,
+                LibrarySort=LibrarySorting.Code(librarySort),LibrarySortOrder=librarySortAscending ? "asc" : "desc",InstalledSort=InstalledSortCode(installedSort),InstalledSortOrder=installedSortAscending ? "asc" : "desc",LibraryNames=libraryFileNames ? "file" : "name",DeepSearch=DeepSearchOn,HideAddons=hideAddonRows,
                 FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide),
                 WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen,
                 ToursSeen=viewPreferences!=null && viewPreferences.ToursSeen!=null ? viewPreferences.ToursSeen : new List<string>(),
@@ -996,7 +998,16 @@ namespace SlotsInstaller
             // 1.0.11: empty = automatic (installed 7-Zip, else the copy beside the Manager); the note says which one runs.
             showSevenZipNote = delegate { string typed = settingsSevenZip.Text.Trim(); sevenHint.Text = typed.Length > 0 && !File.Exists(typed) ? "Not found at that path · clear the field to find 7-Zip automatically" : SevenZipTool.Describe(typed); };
             settingsSevenZip.TextChanged += delegate { showSevenZipNote(); };
-            Label libCaption = Caption("Mod libraries"); libCaption.Dock = DockStyle.Fill; layout.Controls.Add(libCaption, 0, 8); layout.SetColumnSpan(libCaption, 2);
+            // 26 Nov 2026 (the user): "Hide add-ons" on the caption's line, so the library list keeps its height on short
+            // windows. Add-on files leave the Mod library list; their options show inside the main mod, and right-clicking
+            // an add-on option opens its file in Explorer. Takes effect at once (view-settings.json).
+            Label libCaption = Caption("Mod libraries"); libCaption.Dock = DockStyle.Fill;
+            settingsHideAddons = new CheckBox { Text = "Hide add-ons from the Mod library", Name = "settingsHideAddons", Dock = DockStyle.Right, AutoSize = true, ForeColor = Palette.Text, Font = Palette.Small, Padding = new Padding(2, 0, 0, 0), Margin = Padding.Empty, Checked = hideAddonRows,
+                AccessibleName = "Hide add-ons from the Mod library", AccessibleDescription = "Add-on files are left out of the Mod library list. Their options show inside the main mod when you open it." };
+            settingsHideAddons.CheckedChanged += delegate { SetHideAddons(settingsHideAddons.Checked, true); };
+            Panel libCaptionRow = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = Padding.Empty };
+            libCaptionRow.Controls.Add(libCaption); libCaptionRow.Controls.Add(settingsHideAddons);
+            layout.Controls.Add(libCaptionRow, 0, 8); layout.SetColumnSpan(libCaptionRow, 2);
             // The line gives way on short windows, so the list keeps at least two rows (100 px).
             int hintHeight = 20 + Rhythm.Related, roomy = heights.Where(h => h > 0).Sum() + hintHeight + 104;
             Label libHint = new Label { UseMnemonic=false, Name = "settingsLibrariesNote", Text = "Folders where you keep downloaded mods. Everything in them shows in the Mod library tab.", ForeColor = Palette.Muted, Font = Palette.Small, AutoSize = false, Height = hintHeight, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Margin = Padding.Empty, AutoEllipsis = true }; layout.Controls.Add(libHint, 0, 9); layout.SetColumnSpan(libHint, 2);
@@ -1709,8 +1720,12 @@ namespace SlotsInstaller
             var customHit = new bool[customCount]; var customTotals = new int[customCount];
             libraryRanks.Clear();
             var ranked = new List<KeyValuePair<LibraryEntry, int>>();
+            // 26 Nov 2026: Settings > Hide add-ons leaves add-on files out (their options show inside the main mod).
+            HashSet<LibraryEntry> hiddenAddons = hideAddonRows ? LibraryAddons.AddonRows(library) : new HashSet<LibraryEntry>();
+            hiddenAddonCount = hiddenAddons.Count;
             foreach (LibraryEntry e in library)
             {
+                if (hiddenAddons.Contains(e)) continue;
                 if (!LibrarySearch.MatchesText(e, query, EntryMatchesCharacter, EntryMatchesName)) continue;
                 int rank = LibrarySearch.CostumeRank(e, query, searchedCodes, EntryMatchesCharacter);
                 if (rank < 0) continue;

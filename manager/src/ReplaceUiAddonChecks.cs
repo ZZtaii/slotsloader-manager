@@ -125,6 +125,18 @@ namespace SlotsInstaller
             Require(a.Name == "Barefoot C2" && LibraryAddons.IsNameless(a) && LibraryAddons.IsNameless(g) && !LibraryAddons.IsNameless(m), "nameless: " + a.Name + " " + LibraryAddons.IsNameless(a) + " " + LibraryAddons.IsNameless(g) + " " + LibraryAddons.IsNameless(m));
             Require(LibraryAddons.IsAddonOf(m, a) && LibraryAddons.IsAddonOf(m, g) && !LibraryAddons.IsAddonOf(a, m) && !LibraryAddons.IsAddonOf(g, m), "a nameless addon is not the main mod's addon (or the other way round)");
             Require(!LibraryAddons.IsAddonOf(m, x), "a nameless addon of another mod was merged");
+            // A nameless add-on whose top level is its own group (like "3) C4 Manon NSFW styles", AddonFor=C4 Manon edits):
+            // the group goes under the main mod's menu with its option inside.
+            string grouped = Path.Combine(folder, "NSFW styles Addon.zip");
+            WriteZip(grouped, new Dictionary<string, byte[]> {
+                { "03 NSFW styles/modinfo.ini", Ini("name=NSFW styles\nDummyMod=true\nAddonFor=" + AddonTestName + "\n") },
+                { "04 Topless/modinfo.ini", Ini("name=Topless\nAddonFor=NSFW styles\n") },
+                { "04 Topless/" + ReplaceChecks.V5, Encoding.ASCII.GetBytes("topless mesh") } });
+            ModPackage gp = PackageReader.Load(grouped, "");
+            Require(LibraryAddons.IsNameless(gp) && LibraryAddons.IsAddonOf(m, gp) && !LibraryAddons.IsAddonOf(gp, m), "a nameless addon with its own group: nameless " + LibraryAddons.IsNameless(gp) + ", addon " + LibraryAddons.IsAddonOf(m, gp));
+            ModPackage withGroup = LibraryAddons.Merge(m, new List<ModPackage> { gp });
+            ModComponent styles = withGroup.Components.Single(c => c.Name == "NSFW styles"), topless = withGroup.Components.Single(c => c.Name == "Topless");
+            Require(styles.ParentId == withGroup.Components.Single(c => c.IsDummy && c.ParentId == null && c.Name == AddonTestName).Id && topless.ParentId == styles.Id, "the add-on's group is not under the main mod's menu: " + styles.ParentId + " / " + topless.ParentId);
             // A one-option mod of its own (no AddonFor=) is never nameless, so another name still keeps it out.
             ModPackage plain = PackageReader.Load(toMod, ""); plain.Components.ForEach(c => c.AddonFor = "");
             Require(!LibraryAddons.IsNameless(plain) && !LibraryAddons.IsAddonOf(m, plain), "a plain one-option mod was taken for a nameless addon");
@@ -136,6 +148,37 @@ namespace SlotsInstaller
             AddonSplit split = LibraryAddons.Split(merged, new[] { mainFiles, bareC2.Id }, true);
             Require(split.MainIds.Contains(mainFiles) && split.Ticked.Single().Value.SequenceEqual(new[] { "Top/02A Barefoot C2" }) && Composer.Plan(a, split.Ticked.Single().Value, true).CanInstall,
                 "split: main " + String.Join("|", split.MainIds) + " addon " + String.Join("|", split.Ticked.SelectMany(p => p.Value)));
+            AddonRowsRule();
+        }
+
+        // 26 Nov 2026 (Settings > Hide add-ons): which library rows are add-ons, from the index rows alone.
+        private static void AddonRowsRule()
+        {
+            Func<string, string, string[], string[], LibraryEntry> row = (file, name, options, addonFors) => new LibraryEntry { SourcePath = @"C:\lib\" + file, Name = file, DisplayName = name, Kind = "ZIP", OptionNames = options.ToList(), AddonFors = addonFors == null ? null : addonFors.ToList() };
+            LibraryEntry main = row("Main.zip", "Mod A", new[] { "Mod A", "Main files", "Outfit", "Full" }, new[] { "Mod A", "Outfit" });
+            LibraryEntry copy = row("Main (copy).zip", "Mod A", new[] { "Mod A", "Main files", "Outfit", "Full" }, new[] { "Mod A", "Outfit" });
+            LibraryEntry menuAddon = row("Mod A Addon.zip", "Mod A", new[] { "Mod A", "Barefoot" }, new[] { "Outfit" });
+            LibraryEntry menuAddonCopy = row("Mod A Addon (2).zip", "Mod A", new[] { "Mod A", "Barefoot" }, new[] { "Outfit" });
+            LibraryEntry nameless = row("Bare C2 Addon.zip", "", new[] { "Bare C2" }, new[] { "Mod A" });
+            LibraryEntry stranger = row("Boots Addon.zip", "", new[] { "Boots" }, new[] { "Some other mod" });
+            LibraryEntry bundle = row("Bundle.zip", "Bundle B", new[] { "One", "Two" }, new[] { "Bundle B" });
+            LibraryEntry bundleCopy = row("Bundle (copy).zip", "Bundle B", new[] { "One", "Two" }, new[] { "Bundle B" });
+            LibraryEntry orphan = row("Mod C Addon.zip", "Mod C", new[] { "Mod C", "Sandals" }, new[] { "Outfit" });
+            LibraryEntry unknown = row("Unread.zip", "Mod A", new[] { "Mod A", "Legs" }, null);
+            // A nameless add-on whose top level is a group of its own ("3) C4 Manon NSFW styles", AddonFor=C4 Manon edits).
+            LibraryEntry namelessGroup = row("NSFW Addon.zip", "", new[] { "3) NSFW styles", "Topless" }, new[] { "Mod A", "3) NSFW styles" });
+            // The user's "Sakura Final Release - Five Foot Options": AddonFor=Outfit, and two different mods have an Outfit.
+            LibraryEntry generic = row("Five Foot Options.zip", "", new[] { "Bare feet" }, new[] { "Outfit" });
+            LibraryEntry otherMod = row("Ingrid Stockings.zip", "Ingrid Stockings", new[] { "Ingrid Stockings", "Outfit", "Legs" }, new[] { "Ingrid Stockings", "Outfit" });
+            var all = new[] { main, copy, menuAddon, menuAddonCopy, nameless, stranger, bundle, bundleCopy, orphan, unknown, namelessGroup, generic, otherMod };
+            HashSet<LibraryEntry> hidden = LibraryAddons.AddonRows(all);
+            Require(hidden.SetEquals(new[] { menuAddon, menuAddonCopy, nameless, namelessGroup }), "add-on rows: " + String.Join(", ", hidden.Select(e => e.Name)));
+            var index = new LibraryAddonIndex(all);
+            Require(index.NamelessMain(nameless) == "Mod A" && index.NamelessMain(namelessGroup) == "Mod A" && index.NamelessMain(generic) == null && index.NamelessMain(stranger) == null && index.NamelessMain(main) == null,
+                "nameless mains: " + index.NamelessMain(nameless) + " / " + index.NamelessMain(namelessGroup) + " / " + index.NamelessMain(generic));
+            // Only one mod with an Outfit: the generic add-on is that mod's.
+            Require(new LibraryAddonIndex(new[] { main, generic }).NamelessMain(generic) == "Mod A", "a generic nameless add-on with one main mod");
+            Require(LibraryAddons.AddonRows(new[] { menuAddon, nameless }).Count == 0, "add-ons without their main mod in the library were hidden");
         }
 
         // 23 Nov 2026 (the user's three copies of "Sakura as Ryu C1 - Barefoot Addons.zip" showed every option three times):
@@ -278,8 +321,17 @@ namespace SlotsInstaller
                     Require(form.PackageReads == reads + 1 && withNameless.AddonParts != null && withNameless.AddonParts.Count == 2 && withNameless.AddonParts.Any(p => ReplacePlanner.SameSource(p.SourcePath, nameless)),
                         "the nameless addon did not join (or another was read): reads +" + (form.PackageReads - reads) + ", parts " + (withNameless.AddonParts == null ? 0 : withNameless.AddonParts.Count));
                     Require(node("Barefoot C2").Parent == node(AddonTestName) && node("Barefoot").Parent == node("Outfit"), "Barefoot C2 is not under the main mod's menu");
+                    // Settings > Hide add-ons: the add-on row leaves the list (and the count), the main mod and an add-on of
+                    // a mod not in the library stay; off again, it is back. Saved with the view.
+                    ListView rowsList = Get<ListView>(form, "modList");
+                    Func<LibraryEntry, bool> listed = e => rowsList.Items.Cast<ListViewItem>().Any(i => i.Tag == e);
+                    Call(form, "SetHideAddons", true, false); Application.DoEvents();
+                    Require(form.HideAddonsOn && !listed(namelessEntry) && listed(mainEntry) && listed(strangerEntry) && Get<CheckBox>(form, "settingsHideAddons").Checked,
+                        "Hide add-ons: nameless listed " + listed(namelessEntry) + ", main listed " + listed(mainEntry) + ", other mod's add-on listed " + listed(strangerEntry));
+                    Call(form, "SetHideAddons", false, false); Application.DoEvents();
+                    Require(!form.HideAddonsOn && listed(namelessEntry) && !Get<CheckBox>(form, "settingsHideAddons").Checked, "Hide add-ons off: the add-on row did not come back");
                 }
-                finally { library.Remove(namelessEntry); library.Remove(strangerEntry); }
+                finally { Call(form, "SetHideAddons", false, false); library.Remove(namelessEntry); library.Remove(strangerEntry); }
                 open(mainEntry);
                 Require(Get<ModPackage>(form, "package").AddonParts.Count == 1, "the nameless addon stayed after its row left the library");
                 // 1.0.19 (the user: "relax requirements ... install the mod anyways. this helps to mix and match options"):

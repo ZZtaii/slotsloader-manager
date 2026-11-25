@@ -83,14 +83,22 @@ namespace SlotsInstaller
         }
 
         // 26 Nov 2026 (the user's "Bison Cammy Barefoot Addon.zip": one option with AddonFor=Bison Cammy and no menu folder;
-        // Fluffy shows it in "Bison Cammy", the Manager didn't): an archive with no name of its own, whose top-level
-        // options all name a group it doesn't have (AddonFor= unresolved inside it) and no dummy root. Its package name
-        // is only its first option's, so it is matched by its AddonFor alone.
+        // Fluffy shows it in "Bison Cammy", the Manager didn't): an archive with no name of its own, whose top-level options
+        // or groups all name something it doesn't have (AddonFor= unresolved inside it; a group like "3) C4 Manon NSFW
+        // styles" with AddonFor=C4 Manon edits counts too). Its package name is only its first option's, so it is matched
+        // by its AddonFor alone, and only to one mod (LibraryAddonIndex.NamelessMain).
         internal static bool IsNameless(ModPackage candidate)
         {
             if (candidate == null) return false;
             List<ModComponent> roots = candidate.Components.Where(c => c.ParentId == null).ToList();
-            return roots.Count > 0 && roots.All(c => !c.IsDummy && !String.IsNullOrWhiteSpace(c.AddonFor) && !SameName(c.AddonFor, c.Name));
+            return roots.Count > 0 && roots.All(c => !String.IsNullOrWhiteSpace(c.AddonFor) && !SameName(c.AddonFor, c.Name));
+        }
+
+        // 26 Nov 2026 (the user: hide the add-ons from view by a setting, "this way we won't have clutter"; Settings > Hide
+        // add-ons): the library rows that are add-ons of another row, from the index alone (nothing is read).
+        internal static HashSet<LibraryEntry> AddonRows(IEnumerable<LibraryEntry> library)
+        {
+            return new LibraryAddonIndex(library).AddonRows();
         }
 
         // A new package (cached packages are shared and never changed): the main's components as they are, then each
@@ -352,6 +360,82 @@ namespace SlotsInstaller
                 ModComponent target = Target(merged.MergedFrom, name);
                 if (target != null && !target.IsDummy && target.HasFiles(true)) result.Add(target);
             }
+            return result;
+        }
+    }
+
+    // 26 Nov 2026: which library rows are add-ons and of which mod, from the index (mod name, option names, AddonFor=).
+    // A row points outside when an AddonFor= of it names none of its own names (its options and its mod name); such a
+    // row is never anyone's main mod. A main mod has the name the AddonFor= points at among its options or as its mod
+    // name, and options the add-on doesn't have (another copy of the add-on never counts). An add-on with its own mod
+    // name joins the rows of that name. A nameless one joins only when all its main mods share one mod name: a generic
+    // AddonFor=Outfit that several different mods have stays a mod of its own (the user's "Sakura Final Release - Five
+    // Foot Options" would otherwise show inside Ingrid C1 Barefoot Stockings).
+    internal sealed class LibraryAddonIndex
+    {
+        private readonly List<LibraryEntry> rows;
+        private readonly Dictionary<string, List<LibraryEntry>> byOption = new Dictionary<string, List<LibraryEntry>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<LibraryEntry, HashSet<string>> ownNames = new Dictionary<LibraryEntry, HashSet<string>>();
+        private readonly Dictionary<LibraryEntry, List<string>> outsideOf = new Dictionary<LibraryEntry, List<string>>();
+
+        private static string Clean(string name) { return (name ?? "").Trim(); }
+        private static bool Named(LibraryEntry e) { return !String.IsNullOrWhiteSpace(e.DisplayName); }
+
+        internal LibraryAddonIndex(IEnumerable<LibraryEntry> library)
+        {
+            rows = (library ?? new LibraryEntry[0]).Where(e => e != null && e.Recipe == null && !e.NamesPending && e.OptionNames != null && e.OptionNames.Count > 0).ToList();
+            foreach (LibraryEntry e in rows)
+            {
+                if (Named(e))
+                {
+                    // Rows are added one after another, so a repeat of the same row is always the last one (no list scan).
+                    foreach (string key in e.OptionNames.Concat(new[] { e.DisplayName }).Select(Clean).Where(k => k.Length > 0))
+                    {
+                        List<LibraryEntry> list; if (!byOption.TryGetValue(key, out list)) byOption[key] = list = new List<LibraryEntry>();
+                        if (list.Count == 0 || list[list.Count - 1] != e) list.Add(e);
+                    }
+                }
+                if (e.AddonFors == null || e.AddonFors.Count == 0) continue;
+                var names = new HashSet<string>(e.OptionNames.Select(Clean), StringComparer.OrdinalIgnoreCase);
+                if (Named(e)) names.Add(Clean(e.DisplayName));
+                List<string> outside = e.AddonFors.Select(Clean).Where(n => n.Length > 0 && !names.Contains(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (outside.Count == 0) continue;
+                ownNames[e] = names; outsideOf[e] = outside;
+            }
+        }
+
+        // The main mods of a row that points outside (none for any other row).
+        private List<LibraryEntry> Mains(LibraryEntry e)
+        {
+            var result = new List<LibraryEntry>();
+            List<string> outside; if (e == null || !outsideOf.TryGetValue(e, out outside)) return result;
+            HashSet<string> own = ownNames[e];
+            foreach (string target in outside)
+            {
+                List<LibraryEntry> found;
+                if (!byOption.TryGetValue(target, out found)) continue;
+                foreach (LibraryEntry m in found)
+                    if (m != e && !outsideOf.ContainsKey(m) && !ReplacePlanner.SameSource(m.SourcePath, e.SourcePath) && !result.Contains(m)
+                        && (!Named(e) || String.Equals(Clean(m.DisplayName), Clean(e.DisplayName), StringComparison.OrdinalIgnoreCase))
+                        && m.OptionNames.Any(n => Clean(n).Length > 0 && !own.Contains(Clean(n))))
+                        result.Add(m);
+            }
+            return result;
+        }
+
+        // A nameless row's one main mod name, or null (none, a named row, or several different mods).
+        internal string NamelessMain(LibraryEntry e)
+        {
+            if (e == null || Named(e)) return null;
+            List<string> names = Mains(e).Select(m => Clean(m.DisplayName)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            return names.Count == 1 ? names[0] : null;
+        }
+
+        internal HashSet<LibraryEntry> AddonRows()
+        {
+            var result = new HashSet<LibraryEntry>();
+            foreach (LibraryEntry e in outsideOf.Keys)
+                if (Named(e) ? Mains(e).Count > 0 : NamelessMain(e) != null) result.Add(e);
             return result;
         }
     }

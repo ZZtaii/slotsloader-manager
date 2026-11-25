@@ -147,8 +147,9 @@ namespace SlotsInstaller
         private void UpdateLibraryCaption()
         {
             if (libraryCount == null) return;
-            int shown = captionShown < 0 ? library.Count : captionShown;
-            string text = library.Count == 0 ? "MOD LIBRARY" : shown == library.Count ? library.Count + " MODS" : shown + " OF " + library.Count + " MODS";
+            int total = Math.Max(0, library.Count - hiddenAddonCount);   // 26 Nov 2026: hidden add-ons are not counted
+            int shown = captionShown < 0 ? total : captionShown;
+            string text = library.Count == 0 ? "MOD LIBRARY" : shown == total ? total + " MODS" : shown + " OF " + total + " MODS";
             if (customMatchesPending && listAwaitsMatches) text += " · FILTERING…";
             if (Indexing)
             {
