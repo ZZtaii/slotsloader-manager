@@ -72,17 +72,25 @@ namespace SlotsInstaller
             ModComponent outfit = merged.Components.Single(c => c.Name == "Outfit"), full = merged.Components.Single(c => c.Name == "Full"), bare = merged.Components.Single(c => c.Name == "Barefoot");
             Require(bare.ParentId == outfit.Id && merged.IsChoiceBranch(outfit, bare) && merged.IsChoiceBranch(outfit, full) && !merged.Components.Any(c => c.Id.StartsWith(LibraryAddons.PrefixHead) && c.IsDummy), "merged tree: Barefoot " + bare.ParentId);
             string mainFiles = merged.Components.Single(c => c.Name == "Main files").Id, shortHair = merged.Components.Single(c => c.Name == "Short").Id;
+            // 1.0.22 (guesses never block): "Outfit" is a choose-one only by its description, so nothing requires a choice
+            // there and the main record needs no fill-in; with an explicit "Choose one" (Reorder bundle) Full stands in.
             AddonSplit split = LibraryAddons.Split(merged, new[] { mainFiles, bare.Id, shortHair }, true);
-            Require(String.Join("|", split.MainIds) == mainFiles + "|" + full.Id + "|" + shortHair && split.Parts.Single().Value.SequenceEqual(new[] { "04 Barefoot" }) && split.Warnings.Count == 0 && split.Notes.Single() == "Also installs Barefoot from " + Path.GetFileName(addon) + " on top.",
+            Require(String.Join("|", split.MainIds) == mainFiles + "|" + shortHair && split.FillIns.Count == 0 && split.Parts.Single().Value.SequenceEqual(new[] { "04 Barefoot" }) && split.Warnings.Count == 0 && split.Notes.Single() == "Also installs Barefoot from " + Path.GetFileName(addon) + " on top.",
                 "split: main " + String.Join("|", split.MainIds) + " addon " + String.Join("|", split.Parts.Single().Value) + " warnings " + String.Join(" / ", split.Warnings));
             Require(Composer.Plan(m, split.MainIds, true).CanInstall && Composer.Plan(a, split.Parts.Single().Value, true).CanInstall, "a split record is not valid alone");
+            Func<ModPackage, ModPackage> chooseOne = p => { p.Components.Single(c => c.Name == "Outfit").BundleRule = "Choose one"; p.PrepareChoices(); return p; };
+            ModPackage ruled = LibraryAddons.Merge(chooseOne(PackageReader.Load(main, "")), new List<ModPackage> { a });
+            AddonSplit ruledSplit = LibraryAddons.Split(ruled, new[] { mainFiles, ruled.Components.Single(c => c.Name == "Barefoot").Id, shortHair }, true);
+            Require(String.Join("|", ruledSplit.MainIds) == mainFiles + "|" + full.Id + "|" + shortHair && ruledSplit.FillIns.SequenceEqual(new[] { full.Id }) && ruledSplit.Warnings.Count == 0,
+                "split with an explicit Choose one: main " + String.Join("|", ruledSplit.MainIds) + " warnings " + String.Join(" / ", ruledSplit.Warnings));
+            Require(Composer.Plan(ruled.MergedFrom, ruledSplit.MainIds, true).CanInstall, "the main record with its fill-in is not valid alone");
             // 2026-11-23: "Outfit" is a choose-one only by its description, a guess: two picks warn, never block.
             CompositionPlan twoOutfits = Composer.Plan(merged, new[] { mainFiles, full.Id, bare.Id, shortHair }, true);
             Require(twoOutfits.CanInstall && twoOutfits.Warnings.Any(w => w.StartsWith("'Outfit' looks like a choose-one group")), "two picks in a guessed Outfit group: " + String.Join(" / ", twoOutfits.Errors));
             List<string> restored = LibraryAddons.Restore(merged, new List<string> { mainFiles, full.Id, shortHair }, new[] { new KeyValuePair<AddonPart, List<string>>(merged.AddonParts[0], new List<string> { "04 Barefoot" }) });
             Require(restored.Contains(bare.Id) && !restored.Contains(full.Id) && restored.Contains(shortHair), "restore: " + String.Join("|", restored));
             // Only Shorts to stand in: it is the fill-in and its texture Barefoot doesn't replace is named.
-            ModPackage shortsOnly = PackageReader.Load(main, ""); shortsOnly.Components.RemoveAll(c => c.Name == "Full"); shortsOnly.RebuildIndexes(); shortsOnly.PrepareChoices();
+            ModPackage shortsOnly = PackageReader.Load(main, ""); shortsOnly.Components.RemoveAll(c => c.Name == "Full"); shortsOnly.RebuildIndexes(); chooseOne(shortsOnly);
             ModPackage merged2 = LibraryAddons.Merge(shortsOnly, new List<ModPackage> { a });
             AddonSplit split2 = LibraryAddons.Split(merged2, new[] { mainFiles, merged2.Components.Single(c => c.Name == "Barefoot").Id }, false);
             Require(split2.MainIds.Contains(merged2.Components.Single(c => c.Name == "Shorts").Id) && split2.Warnings.Count == 1 && split2.Warnings[0].Contains("shorts.tex.241101895") && split2.Warnings[0].Contains("Barefoot"), "leftover note: " + String.Join(" / ", split2.Warnings));
@@ -245,11 +253,12 @@ namespace SlotsInstaller
                 Require(ticked("Barefoot") && !ticked("Full") && ticked("Main files") && ticked("Short"), "ticks after Barefoot: " + state());
                 ReplacePlan health = Get<ReplacePlan>(form, "replacePlan");
                 Require(health != null && health.CanInstall && health.Items.Any(i => i.Text == "Also installs Barefoot from " + Path.GetFileName(addon) + " on top.") && Get<FlatButton>(form, "installButton").Enabled, "health: " + state() + (health == null ? "" : " / " + String.Join(" / ", health.Items.Select(i => i.Text))));
-                // Install: two records, the addon directly above the main one; the main record is valid alone with Full.
+                // Install: two records, the addon directly above the main one; the main record is valid alone. 1.0.22: with
+                // Main files ticked and Outfit a choose-one only by its description, it carries no fill-in (no Full).
                 Call(form, "InstallCurrent"); WaitIdle(form); WaitReview(form);
                 List<ReplaceMod> mods = engine.LoadState().Mods;
                 ReplaceMod mainMod = mods.Single(m => isMain(m.SourcePath)), addonMod = mods.Single(m => isAddon(m.SourcePath));
-                Require(mods.IndexOf(addonMod) == mods.IndexOf(mainMod) - 1 && addonMod.Name == AddonTestName + " Addon" && addonMod.SelectedIds.SequenceEqual(new[] { "04 Barefoot" }) && mainMod.SelectedIds.Contains(full.Id) && !mainMod.SelectedIds.Any(id => id.StartsWith(LibraryAddons.PrefixHead)),
+                Require(mods.IndexOf(addonMod) == mods.IndexOf(mainMod) - 1 && addonMod.Name == AddonTestName + " Addon" && addonMod.SelectedIds.SequenceEqual(new[] { "04 Barefoot" }) && !mainMod.SelectedIds.Contains(full.Id) && !mainMod.SelectedIds.Any(id => id.StartsWith(LibraryAddons.PrefixHead)),
                     "records: " + String.Join(" / ", mods.Select(m => m.Name + " [" + String.Join(",", m.SelectedIds) + "]")) + " / " + state());
                 Require(Composer.Plan(PackageReader.Load(main, ""), mainMod.SelectedIds, true).CanInstall, "the main record is not valid alone");
                 Require(engine.LoadState().Deployment(ReplaceChecks.V5).Owner == addonMod.Id, "Barefoot's mesh does not win in game");
@@ -378,8 +387,9 @@ namespace SlotsInstaller
                 {
                     // F2: the addon record is switched in place and moved above the new main record in its own install (no Move).
                     Require(engine.LoadState().Generation == generation + 2, "changes for main + addon: " + (engine.LoadState().Generation - generation) + " (a Move is one more)");
-                    // L3: the main record's name shows Barefoot (the addon), not Full (the fill-in it carries).
-                    Require(mainMod.Name == AddonTestName + " · Short + Barefoot (addon)", "main record name: " + mainMod.Name);
+                    // L3: the main record's name never shows Full. 1.0.22: the fixture's Outfit is a choose-one only by its
+                    // description, so the main record carries no fill-in and is named after its own ticks.
+                    Require(mainMod.Name == AddonTestName + " · Short" && !mainMod.SelectedIds.Any(id => id.EndsWith("Full")), "main record name: " + mainMod.Name + " [" + String.Join(",", mainMod.SelectedIds) + "]");
                     // F3 (Replace original): Full instead of Barefoot is not "already installed".
                     Require(Call(form, "SameInstalledReplacement") != null, "the same ticks are not the installed replacement: " + state());
                     node("Full").Checked = true; WaitReview(form);

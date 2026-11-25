@@ -262,7 +262,13 @@ namespace SlotsInstaller
             merged.PrepareChoices(); main.PrepareChoices();
             var fillAt = new Dictionary<int, string>();
             List<string> defaults = Composer.DefaultSelection(main, replace);
-            foreach (ModComponent group in Composer.UnresolvedChoiceGroups(main, mainIds, replace))
+            List<ModComponent> groups = Composer.UnresolvedChoiceGroups(main, mainIds, replace);
+            // 1.0.22: description wording no longer makes a required choice (guesses never block), so a guessed group gets
+            // no fill-in while the main record installs alone. When it can't (only an addon option ticked; in Extra outfit
+            // the outfit mesh is in the branch the addon replaces), every choice group an addon option answers gets one.
+            if (split.Parts.Any(p => p.Value.Count > 0) && !Composer.Plan(main, mainIds, replace).CanInstall)
+                groups.AddRange(main.Components.Where(g => g.IsDummy && !groups.Contains(g) && merged.Find(g.Id) != null && merged.IsChoice(merged.Find(g.Id))));
+            foreach (ModComponent group in groups)
             {
                 ModComponent shown = merged.Find(group.Id);
                 if (shown == null || !merged.IsChoice(shown)) continue;
