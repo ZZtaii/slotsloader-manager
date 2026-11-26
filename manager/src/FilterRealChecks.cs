@@ -191,11 +191,15 @@ namespace SlotsInstaller
                         return !used.HasValue ? "never used" : "used " + used.Value.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " UTC";
                     };
                     var timings = new List<string>();
+                    // 26 Nov 2026: the rows shown before sorting, not the whole library: Hide add-ons from the Mod library
+                    // (on by default since 1.0.22's updated download) leaves add-on archives out of the list.
+                    int shown = list.Items.Count;
+                    Require(shown > 0 && shown <= library.Count, "rows before sorting: " + shown + " of " + library.Count);
                     foreach (LibrarySortKey key in new[] { LibrarySortKey.Added, LibrarySortKey.LastUsed, LibrarySortKey.Installed })
                     {
                         clock.Restart(); chips[key].PerformClick(); list.Refresh(); long ms = clock.ElapsedMilliseconds;
                         timings.Add(chips[key].Text + " " + ms + " ms");
-                        Require(list.Items.Count == library.Count, "rows lost after " + chips[key].Text);
+                        Require(list.Items.Count == shown, "rows lost after " + chips[key].Text + ": " + list.Items.Count + " of " + shown);
                         var top = list.Items.Cast<ListViewItem>().Take(3).Select(i => (LibraryEntry)i.Tag).ToList();
                         if (key == LibrarySortKey.Added) lines.Add("Added \u2193 top 3: " + String.Join("; ", top.Select(e => e.Name + " (" + (e.AddedUtc == DateTime.MinValue ? "unknown" : e.AddedUtc.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " UTC") + ")")));
                         if (key == LibrarySortKey.LastUsed) lines.Add("Last used \u2193 top 3: " + String.Join("; ", top.Select(e => e.Name + " (" + when(e) + ")")) + "; " + library.Count(e => form.LibraryLastUsed(e).HasValue) + " with a use time, " + library.Count(e => !form.LibraryLastUsed(e).HasValue) + " never used");
