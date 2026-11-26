@@ -455,7 +455,7 @@ namespace SlotsInstaller
         {
             bool pre = a.IncludePrereleases || UpdateSettings.Load().IncludePrereleases;
             UpdateCheckResult r = UpdateCheck.Check(pre);
-            UpdateSettings s = UpdateSettings.Load(); s.LastCheckUtc = r.CheckedUtc; s.RememberApproved(r.Loader, r.CheckedUtc); if (r.Ok) s.Last = r; s.Save();
+            UpdateSettings s = UpdateSettings.Load(); s.LastCheckUtc = r.CheckedUtc; s.RememberApproved(r.Loader, r.CheckedUtc); s.RememberApprovedCore(r.Core); if (r.Ok) s.Last = r; s.Save();
             if (manager && !r.Ok) throw new IOException("Could not check for updates: " + r.Reason + ".");
             if (loader && r.Loader == null) throw new IOException("Could not read the approved Slotsloader list: " + r.ListReason + ".");
             return r;
@@ -503,10 +503,10 @@ namespace SlotsInstaller
         private static int SetupTools(Args a, ReplaceEngine engine, AppConfig config)
         {
             FluffyInstalls fluffy = engine.Fluffy();
-            SetupNeeds needs = GameSetup.Needs(ToolStatus.Detect(engine.GameRoot, fluffy), engine.LoadState(), fluffy);
+            SetupNeeds needs = GameSetup.Needs(ToolStatus.Detect(engine.GameRoot, fluffy), engine.LoadState(), fluffy, UpdateCheck.CoreInstallPin(UpdateSettings.Load()));
             if (!needs.Any) { Console.WriteLine("REFramework, Slotsloader and Native Core are all in the game folder: nothing to install."); return 0; }
             LoaderPin pin = LoaderRelease.Pin != LoaderPin.Release ? LoaderRelease.Pin : UpdateCheck.InstallPin(UpdateSettings.Load().ApprovedLoader());
-            Console.WriteLine("Missing: " + needs.Text() + ".");
+            Console.WriteLine("To install" + (needs.CoreUpdate || needs.ReFrameworkUpdate ? " or update" : "") + ": " + needs.Text() + (needs.CoreUpdate ? " (Native Core " + UpdateCheck.ShortVersion(needs.CoreFrom) + " -> " + needs.CorePin.Version + ")" : "") + ".");
             if (!a.Yes) { Console.WriteLine("Nothing changed: add --yes to install."); return 1; }
             if (GameProcesses.Probe.IsGameRunning()) { Console.Error.WriteLine("Close SF6 first."); return 1; }
             List<string> libraries = a.Libraries.Count > 0 ? a.Libraries : config.Libraries;

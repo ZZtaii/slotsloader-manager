@@ -57,15 +57,15 @@ namespace SlotsInstaller
         {
             var thread = new Thread(delegate()
             {
-                string why; ReleaseOffer approved;
-                try { approved = UpdateCheck.ReadList(out why); }
+                string why; ReleaseOffer approved, core = null;
+                try { approved = UpdateCheck.ReadList(out why, out core); }
                 catch (Exception ex) { Program.Log(ex); approved = null; }
                 try
                 {
                     if (!IsDisposed) BeginInvoke((Action)delegate
                     {
                         if (approved != null)
-                            try { UpdateSettings s = UpdateSettings.Load(); s.RememberApproved(approved, DateTime.UtcNow.ToString("o")); s.Save(); }
+                            try { UpdateSettings s = UpdateSettings.Load(); s.RememberApproved(approved, DateTime.UtcNow.ToString("o")); s.RememberApprovedCore(core); s.Save(); }
                             catch (Exception ex) { Program.Log(ex); }
                         ListReadsRun++;
                         if (approved != null) ShowUpdateToasts();
@@ -97,7 +97,8 @@ namespace SlotsInstaller
             UpdateSettings s = UpdateSettings.Load();
             s.LastCheckUtc = r.CheckedUtc;
             s.RememberApproved(r.Loader, r.CheckedUtc);   // 1.0.19: also when the releases API failed
-            if (r.Ok) { s.Last = r; s.DismissedLoader = ""; s.DismissedManager = ""; }
+            s.RememberApprovedCore(r.Core);               // 26 Nov 2026
+            if (r.Ok) { s.Last = r; s.DismissedLoader = ""; s.DismissedManager = ""; s.DismissedCore = ""; }
             else Program.LogLine("Update check: " + r.Reason + (r.Status == 404 ? " (expected while the repository is private)" : "") + ".");
             try { s.Save(); } catch (Exception ex) { Program.Log(ex); }
             string summary = UpdateSummary(r), skipped = SkippedSummary(r);
@@ -176,6 +177,30 @@ namespace SlotsInstaller
             if (takeover) loader = approved;
             SetToast(UpdateProducts.Loader, loader != null && loader.Version != s.SkipLoader && loader.Version != s.DismissedLoader ? loader : null, now.Version, takeover);
             SetToast(UpdateProducts.Manager, manager != null && manager.Version != s.SkipManager && manager.Version != s.DismissedManager ? manager : null, SafeHttp.AppVersion());
+            // 26 Nov 2026: the Native Core the Manager installed, older than the approved one
+            string coreNow = null; ReleaseOffer core = null;
+            try { ReplaceMod record = InstalledCore.Record(Engine().LoadState()); coreNow = InstalledCore.Version(record); core = record == null ? null : UpdateCheck.CoreUpdate(s.ApprovedCore(), coreNow); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
+            SetToast(UpdateProducts.Core, core != null && core.Version != s.SkipCore && core.Version != s.DismissedCore ? core : null, coreNow);
+        }
+        // The core toast's Update: only the Native Core, in place (the one-click setup with nothing else to do).
+        internal void StartCoreUpdate(ReleaseOffer offer)
+        {
+            if (busy) { SetPageStatus(currentPage, "Wait for the current task to finish.", Palette.Red); return; }
+            if (gameRunning) { SetToastText(UpdateProducts.Core, "Close SF6 to update Native Core to " + offer.Version + "."); return; }
+            SetupNeeds all = SetupNeedsNow();
+            if (!all.CoreUpdate) { SetToast(UpdateProducts.Core, null, null); return; }
+            var only = new SetupNeeds { CoreUpdate = true, CoreRecordId = all.CoreRecordId, CoreFrom = all.CoreFrom, CorePin = offer.AsPin() };
+            ReplaceEngine engine = Engine();
+            List<string> libraries = config.Libraries.ToList(); string sevenZip = config.SevenZipPath, downloads = LoaderRelease.DownloadDir;
+            Work("Updating Native Core to " + offer.Version + "…", delegate { return GameSetup.Run(engine, only, CurrentInstallPin(), libraries, sevenZip, downloads); }, delegate(SetupResult r)
+            {
+                LastSetupResult = r;
+                Program.LogLine("Native Core update: " + r.Message);
+                if (r.Failed == null) SetToast(UpdateProducts.Core, null, null);
+                LoadAfterSetup();
+                RefreshInstalled((r.Failed == null ? "✓ " : "") + r.Message);
+            });
         }
         private void BuildToastHost()
         {
@@ -198,7 +223,7 @@ namespace SlotsInstaller
         {
             Panel old = UpdateToast(product);
             if (offer == null) { if (old != null) { toastHost.Controls.Remove(old); old.Dispose(); } toastHost.Visible = toastHost.Controls.Count > 0; PlaceToasts(); return; }
-            string name = product == UpdateProducts.Loader ? "Slotsloader" : "Slotsloader Manager";
+            string name = product == UpdateProducts.Loader ? "Slotsloader" : product == UpdateProducts.Core ? "Native Core" : "Slotsloader Manager";
             // 1.0.19: an approval taken back offers the approved, older version: worded as going back to it.
             bool back = product == UpdateProducts.Loader && !takeover && UpdateCheck.GoesBack(offer, installed);
             // A Slotsloader installed outside the Manager: the approved one through the Manager, to use its settings.
@@ -212,10 +237,10 @@ namespace SlotsInstaller
             toast.Paint += delegate(object sender, PaintEventArgs e) { using (var pen = new Pen(Palette.Accent, Math.Max(1F, Px(1)))) e.Graphics.DrawRectangle(pen, 0, 0, toast.Width - 1, toast.Height - 1); };
             var label = new Label { UseMnemonic = false, Text = text, Dock = DockStyle.Top, Height = Px(28), ForeColor = Palette.Text, Font = Palette.Normal, AutoEllipsis = true, Name = "toastText" };
             var row = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = Padding.Empty };
-            FlatButton update = Button(takeover ? "Install" : back ? "Go back" : "Update", true, 92, delegate { if (takeover) OfferSlotsLoaderInstall(); else if (product == UpdateProducts.Loader) StartLoaderUpdate(offer, installed); else StartManagerUpdate(offer); });
+            FlatButton update = Button(takeover ? "Install" : back ? "Go back" : "Update", true, 92, delegate { if (takeover) OfferSlotsLoaderInstall(); else if (product == UpdateProducts.Loader) StartLoaderUpdate(offer, installed); else if (product == UpdateProducts.Core) StartCoreUpdate(offer); else StartManagerUpdate(offer); });
             FlatButton notes = Button("What's new", false, 110, delegate { OpenReleasePage(offer.HtmlUrl); });
-            FlatButton skip = Button("Skip this version", false, 140, delegate { UpdateSettings s = UpdateSettings.Load(); if (product == UpdateProducts.Loader) s.SkipLoader = offer.Version; else s.SkipManager = offer.Version; s.Save(); SetToast(product, null, null); });
-            FlatButton close = Button("✕", false, 40, delegate { UpdateSettings s = UpdateSettings.Load(); if (product == UpdateProducts.Loader) s.DismissedLoader = offer.Version; else s.DismissedManager = offer.Version; s.Save(); SetToast(product, null, null); });
+            FlatButton skip = Button("Skip this version", false, 140, delegate { UpdateSettings s = UpdateSettings.Load(); if (product == UpdateProducts.Loader) s.SkipLoader = offer.Version; else if (product == UpdateProducts.Core) s.SkipCore = offer.Version; else s.SkipManager = offer.Version; s.Save(); SetToast(product, null, null); });
+            FlatButton close = Button("✕", false, 40, delegate { UpdateSettings s = UpdateSettings.Load(); if (product == UpdateProducts.Loader) s.DismissedLoader = offer.Version; else if (product == UpdateProducts.Core) s.DismissedCore = offer.Version; else s.DismissedManager = offer.Version; s.Save(); SetToast(product, null, null); });
             update.AccessibleName = (takeover ? "Install " + name + " " : back ? "Go back to " + name + " " : "Update " + name + " to ") + offer.Version; notes.AccessibleName = "What's new in " + name + " " + offer.Version + " (opens the release page)";
             skip.AccessibleName = "Skip " + name + " " + offer.Version; close.AccessibleName = "Dismiss the " + name + " update until the next check";
             foreach (FlatButton b in new[] { update, notes, skip, close }) { b.Width = Px(b.Width); b.Height = Px(32); b.Font = Palette.Small; b.Margin = new Padding(0, 0, Px(6), 0); row.Controls.Add(b); }

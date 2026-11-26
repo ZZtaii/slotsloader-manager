@@ -1317,7 +1317,7 @@ namespace SlotsInstaller
                 installReFrameworkButton.Text = (tools.ReFrameworkFile ? "Update to " : "Install ") + ReFrameworkRelease.Pin.Label;
                 // 26 Nov 2026: anything missing: the one button for it all, in place of the single ones it covers (those
                 // stay for what it doesn't do: taking over a Slotsloader installed by hand).
-                SetupNeeds needs = GameSetup.Needs(tools, state, fluffy);
+                SetupNeeds needs = GameSetup.Needs(tools, state, fluffy, UpdateCheck.CoreInstallPin(UpdateSettings.Load()));
                 bool all = needs.Any;
                 installAllToolsButton.Visible = all;
                 if (all)

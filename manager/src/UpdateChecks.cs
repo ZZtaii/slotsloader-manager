@@ -332,6 +332,18 @@ namespace SlotsInstaller
                         ",\"native_core\":{\"name\":\"SF6 Native Core\",\"version\":\"0.9.14\",\"release\":\"v1.37.0\",\"file\":\"SF6_NativeCore_0.9.14.zip\",\"size\":684069,\"sha256\":\"" + new string('b', 64) + "\"},\"something_new\":{\"x\":[1]}", ",\"updated\":\"2026-11-16\"")) };
                     ReleaseOffer read = UpdateCheck.ReadList(out why);
                     Require(read != null && read.Version == "1.9.8" && read.Sha256 == Sha(l198) && why == "" && File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("not used here: something_new"), "unknown packages: " + why);   // 26 Nov 2026: native_core is used now (DependencyList.Core)
+                    // 26 Nov 2026: the list's Native Core is read too, kept per Manager version like the loader's, and offered
+                    // over an older core the Manager installed (never going back).
+                    ReleaseOffer core;
+                    UpdateCheck.ReadList(out why, out core);
+                    Require(core != null && core.Product == UpdateProducts.Core && core.Version == "0.9.14" && core.IsApproval && core.AsPin().Label == "Native Core", "the list's native_core: " + (core == null ? "none" : core.Product + " " + core.Version));
+                    var coreSettings = new UpdateSettings(); coreSettings.DismissedCore = "0.9.13"; coreSettings.RememberApprovedCore(core);
+                    Require(coreSettings.ApprovedCore() == core && coreSettings.DismissedCore == "" && UpdateCheck.CoreInstallPin(coreSettings).Version == "0.9.14", "approved core kept: " + (coreSettings.ApprovedCore() == null ? "none" : coreSettings.ApprovedCore().Version));
+                    coreSettings.ApprovedCoreBy = "0.0.1";
+                    Require(coreSettings.ApprovedCore() == null, "an approved core read by another Manager version is not used");
+                    Require(UpdateCheck.CoreUpdate(core, "0.9.13") == core && UpdateCheck.CoreUpdate(core, "0.9.14") == null && UpdateCheck.CoreUpdate(core, "0.9.14-mm1") == null && UpdateCheck.CoreUpdate(core, "0.9.15") == null && UpdateCheck.CoreUpdate(core, null) == null,
+                        "CoreUpdate: older only");
+                    Require(MainForm.SetupButtonText(new SetupNeeds { CoreUpdate = true }) == "Update Native Core" && MainForm.SetupButtonText(new SetupNeeds { CoreUpdate = true, Loader = true }) == "Install dependencies", "setup button for a core update");
                     // 1.0.21: the malformed lists themselves are the loader group's (20 lists through the same DependencyList.Parse);
                     // here one refused list for the log and the Skipped line, and the 64 KB cap of the read.
                     var bad = new Dictionary<string, string> {

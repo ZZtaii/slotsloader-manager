@@ -13,14 +13,18 @@ namespace SlotsInstaller
     // Slotsloader that is there already); Slotsloader switched off with the outfit mods is not installed again.
     internal sealed class SetupNeeds
     {
-        internal bool ReFramework, ReFrameworkUpdate, Loader, Core;
-        internal bool Any { get { return ReFramework || Loader || Core; } }
+        // CoreUpdate: the Native Core the Manager installed is older than the approved one (CoreRecordId: its record,
+        // updated in place).
+        internal bool ReFramework, ReFrameworkUpdate, Loader, Core, CoreUpdate;
+        internal string CoreRecordId, CoreFrom;
+        internal LoaderPin CorePin;   // the Native Core to install (UpdateCheck.CoreInstallPin)
+        internal bool Any { get { return ReFramework || Loader || Core || CoreUpdate; } }
         internal List<string> Names()
         {
             var names = new List<string>();
             if (ReFramework) names.Add("REFramework");
             if (Loader) names.Add("Slotsloader");
-            if (Core) names.Add("Native Core");
+            if (Core || CoreUpdate) names.Add("Native Core");
             return names;
         }
         // "REFramework, Slotsloader and Native Core"
@@ -52,16 +56,23 @@ namespace SlotsInstaller
 
         // What one click would install. state: the Manager's records (null when unreadable: then the loader counts as
         // missing only by the game folder).
-        internal static SetupNeeds Needs(ToolStatus tools, ReplaceState state, FluffyInstalls fluffy)
+        internal static SetupNeeds Needs(ToolStatus tools, ReplaceState state, FluffyInstalls fluffy) { return Needs(tools, state, fluffy, LoaderRelease.CorePin); }
+        internal static SetupNeeds Needs(ToolStatus tools, ReplaceState state, FluffyInstalls fluffy, LoaderPin corePin)
         {
-            var n = new SetupNeeds();
+            var n = new SetupNeeds { CorePin = corePin };
             if (tools == null || !tools.GameFound) return n;
             n.ReFramework = tools.ReFrameworkOffer;
             n.ReFrameworkUpdate = n.ReFramework && tools.ReFrameworkFile;
             bool parked = state != null && state.ModsOff != null && !String.IsNullOrEmpty(state.ModsOff.LoaderId);
             n.Loader = !tools.SlotsLoader && !parked;
             bool coreByFluffy = fluffy != null && fluffy.OwnersOf(LoaderFlags.CorePlugin).Count > 0;
-            n.Core = !tools.NativeCore && !coreByFluffy && LoaderRelease.CorePin != null;
+            n.Core = !tools.NativeCore && !coreByFluffy && corePin != null;
+            // 26 Nov 2026: the Manager's own core, older than the one to install: updated in place
+            ReplaceMod record = tools.NativeCore && !coreByFluffy && corePin != null ? InstalledCore.Record(state) : null;
+            if (record != null && UpdateCheck.CoreUpdate(ReleaseOffer.Approved(corePin, UpdateProducts.Core), InstalledCore.Version(record)) != null)
+            {
+                n.CoreUpdate = true; n.CoreRecordId = record.Id; n.CoreFrom = InstalledCore.Version(record);
+            }
             return n;
         }
 
@@ -73,7 +84,8 @@ namespace SlotsInstaller
             var steps = new List<KeyValuePair<string, Func<LoaderFile>>>();
             if (needs.ReFramework) { ReFrameworkPin p = ReFrameworkRelease.Pin; steps.Add(new KeyValuePair<string, Func<LoaderFile>>(p.Label, delegate { return ReFrameworkRelease.Fetch(p, downloads); })); }
             if (needs.Loader) steps.Add(new KeyValuePair<string, Func<LoaderFile>>("Slotsloader " + UpdateCheck.ShortVersion(loaderPin.Version), delegate { return LoaderRelease.Fetch(loaderPin, libs, downloads, true); }));
-            if (needs.Core) { LoaderPin core = LoaderRelease.CorePin; steps.Add(new KeyValuePair<string, Func<LoaderFile>>("Native Core " + core.Version, delegate { return LoaderRelease.Fetch(core, libs, downloads, true); })); }
+            LoaderPin corePin = needs.CorePin ?? LoaderRelease.CorePin;
+            if ((needs.Core || needs.CoreUpdate) && corePin != null) steps.Add(new KeyValuePair<string, Func<LoaderFile>>("Native Core " + corePin.Version, delegate { return LoaderRelease.Fetch(corePin, libs, downloads, true); }));
             foreach (var step in steps)
             {
                 OperationContext.ThrowIfCancellationRequested();
@@ -85,10 +97,12 @@ namespace SlotsInstaller
                     CompositionPlan composition = Composer.Plan(package, Composer.DefaultSelection(package, true), true);
                     if (!composition.CanInstall) throw new IOException(String.Join(" ", composition.Errors));
                     ReplacePlan plan;
-                    ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, package.Name, false, null, out plan);
+                    // an update of the Manager's own Native Core keeps its record (and its place)
+                    string replaceId = needs.CoreUpdate && ReplaceEngine.HasCorePlugin(composition.Files.Keys) ? needs.CoreRecordId : null;
+                    ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, sevenZip, engine, package.Name, false, replaceId, replaceId != null, out plan);
                     if (LoaderCostumePak.IsLoaderMod(mod)) UnownedSlotsFlag.Ensure(engine.GameRoot);
                     Program.LogLine("Set up: installed " + step.Key + " (" + ReplacePlanner.N(mod.Files.Count, "file") + ").");
-                    result.Installed.Add(step.Key);
+                    result.Installed.Add(replaceId != null && !String.IsNullOrEmpty(needs.CoreFrom) ? step.Key + " (was " + UpdateCheck.ShortVersion(needs.CoreFrom) + ")" : step.Key);
                 }
                 catch (Exception ex)
                 {

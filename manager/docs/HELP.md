@@ -233,6 +233,7 @@ At start and once a day the Manager checks GitHub for a new Manager or approved 
 
 - **Manager update:** downloads the release, checks its SHA-256, replaces the program files and restarts. Your settings and records in `Data` stay. The previous version is kept: with the Manager closed, run `& '.\Slotsloader Manager.exe' update-rollback` in PowerShell in its folder to put it back.
 - **Slotsloader update:** offered for a Slotsloader the Manager installed. It goes through the health check and installs over the old one at the same priority. Close SF6 first. An approval taken back offers **Go back**.
+- **Native Core update:** offered for a Native Core the Manager installed, when a newer one is approved.
 - **Slotsloader installed outside the Manager:** **Install** in the notice lets the Manager's settings apply. With another mod manager, turn off its Slotsloader entry first.
 
 **Settings → Slotsloader** has **Check automatically (daily)**, **Include test builds** (Manager pre-releases) and **Check now**.

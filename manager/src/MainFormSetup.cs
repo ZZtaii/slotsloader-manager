@@ -20,7 +20,7 @@ namespace SlotsInstaller
                 FluffyInstalls fluffy = null; ReplaceState state = null;
                 try { fluffy = engine.Fluffy(); } catch (Exception ex) { Program.Log(ex); }
                 try { state = engine.LoadState(); } catch (Exception ex) { Program.Log(ex); }
-                return GameSetup.Needs(ToolStatus.Detect(config.GameRoot, fluffy), state, fluffy);
+                return GameSetup.Needs(ToolStatus.Detect(config.GameRoot, fluffy), state, fluffy, UpdateCheck.CoreInstallPin(UpdateSettings.Load()));
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); return new SetupNeeds(); }
         }
@@ -28,7 +28,9 @@ namespace SlotsInstaller
         // The user: "change this to dependencies in button" (the lines above it already name what is missing).
         internal static string SetupButtonText(SetupNeeds needs)
         {
-            if (needs.ReFrameworkUpdate && !needs.Loader && !needs.Core) return "Update REFramework";
+            bool core = needs.Core || needs.CoreUpdate;
+            if (needs.ReFrameworkUpdate && !needs.Loader && !core) return "Update REFramework";
+            if (needs.CoreUpdate && !needs.ReFramework && !needs.Loader) return "Update Native Core";
             return "Install dependencies";
         }
 
