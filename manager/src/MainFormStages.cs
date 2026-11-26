@@ -77,7 +77,9 @@ namespace SlotsInstaller
             clickable = false;
             if (!StageLoaderReady)
             {
-                clickable = tools != null && tools.GameFound;
+                // Only when the one-click setup would install it: an older Slotsloader without stage support is there already
+                clickable = tools != null && tools.GameFound && !tools.SlotsLoader;
+                if (tools != null && tools.SlotsLoader) return "This Slotsloader can't load stages, so Extra stage is off · use Replace original";
                 return "Wael's Slots Loader isn't in the game folder, so Extra stage is off · " + (clickable ? "click to install it" : "use Replace original");
             }
             if (tools != null && tools.GameFound && !tools.NativeCore && LoaderRelease.CorePin != null)
@@ -133,7 +135,7 @@ namespace SlotsInstaller
             Work("Installing extra stage…", delegate { return StageMods.Install(current, ids, game, sevenZip, name); }, delegate(InstallResult result)
             {
                 bool core = ToolStatus.Detect(game).NativeCore || LoaderRelease.CorePin == null;
-                RefreshInstalled("✓ " + result.Message + (core ? "" : " Its pictures need SF6 Native Core: Settings, Install Native Core."));
+                RefreshInstalled("✓ " + result.Message + (core ? "" : " Its pictures need SF6 Native Core: click the line under INSTALL AS to install it."));
             });
         }
 

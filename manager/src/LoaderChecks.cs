@@ -90,6 +90,10 @@ namespace SlotsInstaller
                     var parked = new ReplaceState(); parked.ModsOff = new ModsOffRecord { LoaderId = "abc" };
                     SetupNeeds offNeeds = GameSetup.Needs(new ToolStatus { GameFound = true, ReFrameworkFile = true, ReFramework = true, NativeCore = true }, parked, null);
                     Require(!offNeeds.Loader && !offNeeds.Any, "outfit mods off: Slotsloader is switched off, not missing: " + offNeeds.Text());
+                    // A tool whose record of this Manager is turned off is not installed again (that would keep it off): named instead.
+                    var offCore = new ReplaceState(); offCore.Mods.Add(new ReplaceMod { Id = "c1", Name = "SF6 Native Core", Enabled = false, Files = new List<ModFile> { new ModFile { Path = LoaderFlags.CorePlugin } } });
+                    SetupNeeds offCoreNeeds = GameSetup.Needs(new ToolStatus { GameFound = true, ReFrameworkFile = true, ReFramework = true, SlotsLoader = true }, offCore, null);
+                    Require(!offCoreNeeds.Core && !offCoreNeeds.Any && offCoreNeeds.TurnedOff.SequenceEqual(new[] { "Native Core" }), "a turned-off Native Core record: " + offCoreNeeds.Text() + " / off " + String.Join(",", offCoreNeeds.TurnedOff));
                     string goodList = ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, "", "");
                     var bad = new Dictionary<string, string>
                     {

@@ -504,7 +504,8 @@ namespace SlotsInstaller
         {
             FluffyInstalls fluffy = engine.Fluffy();
             SetupNeeds needs = GameSetup.Needs(ToolStatus.Detect(engine.GameRoot, fluffy), engine.LoadState(), fluffy, UpdateCheck.CoreInstallPin(UpdateSettings.Load()));
-            if (!needs.Any) { Console.WriteLine("REFramework, Slotsloader and Native Core are all in the game folder: nothing to install."); return 0; }
+            if (needs.TurnedOff.Count > 0) Console.WriteLine("Turned off on the Installed page (not installed again; turn it back on there): " + GameSetup.Join(needs.TurnedOff) + ".");
+            if (!needs.Any) { Console.WriteLine(needs.TurnedOff.Count > 0 ? "Nothing else to install." : "REFramework, Slotsloader and Native Core are all in the game folder: nothing to install."); return 0; }
             LoaderPin pin = LoaderRelease.Pin != LoaderPin.Release ? LoaderRelease.Pin : UpdateCheck.InstallPin(UpdateSettings.Load().ApprovedLoader());
             Console.WriteLine("To install" + (needs.CoreUpdate || needs.ReFrameworkUpdate ? " or update" : "") + ": " + needs.Text() + (needs.CoreUpdate ? " (Native Core " + UpdateCheck.ShortVersion(needs.CoreFrom) + " -> " + needs.CorePin.Version + ")" : "") + ".");
             if (!a.Yes) { Console.WriteLine("Nothing changed: add --yes to install."); return 1; }

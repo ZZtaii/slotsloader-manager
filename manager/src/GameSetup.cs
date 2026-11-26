@@ -17,6 +17,9 @@ namespace SlotsInstaller
         // updated in place).
         internal bool ReFramework, ReFrameworkUpdate, Loader, Core, CoreUpdate;
         internal string CoreRecordId, CoreFrom;
+        // Tools the Manager installed whose record is turned off on the Installed page: not installed again (a reinstall
+        // of the same zip keeps the record off), the status says to turn them back on.
+        internal List<string> TurnedOff = new List<string>();
         internal LoaderPin CorePin;   // the Native Core to install (UpdateCheck.CoreInstallPin)
         internal bool Any { get { return ReFramework || Loader || Core || CoreUpdate; } }
         internal List<string> Names()
@@ -73,7 +76,17 @@ namespace SlotsInstaller
             {
                 n.CoreUpdate = true; n.CoreRecordId = record.Id; n.CoreFrom = InstalledCore.Version(record);
             }
+            // A missing tool whose record of this Manager is only turned off: the user turns it back on
+            if (n.ReFramework && !tools.ReFrameworkFile && TurnedOff(state, "dinput8.dll")) { n.ReFramework = false; n.ReFrameworkUpdate = false; n.TurnedOff.Add("REFramework"); }
+            if (n.Loader && TurnedOff(state, LoaderCostumePak.PluginPath)) { n.Loader = false; n.TurnedOff.Add("Slotsloader"); }
+            if (n.Core && TurnedOff(state, LoaderFlags.CorePlugin)) { n.Core = false; n.TurnedOff.Add("Native Core"); }
             return n;
+        }
+        private static bool TurnedOff(ReplaceState state, string path)
+        {
+            if (state == null) return false;
+            Func<ReplaceMod, bool> holds = m => m != null && m.Files != null && m.Files.Any(f => String.Equals(PakHash.Normalize(f.Path ?? "").TrimStart('/'), path, StringComparison.OrdinalIgnoreCase));
+            return state.Mods.Any(m => !m.Enabled && holds(m)) && !state.Mods.Any(m => m.Enabled && holds(m));
         }
 
         // Runs on a worker thread. loaderPin: the Slotsloader build to install (the approved one, MainForm.CurrentInstallPin).

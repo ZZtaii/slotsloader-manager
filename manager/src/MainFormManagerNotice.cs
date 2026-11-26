@@ -17,6 +17,7 @@ namespace SlotsInstaller
         private NoticeBanner libraryManagerBanner, installedManagerBanner;
         private string modeExternalLock;      // UpdateModeUi: the lockout reason for the open mod (null: none)
         private string modeMethodNow = "";    // UpdateModeUi: the method the open mod would install with (Replace original)
+        private int modeExternalMods;         // UpdateModeUi: the other manager's installed mods, as the lockout counted them
 
         internal static string ManagerLockText(int mods) { return "Replace original is off while your other mod manager has " + ReplacePlanner.N(mods, "mod") + " installed. Extra outfits still install here."; }
         internal const string ManagerOpenInstallText = "Close your other mod manager to install this replacement: both apps edit the same game PAK.";
@@ -49,11 +50,7 @@ namespace SlotsInstaller
         internal string LibraryManagerNotice()
         {
             if (package == null || !IsReplaceMode || StageMode) return null;
-            if (ReplaceEngine.IsExternalLock(modeExternalLock))
-            {
-                int mods = gameRows == null ? 0 : gameRows.Count(r => r.Kind == "Fluffy");
-                return ManagerLockText(Math.Max(1, mods));
-            }
+            if (ReplaceEngine.IsExternalLock(modeExternalLock)) return ManagerLockText(Math.Max(1, modeExternalMods));
             bool natives = PackagePaths(package).Any(p => (p ?? "").Replace('\\', '/').TrimStart('/').StartsWith("natives/", StringComparison.OrdinalIgnoreCase));
             if (fluffyRunning && natives && (FluffyBlocksPlan || modeMethodNow == ReplaceMethods.Pak)) return ManagerOpenInstallText;
             return null;

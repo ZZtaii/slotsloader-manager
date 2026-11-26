@@ -247,7 +247,7 @@ namespace SlotsInstaller
                 try { external = Engine().Fluffy(); locked = ReplaceEngine.ExternalLockReason(external, PackagePaths(package)); } catch (Exception ex) { Program.Log(ex); }
             // 1.0.11 (the user): Extra outfit mode says up front that Replace original is off and why, so it isn't a surprise after switching.
             bool replaceOff = ReplaceEngine.IsExternalLock(locked);
-            modeExternalLock = locked; modeMethodNow = "";   // 26 Nov 2026: the banner (MainFormManagerNotice.cs)
+            modeExternalLock = locked; modeMethodNow = ""; modeExternalMods = external == null ? 0 : external.Mods.Count;   // 26 Nov 2026: the banner (MainFormManagerNotice.cs)
             modeLockHint.Text = forced ? "· locked for this mod" : !IsReplaceMode && replaceOff ? "· Replace off: the external mod manager has " + ReplacePlanner.N(external.Mods.Count, "mod") : "";
             modeLockHint.ForeColor = forced ? Palette.Muted : Palette.Accent;
             if (targetPanel != null) targetPanel.Visible = !IsReplaceMode && !StageMode;

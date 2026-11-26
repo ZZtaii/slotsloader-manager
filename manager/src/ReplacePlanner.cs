@@ -106,6 +106,7 @@ namespace SlotsInstaller
             var modPaks = new List<PlannedFile>();   // 2.5.6: PAK mods (ReplacePakMods.cs)
             int skippedLoader = 0;                   // 1.0.21: Slots Loader files the game doesn't need (ReplaceEngine.SkippedLoaderFiles)
             bool core = ReplaceEngine.HasCorePlugin(composition.Files.Keys);   // 26 Nov 2026: and Native Core's (SkippedCoreFiles)
+            int skippedCore = 0;
             var refusedLoader = new List<string>();  // 1.0.21 (the user): a Slots Loader file the Manager never installs is skipped, not refused
             foreach (PlannedFile f in composition.Files.Values)
             {
@@ -126,7 +127,7 @@ namespace SlotsInstaller
                     renamed[upgraded] = dest; dest = upgraded;
                 }
                 if (plugin != null && ReplaceEngine.SkippedLoaderFile(dest)) { skippedLoader++; continue; }   // 1.0.21, before the program rule
-                if (core && ReplaceEngine.SkippedCoreFile(dest)) { skippedLoader++; continue; }
+                if (core && ReplaceEngine.SkippedCoreFile(dest)) { skippedCore++; continue; }
                 if (ReplaceEngine.SkippedProgram(dest, engine.GameRoot)) { plan.Items.Add(new HealthItem("info", "Skipped " + dest + ": programs aren't installed into the game folder.")); continue; }
                 try { ReplaceEngine.ValidateDestination(dest); }
                 catch (IOException ex)
@@ -138,7 +139,13 @@ namespace SlotsInstaller
                 if (chosen.ContainsKey(dest)) { plan.Items.Add(new HealthItem("warn", "Two selected files map to " + dest + "; the later option wins.")); }
                 chosen[dest] = new PlannedFile { Component = f.Component, Asset = new NativeAsset { EntryPath = f.Asset.EntryPath, DestinationPath = dest, Size = f.Asset.Size } };
             }
-            if (skippedLoader > 0) plan.Items.Add(new HealthItem("info", "Skipped " + N(skippedLoader, "file") + " the game doesn't need (" + (plugin != null ? "cover and title screen pictures, Report a bug, clean-up and audit tools" : "the crash report tool and the News text") + ")."));
+            if (skippedLoader + skippedCore > 0)
+            {
+                var kinds = new List<string>();
+                if (skippedLoader > 0) kinds.Add("cover and title screen pictures, Report a bug, clean-up and audit tools");
+                if (skippedCore > 0) kinds.Add("Native Core's crash report tool and News text");
+                plan.Items.Add(new HealthItem("info", "Skipped " + N(skippedLoader + skippedCore, "file") + " the game doesn't need (" + String.Join("; ", kinds) + ")."));
+            }
             if (refusedLoader.Count > 0) plan.Items.Add(new HealthItem("info", "Skipped " + String.Join(", ", refusedLoader.Take(5)) + (refusedLoader.Count > 5 ? " and " + N(refusedLoader.Count - 5, "more file") : "") + ": the Manager doesn't install " + (refusedLoader.Count == 1 ? "this file" : "these files") + " into the game folder; the rest of Slotsloader installs."));
             // 2.5.6: each .pak becomes the next patch PAK, after every patch number in use (the game reads them in order).
             if (modPaks.Count > 0)

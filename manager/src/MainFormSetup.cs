@@ -39,7 +39,13 @@ namespace SlotsInstaller
             if (busy) { SetPageStatus(currentPage, "Another task is running. Click again when it finishes.", Palette.Accent); return; }
             if (gameRunning) { SetPageStatus(currentPage, "Close SF6 first: REFramework, Slotsloader and Native Core can't be installed while it runs.", Palette.Red); return; }
             SetupNeeds needs = SetupNeedsNow();
-            if (!needs.Any) { SetPageStatus(currentPage, "✓ REFramework, Slotsloader and Native Core are all in the game folder.", Palette.Green); LoadAfterSetup(); return; }
+            string off = needs.TurnedOff.Count == 0 ? "" : GameSetup.Join(needs.TurnedOff) + (needs.TurnedOff.Count == 1 ? " is" : " are") + " turned off on the Installed page: turn " + (needs.TurnedOff.Count == 1 ? "it" : "them") + " back on there.";
+            if (!needs.Any)
+            {
+                if (off.Length > 0) SetPageStatus(currentPage, off, Palette.Accent);
+                else SetPageStatus(currentPage, "✓ REFramework, Slotsloader and Native Core are all in the game folder.", Palette.Green);
+                LoadAfterSetup(); return;
+            }
             ReplaceEngine engine = Engine();
             LoaderPin pin = CurrentInstallPin();
             List<string> libraries = config.Libraries.ToList(); string sevenZip = config.SevenZipPath, downloads = LoaderRelease.DownloadDir;
@@ -48,7 +54,7 @@ namespace SlotsInstaller
                 LastSetupResult = r;
                 Program.LogLine("Set up: " + r.Message);
                 LoadAfterSetup();
-                RefreshInstalled((r.Failed == null ? "✓ " : "") + r.Message);
+                RefreshInstalled((r.Failed == null ? "✓ " : "") + r.Message + (off.Length > 0 ? " " + off : ""));
             });
         }
         private void LoadAfterSetup()
