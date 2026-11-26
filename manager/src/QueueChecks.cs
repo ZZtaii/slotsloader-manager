@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -43,6 +43,7 @@ namespace SlotsInstaller
                 check("background index (1.0.6): the quick listing returns every mod at once (unread ones Pending, with their file-name fighter); reading one gives the same identity as a full scan; a 1.0.5 record (no names) keeps its identity without a relist and only its names are read; names fill the display name and option names", delegate { BackgroundIndex(root); });
                 check("queue defaults (1.0.6): alternative top-level variants keep the first (the Default one first); a required choose-one group gets its default/first option; optional add-ons stay off; the plan installs", delegate { QueueDefaults(root); });
                 check("outfit order (1.0.18): one fighter's extra outfits change places within the same slots (number, folder and scene move together), another fighter is untouched, the fingerprint is cleared, the report is renumbered and renamed, the equipped slot follows its outfit, Undo restores the files; a stale list and a running SF6 are refused; the window lists the slots and a moved row changes the order", delegate { OutfitOrderCheck(root); });
+                check("Random list (1.0.24): a fighter's outfits are its game outfits then its extra outfits (mod, swatches, NSFW; Random left out); a list saves in the plugin's format and reads back, other fighters' lists kept; a mod numbered again is found by its mod; removing the list and Undo; the same list writes nothing; the window reads the list, a colour click and the mode change it", delegate { RandomListCheck(root); });
                 check("add to outfit (1.0.6): exactly the ticked options' files go into the installed outfit (a lone hair option without main files is fine); nothing else is added or removed; recorded once; a reinstall of the same mod puts them back; files for another outfit slot are refused; the picker window renders", delegate { AddPart(root); });
                 check("added parts as in-game options (1.0.19): manager_parts.json and its folders for a suite-line loader with the costume options on: a part on, a part off, two parts on one path, base only where a part that is on took a file of the outfit; a part removed, an outfit disabled or uninstalled, the switch off or no such loader leave nothing; a mod that is gone or changed leaves its outfit out with one log line; a second sync changes no file date; a part keeps its id through a reorder and on another outfit", delegate { ManagerPartsChecks.Run(root); });
                 SynchronizationContext previous = SynchronizationContext.Current; bool previousAuto = WindowsFormsSynchronizationContext.AutoInstall;
@@ -241,14 +242,133 @@ namespace SlotsInstaller
         }
 
         // ---- Add a part ----------------------------------------------------------------------------------------------
+        private static void RandomListCheck(string root)
+        {
+            string game = Path.Combine(root, "random-game"), data = Path.Combine(game, OutfitOrder.DataRelative), listPath = RandomList.PathOf(game);
+            Directory.CreateDirectory(data); Directory.CreateDirectory(Path.GetDirectoryName(listPath));
+            Func<string, int, int, bool, string> slot = delegate(string mod, int no, int baseNo, bool nsfw)
+            { return "    {\n      \"mod_id\": \"" + mod + "\",\n      \"fighter\": 16,\n      \"fighter_dir\": \"esf016\",\n      \"original_costume_no\": " + baseNo + ",\n      \"original_folder\": \"001\",\n      \"new_costume_no\": " + no + ",\n      \"new_folder\": \"" + (no + 1).ToString("D3") + "\",\n      \"scene_name\": \"esf016v" + no.ToString("D2") + "\"" + (nsfw ? ",\n      \"nsfw\": true" : "") + "\n    }"; };
+            Func<string, string> registry = delegate(string cccNo)
+            {
+                return "{\n  \"version\": 1,\n  \"fingerprint\": \"x\",\n  \"slots\": [\n" + String.Join(",\n", new[] { slot("aaa", 5, 0, false), slot("bbb", 6, 1, true), slot("ccc", Int32.Parse(cccNo), 0, false) })
+                    + "\n  ],\n  \"next_ids\": {},\n  \"possession\": [\n    {\n      \"fighter\": 16,\n      \"fighter_dir\": \"esf016\",\n      \"costume_no\": 5,\n      \"record_id\": 5300,\n      \"manage_id\": 5300,\n      \"name\": \"Outfit I\",\n      \"swatches\": [[4292965206,4284772745],[4290954953,4283192677]]\n    },\n"
+                    + "    {\n      \"fighter\": 16,\n      \"fighter_dir\": \"esf016\",\n      \"costume_no\": 104,\n      \"record_id\": 5399,\n      \"manage_id\": 5399,\n      \"name\": \"Random\",\n      \"random\": true\n    }\n  ]\n}\n";
+            };
+            string report = "{\n  \"outfits\": [\n    {\"fighter\": 16, \"fighter_dir\": \"esf016\", \"costume_no\": 5, \"name\": \"Outfit I\", \"label\": \"Juri/Alpha\", \"source\": \"Juri/Alpha\"},\n"
+                + "    {\"fighter\": 16, \"fighter_dir\": \"esf016\", \"costume_no\": 6, \"name\": \"Outfit II\", \"label\": \"Juri/Beta\", \"source\": \"Juri/Beta\"},\n    {\"fighter\": 16, \"fighter_dir\": \"esf016\", \"costume_no\": 8, \"name\": \"Outfit III\", \"label\": \"Juri/Gamma\", \"source\": \"Juri/Gamma\"}\n  ]\n}\n";
+            File.WriteAllText(Path.Combine(data, "registry.json"), registry("8")); File.WriteAllText(Path.Combine(data, "outfits.json"), report);
+            // Another fighter's list, kept through every save
+            File.WriteAllText(listPath, "{\"format\":\"sf6-random-list-1\",\"fighters\":{\"1\":{\"mode\":\"shuffle\",\"outfits\":[{\"game\":0,\"repeat\":3}]}}}");
+            List<RandomOutfit> outfits = RandomList.Outfits(game, "esf016");
+            var extra = outfits.Where(o => !o.Game).ToList();
+            Require(outfits.First().Game && outfits.First().CostumeNo == 0 && outfits.First().Name == "Outfit 1" && outfits.TakeWhile(o => o.Game).Count() >= 2
+                && extra.Select(o => o.ModId).SequenceEqual(new[] { "aaa", "bbb", "ccc" }) && extra[0].Swatches != null && extra[0].Swatches.Length == 2 && extra[0].Swatches[0][0] == 4292965206u
+                && extra[1].Nsfw && extra[1].Base == 1 && extra[2].Swatches == null && extra[2].Label == "Juri/Gamma" && !outfits.Any(o => o.CostumeNo == 104),
+                "outfits: " + String.Join(", ", outfits.Select(o => o.Key + " " + o.Name)));
+            Require(RandomList.Load(game, "esf016", outfits) == null, "a fighter without a list read one");
+            var plan = new RandomPlan();
+            plan.Items.Add(new RandomListItem { Outfit = extra[2], Repeat = 2, Colours = new List<int> { 5, 2 } });
+            plan.Items.Add(new RandomListItem { Outfit = outfits[0], Repeat = 1 });
+            string undo = Path.Combine(root, "random-undo");
+            string backup = RandomList.Save(game, "esf016", plan, undo);
+            var file = (Dictionary<string, object>)new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject(File.ReadAllText(listPath));
+            var fighters = (Dictionary<string, object>)file["fighters"];
+            var juri = (Dictionary<string, object>)fighters["16"]; var items = (object[])juri["outfits"]; var first = (Dictionary<string, object>)items[0]; var second = (Dictionary<string, object>)items[1];
+            Require((string)file["format"] == "sf6-random-list-1" && fighters.ContainsKey("1") && (string)juri["mode"] == "order" && items.Length == 2
+                && (string)first["mod_id"] == "ccc" && Convert.ToInt32(first["base"]) == 0 && Convert.ToInt32(first["costume"]) == 8 && Convert.ToInt32(first["repeat"]) == 2
+                && ((object[])first["colours"]).Select(c => Convert.ToInt32(c)).SequenceEqual(new[] { 2, 5 }) && Convert.ToInt32(second["game"]) == 0 && !second.ContainsKey("colours")
+                && !String.IsNullOrEmpty(backup) && File.Exists(Path.Combine(backup, "random_list.json")), "the saved list: " + File.ReadAllText(listPath));
+            Require(RandomList.Save(game, "esf016", RandomList.Load(game, "esf016", outfits), undo) == null, "the same list wrote the file again");
+            // The loader numbers Gamma again: its mod finds it
+            File.WriteAllText(Path.Combine(data, "registry.json"), registry("9"));
+            List<RandomOutfit> renumbered = RandomList.Outfits(game, "esf016");
+            RandomPlan back = RandomList.Load(game, "esf016", renumbered);
+            Require(back != null && !back.Shuffle && back.Items.Count == 2 && back.Items[0].Outfit.ModId == "ccc" && back.Items[0].Outfit.CostumeNo == 9 && back.Items[0].Repeat == 2
+                && back.Items[0].Colours.SequenceEqual(new[] { 2, 5 }) && back.Items[1].Outfit.Game, "the list after a renumbering: " + (back == null ? "none" : back.Signature));
+            // The window: the list's rows first, in its order; a colour click and the mode change it
+            // The game's own outfits' swatches the loader keeps (game_swatches.json): Outfit 2 has 20 colours, the second
+            // without a file of its own; a replaced Outfit 1 carries its mod's name
+            File.WriteAllText(Path.Combine(data, "game_swatches.json"), "{\"format\": \"sf6-game-swatches-1\", \"key\": \"k\", \"outfits\": [\n"
+                + " {\"fighter_dir\": \"esf016\", \"costume_no\": 1, \"swatches\": [[4281545523,4278190335],null," + String.Concat(Enumerable.Repeat("[1,2],", 17)) + "[3,4]]},\n"
+                + " {\"fighter_dir\": \"esf001\", \"costume_no\": 0, \"swatches\": [[5,6]]}]}");
+            List<RandomOutfit> withGame = RandomList.Outfits(game, "esf016", new Dictionary<int, string> { { 0, "Juri Hat zz" } });
+            RandomOutfit outfit2 = withGame.First(o => o.Game && o.CostumeNo == 1), outfit1 = withGame.First(o => o.Game && o.CostumeNo == 0);
+            Require(outfit2.ColourCount == 20 && outfit2.Swatches[0][0] == 4281545523u && outfit2.Swatches[1].Length == 0 && outfit1.Name == "Outfit 1 (Juri Hat zz)" && outfit1.Swatches == null && outfit1.ColourCount == 10
+                && withGame.Where(o => !o.Game).All(o => o.ColourCount == 10), "game outfits' swatches and names: " + String.Join(", ", withGame.Select(o => o.Name + " x" + o.ColourCount)));
+            // The window: the list's rows first, in its order; a colour click, + and a tick change it; a drag moves a row
+            using (var form = new RandomListForm(game, "Juri", new[] { new KeyValuePair<string, string>("016", "Juri") }, null, null, delegate(string dir) { return new Dictionary<int, string> { { 0, "Juri Hat zz" } }; }))
+            {
+                RandomRows rows = form.RowsForTest;
+                Require(form.FighterDir == "esf016" && form.Mode == 1 && !form.Changed && rows.Count == renumbered.Count
+                    && rows[0].Outfit.ModId == "ccc" && rows[0].InList && rows[1].Outfit.Game && !rows[2].InList && rows.Entries.Any(e => e.Outfit.Name == "Outfit 1 (Juri Hat zz)"), "window rows");
+                rows.ClickForTest(0, rows.ChipPointForTest(0, 7));
+                Require(form.Changed && form.CanSave && form.Plan.Items[0].Colours.SequenceEqual(new[] { 2, 5, 7 }), "a colour click: " + form.Plan.Signature);
+                rows.ClickForTest(0, rows.PlusPointForTest(0));
+                Require(form.Plan.Items[0].Repeat == 3, "the + button");
+                RandomEntry third = rows[2];
+                rows.ClickForTest(2, rows.TickPointForTest(2));
+                int rowPixels = rows.Height / rows.Count;
+                rows.DragForTest(2, rowPixels / 4);   // the third row dragged to the top
+                rows.SettleForTest();
+                Require(form.Plan.Items.Count == 3 && form.Plan.Items[0].Outfit == third.Outfit && form.Plan.Items[1].Outfit.ModId == "ccc" && !rows.Dragging, "a ticked row dragged to the top: " + form.Plan.Signature);
+                // An outfit with 20 colours: the rows are wider than the list, which scrolls sideways
+                RandomEntry wide = rows.Entries.First(e => e.Outfit.Game && e.Outfit.CostumeNo == 1);
+                Require(wide.ColourCount == 20 && rows.NeededWidth > rows.Parent.ClientSize.Width - 1 && rows.Width >= rows.NeededWidth, "20 colours: " + rows.NeededWidth + " in " + rows.Parent.ClientSize.Width);
+                Require(RandomRows.ChipLabel(0) == "1" && RandomRows.ChipLabel(9) == "10" && RandomRows.ChipLabel(10) == "EX1" && RandomRows.ChipLabel(18) == "EX9", "colour labels: 1-10, then EX1...");
+                // The window opens on the fighter it showed last, kept in view-settings.json (older files: none)
+                string viewFile = Path.Combine(root, "random-view", "view-settings.json");
+                new ViewPreferences { RandomListFighter = "Juri" }.Save(viewFile);
+                Require(ViewPreferences.Load(viewFile).RandomListFighter == "Juri" && new ViewPreferences().RandomListFighter == "" && form.FighterName == "Juri", "the last Random list fighter is not kept");
+                Require(!form.PickerOpenForTest, "the fighter picker opened over a fighter");
+                // The repeats are a count: in a row (In order), "2 of 6 picks" (Shuffled)
+                var twice = new RandomEntry { InList = true, Repeat = 2 };
+                Require(RandomRows.RepeatCaption(1, twice, 6) == "in a row" && RandomRows.RepeatCaption(2, twice, 6) == "2 of 6 picks" && RandomRows.RepeatCaption(2, new RandomEntry(), 6) == "per round",
+                    "repeat captions: " + RandomRows.RepeatCaption(2, twice, 6));
+                form.Mode = 2; Require(form.Plan.Shuffle, "Shuffled");
+                form.Mode = 0; Require(form.Plan == null && form.Changed && form.CanSave, "Random as before: no list");
+                using (Bitmap bmp = new Bitmap(form.Width, form.Height)) form.DrawToBitmap(bmp, new Rectangle(Point.Empty, form.Size));   // paints
+            }
+            File.Delete(Path.Combine(data, "game_swatches.json"));
+            // No fighter to start on (none shown before): the fighter picker opens with the window
+            using (var form = new RandomListForm(game, "", new[] { new KeyValuePair<string, string>("016", "Juri") }, null, null))
+            {
+                form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-4000, -4000); form.Show(); Application.DoEvents();
+                Require(form.FighterDir == "" && form.FighterName == "" && form.PickerOpenForTest, "no fighter: the picker did not open");
+                form.Close();
+            }
+            // Variants of one archive are told apart by what differs (the loader's labels as seen 27/11 for Chun-Li Sleeveless C2)
+            Func<string, RandomOutfit> variant = delegate(string option)
+            { return new RandomOutfit { ModId = option, Source = "Chun-Li/Sleeveless C2.zip", Label = "Chun-Li/Sleeveless C2.zip/Sleeveless C2/01 Main files - Sleeveless C2 - " + option + " - Sleeveless C2" }; };
+            var variants = new List<RandomOutfit> { variant("Main files"), variant("Torn Stockings"), variant("Barefoot"), new RandomOutfit { ModId = "solo", Source = "Chun-Li/Barelegs C2", Label = "Chun-Li/Barelegs C2" } };
+            Dictionary<RandomOutfit, string> shownLabels = RandomListForm.DisplayLabels(variants, "Chun-Li");
+            Require(shownLabels[variants[0]] == "Sleeveless C2.zip · Main files" && shownLabels[variants[1]] == "Sleeveless C2.zip · Torn Stockings" && shownLabels[variants[3]] == "Barelegs C2",
+                "variant labels: " + String.Join(" | ", variants.Select(o => shownLabels[o])));
+            // No list for Juri: the fighter leaves the file, the other stays; Undo puts it back
+            string removed = RandomList.Save(game, "esf016", null, undo);
+            string after = File.ReadAllText(listPath);
+            Require(!String.IsNullOrEmpty(removed) && !after.Contains("\"16\"") && after.Contains("\"1\""), "the list removed: " + after);
+            RandomList.Restore(game, removed);
+            Require(RandomList.Load(game, "esf016", renumbered) != null, "Undo did not put the list back");
+            // A file without lists left: removed; Undo of a first list: no file
+            File.Delete(listPath);
+            string firstSave = RandomList.Save(game, "esf016", plan, undo);
+            Require(firstSave == "" && File.Exists(listPath), "a first list: no copy, the file written");
+            RandomList.Restore(game, firstSave);
+            Require(!File.Exists(listPath), "Undo of a first list left the file");
+        }
+
         private static void OutfitOrderCheck(string root)
         {
             string game = Path.Combine(root, "order-game"), data = Path.Combine(game, OutfitOrder.DataRelative), statePath = Path.Combine(game, OutfitOrder.StateRelative);
             Directory.CreateDirectory(data); Directory.CreateDirectory(Path.GetDirectoryName(statePath));
             Func<string, int, string, int, string> slot = delegate(string mod, int fighter, string dir, int no)
             { return "    {\n      \"mod_id\": \"" + mod + "\",\n      \"fighter\": " + fighter + ",\n      \"fighter_dir\": \"" + dir + "\",\n      \"original_costume_no\": 0,\n      \"original_folder\": \"001\",\n      \"new_costume_no\": " + no + ",\n      \"new_folder\": \"" + (no + 1).ToString("D3") + "\",\n      \"scene_name\": \"" + dir + "v" + no.ToString("D2") + "\"\n    }"; };
-            string registry = "{\n  \"version\": 1,\n  \"fingerprint\": \"abc123\",\n  \"slots\": [\n" + String.Join(",\n", new[] { slot("ryu", 1, "esf001", 5), slot("aaa", 16, "esf016", 5), slot("bbb", 16, "esf016", 6), slot("ccc", 16, "esf016", 8) })
-                + "\n  ],\n  \"next_ids\": {},\n  \"possession\": [\n    {\n      \"fighter\": 16,\n      \"fighter_dir\": \"esf016\",\n      \"costume_no\": 5,\n      \"name\": \"Outfit I\",\n      \"swatches\": [[1,2],[3,4]]\n    }\n  ]\n}\n";
+            // The suite line's layout (1.0.24): pak_id, "nsfw": true closing an NSFW outfit's row, possession with record ids,
+            // swatches and the Random entry.
+            string nsfwSlot = slot("bbb", 16, "esf016", 6).Replace("\"esf016v06\"", "\"esf016v06\",\n      \"nsfw\": true");
+            string registry = "{\n  \"version\": 1,\n  \"fingerprint\": \"abc123\",\n  \"pak_id\": \"2026-11-10-random-outfit\",\n  \"slots\": [\n" + String.Join(",\n", new[] { slot("ryu", 1, "esf001", 5), slot("aaa", 16, "esf016", 5), nsfwSlot, slot("ccc", 16, "esf016", 8) })
+                + "\n  ],\n  \"next_ids\": {},\n  \"possession\": [\n    {\n      \"fighter\": 16,\n      \"fighter_dir\": \"esf016\",\n      \"costume_no\": 5,\n      \"record_id\": 5300,\n      \"manage_id\": 5300,\n      \"name\": \"Outfit I\",\n      \"swatches\": [[1,2],[3,4]]\n    },\n"
+                + "    {\n      \"fighter\": 16,\n      \"fighter_dir\": \"esf016\",\n      \"costume_no\": 104,\n      \"record_id\": 5399,\n      \"manage_id\": 5399,\n      \"name\": \"Random\",\n      \"random\": true\n    }\n  ]\n}\n";
             Func<int, string, int, string, string, string> row = delegate(int fighter, string dir, int no, string name, string source)
             { return "    {\"fighter\": " + fighter + ", \"fighter_dir\": \"" + dir + "\", \"costume_no\": " + no + ", \"name\": \"" + name + "\", \"based_on\": 0, \"label\": \"" + source + "\", \"kind\": \"folder\", \"source\": \"" + source + "\"}"; };
             string report = "{\n  \"generated\": \"2026-11-08 16:57\",\n  \"loader\": \"test\",\n  \"outfits\": [\n" + String.Join(",\n", new[] { row(1, "esf001", 5, "Outfit I", "Ryu/Gi"), row(16, "esf016", 5, "Outfit I", "Juri/Alpha"), row(16, "esf016", 6, "Outfit II", "Juri/Beta"), row(16, "esf016", 8, "Outfit III", "Juri/Gamma") })
@@ -265,7 +385,9 @@ namespace SlotsInstaller
             string next = File.ReadAllText(registryPath);
             Func<string, string> block = delegate(string mod) { int at = next.IndexOf("\"mod_id\": \"" + mod + "\""); return next.Substring(at, next.IndexOf('}', at) - at); };
             Require(block("ccc").Contains("\"new_costume_no\": 5,") && block("ccc").Contains("\"new_folder\": \"006\"") && block("ccc").Contains("\"scene_name\": \"esf016v05\"")
-                && block("aaa").Contains("\"new_costume_no\": 6,") && block("aaa").Contains("\"new_folder\": \"007\"") && block("bbb").Contains("\"new_costume_no\": 8,") && block("bbb").Contains("\"scene_name\": \"esf016v08\""), "the slots did not change places: " + next);
+                && block("aaa").Contains("\"new_costume_no\": 6,") && block("aaa").Contains("\"new_folder\": \"007\"") && block("bbb").Contains("\"new_costume_no\": 8,") && block("bbb").Contains("\"scene_name\": \"esf016v08\",\n      \"nsfw\": true")
+                && !block("aaa").Contains("nsfw") && !block("ccc").Contains("nsfw"), "the slots did not change places: " + next);
+            Require(next.Contains("\"pak_id\": \"2026-11-10-random-outfit\"") && next.Contains("\"costume_no\": 104,\n      \"record_id\": 5399") && next.Contains("\"costume_no\": 5,\n      \"record_id\": 5300"), "the suite line's possession or pak_id changed: " + next);
             Require(block("ryu").Contains("\"new_costume_no\": 5,") && block("ryu").Contains("\"scene_name\": \"esf001v05\"") && next.Contains("\"fingerprint\": \"\"") && next.Contains("\"swatches\": [[1,2],[3,4]]") && next.Contains("\"original_folder\": \"001\""), "another fighter, the fingerprint or the rest of the registry: " + next);
             List<OutfitSlot> after = OutfitOrder.Slots(game, "esf016");
             Require(after.Select(s => s.Source).SequenceEqual(new[] { "Juri/Gamma", "Juri/Alpha", "Juri/Beta" }) && after.Select(s => s.Name).SequenceEqual(new[] { "Outfit I", "Outfit II", "Outfit III" }) && File.ReadAllText(reportPath).Contains("\"left_out\"") && OutfitOrder.Slots(game, "esf001").Single().Source == "Ryu/Gi", "the report was not renumbered: " + File.ReadAllText(reportPath));

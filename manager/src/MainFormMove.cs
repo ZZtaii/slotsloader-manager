@@ -70,6 +70,32 @@ namespace SlotsInstaller
             if (delta < 0) { for (int i = 1; i < own.Count; i++) if (set.Contains(own[i]) && !set.Contains(own[i - 1])) { GameModRow t = own[i - 1]; own[i - 1] = own[i]; own[i] = t; moved = true; } }
             else { for (int i = own.Count - 2; i >= 0; i--) if (set.Contains(own[i]) && !set.Contains(own[i + 1])) { GameModRow t = own[i + 1]; own[i + 1] = own[i]; own[i] = t; moved = true; } }
             if (!moved) return;
+            ApplyGameOrder(own, picked, delta < 0);
+        }
+
+        // 1.0.24 (the user: "lets also allow mods in installed tab to be draggable too for load order"): the selected rows,
+        // dragged in the Installed list, go before the row at priority place `before` (0-based among the replacements and
+        // tool mods; their count: after the last), in their order. Saved as Move up/down's clicks are.
+        internal void MoveGameRowsTo(int before)
+        {
+            List<GameModRow> picked = MovableSelection();
+            if (picked.Count == 0) return;
+            if (busy ? !MovePending : !RowChangesAllowed) return;
+            if (!GameIdle("changing priority")) return;
+            List<GameModRow> own = gameRows.Where(r => r.Mod != null).ToList();
+            var set = new HashSet<GameModRow>(picked);
+            before = Math.Max(0, Math.Min(own.Count, before));
+            int at = own.Take(before).Count(r => !set.Contains(r));
+            List<GameModRow> rest = own.Where(r => !set.Contains(r)).ToList();
+            rest.InsertRange(at, own.Where(r => set.Contains(r)));
+            if (rest.SequenceEqual(own)) return;
+            bool up = own.IndexOf(picked[0]) > rest.IndexOf(picked[0]);
+            ApplyGameOrder(rest, picked, up);
+        }
+
+        // The new order shown at once and saved MoveSaveDelay later (Move up/down, a drag)
+        private void ApplyGameOrder(List<GameModRow> own, List<GameModRow> picked, bool up)
+        {
             if (!MovePending)
             {
                 UndoOnWorkStart();   // as every change: the previous Undo ends
@@ -85,7 +111,7 @@ namespace SlotsInstaller
             moveDirty = true;
             FillInstalled();
             GameModRow row = picked.OrderBy(p => p.Priority).First();
-            ListViewItem item = installedList.Items.Cast<ListViewItem>().FirstOrDefault(i => Object.ReferenceEquals(i.Tag, delta < 0 ? row : picked.OrderBy(p => p.Priority).Last()));
+            ListViewItem item = installedList.Items.Cast<ListViewItem>().FirstOrDefault(i => Object.ReferenceEquals(i.Tag, up ? row : picked.OrderBy(p => p.Priority).Last()));
             if (item != null) { item.Focused = true; item.EnsureVisible(); }
             ShowInstalledSelection();
             string where = picked.Count > 1 ? ReplacePlanner.N(picked.Count, "mod") + " · #" + String.Join(", #", picked.Select(p => p.Priority).OrderBy(p => p)) + " of " + own.Count

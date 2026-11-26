@@ -420,6 +420,10 @@ namespace SlotsInstaller
             Require(visible.Length == 5 && visible[0].Top == visible[1].Top && visible[2].Top == visible[3].Top && visible[0].Left == visible[2].Left && visible[1].Left == visible[3].Left && visible[0].Width == visible[3].Width
                 && visible[4].Top > visible[3].Top && visible[4].Left == visible[0].Left && visible[4].Right == visible[1].Right, "Managed outfit actions are not an aligned grid.");
             foreach (var button in visible) Require(button.Parent.ClientRectangle.Contains(button.Bounds), "Installed action is clipped: " + button.Text);
+            // 1.0.24 (the user): Random list is a toolbar icon left of History; Refresh sits after Clear in the selection row.
+            FlatButton randomIcon = Get<FlatButton>(form, "randomListButton"), refresh = Get<FlatButton>(form, "refreshInstalledButton"), clear = Get<FlatButton>(form, "clearInstalledSelectionButton"), history = Get<FlatButton>(form, "historyButton");
+            Require(randomIcon.Parent.Parent == history.Parent.Parent && randomIcon.Parent.Right <= history.Parent.Left && refresh.Parent == clear.Parent && refresh.Left > clear.Right && refresh.Top == clear.Top,
+                "Random list icon not left of History, or Refresh not after Clear");
             if (TestTier.Render) using (var image = new Bitmap(installed.Width, installed.Height)) { installed.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(root, "polish-installed-" + installed.DeviceDpi + ".png"), ImageFormat.Png); }
             report.Add("PASS: installed details: two-line title, character/state chips, path row with copy action, actions in an aligned two-column grid with Uninstall last (manual: an even count, so Uninstall pairs up; managed: an odd count, so Uninstall takes the last row) without clipping.");
         }
@@ -523,6 +527,7 @@ namespace SlotsInstaller
             "OptionPickForm.Choose",        // 1.0.18 the builder's Options: tick a mod's options (Cancel keeps the earlier ticks)
             "RecipesForm.Choose",           // 1.0.18 Outfit recipes: the saved recipes; Install, Delete recipe, save the selected outfit (Close changes nothing)
             "OutfitOrderForm.Choose",       // 1.0.18 Outfit order: drag one fighter's extra outfits into place (Cancel changes nothing; Save has Undo)
+            "RandomListForm.Choose",        // 1.0.24 Random list: one fighter's own Random list, repeats and colours (Cancel changes nothing; Save has Undo)
             "FluffyPresetForm.Review",      // Import Fluffy preset: map each entry before anything installs (Cancel installs nothing)
             "MainForm.ShowMigration",       // Migrate installed mods: review, then wait while the user uninstalls there (Close keeps the saved plan)
             "MainForm.EnlargePreview",      // the preview image, enlarged (click the preview)

@@ -17,6 +17,11 @@ namespace SlotsInstaller
     // and the plugin's equipped slot (state.json) follows its outfit. The three files are copied first: Undo puts them
     // back. SF6 must be closed (it reads the registry at start and rewrites state.json while it runs).
     // What cannot follow: the game's own save and old replays name slots by number.
+    // 1.0.24: the same on suite-line loaders (Slots Loader 1.18 and later). Their slot rows are the fork's, plus
+    // "nsfw": true on an NSFW outfit's row, which stays with the row (the loader numbers an outfit again only when it
+    // becomes or stops being NSFW, so a reordered NSFW outfit keeps the slot it is given here). "possession" (record
+    // ids, "Outfit V" names, colour swatches, Random) is left as it is: the loader builds it again from the slots when
+    // the cleared fingerprint makes it build. state.json "slot": false (nothing equipped) is left as it is.
     internal sealed class OutfitSlot
     {
         internal int CostumeNo;

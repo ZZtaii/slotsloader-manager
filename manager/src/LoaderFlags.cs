@@ -110,8 +110,7 @@ namespace SlotsInstaller
             return path == null || !HasKey(path, OthersSeeKey) ? OthersSeeDefault : OthersSeeValue(ReadText(path, OthersSeeKey));
         }
         internal static readonly Version SuiteFrom = new Version(1, 18, 0);
-        // The loader the last Apply saw is of the suite line: "Load order" stays off on it (its registry and plugin
-        // state have another shape than the fork's, which OutfitOrder rewrites).
+        // The loader the last Apply saw is of the suite line. (1.0.19 to 1.0.23 hid "Load order" on it; 1.0.24 shows it.)
         internal static volatile bool SuiteLoaderInstalled;
 
         internal static LoaderFlagChoices Load(string dataDir)

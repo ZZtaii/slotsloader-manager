@@ -149,14 +149,19 @@ namespace SlotsInstaller
             holder.Controls.Add(historyButton);
             heading.Controls.Add(holder);
             heading.Controls.SetChildIndex(holder, 1);   // docks after Presets…, so it sits to its left
-            // 1.0.6 (the user): Refresh re-reads what is installed (extra outfits, game-folder mods), left of History.
-            var refreshHolder = new Panel { Dock = DockStyle.Right, Width = 50, Padding = new Padding(0, 0, 8, 10) };
-            refreshInstalledButton = Button("", false, 42, delegate { if (!busy) RefreshInstalled(); });   // the page status shows the fresh count
-            refreshInstalledButton.Dock = DockStyle.Fill; refreshInstalledButton.Margin = Padding.Empty; refreshInstalledButton.Name = "refreshInstalledButton"; refreshInstalledButton.AccessibleName = "Refresh installed";
+            // 1.0.6 (the user): Refresh re-reads what is installed (extra outfits, game-folder mods). 1.0.24 (the user: "move refresh
+            // icon to near clear button or something so its nearer"): it sits after Clear in the selection row (BuildInstalledPage).
+            refreshInstalledButton = Button("", false, 34, delegate { if (!busy) RefreshInstalled(); });   // the page status shows the fresh count
+            refreshInstalledButton.Margin = Padding.Empty; refreshInstalledButton.Name = "refreshInstalledButton"; refreshInstalledButton.AccessibleName = "Refresh installed";
             refreshInstalledButton.Glyph = ButtonGlyph.Refresh; IconHint(refreshInstalledButton, "Refresh");
-            refreshHolder.Controls.Add(refreshInstalledButton);
-            heading.Controls.Add(refreshHolder);
-            heading.Controls.SetChildIndex(refreshHolder, 1);   // docks after History, so it sits to its left
+            // 1.0.24 (the user: "we want to add random list to a button"): Random list, left of History where Refresh was.
+            var randomHolder = new Panel { Dock = DockStyle.Right, Width = 50, Padding = new Padding(0, 0, 8, 10) };
+            randomListButton = Button("", false, 42, delegate { if (!busy) ShowRandomList(); });
+            randomListButton.Dock = DockStyle.Fill; randomListButton.Margin = Padding.Empty; randomListButton.Name = "randomListButton"; randomListButton.AccessibleName = "Random list";
+            randomListButton.Glyph = ButtonGlyph.Dice; IconHint(randomListButton, "Random list");
+            randomHolder.Controls.Add(randomListButton);
+            heading.Controls.Add(randomHolder);
+            heading.Controls.SetChildIndex(randomHolder, 1);   // docks after History, so it sits to its left
             // 1.0.18 (the user: "how do i see all the recipes, is there a button somewhere?"): Recipes, always there, left of Refresh.
             var recipesHolder = new Panel { Dock = DockStyle.Right, Width = 50, Padding = new Padding(0, 0, 8, 10) };
             recipesIconButton = Button("", false, 42, delegate { if (!busy) ShowRecipes(); });
@@ -164,7 +169,7 @@ namespace SlotsInstaller
             recipesIconButton.Glyph = ButtonGlyph.Recipes; IconHint(recipesIconButton, "Recipes");
             recipesHolder.Controls.Add(recipesIconButton);
             heading.Controls.Add(recipesHolder);
-            heading.Controls.SetChildIndex(recipesHolder, 1);   // docks after Refresh, so it sits to its left
+            heading.Controls.SetChildIndex(recipesHolder, 1);   // docks after Random list, so it sits to its left
             Shown += delegate { if (!Program.Headless) StartHistory(); };
             FormClosing += delegate { if (historySessions != null) historySessions.Close(History.Now); };
         }

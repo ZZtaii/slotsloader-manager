@@ -7,7 +7,7 @@ using System.Windows.Forms;
 namespace SlotsInstaller
 {
     // 1.0.18 (user request): "Outfit order" on the Installed page. One fighter's extra outfits in their slot order;
-    // drag a row (or Move up / Move down, Alt+Up / Alt+Down) to the place it should have, then Save. The fighter
+    // drag a row by its grip (or Alt+Up / Alt+Down) to the place it should have, then Save. The fighter
     // button opens the portrait grid, one fighter at a time. The engine is OutfitOrder.Apply; nothing is written
     // until Save, and Cancel changes nothing.
     internal sealed partial class MainForm
@@ -19,13 +19,11 @@ namespace SlotsInstaller
 
         internal void ShowOutfitOrder()
         {
-            if (busy || String.IsNullOrWhiteSpace(config.GameRoot) || LoaderFlags.SuiteLoaderInstalled) return;   // 1.0.19: the suite-line loader keeps its numbers in files of another shape
-            // The flag above is what the last sync saw (none may have run yet at start-up): the installed loader is read
-            // again here, and a state that cannot be read keeps the window shut.
-            bool suite;
-            try { suite = ReplaceEngine.ForConfig(config).LoadState().Mods.Any(LoaderFlags.IsSuiteLoader); }
-            catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); return; }
-            if (suite) { LoaderFlags.SuiteLoaderInstalled = true; ShowInstalledSelection(); return; }
+            // 1.0.19 kept this window shut on suite-line loaders; 1.0.24 (the user: "bring it back") opens it on both:
+            // the suite line keeps an outfit's slot by mod, fighter and original costume in registry.json "slots" as the
+            // fork does, keeps an outfit's NSFW place with its row, and builds "possession" (names, swatches) again from
+            // the slots at every build (OutfitOrder.cs).
+            if (busy || String.IsNullOrWhiteSpace(config.GameRoot)) return;
             InstalledOutfit picked = GetInstalledSelection(); OutfitGroup group = GetGroupSelection();
             string start = picked != null ? picked.Character : group != null ? group.Character : installedCharacters.FirstOrDefault();
             string game = config.GameRoot;
@@ -65,7 +63,7 @@ namespace SlotsInstaller
         private readonly OrderRows rows;
         private readonly Panel listHost;
         private readonly Label note, waitingNote;
-        private readonly FlatButton save, up, down;
+        private readonly FlatButton save;
         private readonly ToolStripDropDown popup;
         private readonly FighterGrid grid;
         private readonly Func<string, List<OutfitSlot>, List<string>> waiting;
@@ -114,9 +112,9 @@ namespace SlotsInstaller
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(0, 14, 0, 0) };
             save = new FlatButton("Save order", true) { Width = 130, Dock = DockStyle.Right, Font = Palette.Small, Name = "outfitOrderSave" }; save.Click += delegate { Accept(); };
             var cancel = new FlatButton("Cancel", false) { Width = 100, Dock = DockStyle.Right, Font = Palette.Small }; cancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
-            up = new FlatButton("Move up", false) { Width = 100, Dock = DockStyle.Left, Font = Palette.Small, Name = "outfitOrderUp" }; up.Click += delegate { rows.MoveSelected(-1); rows.Focus(); };
-            down = new FlatButton("Move down", false) { Width = 110, Dock = DockStyle.Left, Font = Palette.Small, Name = "outfitOrderDown" }; down.Click += delegate { rows.MoveSelected(1); rows.Focus(); };
-            footer.Controls.Add(new Panel { Dock = DockStyle.Fill }); footer.Controls.Add(down); footer.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); footer.Controls.Add(up);
+            // 1.0.24 (the user): dragging is the way; Move up / Move down are gone (Alt+Up / Alt+Down still move a row)
+            var hint = new Label { UseMnemonic = false, Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Small, TextAlign = ContentAlignment.MiddleLeft, Text = "Drag a row by its grip to its place." };
+            footer.Controls.Add(hint);
             footer.Controls.Add(cancel); footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); footer.Controls.Add(save);
             Controls.Add(footer); Controls.Add(waitingNote); Controls.Add(listHost); Controls.Add(note); Controls.Add(pickRow); Controls.Add(title);
             ClientSize = new Size(760, Padding.Vertical + title.Height + pickRow.Height + note.Height + listHost.Height + waitingNote.Height + footer.Height);
@@ -182,7 +180,7 @@ namespace SlotsInstaller
         {
             bool changed = Changed;
             save.Enabled = changed && !gameRunning;
-            up.Enabled = rows.CanMove(-1); down.Enabled = rows.CanMove(1);
+
             note.Text = gameRunning ? "Close SF6 to change the order: it reads the slots when it starts."
                 : changed ? "Applies when SF6 starts next. Replays and the outfit the game itself remembers keep pointing at the slot, so they show the outfit that sits there now."
                 : "Drag an outfit to the place it should have in the game's outfit list. The slots stay the same; the outfits change places.";
