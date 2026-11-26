@@ -64,12 +64,12 @@ namespace SlotsInstaller
         {
             SetLibraryFileNames(!String.Equals(saved == null ? null : saved.LibraryNames, "name", StringComparison.OrdinalIgnoreCase), false);
             if (deepSearch != null) deepSearch.Checked = saved != null && saved.DeepSearch;
-            SetHideAddons(saved != null && saved.HideAddons, false);
+            SetHideAddons(saved == null || saved.HideAddons, false);   // on by default
         }
 
         // 26 Nov 2026 (the user: "hide the addons from view via a settings ... we can already open as folder the addons
         // anyway"): Settings > Mod libraries > Hide add-ons. Takes effect at once and is kept in view-settings.json.
-        private bool hideAddonRows;
+        private bool hideAddonRows = true;   // on by default (the user); RestoreLibraryView applies the saved choice
         private int hiddenAddonCount;
         private CheckBox settingsHideAddons;
         internal bool HideAddonsOn { get { return hideAddonRows; } }

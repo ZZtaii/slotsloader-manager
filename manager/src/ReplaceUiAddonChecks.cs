@@ -325,13 +325,15 @@ namespace SlotsInstaller
                     // a mod not in the library stay; off again, it is back. Saved with the view.
                     ListView rowsList = Get<ListView>(form, "modList");
                     Func<LibraryEntry, bool> listed = e => rowsList.Items.Cast<ListViewItem>().Any(i => i.Tag == e);
+                    // On by default (the user); off first, so the rows added above are listed, then on again.
+                    Require(form.HideAddonsOn && new ViewPreferences().HideAddons, "Hide add-ons is not on by default");
+                    Call(form, "SetHideAddons", false, false); Application.DoEvents();
+                    Require(!form.HideAddonsOn && listed(namelessEntry) && listed(strangerEntry) && !Get<CheckBox>(form, "settingsHideAddons").Checked, "Hide add-ons off: the add-on rows are not listed");
                     Call(form, "SetHideAddons", true, false); Application.DoEvents();
                     Require(form.HideAddonsOn && !listed(namelessEntry) && listed(mainEntry) && listed(strangerEntry) && Get<CheckBox>(form, "settingsHideAddons").Checked,
                         "Hide add-ons: nameless listed " + listed(namelessEntry) + ", main listed " + listed(mainEntry) + ", other mod's add-on listed " + listed(strangerEntry));
-                    Call(form, "SetHideAddons", false, false); Application.DoEvents();
-                    Require(!form.HideAddonsOn && listed(namelessEntry) && !Get<CheckBox>(form, "settingsHideAddons").Checked, "Hide add-ons off: the add-on row did not come back");
                 }
-                finally { Call(form, "SetHideAddons", false, false); library.Remove(namelessEntry); library.Remove(strangerEntry); }
+                finally { Call(form, "SetHideAddons", true, false); library.Remove(namelessEntry); library.Remove(strangerEntry); }
                 open(mainEntry);
                 Require(Get<ModPackage>(form, "package").AddonParts.Count == 1, "the nameless addon stayed after its row left the library");
                 // 1.0.19 (the user: "relax requirements ... install the mod anyways. this helps to mix and match options"):

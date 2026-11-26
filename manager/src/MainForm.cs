@@ -37,8 +37,9 @@ namespace SlotsInstaller
         // 1.0.6: library rows show "name" (modinfo.ini) or "file" names (missing = file); Deep search on/off.
         public string LibraryNames = "";
         public bool DeepSearch;
-        // 26 Nov 2026: Settings > Hide add-ons (LibraryAddons.AddonRows); missing in older files = shown.
-        public bool HideAddons;
+        // 26 Nov 2026: Settings > Hide add-ons (LibraryAddons.AddonRows). On by default (the user), also when missing in
+        // older files: the serializer keeps this value for a key the file doesn't have.
+        public bool HideAddons = true;
         // 1.0.8: MY FILTERS chips showing only their matches / hiding them, by filter id (LibraryFilters.cs).
         public List<string> FiltersOnly = new List<string>(), FiltersHidden = new List<string>();
         // 1.0.11: the welcome (WelcomeForm) was shown; missing in older files, so updating users see it once too.
