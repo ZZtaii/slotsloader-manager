@@ -17,6 +17,8 @@ namespace SlotsInstaller
     {
         internal string Tag, Version, Asset, Sha256, Url, ReleasePage, Origin, Name = "";
         internal long Size;
+        // 26 Nov 2026: the short name the status lines and errors use ("Downloading Native Core 0.9.32…").
+        internal string Label = "Slotsloader";
         // 1.0.21: when Asset is the Manager's slim zip (slots_loader.slim of dependencies.json, on a slotsloader-v* release
         // of Repo), the suite's full zip of the same entry: a library copy of it is used too (the install leaves out the same
         // files, ReplaceEngine.SkippedLoaderFiles). Empty when the pin is the full zip itself.
@@ -29,6 +31,9 @@ namespace SlotsInstaller
         internal const string Repo = "ZZtaii/slotsloader-manager", Source = "Wael3rd/SF6-ModSuite", ResourceName = "SlotsInstaller.Dependencies.json";
         internal const string DownloadPrefix = "https://github.com/" + Source + "/releases/download/";
         internal static readonly LoaderPin Release = FromList(ReadResource());
+        // 26 Nov 2026: the approved native_core entry of the same file (null when it has none that can be used). The
+        // suite's Slots Loader draws its in-game pictures through it (stage thumbnails and tiles, menu texts).
+        internal static readonly LoaderPin CoreRelease = DependencyList.Parse(ReadResource()).Core;
 
         // dependencies.json -> its slots_loader entry (InvalidDataException with the reason when it can't be used).
         internal static LoaderPin FromList(string json) { return DependencyList.Parse(json).Loader; }
@@ -61,12 +66,14 @@ namespace SlotsInstaller
 
     // 1.0.19: the repository's dependencies.json, written by the maintainer's approval (a merged pull request):
     // {"format":1,"source":"Wael3rd/SF6-ModSuite","packages":{"slots_loader":{name,version,release,file,size,sha256},...}}.
-    // Only slots_loader is used; every other package (native_core) and every unknown key is ignored. A missing or
-    // malformed slots_loader entry, another format or another source is refused with the reason (never a crash).
+    // slots_loader is required; 26 Nov 2026: native_core is used too (Core), every other package and unknown key is
+    // ignored. A missing or malformed slots_loader entry, another format or another source is refused with the reason
+    // (never a crash); a malformed native_core entry is only left out (CoreIgnored says why).
     internal sealed class DependencyList
     {
         internal int Format;
-        internal LoaderPin Loader;
+        internal LoaderPin Loader, Core;
+        internal string CoreIgnored;
         internal List<string> IgnoredPackages = new List<string>();
         internal static string TestDownloadBase;   // tests: download URLs on a loopback server instead of github.com
 
@@ -87,26 +94,17 @@ namespace SlotsInstaller
             var packages = d.TryGetValue("packages", out value) ? value as Dictionary<string, object> : null;
             if (packages == null) throw Bad("it has no packages");
             var list = new DependencyList { Format = 1 };
-            list.IgnoredPackages.AddRange(packages.Keys.Where(k => k != "slots_loader").OrderBy(k => k, StringComparer.Ordinal));
             var e = packages.TryGetValue("slots_loader", out value) ? value as Dictionary<string, object> : null;
             if (e == null) throw Bad("it has no slots_loader entry");
-            string version = Text(e, "version", "slots_loader."), release = Text(e, "release", "slots_loader."), file = Text(e, "file", "slots_loader."), sha = Text(e, "sha256", "slots_loader.").ToUpperInvariant();
-            if (version.Length > 40 || UpdateCheck.ParseVersion(version) == null) throw Bad("slots_loader.version '" + version + "' is not a version");
-            if (!TagPattern.IsMatch(release) || release.Contains("..")) throw Bad("slots_loader.release '" + release + "' is not a release tag");
-            if (!FilePattern.IsMatch(file) || file.Contains("..")) throw Bad("slots_loader.file '" + file + "' is not a .zip file name");
-            if (sha.Length != 64 || sha.Any(c => !Uri.IsHexDigit(c))) throw Bad("slots_loader.sha256 is not a SHA-256");
-            object sizeValue; long size = 0;
-            if (e.TryGetValue("size", out sizeValue) && (sizeValue is int || sizeValue is long)) size = Convert.ToInt64(sizeValue, System.Globalization.CultureInfo.InvariantCulture);
-            if (size <= 0 || size > 512L * 1024 * 1024) throw Bad("slots_loader.size is not a size in bytes");
-            object nameValue; string name = e.TryGetValue("name", out nameValue) && nameValue is string ? ((string)nameValue).Trim() : "";
-            string escaped = Uri.EscapeDataString(release) + "/" + Uri.EscapeDataString(file);
-            list.Loader = new LoaderPin
+            list.Loader = Entry(e, "slots_loader", "SF6 Slots Loader", "Slotsloader");
+            // 26 Nov 2026: native_core, offered beside the loader (Settings, the library's notice, Extra stage).
+            var c = packages.TryGetValue("native_core", out value) ? value as Dictionary<string, object> : null;
+            if (c != null)
             {
-                Name = name.Length > 0 ? name : "SF6 Slots Loader", Tag = release, Version = version, Asset = file, Size = size, Sha256 = sha,
-                Url = (TestDownloadBase != null ? TestDownloadBase.TrimEnd('/') + "/" : LoaderPin.DownloadPrefix) + escaped,
-                ReleasePage = "https://github.com/" + LoaderPin.Source + "/releases/tag/" + Uri.EscapeDataString(release),
-                Origin = "github.com/" + LoaderPin.Source
-            };
+                try { list.Core = Entry(c, "native_core", "SF6 Native Core", "Native Core"); }
+                catch (InvalidDataException ex) { list.CoreIgnored = ex.Message; }
+            }
+            list.IgnoredPackages.AddRange(packages.Keys.Where(k => k != "slots_loader" && (k != "native_core" || list.Core == null)).OrderBy(k => k, StringComparer.Ordinal));
             // 1.0.21: slots_loader.slim, the same loader without the files the game doesn't need (the sync Action builds and
             // publishes it). Used in place of the full zip when it is sound; a slim block that isn't is left out (logged by
             // the caller through SlimIgnored), the full zip stays approved. Managers before 1.0.21 never read it.
@@ -118,6 +116,28 @@ namespace SlotsInstaller
                 catch (InvalidDataException ex) { list.SlimIgnored = ex.Message; }
             }
             return list;
+        }
+        // One package entry ({name, version, release, file, size, sha256}) as a pin on the suite's releases.
+        private static LoaderPin Entry(Dictionary<string, object> e, string key, string defaultName, string label)
+        {
+            string p = key + ".";
+            string version = Text(e, "version", p), release = Text(e, "release", p), file = Text(e, "file", p), sha = Text(e, "sha256", p).ToUpperInvariant();
+            if (version.Length > 40 || UpdateCheck.ParseVersion(version) == null) throw Bad(p + "version '" + version + "' is not a version");
+            if (!TagPattern.IsMatch(release) || release.Contains("..")) throw Bad(p + "release '" + release + "' is not a release tag");
+            if (!FilePattern.IsMatch(file) || file.Contains("..")) throw Bad(p + "file '" + file + "' is not a .zip file name");
+            if (sha.Length != 64 || sha.Any(ch => !Uri.IsHexDigit(ch))) throw Bad(p + "sha256 is not a SHA-256");
+            object sizeValue; long size = 0;
+            if (e.TryGetValue("size", out sizeValue) && (sizeValue is int || sizeValue is long)) size = Convert.ToInt64(sizeValue, System.Globalization.CultureInfo.InvariantCulture);
+            if (size <= 0 || size > 512L * 1024 * 1024) throw Bad(p + "size is not a size in bytes");
+            object nameValue; string name = e.TryGetValue("name", out nameValue) && nameValue is string ? ((string)nameValue).Trim() : "";
+            string escaped = Uri.EscapeDataString(release) + "/" + Uri.EscapeDataString(file);
+            return new LoaderPin
+            {
+                Name = name.Length > 0 ? name : defaultName, Label = label, Tag = release, Version = version, Asset = file, Size = size, Sha256 = sha,
+                Url = (TestDownloadBase != null ? TestDownloadBase.TrimEnd('/') + "/" : LoaderPin.DownloadPrefix) + escaped,
+                ReleasePage = "https://github.com/" + LoaderPin.Source + "/releases/tag/" + Uri.EscapeDataString(release),
+                Origin = "github.com/" + LoaderPin.Source
+            };
         }
         internal string SlimIgnored;   // why slots_loader.slim was not used (null: used, or none)
         private static void UseSlim(LoaderPin pin, Dictionary<string, object> s)
@@ -163,7 +183,7 @@ namespace SlotsInstaller
     {
         internal readonly string Reason;
         internal LoaderFetchException(LoaderPin pin, string reason)
-            : base("Couldn't download Slotsloader " + pin.Version + ": " + reason + ".\n\nDownload it from " + pin.ReleasePage + " and drop the zip on the window.")
+            : base("Couldn't download " + pin.Label + " " + pin.Version + ": " + reason + ".\n\nDownload it from " + pin.ReleasePage + " and drop the zip on the window.")
         { Reason = reason; }
     }
 
@@ -172,6 +192,7 @@ namespace SlotsInstaller
         // The pin in use. Tests swap in a fixture pin (and may allow plain http to a loopback address); nothing in
         // the settings or on the command line can change it.
         internal static LoaderPin Pin = LoaderPin.Release;
+        internal static LoaderPin CorePin = LoaderPin.CoreRelease;   // 26 Nov 2026; tests swap it too
         // 2.4.0: the HTTP code is shared with the update check (SafeHttp); these forward to it.
         internal static bool AllowLoopbackHttp { get { return SafeHttp.AllowLoopbackHttp; } set { SafeHttp.AllowLoopbackHttp = value; } }
         internal static int TimeoutMs { get { return SafeHttp.TimeoutMs; } set { SafeHttp.TimeoutMs = value; } }
@@ -248,10 +269,10 @@ namespace SlotsInstaller
         internal static LoaderFile Download(LoaderPin pin, string downloadDir)
         {
             string refused = LoaderPin.DownloadRefusal(pin.Url);   // 1.0.19: only from the approved source's releases
-            if (refused != null) { Program.LogLine("Slotsloader download refused: " + refused + "."); throw new LoaderFetchException(pin, refused); }
+            if (refused != null) { Program.LogLine(pin.Label + " download refused: " + refused + "."); throw new LoaderFetchException(pin, refused); }
             try
             {
-                string path = SafeHttp.Download(pin.Url, downloadDir, pin.Asset, pin.Size, pin.Sha256, "Downloading Slotsloader " + pin.Version, "pinned");
+                string path = SafeHttp.Download(pin.Url, downloadDir, pin.Asset, pin.Size, pin.Sha256, "Downloading " + pin.Label + " " + pin.Version, "pinned");
                 return new LoaderFile { Path = path, Sha256 = pin.Sha256.ToUpperInvariant(), Size = pin.Size, Source = LoaderSource.Download };
             }
             catch (DownloadFailure f) { throw new LoaderFetchException(pin, f.Reason); }

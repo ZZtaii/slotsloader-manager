@@ -85,7 +85,7 @@ namespace SlotsInstaller
         private FlatButton reclaimSpaceButton;
         private Control reclaimSpaceRow;
         private bool reclaimShown;   // the row's requested state (Visible reads false while Settings is hidden)
-        private FlatButton loaderOnButton, loaderOffButton, installSlotsLoaderButton, installReFrameworkButton;
+        private FlatButton loaderOnButton, loaderOffButton, installSlotsLoaderButton, installReFrameworkButton, installAllToolsButton;
         private bool loadingReplaceSettings;
         private string gameMethod = "";
         // Loose-method replacements of natives files may change while SF6 runs (the engine re-checks).
@@ -128,7 +128,7 @@ namespace SlotsInstaller
             gameStateLabel.Text = game ? "● Game running" : fluffy ? "● Mod manager running" : "Game closed";
             gameStateLabel.ForeColor = game ? Palette.Green : fluffy ? Palette.Accent : Palette.Muted;
             launchButton.Enabled = !game && !busy;
-            if (changed) { UpdateFooter(); ShowInstalledSelection(); UpdateBanner(); UpdateLibraryUninstall(); }
+            if (changed) { UpdateFooter(); ShowInstalledSelection(); UpdateBanner(); UpdateLibraryUninstall(); UpdateManagerBanners(); }
             if (leftoverTestPending && !gameRunning && !busy) FinishLeftoverTest();
             // Minimized: nothing to repaint, so the game and mod manager drives are left alone (about ten file
             // stats per poll). Restoring the window runs both checks at once (Activated) and on the next poll.
@@ -185,7 +185,10 @@ namespace SlotsInstaller
             toggle.Controls.Add(modeToggle);
             modeNotice = new Label { UseMnemonic = false, Dock = DockStyle.Fill, Font = Palette.Tiny, ForeColor = Palette.Muted, AutoEllipsis = true, Padding = new Padding(0, 4, 0, 0) };
             // 1.0.8: REFramework first; 1.0.10: a REFramework notice without an offer (the external manager's) does nothing.
-            modeNotice.Click += delegate { if (IsReplaceMode || StageMode || toolStatus == null) return; if (ReFrameworkNotice(toolStatus) != null) { if (toolStatus.ReFrameworkOffer) OfferReFrameworkInstall(); } else if (toolStatus.ReFramework && !toolStatus.SlotsLoader) OfferSlotsLoaderInstall(); };
+            // 26 Nov 2026 (the user: "install in one click for newer people"): a clickable notice (hand cursor, set in
+            // UpdateModeUi: REFramework missing or old, Slotsloader missing, Native Core missing for Extra stage) installs
+            // everything that is missing in one go (MainFormSetup.cs), not one tool at a time.
+            modeNotice.Click += delegate { if (IsReplaceMode || toolStatus == null || modeNotice.Cursor != Cursors.Hand) return; RunGameSetup(); };
             modePanel.Controls.Add(modeNotice); modePanel.Controls.Add(toggle); modePanel.Controls.Add(captionRow);
             return modePanel;
         }
@@ -244,6 +247,7 @@ namespace SlotsInstaller
                 try { external = Engine().Fluffy(); locked = ReplaceEngine.ExternalLockReason(external, PackagePaths(package)); } catch (Exception ex) { Program.Log(ex); }
             // 1.0.11 (the user): Extra outfit mode says up front that Replace original is off and why, so it isn't a surprise after switching.
             bool replaceOff = ReplaceEngine.IsExternalLock(locked);
+            modeExternalLock = locked; modeMethodNow = ""; modeExternalMods = external == null ? 0 : external.Mods.Count;   // 26 Nov 2026: the banner (MainFormManagerNotice.cs)
             modeLockHint.Text = forced ? "· locked for this mod" : !IsReplaceMode && replaceOff ? "· Replace off: the external mod manager has " + ReplacePlanner.N(external.Mods.Count, "mod") : "";
             modeLockHint.ForeColor = forced ? Palette.Muted : Palette.Accent;
             if (targetPanel != null) targetPanel.Visible = !IsReplaceMode && !StageMode;
@@ -253,12 +257,13 @@ namespace SlotsInstaller
                 string method = ReplaceMethods.Pak, detail = "";
                 LooseLoaderState loader = LooseLoader.State(config.GameRoot, out detail);
                 try { method = ModeMethod(Engine(), loader); } catch (Exception ex) { detail = ex.Message; }
+                modeMethodNow = method;
                 // The health check and the banner say how to turn it on; the strip only gives the state.
                 modeNotice.Text = (forced ? forcedReplaceReason + " · " : "Overwrites game files · ") + ReplaceMethods.Label(method) + (method == ReplaceMethods.Loose ? (loader == LooseLoaderState.Enabled ? " (on)" : " (off)") : "");
                 if (forcedReplaceReason == PakModReason) modeNotice.Text = PakModReason;   // 2.5.6: the replace method plays no part
                 modeNotice.ForeColor = Palette.Muted; modeNotice.Cursor = Cursors.Default;
                 // A mod that only installs as a replacement (tool mod, edit of an installed one) can't use Extra outfit instead.
-                if (locked != null) { modeNotice.Text = locked == ReplaceEngine.ReFrameworkFluffyReason ? "REFramework came from the external mod manager · update it there" : "Off while the external mod manager has mods installed · " + (forced ? "uninstall them there first" : "use Extra outfit"); modeNotice.ForeColor = Palette.Accent; }
+                if (locked != null) { modeNotice.Text = locked == ReplaceEngine.ReFrameworkFluffyReason ? "REFramework came from the external mod manager · update it there" : locked == ReplaceEngine.NativeCoreFluffyReason ? "Native Core came from the external mod manager · update it there" : "Off while the external mod manager has mods installed · " + (forced ? "uninstall them there first" : "use Extra outfit"); modeNotice.ForeColor = Palette.Accent; }
                 // 2.4.1: INSTALL AS already names the mode; "Health" opens the health-check report.
                 installButton.Text = editingReplacement != null ? "Update" : "Install";
                 previewButton.Text = "Health"; previewButton.AccessibleName = "Health check report";
@@ -274,7 +279,7 @@ namespace SlotsInstaller
                 // 1.0.18: outfit mods are off and Slotsloader with them: say that, not "isn't installed · click to install it".
                 if (ModsAreOff && gameStatus.ModsOff.LoaderId.Length > 0 && !toolStatus.SlotsLoader && !toolStatus.ReFrameworkOffer) { notice = "Outfit mods are off, so extra outfits won't load · turn them back on in Settings"; clickable = false; }
                 bool fine = notice.StartsWith("Adds the outfit", StringComparison.Ordinal);
-                if (StageMode) { notice = StageNotice(); fine = StageLoaderReady; clickable = false; }   // 25 Nov 2026 (MainFormStages.cs)
+                if (StageMode) { notice = StageNotice(toolStatus, out clickable); fine = StageLoaderReady && toolStatus.NativeCore; }   // 25 Nov 2026 (MainFormStages.cs)
                 modeNotice.Text = notice;
                 modeNotice.ForeColor = fine ? Palette.Muted : Palette.Accent;
                 modeNotice.Cursor = clickable ? Cursors.Hand : Cursors.Default;
@@ -285,6 +290,7 @@ namespace SlotsInstaller
             UpdateLibraryUninstall();
             UpdateFooter();
             UpdateDestination();
+            UpdateManagerBanners();
         }
 
         // 1.0.12: the method the mode notice names, read again only when the state file, the method setting, the game
@@ -774,6 +780,7 @@ namespace SlotsInstaller
             bannerReapply.Enabled = bannerRestore.Enabled = idle && !FluffyBlocksPak;
             bannerKeep.Visible = CanKeepChangedFiles; bannerKeep.Enabled = !busy;
             UpdateGameFilesToast();   // 1.0.10: the same notice on the other pages (MainFormGameNotice.cs)
+            UpdateManagerBanners();   // 26 Nov 2026 (MainFormManagerNotice.cs)
         }
 
         // 1.0.18: the banner's Show mod. Selects the first mod the missing-copy notice names (the next one on the next
@@ -851,7 +858,7 @@ namespace SlotsInstaller
             var lines = new List<string>();
             if (row.Fluffy != null)
             {
-                lines.Add("Installed by an external mod manager (" + row.Fluffy.IniPath + "). The Manager never overwrites its files, and while that manager has mods installed only Extra outfit, Slotsloader and REFramework install here.");   // 1.0.1
+                lines.Add("Installed by an external mod manager (" + row.Fluffy.IniPath + "). The Manager never overwrites its files, and while that manager has mods installed only Extra outfit, Slotsloader, Native Core and REFramework install here.");   // 1.0.1
                 string blocker = row.Fluffy.UninstallBlocker;
                 // 2.4.2: PAK installs too (FluffyPakUninstall.cs).
                 if (blocker == null && row.Fluffy.PakInstall) lines.Add("PAK install (" + row.Fluffy.InstallType + "): Uninstall also restores the game entries it invalidated (only ones the Manager can prove; otherwise nothing changes) and removes its patch PAK, leaving an empty placeholder where another PAK sits above.");
@@ -1225,7 +1232,11 @@ namespace SlotsInstaller
             installSlotsLoaderButton = Button("Install Slotsloader " + LoaderRelease.Pin.Version, false, 230, delegate { OfferSlotsLoaderInstall(); }); installSlotsLoaderButton.Height = 32; installSlotsLoaderButton.Font = Palette.Small; installSlotsLoaderButton.Margin = Padding.Empty;
             // 1.0.8: REFramework first (Slotsloader is its plugin); shown while it is missing or out of date.
             installReFrameworkButton = Button("Install " + ReFrameworkRelease.Pin.Label, false, 260, delegate { OfferReFrameworkInstall(); }); installReFrameworkButton.Height = 32; installReFrameworkButton.Font = Palette.Small; installReFrameworkButton.Margin = new Padding(0, 0, 8, 0);
-            var toolRow = buttonRow(8); toolRow.Controls.Add(installReFrameworkButton); toolRow.Controls.Add(installSlotsLoaderButton); add(left, toolRow);
+            // 26 Nov 2026: one button for whatever of REFramework, Slotsloader and Native Core is missing (MainFormSetup.cs);
+            // while it shows, the single buttons it covers are hidden.
+            installAllToolsButton = Button("Install dependencies", true, 200, delegate { RunGameSetup(); }); installAllToolsButton.Name = "installAllToolsButton";
+            installAllToolsButton.Height = 32; installAllToolsButton.Font = Palette.Small; installAllToolsButton.Margin = new Padding(0, 0, 8, 0); installAllToolsButton.Visible = false;
+            var toolRow = buttonRow(8); toolRow.Controls.Add(installAllToolsButton); toolRow.Controls.Add(installReFrameworkButton); toolRow.Controls.Add(installSlotsLoaderButton); add(left, toolRow);
 
             add(right, Caption("Game files"));
             settingsGameFiles = note("", 76); add(right, settingsGameFiles);
@@ -1295,8 +1306,8 @@ namespace SlotsInstaller
                 loaderOnButton.Enabled = loader == LooseLoaderState.Disabled; loaderOffButton.Enabled = loader == LooseLoaderState.Enabled;
                 FluffyInstalls fluffy = engine.Fluffy();
                 ToolStatus tools = ToolStatus.Detect(config.GameRoot, fluffy);
-                settingsToolStatus.Text = tools.ReFrameworkDetail + Environment.NewLine + tools.SlotsLoaderDetail;
-                settingsToolStatus.ForeColor = tools.SlotsLoader && !tools.ReFrameworkOffer && tools.ReFramework ? Palette.Muted : Palette.Accent;
+                settingsToolStatus.Text = tools.ReFrameworkDetail + Environment.NewLine + tools.SlotsLoaderDetail + " · " + tools.NativeCoreDetail;
+                settingsToolStatus.ForeColor = tools.SlotsLoader && !tools.ReFrameworkOffer && tools.ReFramework && tools.NativeCore ? Palette.Muted : Palette.Accent;
                 // 1.0.18: while outfit mods are off, the Manager's own Slotsloader is only switched off: no second install.
                 bool loaderParked = state != null && state.ModsOff != null && state.ModsOff.LoaderId.Length > 0;
                 // 1.0.19: a Slotsloader installed outside the Manager can be taken over (installed again through it).
@@ -1304,6 +1315,18 @@ namespace SlotsInstaller
                 if (loaderParked) settingsToolStatus.Text = tools.ReFrameworkDetail + Environment.NewLine + "Slotsloader is switched off with the outfit mods.";
                 installReFrameworkButton.Visible = tools.ReFrameworkOffer;
                 installReFrameworkButton.Text = (tools.ReFrameworkFile ? "Update to " : "Install ") + ReFrameworkRelease.Pin.Label;
+                // 26 Nov 2026: anything missing: the one button for it all, in place of the single ones it covers (those
+                // stay for what it doesn't do: taking over a Slotsloader installed by hand).
+                SetupNeeds needs = GameSetup.Needs(tools, state, fluffy, UpdateCheck.CoreInstallPin(UpdateSettings.Load()));
+                bool all = needs.Any;
+                installAllToolsButton.Visible = all;
+                if (all)
+                {
+                    installAllToolsButton.Text = SetupButtonText(needs);
+                    installAllToolsButton.Width = TextRenderer.MeasureText(installAllToolsButton.Text, installAllToolsButton.Font, Size.Empty, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width + Px(48);
+                    if (needs.ReFramework) installReFrameworkButton.Visible = false;
+                }
+                installSlotsLoaderButton.Visible = !(all && needs.Loader);
                 if (state != null)
                 {
                     string pak = "Base PAK: not found";

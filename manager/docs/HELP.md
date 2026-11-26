@@ -35,25 +35,25 @@ The Manager installs Street Fighter 6 mods from your own mod folders: ZIP, RAR a
 - Tick the options you want. Groups marked **Required** get one choice ticked for you.
 - **Main files** marks an option recognized by its name: ticked for you, but not required.
 - To mix and match, untick anything, also what the mod marks as required. A line under the preview picture says "May not work without" and names it, and **Install** still works.
-- Under **INSTALL AS**, choose **Extra outfit**. If the line under it says REFramework or Slotsloader is missing, click that line to install it. If your external mod manager installed REFramework, install or update it there.
+- Under **INSTALL AS**, choose **Extra outfit**. If the line under it says REFramework or Slotsloader is missing, click that line to install everything missing. If your external mod manager installed REFramework, install or update it there.
 - Check **CHARACTER** and **OUTFIT NAME**, then click **Install** (or press Space).
 - Click **Launch SF6**. New outfits show on the character select screen once SF6 has started.
 
 Using an external mod manager too? Read [[Using it with your mod manager]] next.
 
 ## Using it with your mod manager
-> Keep your external mod manager for replacements and use the Manager for extra outfits.
+> Keep your external mod manager if you like: the Manager works beside it.
 
-This is the "companion" setup from the welcome. The Manager works beside your external mod manager and leaves that manager's mods alone.
+The Manager leaves that manager's mods alone. Nothing to switch: Extra outfit and Replace original are picked per mod.
 
 ### While your mod manager has mods installed
 - **Extra outfit** installs work as usual.
-- Slotsloader and REFramework install here too. If your mod manager installed REFramework, update it there instead.
+- Slotsloader, Native Core and REFramework install here too. If your mod manager installed REFramework or Native Core, update it there instead.
 - **Replace original** is off. PAK mods and other tool mods wait too, so two managers never change the same game files. In Extra outfit mode, the **INSTALL AS** line says "Replace off" and how many mods your mod manager has.
 - The Installed page lists its mods as **External mod manager** rows, marked "uninstall it there". The Manager doesn't uninstall them one by one; use your mod manager for that. Only **Restore game to vanilla** removes them all.
 
 ### While your mod manager is open
-The header shows "● Mod manager running". While your replacements use the PAK method, PAK installs and every change on the Installed page wait until you close it ("Close the external mod manager first…"). Extra outfits, loose-file replacements and new tool-mod installs still go ahead. Removing a leftover PAK and Restore game to vanilla always wait.
+The header shows "● Mod manager running". While your replacements use the PAK method, PAK installs and every change on the Installed page wait until you close it; a banner at the top of the page says so. Extra outfits, loose-file replacements and new tool-mod installs still go ahead. Removing a leftover PAK and Restore game to vanilla always wait.
 
 ### Tips
 - Don't install the same mod in both managers.
@@ -143,7 +143,7 @@ The Manager automatically checks character swaps during installation and reinsta
 > New costume slots through Slotsloader, with the original outfits left as they are.
 
 ### Before you start
-Extra outfits need REFramework and Slotsloader in the game folder. In Extra outfit mode, the line under **INSTALL AS** says when either one is missing or out of date. Click the line to install it; if your external mod manager installed REFramework, the line says to install or update it there. **Settings → Game files & replacements → REFramework and Slotsloader** shows both as well.
+Extra outfits need REFramework and Slotsloader in the game folder. In Extra outfit mode, the line under **INSTALL AS** says when either one is missing or out of date. One click on the line installs whatever is missing of REFramework, Slotsloader and Native Core; if your external mod manager installed REFramework, the line says to update it there. **Settings → Game files & replacements → REFramework and Slotsloader** has the same button.
 
 ### Slots and the outfit name
 - **CHARACTER** is the fighter the mod is for. The Manager doesn't move a mod to another fighter.
@@ -160,6 +160,7 @@ When a ZIP mod shows options from an add-on archive (marked **Add-on** in the li
 
 ### Extra stage
 A stage mod opens with **INSTALL AS** showing **Extra stage** (needs Wael's Slots Loader) and **Replace original**.
+- Stage pictures need SF6 Native Core; without it stages load with the game's pictures. The line under **INSTALL AS** offers it.
 - Each ticked option becomes a variant of its stage: UP / DOWN on the stage select picks it, and the original stays a choice. A whole new stage gets its own cell in Battle Settings, Training and Replays.
 - One option starts ticked; with several, tick the variants you want (all of them if you like).
 - It goes to `reframework\stage_mods\<Mod name>\`; installing again updates it. The Installed page shows an **Extra stage** row whose **Uninstall** deletes it.
@@ -232,6 +233,7 @@ At start and once a day the Manager checks GitHub for a new Manager or approved 
 
 - **Manager update:** downloads the release, checks its SHA-256, replaces the program files and restarts. Your settings and records in `Data` stay. The previous version is kept: with the Manager closed, run `& '.\Slotsloader Manager.exe' update-rollback` in PowerShell in its folder to put it back.
 - **Slotsloader update:** offered for a Slotsloader the Manager installed. It goes through the health check and installs over the old one at the same priority. Close SF6 first. An approval taken back offers **Go back**.
+- **Native Core update:** offered for a Native Core the Manager installed, when a newer one is approved.
 - **Slotsloader installed outside the Manager:** **Install** in the notice lets the Manager's settings apply. With another mod manager, turn off its Slotsloader entry first.
 
 **Settings → Slotsloader** has **Check automatically (daily)**, **Include test builds** (Manager pre-releases) and **Check now**.
@@ -308,7 +310,7 @@ An SF6 update or a Steam file check puts the game's original files back, so your
 > Why the Manager won't replace files right now, and how to turn it back on.
 
 ### Your external mod manager has mods installed
-The footer reads **Replace original is off**, with "The external mod manager has N mods installed · uninstall them there or use Extra outfit". The Health report adds "…so only Extra outfit, Slotsloader and REFramework install here." In Extra outfit mode, the **INSTALL AS** line shows "Replace off" before you even switch.
+A banner across the top says **Replace original is off** while it has mods installed, with **Migrate mods here**; the footer says it too. The Health report adds "…so only Extra outfit, Slotsloader, Native Core and REFramework install here." In Extra outfit mode, the **INSTALL AS** line shows "Replace off" before you even switch.
 
 This keeps two managers from changing the same game files. While it lasts:
 
@@ -398,7 +400,7 @@ Many actions happen at once and show **Undo** in the status bar: **Disable** and
 ### Restore game to vanilla
 **Gear → Restore → Restore game to vanilla** asks first and has no Undo. Close SF6 and your external mod manager first. It removes:
 
-- every mod this Manager installed, except its REFramework and Slotsloader;
+- every mod this Manager installed, except its REFramework, Slotsloader and Native Core;
 - every mod your external mod manager installed (its list is cleared);
 - all patch PAKs (`re_chunk_000.pak.patch_NNN.pak`) and the `natives` folder.
 

@@ -128,14 +128,14 @@ namespace SlotsInstaller
             Func<Rectangle, Size, Point> overPreview = delegate(Rectangle hole, Size size) { Rectangle p = TourRect(preview.Parent); return new Point(p.Left + Px(6), p.Top + Px(14)); };
             Func<string, string[], Func<Rectangle>, TourStep> step = delegate(string title, string[] body, Func<Rectangle> target) { return new TourStep { Title = title, Body = body, Prepare = ShowLibraryForTour, Target = target, Width = width, Place = overPreview }; };
             var tour = new Tour { Id = LibraryTourId, Name = "Mod library" };
-            tour.Steps.Add(step("Your mod library", new[] { "Every mod in your mod folders, one row each. Click one to open it, or search by name, fighter or costume (Ctrl+F).", "Drag the divider on the right to make the list wider." }, delegate { return TourRect(librarySplit.Panel1); }));
-            tour.Steps.Add(step("Pick the options", new[] { "What this mod can install. Tick what you want; a \"Choose one\" group takes one pick. Hover an option to see its preview on the right." }, delegate { return TourRect(choicesHost); }));
-            tour.Steps.Add(step("Two ways to install", new[] { "- Extra outfit adds a new costume slot and keeps the original outfit.", "- Replace original swaps the game's own outfit, like other mod managers do. Uninstall puts the original back exactly.", "Tool mods and PAK mods always install as Replace original." }, delegate { return TourRect(modePanel); }));
-            tour.Steps.Add(step("Extra outfits need two tools", new[] { "REFramework and Slotsloader must be in the game folder. When one is missing or out of date, this line says so: click it to install.", "New outfits show on the character select screen after SF6 restarts." },
+            // 26 Nov 2026 (the user: "update tour guides appropriately and shorten them"): five steps, the one-click setup,
+            // and that INSTALL AS is picked per mod (some people thought it was a mode for the whole app).
+            tour.Steps.Add(step("Your mod library", new[] { "Every mod in your mod folders. Click one to open it. Ctrl+F searches by name, fighter or costume." }, delegate { return TourRect(librarySplit.Panel1); }));
+            tour.Steps.Add(step("Pick the options", new[] { "Tick what you want. A \"Choose one\" group takes one pick. Hover an option to preview it." }, delegate { return TourRect(choicesHost); }));
+            tour.Steps.Add(step("Install as", new[] { "You choose this for each mod, not once for the app.", "- Extra outfit adds a new costume slot; the original stays.", "- Replace original swaps the game's own files; Uninstall puts them back." }, delegate { return TourRect(modePanel); }));
+            tour.Steps.Add(step("One click to set up", new[] { "Extra outfits need REFramework and Slotsloader. If this line says one is missing, click it: everything missing installs at once." },
                 delegate { return !IsReplaceMode && !String.IsNullOrEmpty(modeNotice.Text) ? TourRect(modeNotice) : TourRect(modePanel); }));
-            tour.Steps.Add(step("Before you Replace original", new[] { "- Close SF6 first. Replacements wait while it runs.", "- If another mod manager has mods installed, Replace original stays off, so two managers never change the same game files. Use Extra outfit, or move those mods here: Settings → Migrate installed mods.", "- Close the other mod manager while you install or change replacements.", "- After an SF6 update, click Reapply to put your replacements back." },
-                delegate { Rectangle t = TourRect(modeToggle); return t.IsEmpty ? t : new Rectangle(t.X + t.Width / 2, t.Y, t.Width - t.Width / 2, t.Height); }));
-            tour.Steps.Add(step("Installed and Help", new[] { "Everything you installed is on the Installed page: disable, uninstall, change the order, and Undo.", "Help is under the gear, or press F1 any time. This tour is there too." }, delegate { return TourRect(navInstalled); }));
+            tour.Steps.Add(step("Installed and Help", new[] { "Your installs are on the Installed page, with Undo.", "Help: the gear or F1. This tour is there too." }, delegate { return TourRect(navInstalled); }));
             return tour;
         }
 
@@ -175,19 +175,18 @@ namespace SlotsInstaller
             Action show = delegate { if (currentPage != installedPage) ShowPage(installedPage); };
             Func<string, string[], Action, Func<Rectangle>, TourStep> step = delegate(string title, string[] body, Action prepare, Func<Rectangle> target) { return new TourStep { Title = title, Body = body, Prepare = prepare, Target = target, Width = width, Place = inList }; };
             var tour = new Tour { Id = InstalledTourId, Name = "Installed page" };
-            tour.Steps.Add(step("Everything you installed", new[] { "Extra shows your extra outfits, Installed your replacements and tool mods, All shows both. Search, or pick a character or outfit to narrow the list." }, show,
+            // 26 Nov 2026: shorter, five steps (After an SF6 update joined Refresh, History, Presets).
+            tour.Steps.Add(step("Everything you installed", new[] { "Extra: your extra outfits. Installed: replacements and tool mods. All: both. Search or pick a character to narrow it." }, show,
                 delegate { return TourUnion(installedSearch, installedKind); }));
-            tour.Steps.Add(step("Each row", new[] { "- Replacement or Extra outfit, and its place in the order: #1 is on top and wins.", "- Enabled or Disabled.", "- Shared files: when several mods change the same file, the one higher in the list wins. What you install last goes to #1." }, show,
+            tour.Steps.Add(step("The order", new[] { "When mods change the same file, the higher one wins. #1 is on top; what you install last goes there." }, show,
                 delegate { var rows = installedList.Items.Cast<ListViewItem>().Where(r => !TourElsewhere(r)).Take(3).ToList(); return rows.Count == 0 ? TourRect(installedList) : TourRows(rows); }));
-            tour.Steps.Add(step("Rows from elsewhere", new[] { "- A Leftover PAK is a patch PAK no mod manager lists, but SF6 still loads it. Remove PAK takes it out, with Undo.", "- External mod manager rows are that manager's mods. Uninstall them there." }, show,
+            tour.Steps.Add(step("Rows from elsewhere", new[] { "- Leftover PAK: a patch PAK no mod manager lists. Remove PAK takes it out, with Undo.", "- External mod manager rows: uninstall those there." }, show,
                 delegate { return TourRows(installedList.Items.Cast<ListViewItem>().Where(TourElsewhere).Take(3)); }));
-            tour.Steps.Add(step("Change what's installed", new[] { "- Health checks the selected mod's installed files and changes nothing.", "- Disable keeps a mod but takes it out of the game; Enable brings it back.", "- Uninstall removes it and puts the original files back.", "- Move up and Move down set which mod wins shared files.", "Look in the status bar for available Undo actions." },
+            tour.Steps.Add(step("Change what's installed", new[] { "Health, Disable, Uninstall, and Move up / down to change who wins. Undo shows in the status bar." },
                 delegate { show(); SelectRowForTour(); },
                 delegate { return TourUnion(openInstalledButton, editInstalledButton, toggleInstalledButton, disableInstalledButton, removeInstalledButton, moveUpButton, moveDownButton); }));
-            tour.Steps.Add(step("After an SF6 update", new[] { "An update or a Steam file check puts the game's own files back. If the Manager detects changed game files, use Reapply in the warning banner to restore your replacements." },
-                delegate { show(); SelectRowForTour(); }, delegate { return gameBanner.Visible ? TourRect(gameBanner) : TourRect(refreshInstalledButton); }));
-            tour.Steps.Add(step("Refresh, History, Presets", new[] { "- Refresh reads the game folder again.", "- History lists every install and change.", "- Presets save your whole setup and bring it back later." }, show,
-                delegate { return TourUnion(refreshInstalledButton, historyButton, presetsButton); }));
+            tour.Steps.Add(step("Updates, History, Presets", new[] { "- After an SF6 update, click Reapply in the banner to put replacements back.", "- History lists every change. Presets save your setup for later." }, show,
+                delegate { return gameBanner.Visible ? TourUnion(gameBanner, refreshInstalledButton, historyButton, presetsButton) : TourUnion(refreshInstalledButton, historyButton, presetsButton); }));
             return tour;
         }
 
@@ -209,17 +208,17 @@ namespace SlotsInstaller
             Func<Rectangle> gameFiles = delegate { return TourUnion(TourCaption(settingsGameFiles, "Game files"), settingsGameFiles, TourBelow(settingsGameFiles)); };
             Func<Rectangle> external = delegate { return TourUnion(TourCaption(settingsFluffyStatus, "External mod manager"), settingsFluffyStatus, TourBelow(settingsFluffyStatus)); };
             var tour = new Tour { Id = SettingsTourId, Name = "Settings" };
-            tour.Steps.Add(new TourStep { Title = "Game folder", Body = new[] { "Where SF6 is installed. The Manager finds it through Steam on the first start; use Browse if yours is somewhere else." }, Prepare = general, Target = gameFolder, Width = besideWidth(gameFolder), Place = right });
-            tour.Steps.Add(new TourStep { Title = "Mod libraries", Body = new[] { "Every folder where you keep downloaded mods. Everything in them shows in the Mod library tab. Add your other mod manager's mods folder too.", "Click Save settings after a change." }, Prepare = general, Target = libraries, Width = besideWidth(libraries), Place = right });
-            tour.Steps.Add(new TourStep { Title = "Replacement method", Body = new[] { "- Automatic uses REFramework's loose file loader when it is on, else the PAK method.", "- The PAK method works without REFramework.", "- Changing it converts your replacements, with Undo." }, Prepare = replace,
-                Target = delegate { return TourUnion(TourCaption(settingsMethod, "Replacement method"), settingsMethod, settingsMethodStatus, loaderOnButton.Parent); }, Width = storeWidth, Place = overStore });
-            tour.Steps.Add(new TourStep { Title = "REFramework and Slotsloader", Body = new[] { "Extra outfits need both. Install or update them here. If your other mod manager installed REFramework, update it there." }, Prepare = replace,
+            // 26 Nov 2026: shorter, six steps (no Replacement method: Automatic suits nearly everyone); the tools step
+            // names the one-click button.
+            tour.Steps.Add(new TourStep { Title = "Game folder", Body = new[] { "Where SF6 is installed, found through Steam. Use Browse if yours is somewhere else." }, Prepare = general, Target = gameFolder, Width = besideWidth(gameFolder), Place = right });
+            tour.Steps.Add(new TourStep { Title = "Mod libraries", Body = new[] { "The folders where you keep downloaded mods, your other mod manager's too. Click Save settings after a change." }, Prepare = general, Target = libraries, Width = besideWidth(libraries), Place = right });
+            tour.Steps.Add(new TourStep { Title = "REFramework, Slotsloader, Native Core", Body = new[] { "Extra outfits need the first two; stage pictures need Native Core. One button installs whatever is missing." }, Prepare = replace,
                 Target = delegate { return TourUnion(TourCaption(settingsToolStatus, "REFramework and Slotsloader"), settingsToolStatus, installReFrameworkButton.Parent); }, Width = storeWidth, Place = overStore });
-            tour.Steps.Add(new TourStep { Title = "Game files", Body = new[] { "- Reapply all puts your replacements back after an SF6 update.", "- Restore original game files takes out this Manager's replacements and tool mods and puts the game's own files back, with Undo." }, Prepare = replace,
+            tour.Steps.Add(new TourStep { Title = "Game files", Body = new[] { "- Reapply all puts replacements back after an SF6 update.", "- Restore original game files takes this Manager's replacements out, with Undo." }, Prepare = replace,
                 Target = gameFiles, Width = delegate { return Math.Min(Px(560), gameFiles().Left - Px(32)); }, Place = delegate(Rectangle hole, Size size) { return new Point(hole.Left - Px(16) - size.Width, hole.Top); } });
-            tour.Steps.Add(new TourStep { Title = "External mod manager", Body = new[] { "What your other mod manager has installed, and whether it is open. While it has mods installed, Replace original stays off.", "- Import external preset brings one of its presets over.", "- Migrate installed mods moves its active mods here in the same order. You review them, uninstall them there, and the Manager installs them again." }, Prepare = replace,
+            tour.Steps.Add(new TourStep { Title = "External mod manager", Body = new[] { "While your other mod manager has mods installed, Replace original stays off here. Migrate installed mods moves them over." }, Prepare = replace,
                 Target = external, Width = delegate { return external().Width + Px(12); }, Place = delegate(Rectangle hole, Size size) { return new Point(hole.Left, hole.Top - Px(16) - size.Height); } });
-            tour.Steps.Add(new TourStep { Title = "Slotsloader and updates", Body = new[] { "The Manager checks for new versions of itself and of Slotsloader, and offers them here when they are out. This tab also holds what Slotsloader adds to the game's menus." }, Prepare = replace,
+            tour.Steps.Add(new TourStep { Title = "Slotsloader and updates", Body = new[] { "Updates for the Manager and Slotsloader, and what Slotsloader adds to the game's menus." }, Prepare = replace,
                 Target = delegate { return TourRect(settingsLoaderTab); }, Width = delegate { return Px(430); }, Place = delegate(Rectangle hole, Size size) { return new Point(hole.Left, hole.Bottom + Px(16)); } });
             return tour;
         }

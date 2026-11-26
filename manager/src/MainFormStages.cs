@@ -70,9 +70,23 @@ namespace SlotsInstaller
             return ids.Count > 0 ? ids : null;
         }
 
-        private string StageNotice()
+        // 26 Nov 2026: a missing Slots Loader or Native Core is one click away (RunGameSetup); people without the Native
+        // Core got stages without their pictures (the loader draws stage thumbnails and tiles through it).
+        private string StageNotice(ToolStatus tools, out bool clickable)
         {
-            if (!StageLoaderReady) return "Wael's Slots Loader isn't in the game folder, so Extra stage is off · use Replace original";
+            clickable = false;
+            if (!StageLoaderReady)
+            {
+                // Only when the one-click setup would install it: an older Slotsloader without stage support is there already
+                clickable = tools != null && tools.GameFound && !tools.SlotsLoader;
+                if (tools != null && tools.SlotsLoader) return "This Slotsloader can't load stages, so Extra stage is off · use Replace original";
+                return "Wael's Slots Loader isn't in the game folder, so Extra stage is off · " + (clickable ? "click to install it" : "use Replace original");
+            }
+            if (tools != null && tools.GameFound && !tools.NativeCore && LoaderRelease.CorePin != null)
+            {
+                clickable = true;
+                return "Stage pictures need SF6 Native Core · click to install it";
+            }
             return "Each ticked option becomes a variant of its stage · the original stays";
         }
         private string StagesText(int most)
@@ -120,7 +134,8 @@ namespace SlotsInstaller
             ModPackage current = package; List<string> ids = selectedOrder.ToList(); string game = config.GameRoot, sevenZip = config.SevenZipPath, name = StageModName(current);
             Work("Installing extra stage…", delegate { return StageMods.Install(current, ids, game, sevenZip, name); }, delegate(InstallResult result)
             {
-                RefreshInstalled("✓ " + result.Message);
+                bool core = ToolStatus.Detect(game).NativeCore || LoaderRelease.CorePin == null;
+                RefreshInstalled("✓ " + result.Message + (core ? "" : " Its pictures need SF6 Native Core: click the line under INSTALL AS to install it."));
             });
         }
 
@@ -139,6 +154,7 @@ namespace SlotsInstaller
             string gone = SourceGoneNote(s.Record.SourcePath);
             if (gone != null) chips.Add(ChipStrip.Quiet(gone));
             if (!StageMods.LoaderReady(config.GameRoot)) chips.Add(ChipStrip.Warn("Slots Loader missing"));
+            else if (!ToolStatus.Detect(config.GameRoot).NativeCore) chips.Add(ChipStrip.Warn("No pictures: Native Core missing"));
             installedChips.SetChips(chips);
             installedChips.Cursor = Cursors.Default;
             installedDetail.Text = s.Folder; installedPathRow.Visible = true;

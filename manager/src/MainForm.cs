@@ -739,6 +739,7 @@ namespace SlotsInstaller
             split.Panel1.Controls.Add(browser);
             split.Panel2.Controls.Add(detailPanel = BuildDetail());
             split.Panel2.Controls.Add(BuildBatchPanel()); batchPanel.BringToFront();   // 1.0.6: hidden until several mods are selected
+            page.Controls.Add(BuildLibraryManagerBanner());   // 26 Nov 2026 (MainFormManagerNotice.cs)
             page.Controls.Add(split); split.BringToFront();
             return page;
         }
@@ -916,7 +917,7 @@ namespace SlotsInstaller
             installedState = Combo(); installedState.Width = 150; installedState.Margin=Padding.Empty; installedState.Items.AddRange(new object[] { "All outfits", "Enabled", "Disabled", "Managed", "Manual" }); installedState.SelectedIndex = 0;
             installedKind = new SegmentedChoice(InstalledKinds) { Width = 240, Height = 30, Margin = new Padding(8, 0, 0, 0), Name = "installedKind", AccessibleName = "Installed type filter" };   // 1.0.1: was a type dropdown
             filters.Controls.Add(installedSearch); filters.Controls.Add(BuildInstalledCharacterPicker()); dpiLayouts.Add(delegate { installedCharacterButton.Height = installedState.Height; }); filters.Controls.Add(installedState); filters.Controls.Add(installedKind);
-            heading.Controls.Add(filters); heading.Controls.Add(presetAction); filters.BringToFront(); AttachHistoryButton(heading); page.Controls.Add(heading); page.Controls.Add(BuildGameBanner());   // 2.4.1: History (MainFormHistory.cs)
+            heading.Controls.Add(filters); heading.Controls.Add(presetAction); filters.BringToFront(); AttachHistoryButton(heading); page.Controls.Add(heading); page.Controls.Add(BuildGameBanner()); page.Controls.Add(BuildInstalledManagerBanner());   // 2.4.1: History (MainFormHistory.cs); 26 Nov 2026: the other mod manager's banner (MainFormManagerNotice.cs)
             installedSearch.TextChanged += delegate { FillInstalled(); }; installedState.SelectedIndexChanged += delegate { if (!fillingInstalledFilters) FillInstalled(); }; installedKind.SelectionChanged += delegate { if (!fillingInstalledFilters) FillInstalled(); };
             SplitContainer split = new SplitContainer { Size = new Size(1180, 680), Dock = DockStyle.Fill, SplitterDistance = 650, SplitterWidth = 18, Panel1MinSize = 460, Panel2MinSize = 290 };
             installedSplit=split;
@@ -2836,7 +2837,7 @@ namespace SlotsInstaller
         {
             if (planSummary == null) return;
             if (openRecipe != null && package == null) { UpdateRecipeFooter(); return; }   // 1.0.18
-            if (IsReplaceMode && package != null) { UpdateReplaceFooter(); return; }
+            if (IsReplaceMode && package != null) { UpdateReplaceFooter(); UpdateManagerBanners(); return; }   // 26 Nov 2026: the plan's method can change the banner
             if (StageMode) { UpdateStageFooter(); return; }   // 25 Nov 2026 (MainFormStages.cs)
             string tip = ""; Color detailColor = Palette.Muted;
             if (conflictView != null) UpdateConflictView();
@@ -3019,7 +3020,7 @@ namespace SlotsInstaller
             return delegate(ScanResult scan)
             {
                 installed = scan.Installed; ApplySuggestedName(); UseRemovedUsage(scan.Removed); changedSources = scan.Changed ?? changedSources; ApplyGameRows(scan.Game); FillInstalled(); ApplyFilters(); UpdateLibraryUninstall(); modList.Invalidate();
-                if (completionStatus != null) SetSharedStatus(completionStatus, completionStatus.Contains("wasn't saved") || completionStatus.Contains("Not restored") ? Palette.Accent : Palette.Green);   // 2.4.2: a warning is not a green success
+                if (completionStatus != null) SetSharedStatus(completionStatus, completionStatus.Contains("wasn't saved") || completionStatus.Contains("Not restored") || completionStatus.Contains("was not installed:") ? Palette.Accent : Palette.Green);   // 2.4.2: a warning is not a green success
                 else SetPageStatus(installedPage, ReplacePlanner.N(installed.Count, "extra outfit"));
                 ShowInstalledSelection();
                 if (BatchVisible) UpdateBatchUi();
@@ -3330,12 +3331,16 @@ namespace SlotsInstaller
             if (button == removeInstalledButton) return count > 0;
             return outfit != null && outfit.Managed;
         }
+        // Retries while another program holds the clipboard. Tests swap it so they never touch the real clipboard.
+        internal static Action<string> CopyText = delegate(string text) { Clipboard.SetDataObject(text, true, 10, 100); };
         private void CopyInstalledPath()
         {
-            InstalledOutfit outfit = GetInstalledSelection(); OutfitGroup group = GetGroupSelection();
-            if (group != null) outfit = new InstalledOutfit { Folder = group.Source };   // 2.5.0: a group row copies its source
-            if (outfit == null) return;
-            try { Clipboard.SetText(outfit.Folder); SetPageStatus(installedPage, "Copied path: " + outfit.Folder); }
+            // The button copies the path its row shows. Every kind of row (extra outfit, group of slots, replacement,
+            // Fluffy mod, leftover pak, extra stage) fills installedDetail with its path; only the first two were read
+            // here, so on a replacement row the button did nothing.
+            string path = installedPathRow.Visible ? (installedDetail.Text ?? "").Trim() : "";
+            if (path.Length == 0) return;
+            try { CopyText(path); SetPageStatus(installedPage, "Copied path: " + path); }
             catch (Exception error) { SetPageStatus(installedPage, "Could not copy the path: " + error.Message, Palette.Red); }
         }
 

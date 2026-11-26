@@ -132,10 +132,11 @@ namespace SlotsInstaller
             var reference = GameReference.FromCmd(null);
             var affects = new List<string>();
             bool loader = plan.Files.Keys.Any(p => String.Equals(PakHash.Normalize(p).TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase));
+            bool core = ReplaceEngine.HasCorePlugin(plan.Files.Keys);
             foreach (string path in plan.Files.Keys)
             {
                 string dest = path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase) ? ModFixes.NormalizeNativePath(path) : PakHash.Normalize(path).TrimStart('/');
-                if ((loader && ReplaceEngine.SkippedLoaderFile(dest)) || ReplaceEngine.SkippedProgram(dest, engine.GameRoot)) continue;   // 1.0.21: as ReplacePlanner
+                if ((loader && ReplaceEngine.SkippedLoaderFile(dest)) || (core && ReplaceEngine.SkippedCoreFile(dest)) || ReplaceEngine.SkippedProgram(dest, engine.GameRoot)) continue;   // 1.0.21: as ReplacePlanner
                 if (loader && ReplaceEngine.IsModPak(dest)) continue;
                 try { ReplaceEngine.ValidateDestination(dest); } catch (IOException ex) { if (loader) continue; errors.Add(ex.Message); }
                 FluffyMod owner = fluffy.Owner(dest);

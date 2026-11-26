@@ -14,7 +14,9 @@ namespace SlotsInstaller
     // are refused and logged. 1.0.19: the Slots Loader is no longer a release here: the offer is the approved entry of
     // the repository's dependencies.json (raw.githubusercontent.com, ReadList), whose file is on the upstream releases.
     // Nothing here installs anything.
-    internal static class UpdateProducts { internal const string Loader = "loader", Manager = "manager"; }
+    // 26 Nov 2026: Core, SF6 Native Core: its approved entry is read from the same list, and a core the Manager installed is
+    // offered the approved version when it is newer (no Manager release needed: merging the sync PR approves it).
+    internal static class UpdateProducts { internal const string Loader = "loader", Manager = "manager", Core = "core"; }
 
     public sealed class ReleaseOffer
     {
@@ -25,14 +27,15 @@ namespace SlotsInstaller
         public string FullAsset = "", FullSha256 = "", Origin = "";
         public long FullSize;
         internal Version Parsed { get { return UpdateCheck.ParseVersion(Version); } }
-        internal LoaderPin AsPin() { return new LoaderPin { Tag = Tag, Name = Name, Version = Version, Asset = Asset, Size = Size, Sha256 = Sha256, Url = Url, ReleasePage = HtmlUrl, Origin = String.IsNullOrEmpty(Origin) ? "github.com/" + LoaderPin.Source : Origin, FullAsset = FullAsset ?? "", FullSha256 = FullSha256 ?? "", FullSize = FullSize }; }
+        internal LoaderPin AsPin() { return new LoaderPin { Tag = Tag, Name = Name, Label = Product == UpdateProducts.Core ? "Native Core" : "Slotsloader", Version = Version, Asset = Asset, Size = Size, Sha256 = Sha256, Url = Url, ReleasePage = HtmlUrl, Origin = String.IsNullOrEmpty(Origin) ? "github.com/" + LoaderPin.Source : Origin, FullAsset = FullAsset ?? "", FullSha256 = FullSha256 ?? "", FullSize = FullSize }; }
         // 1.0.19: the approved Slots Loader as an offer (DigestSource names the list, so an offer an older Manager saved
-        // from a loader-v* release is never taken for an approval).
-        internal static ReleaseOffer Approved(LoaderPin pin)
+        // from a loader-v* release is never taken for an approval). 26 Nov 2026: or the approved Native Core (product Core).
+        internal static ReleaseOffer Approved(LoaderPin pin) { return Approved(pin, UpdateProducts.Loader); }
+        internal static ReleaseOffer Approved(LoaderPin pin, string product)
         {
-            return new ReleaseOffer { Product = UpdateProducts.Loader, Tag = pin.Tag, Version = pin.Version, Name = pin.Name, HtmlUrl = pin.ReleasePage, Asset = pin.Asset, Url = pin.Url, Size = pin.Size, Sha256 = pin.Sha256, DigestSource = UpdateCheck.ListMarker, FullAsset = pin.FullAsset, FullSha256 = pin.FullSha256, FullSize = pin.FullSize, Origin = pin.Origin };
+            return new ReleaseOffer { Product = product, Tag = pin.Tag, Version = pin.Version, Name = pin.Name, HtmlUrl = pin.ReleasePage, Asset = pin.Asset, Url = pin.Url, Size = pin.Size, Sha256 = pin.Sha256, DigestSource = UpdateCheck.ListMarker, FullAsset = pin.FullAsset, FullSha256 = pin.FullSha256, FullSize = pin.FullSize, Origin = pin.Origin };
         }
-        internal bool IsApproval { get { return Product == UpdateProducts.Loader && DigestSource == UpdateCheck.ListMarker && Parsed != null && LoaderPin.DownloadRefusal(Url) == null; } }
+        internal bool IsApproval { get { return (Product == UpdateProducts.Loader || Product == UpdateProducts.Core) && DigestSource == UpdateCheck.ListMarker && Parsed != null && LoaderPin.DownloadRefusal(Url) == null; } }
     }
 
     public sealed class UpdateCheckResult
@@ -40,7 +43,7 @@ namespace SlotsInstaller
         public bool Ok;
         public string Reason = "", CheckedUtc = "";
         public int Status;
-        public ReleaseOffer Loader, Manager;
+        public ReleaseOffer Loader, Manager, Core;   // Core: 26 Nov 2026, the list's native_core (null: none, or not read)
         public List<string> Refused = new List<string>();
         public string ListReason = "";   // 1.0.19: why the approved list could not be used (Loader is then null)
     }
@@ -72,6 +75,18 @@ namespace SlotsInstaller
             if (!ApprovedSeen.Contains(approved.Sha256.ToUpperInvariant())) ApprovedSeen.Add(approved.Sha256.ToUpperInvariant());
             if (changed) DismissedLoader = "";
             return changed;
+        }
+        // 26 Nov 2026: the approved Native Core read from the list, as Approved is for the loader (used only by the Manager
+        // version that read it), and what the user chose for its offer.
+        public ReleaseOffer ApprovedCoreOffer;
+        public string ApprovedCoreBy = "", SkipCore = "", DismissedCore = "";
+        internal ReleaseOffer ApprovedCore() { return ApprovedCoreOffer != null && ApprovedCoreOffer.Product == UpdateProducts.Core && ApprovedCoreOffer.IsApproval && ApprovedCoreBy == SafeHttp.AppVersion() ? ApprovedCoreOffer : null; }
+        internal void RememberApprovedCore(ReleaseOffer approved)
+        {
+            if (approved == null) return;
+            ReleaseOffer before = ApprovedCore();
+            if (before == null || before.Version != approved.Version || before.Sha256 != approved.Sha256) DismissedCore = "";
+            ApprovedCoreOffer = approved; ApprovedCoreBy = SafeHttp.AppVersion();
         }
         internal static string FilePath { get { return Path.Combine(AppConfig.DataDir, "update-settings.json"); } }
         internal static UpdateSettings Load()
@@ -139,9 +154,11 @@ namespace SlotsInstaller
         }
 
         // 1.0.19: the approved Slots Loader from the list, or null with the reason (logged: offline, a refused list).
-        internal static ReleaseOffer ReadList(out string reason)
+        internal static ReleaseOffer ReadList(out string reason) { ReleaseOffer core; return ReadList(out reason, out core); }
+        // 26 Nov 2026: and the list's approved Native Core (null: the list has none that can be used, or was not read).
+        internal static ReleaseOffer ReadList(out string reason, out ReleaseOffer core)
         {
-            reason = "";
+            reason = ""; core = null;
             string json;
             try { json = SafeHttp.GetText(ListUrl, MaxListBytes, null, TimeoutMs); }
             catch (DownloadFailure f) { reason = f.Reason; Program.LogLine("Update check: the approved Slotsloader list could not be read: " + f.Reason + "."); return null; }
@@ -150,6 +167,8 @@ namespace SlotsInstaller
                 DependencyList list = DependencyList.Parse(json);
                 if (list.IgnoredPackages.Count > 0) Program.LogLine("Update check: approved Slotsloader " + list.Loader.Version + " (" + list.Loader.Asset + "); not used here: " + String.Join(", ", list.IgnoredPackages) + ".");
                 if (list.SlimIgnored != null) Program.LogLine("Update check: the full Slotsloader zip is used, the slim one was left out: " + list.SlimIgnored);   // 1.0.21
+                if (list.CoreIgnored != null) Program.LogLine("Update check: the approved Native Core was left out: " + list.CoreIgnored);
+                if (list.Core != null) core = ReleaseOffer.Approved(list.Core, UpdateProducts.Core);
                 return ReleaseOffer.Approved(list.Loader);
             }
             catch (InvalidDataException ex) { reason = ex.Message.TrimEnd('.'); Program.LogLine("Update check: refused the approved Slotsloader list: " + ex.Message); return null; }
@@ -158,7 +177,7 @@ namespace SlotsInstaller
         internal static UpdateCheckResult Check(bool includePrereleases)
         {
             var result = new UpdateCheckResult { CheckedUtc = DateTime.UtcNow.ToString("o") };
-            string listReason; result.Loader = ReadList(out listReason); result.ListReason = listReason;
+            string listReason; ReleaseOffer core; result.Loader = ReadList(out listReason, out core); result.ListReason = listReason; result.Core = core;
             string json;
             try { json = SafeHttp.GetText(ApiUrl, 8L * 1024 * 1024, "application/vnd.github+json", TimeoutMs); }
             catch (DownloadFailure f) { result.Reason = f.Reason; result.Status = f.Status; return result; }
@@ -262,6 +281,23 @@ namespace SlotsInstaller
             Version installed = ParseVersion(installedVersion);
             return offer != null && offer.Parsed != null && installed != null && offer.Parsed < installed;
         }
+        // 26 Nov 2026: a Native Core the Manager installed, older than the approved one (never offered going back: the core
+        // keeps working with an older loader, and a newer one may be a test build).
+        internal static ReleaseOffer CoreUpdate(ReleaseOffer approved, string installedVersion)
+        {
+            if (approved == null || approved.Parsed == null) return null;
+            Version installed = ParseVersion(installedVersion);
+            return installed != null && approved.Parsed > installed ? approved : null;
+        }
+        // The Native Core to install: a test's pin, else the approved one last read by this Manager, else the build's own.
+        internal static LoaderPin CoreInstallPin(UpdateSettings s)
+        {
+            if (LoaderRelease.CorePin != LoaderPin.CoreRelease) return LoaderRelease.CorePin;
+            ReleaseOffer approved = s == null ? null : s.ApprovedCore();
+            if (approved == null) return LoaderRelease.CorePin;
+            if (LoaderRelease.CorePin != null && approved.Sha256.Equals(LoaderRelease.CorePin.Sha256, StringComparison.OrdinalIgnoreCase)) return LoaderRelease.CorePin;
+            return approved.AsPin();
+        }
         internal static ReleaseOffer ManagerUpdate(UpdateCheckResult r, Version running)
         {
             if (r == null || r.Manager == null || r.Manager.Parsed == null || running == null) return null;
@@ -287,6 +323,17 @@ namespace SlotsInstaller
 
     // The SlotsLoader this app installed (its tool-mod record) and its version: the modinfo.ini "version" of the
     // recorded source zip/folder when it still exists, else the version in the source's file name.
+    // 26 Nov 2026: the SF6 Native Core this app installed (an enabled record of the core's own files, the highest one) and
+    // its version, read as the loader's is.
+    internal static class InstalledCore
+    {
+        internal static ReplaceMod Record(ReplaceState state)
+        {
+            return state == null ? null : state.Mods.FirstOrDefault(m => m != null && m.Enabled && m.Files != null && ReplaceEngine.IsPlainNativeCore(m.Files.Select(f => f.Path)));
+        }
+        internal static string Version(ReplaceMod mod) { string source; return InstalledLoader.Version(mod, out source); }
+    }
+
     internal static class InstalledLoader
     {
         internal static ReplaceMod Record(ReplaceState state) { return state == null ? null : state.Mods.FirstOrDefault(LoaderCostumePak.IsLoaderMod); }

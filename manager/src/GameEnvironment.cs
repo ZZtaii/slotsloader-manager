@@ -268,6 +268,10 @@ namespace SlotsInstaller
         internal bool ReFrameworkFile, ReFrameworkOutdated, ReFrameworkFluffy;
         internal ReFrameworkBuild ReFrameworkBuild;
         internal bool ReFrameworkOffer { get { return (!ReFrameworkFile || ReFrameworkOutdated) && !ReFrameworkFluffy; } }
+        // 26 Nov 2026: SF6 Native Core (reframework\plugins\sf6core_native.dll), by whoever installed it. The suite's Slots
+        // Loader draws stage pictures and some menu texts through it; without it they stay the game's own.
+        internal bool NativeCore;
+        internal string NativeCoreDetail = "";
 
         internal static ToolStatus Detect(string gameRoot) { return Detect(gameRoot, null); }
         internal static ToolStatus Detect(string gameRoot, FluffyInstalls fluffy)
@@ -295,6 +299,8 @@ namespace SlotsInstaller
                 s.SlotsLoaderDetail = s.SlotsLoader ? "Slotsloader installed" :
                     proxy || File.Exists(plugin) ? "Slotsloader incomplete (missing " + String.Join(", ", new[] { proxy ? null : "amd_ags_x64 proxy", File.Exists(plugin) ? null : "SF6_CostumeSlotsNative.dll", s.SlotsLoaderData ? null : "data folder" }.Where(x => x != null)) + ")" :
                     "Slotsloader not installed: extra outfits won't appear in game";
+                s.NativeCore = File.Exists(Path.Combine(gameRoot, LoaderFlags.CorePlugin.Replace('/', '\\')));
+                s.NativeCoreDetail = s.NativeCore ? "Native Core installed" : "Native Core not installed: stage pictures stay the game's own";
                 bool crash = File.Exists(Path.Combine(gameRoot, "CrashReport.exe")), renamed = File.Exists(Path.Combine(gameRoot, SlotsInstaller.CrashReporter.RenamedName));
                 s.CrashReporterState = crash ? "Crash reporter active (CrashReport.exe)" : renamed ? "Crash reporter renamed to " + SlotsInstaller.CrashReporter.RenamedName + " (as external mod managers do)" : "Crash reporter not found";
             }
@@ -307,7 +313,7 @@ namespace SlotsInstaller
         internal static string Stamp(string gameRoot)
         {
             var parts = new List<string>();
-            foreach (string rel in new[] { "StreetFighter6.exe", "dinput8.dll", "amd_ags_x64.dll", "amd_ags_x64_real.dll", @"reframework\plugins\SF6_CostumeSlotsNative.dll" })
+            foreach (string rel in new[] { "StreetFighter6.exe", "dinput8.dll", "amd_ags_x64.dll", "amd_ags_x64_real.dll", @"reframework\plugins\SF6_CostumeSlotsNative.dll", @"reframework\plugins\sf6core_native.dll" })
             {
                 try { var info = new FileInfo(Path.Combine(gameRoot ?? "", rel)); parts.Add(info.Exists ? info.Length + "@" + info.LastWriteTimeUtc.Ticks : "-"); }
                 catch (Exception ex) { if (ex is OutOfMemoryException) throw; parts.Add("?"); }
