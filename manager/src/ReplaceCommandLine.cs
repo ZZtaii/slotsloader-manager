@@ -11,7 +11,7 @@ namespace SlotsInstaller
     // Data folder (beside the executable) and safety checks as the app window.
     internal static class ReplaceCommandLine
     {
-        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "replace-keep-changes", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "loader-flags", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
+        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "replace-keep-changes", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "setup-tools","loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "loader-flags", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
         // 2.5.1: the fluffy-* names keep working (left out of the help).
         internal static readonly Dictionary<string, string> Aliases = new Dictionary<string, string> { { "fluffy-status", "manager-status" }, { "fluffy-uninstall", "manager-uninstall" }, { "fluffy-restore", "manager-restore" } };
 
@@ -120,6 +120,7 @@ namespace SlotsInstaller
                 case "loader-pak-remove": { Console.WriteLine(engine.RemoveOrphanedCostumePak()); return 0; }
                 case "pak-repair": return PakRepairCommandLine.Run(engine, a.Yes);   // 2.4.2 (PakRepair.cs)
                 case "update-install": return UpdateInstallLoader(a, engine);
+                case "setup-tools": return SetupTools(a, engine, config);
                 case "replace-plan":
                 {
                     CompositionPlan composition = Compose(a);
@@ -497,6 +498,22 @@ namespace SlotsInstaller
             Console.WriteLine((record == null ? "Installed" : "Updated") + " Slotsloader " + pin.Version + " (id " + mod.Id.Substring(0, 8) + ", " + ReplacePlanner.N(mod.Files.Count, "file") + ").");
             return 0;
         }
+        // 26 Nov 2026: the window's one-click setup (GameSetup.cs): whatever of REFramework, Slotsloader and Native Core is
+        // missing, from the pinned zips (libraries and Data\downloads first, else the download).
+        private static int SetupTools(Args a, ReplaceEngine engine, AppConfig config)
+        {
+            FluffyInstalls fluffy = engine.Fluffy();
+            SetupNeeds needs = GameSetup.Needs(ToolStatus.Detect(engine.GameRoot, fluffy), engine.LoadState(), fluffy);
+            if (!needs.Any) { Console.WriteLine("REFramework, Slotsloader and Native Core are all in the game folder: nothing to install."); return 0; }
+            LoaderPin pin = LoaderRelease.Pin != LoaderPin.Release ? LoaderRelease.Pin : UpdateCheck.InstallPin(UpdateSettings.Load().ApprovedLoader());
+            Console.WriteLine("Missing: " + needs.Text() + ".");
+            if (!a.Yes) { Console.WriteLine("Nothing changed: add --yes to install."); return 1; }
+            if (GameProcesses.Probe.IsGameRunning()) { Console.Error.WriteLine("Close SF6 first."); return 1; }
+            List<string> libraries = a.Libraries.Count > 0 ? a.Libraries : config.Libraries;
+            SetupResult r = GameSetup.Run(engine, needs, pin, libraries, a.SevenZip, LoaderRelease.DownloadDir);
+            Console.WriteLine(r.Message);
+            return r.Failed == null ? 0 : 1;
+        }
         private static int UpdateInstallManager(Args a)
         {
             if (!String.Equals(a.Target, "manager", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("update-install needs loader or manager.");
@@ -538,6 +555,7 @@ namespace SlotsInstaller
             Console.WriteLine("  update-install loader|manager [--yes] [--include-prereleases]   download, verify and install the newer release (loader: in place, in Replace mode)");
             Console.WriteLine("  update-rollback                      put back the Slotsloader Manager files kept before the last update");
             Console.WriteLine("  loader-fetch [--library <dir> ...] [--no-download]   the pinned Slotsloader " + LoaderRelease.Pin.Version + " zip: found by SHA-256 in the libraries or Data\\downloads, else downloaded from GitHub and verified; prints the source, path and hash (installs nothing)");
+            Console.WriteLine("  setup-tools [--library <dir> ...] [--yes]   installs whatever of REFramework, Slotsloader and Native Core is missing (the window's one-click setup); without --yes it only lists them");
             Console.WriteLine("Changes refuse while SF6 runs (loose natives files excepted); PAK-method changes and manager-uninstall/-restore refuse while the external mod manager runs. The app's Data folder beside this executable is used.");
         }
     }

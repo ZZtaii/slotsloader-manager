@@ -204,7 +204,7 @@ If another tool replaced or deleted a file this app installed, the banner says w
 
 ## Switching from another mod manager
 
-- **While the external mod manager has any mod installed, only Extra outfit, Slotsloader and REFramework install here.** Replace original, PAK mods and other tool mods wait until it is empty, so two managers never change the same game files. REFramework that the external mod manager installed is updated there. Uninstalling, disabling and Restore original game files still work for this app's own mods.
+- **While the external mod manager has any mod installed, only Extra outfit, Slotsloader, Native Core and REFramework install here.** Replace original, PAK mods and other tool mods wait until it is empty, so two managers never change the same game files. REFramework or Native Core that the external mod manager installed is updated there. Uninstalling, disabling and Restore original game files still work for this app's own mods.
 - **Moving over**: **Migrate installed mods** (Settings → Game files & replacements) reviews that manager's mods, waits while you uninstall them there, then installs them here in the same order. Or install them yourself with Replace original, or import its preset.
 - Close the external mod manager before changing game files here. Don't install the same mod in both managers.
 - External mod manager features this app does not reproduce:

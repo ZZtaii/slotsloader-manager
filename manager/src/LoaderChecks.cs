@@ -61,8 +61,35 @@ namespace SlotsInstaller
                     LoaderPin parsed = LoaderPin.FromList(ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, ",\"native_core\":{\"name\":\"SF6 Native Core\",\"version\":\"0.9.14\",\"release\":\"v1.37.0\",\"file\":\"SF6_NativeCore_0.9.14.zip\",\"size\":684069,\"sha256\":\"" + sha + "\"},\"future_thing\":{\"anything\":[1,2,3]}", ",\"generated\":\"2026-11-16\",\"notes\":{\"x\":1}"));
                     Require(parsed.Version == "1.27.7" && parsed.Tag == "v1.40.0" && parsed.Sha256 == sha.ToUpperInvariant() && parsed.Size == 1400000 && parsed.Name == "SF6 Slots Loader"
                         && parsed.Url == "https://github.com/Wael3rd/SF6-ModSuite/releases/download/v1.40.0/SF6_SlotsLoader_v1.27.7.zip" && parsed.ReleasePage == "https://github.com/Wael3rd/SF6-ModSuite/releases/tag/v1.40.0", "parsed: " + parsed.Url);
+                    // 26 Nov 2026: a sound native_core entry is used (DependencyList.Core); a malformed one is left out with
+                    // the reason and listed as ignored, and never refuses the list.
+                    DependencyList withCore = DependencyList.Parse(ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, ",\"native_core\":{\"name\":\"SF6 Native Core\",\"version\":\"0.9.14\",\"release\":\"v1.37.0\",\"file\":\"SF6_NativeCore_0.9.14.zip\",\"size\":684069,\"sha256\":\"" + sha + "\"},\"zzz\":5", ""));
+                    LoaderPin core = withCore.Core;
+                    Require(core != null && withCore.CoreIgnored == null && core.Version == "0.9.14" && core.Label == "Native Core" && core.Name == "SF6 Native Core" && core.Size == 684069
+                        && core.Url == "https://github.com/Wael3rd/SF6-ModSuite/releases/download/v1.37.0/SF6_NativeCore_0.9.14.zip" && LoaderPin.DownloadRefusal(core.Url) == null
+                        && withCore.IgnoredPackages.SequenceEqual(new[] { "zzz" }) && withCore.Loader.Label == "Slotsloader", "native_core: " + (core == null ? "(none) " + withCore.CoreIgnored : core.Url) + " / ignored " + String.Join(", ", withCore.IgnoredPackages));
                     DependencyList list = DependencyList.Parse(ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, ",\"native_core\":{\"version\":\"0.9.14\"},\"zzz\":5", ""));
-                    Require(list.IgnoredPackages.SequenceEqual(new[] { "native_core", "zzz" }), "ignored packages: " + String.Join(", ", list.IgnoredPackages));
+                    Require(list.Core == null && list.CoreIgnored != null && list.CoreIgnored.StartsWith("dependencies.json: native_core.") && list.Loader.Version == "1.27.7"
+                        && list.IgnoredPackages.SequenceEqual(new[] { "native_core", "zzz" }), "a malformed native_core: " + list.CoreIgnored + " / ignored packages: " + String.Join(", ", list.IgnoredPackages));
+                    // The build's own list has one (the sync Action keeps it beside slots_loader).
+                    Require(LoaderPin.CoreRelease != null && LoaderPin.CoreRelease.Label == "Native Core", "the embedded dependencies.json has no usable native_core");
+                    // The Native Core alone goes past the external manager's lockout; with anything else beside it, it doesn't.
+                    Require(ReplaceEngine.IsPlainNativeCore(new[] { "reframework/plugins/sf6core_native.dll", "reframework/data/sf6core/changelog.json" })
+                        && !ReplaceEngine.IsPlainNativeCore(new[] { "reframework/plugins/sf6core_native.dll", "reframework/plugins/other.dll" })
+                        && !ReplaceEngine.IsPlainNativeCore(new[] { "reframework/data/sf6core/changelog.json" }), "IsPlainNativeCore");
+                    // Its crash report tool and News text are left out: only the plugin is needed.
+                    Require(ReplaceEngine.SkippedCoreFile("reframework\\data\\sf6core\\SF6_CrashReport.bat") && ReplaceEngine.SkippedCoreFile("/reframework/data/sf6core/CHANGELOG.json")
+                        && !ReplaceEngine.SkippedCoreFile(LoaderFlags.CorePlugin) && ReplaceEngine.HasCorePlugin(new[] { "README.txt", "reframework\\plugins\\sf6core_native.dll" }), "SkippedCoreFile / HasCorePlugin");
+                    // What one click installs: only what is missing, nothing another tool owns, nothing while outfit mods are off.
+                    var none = new ToolStatus { GameFound = true };
+                    SetupNeeds all = GameSetup.Needs(none, null, null);
+                    Require(all.ReFramework && !all.ReFrameworkUpdate && all.Loader && all.Core == (LoaderRelease.CorePin != null) && all.Text() == "REFramework, Slotsloader and Native Core"
+                        && MainForm.SetupButtonText(all) == "Install dependencies", "needs on a bare game: " + all.Text());
+                    var ready = new ToolStatus { GameFound = true, ReFrameworkFile = true, ReFramework = true, SlotsLoader = true, NativeCore = true };
+                    Require(!GameSetup.Needs(ready, null, null).Any && !GameSetup.Needs(new ToolStatus(), null, null).Any, "needs with everything there, or no game");
+                    var parked = new ReplaceState(); parked.ModsOff = new ModsOffRecord { LoaderId = "abc" };
+                    SetupNeeds offNeeds = GameSetup.Needs(new ToolStatus { GameFound = true, ReFrameworkFile = true, ReFramework = true, NativeCore = true }, parked, null);
+                    Require(!offNeeds.Loader && !offNeeds.Any, "outfit mods off: Slotsloader is switched off, not missing: " + offNeeds.Text());
                     string goodList = ListJson("1.27.7", "v1.40.0", "SF6_SlotsLoader_v1.27.7.zip", 1400000, sha, "", "");
                     var bad = new Dictionary<string, string>
                     {

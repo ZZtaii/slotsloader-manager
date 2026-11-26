@@ -105,6 +105,10 @@ An archive or folder you dropped into `costume_mods` can hold several variants. 
 - SF6 running: the file is still written and the line says `applies after SF6 restarts`.
 - No `variants.json` (an older Slotsloader, or SF6 not started since): the list says so and exits 0; `--set` exits 1. An unknown source or label exits 1, bad arguments 2.
 
+## One-click setup (26 Nov 2026)
+
+`setup-tools --game <SF6> [--yes]`: the window's one-click setup. Lists what is missing of REFramework, Slotsloader and Native Core; `--yes` installs it (found or downloaded as `loader-fetch` does). Exit **1** without `--yes`, while SF6 runs, or when a step failed.
+
 ## The pinned Slotsloader build (2.3.1)
 
 ```powershell

@@ -351,6 +351,18 @@ namespace SlotsInstaller
                 Application.DoEvents(); Call(form, "MoveGameRow", 1); WaitIdle(form); refresh();
                 Require(order() != start && form.UndoLabel.Contains("moved"), "move: " + order());
                 undo(); Require(order() == start, "Undo of Move: " + order() + " (was " + start + ")");
+                // 26 Nov 2026: Copy path on a replacement row copies the path the row shows (it used to do nothing).
+                foreach (ListViewItem item in list.Items) item.Selected = item.Tag is GameModRow && ((GameModRow)item.Tag).Mod != null && ((GameModRow)item.Tag).Mod.SourcePath == f.Mod("modA");
+                Application.DoEvents();
+                // The real clipboard is left alone (another program on the PC may hold it): MainForm.CopyText records the text.
+                Action<string> realCopy = MainForm.CopyText; string copied = null;
+                MainForm.CopyText = delegate(string text) { copied = text; };
+                try
+                {
+                    Get<FlatButton>(form, "copyPathButton").PerformClick(); Application.DoEvents();
+                    Require(copied == f.Mod("modA"), "Copy path on a replacement row: '" + copied + "', expected " + f.Mod("modA") + " / status " + Get<Label>(form, "statusText").Text);
+                }
+                finally { MainForm.CopyText = realCopy; }
                 // 1.0.18: the row moves at once (the list follows the priority) and clicks before the save are one save:
                 // down and back up again saves nothing new and offers no Undo.
                 foreach (ListViewItem item in list.Items) item.Selected = item.Tag is GameModRow && ((GameModRow)item.Tag).Mod != null && ((GameModRow)item.Tag).Mod.SourcePath == f.Mod("modA");
@@ -772,7 +784,12 @@ namespace SlotsInstaller
             Require(Get<Label>(form, "gameStateLabel").Text.Contains("Game running") && !Get<FlatButton>(form, "launchButton").Enabled && !Get<FlatButton>(form, "installButton").Enabled, "running state");
             probe.Game = false; probe.Fluffy = true; Call(form, "PollGame");
             Require(Get<Label>(form, "gameStateLabel").Text.Contains("Mod manager running") && !Get<FlatButton>(form, "installButton").Enabled, "Fluffy running state");
+            // 26 Nov 2026: open with no mods of its own, the banner asks to close it (this install edits the PAK).
+            Require(form.IsReplaceMode && form.LibraryManagerNotice() == MainForm.ManagerOpenInstallText && Get<NoticeBanner>(form, "libraryManagerBanner").Visible,
+                "library banner while the other mod manager runs with no mods: replace mode " + form.IsReplaceMode + ", '" + form.LibraryManagerNotice() + "'");
+            Render(form, Path.Combine(Path.GetDirectoryName(Get<AppConfig>(form, "config").GameRoot), "library-manager-open-" + form.DeviceDpi + ".png"));
             probe.Fluffy = false; Call(form, "PollGame");
+            Require(form.LibraryManagerNotice() == null && !Get<NoticeBanner>(form, "libraryManagerBanner").Visible, "the library banner stays after the other mod manager closed");
             Require(Get<Label>(form, "gameStateLabel").Text == "Game closed", "closed state");
         }
 
@@ -890,6 +907,16 @@ namespace SlotsInstaller
                 }
                 // Fluffy running: disabled with the app's reason; a direct call changes nothing.
                 probe.Fluffy = true; Call(form, "PollGame");
+                // 26 Nov 2026: the Installed page says it across the top while PAK-method replacements can't change.
+                NoticeBanner installedBanner = Get<NoticeBanner>(form, "installedManagerBanner");
+                Require(form.InstalledManagerNotice() == MainForm.ManagerOpenChangeText && installedBanner.Message.Text == MainForm.ManagerOpenChangeText, "Installed banner while the other mod manager runs: '" + form.InstalledManagerNotice() + "' / '" + installedBanner.Message.Text + "'");
+                { Panel pageBefore = Get<Panel>(form, "currentPage"); Call(form, "ShowPage", Get<Panel>(form, "installedPage")); Application.DoEvents(); Require(installedBanner.Visible, "the Installed banner is not shown on its page");
+                  Render(form, Path.Combine(Path.GetDirectoryName(f.Mods), "installed-manager-open-" + form.DeviceDpi + ".png"));
+                  // Why? opens Help at the part about the other manager being open.
+                  ((FlatButton)installedBanner.Actions.Controls.Find("installedManagerBannerWhy", false).Single()).PerformClick(); Application.DoEvents();
+                  Require(form.LastManagerHelp == MainForm.ManagerHelpTopic + "#" + MainForm.ManagerOpenHeading && Get<HelpArticleView>(form, "helpArticle").Topic.Title == MainForm.ManagerHelpTopic, "Why? opened: " + form.LastManagerHelp);
+                  Render(form, Path.Combine(Path.GetDirectoryName(f.Mods), "installed-manager-open-why-" + form.DeviceDpi + ".png"));
+                  Call(form, "ShowPage", pageBefore); Application.DoEvents(); }
                 open();
                 Require(replacementItem.Visible && !replacementItem.Enabled && replacementItem.Text == "Uninstall replacement (close the external mod manager first: same PAK)" && replacementItem.AccessibleDescription.Contains("Close the external mod manager first"), "Fluffy running: " + replacementItem.Text + " / " + replacementItem.AccessibleDescription);
                 menu.Close();
@@ -897,6 +924,7 @@ namespace SlotsInstaller
                 Call(form, "UninstallLibraryReplacement", Get<List<GameModRow>>(form, "gameRows").First(r => r.Mod != null)); WaitReview(form);
                 Require(engine.LoadState().Find(mod.Id) != null, "uninstalled while Fluffy runs");
                 probe.Fluffy = false; Call(form, "PollGame");
+                Require(form.InstalledManagerNotice() == null, "the Installed banner stays after the other mod manager closed");
                 // Extra outfit mode: the footer covers the replacement (2.5.3: labelled Uninstall, and a click removes it).
                 Call(form, "SetInstallMode", InstallModes.Slot, true);
                 Require(button.Visible && button.Text == "Uninstall" && button.Enabled, "Extra outfit footer for a replacement-only source: " + button.Text);
@@ -1413,8 +1441,13 @@ namespace SlotsInstaller
                 Label lockHint = Get<Label>(form, "modeLockHint");
                 Require(Summary(form) == "Replace original is off" && Details(form) == "The external mod manager has 1 mod installed · uninstall them there or use Extra outfit · View report" && !Get<FlatButton>(form, "installButton").Enabled, "Fluffy footer: " + Summary(form) + " / " + Details(form));
                 Require(Get<Label>(form, "modeNotice").Text == "Off while the external mod manager has mods installed · use Extra outfit" && lockHint.Text == "", "Replace original strip: " + Get<Label>(form, "modeNotice").Text + " / hint " + lockHint.Text);
+                // 26 Nov 2026: and a banner across the top of the page, with Why? and Migrate mods here.
+                NoticeBanner managerBanner = Get<NoticeBanner>(form, "libraryManagerBanner");
+                Require(managerBanner.Visible && managerBanner.Message.Text == MainForm.ManagerLockText(1) && managerBanner.Actions.Controls.Find("libraryManagerBannerMigrate", false).Single().Visible,
+                    "library banner while the other mod manager has a mod: " + managerBanner.Visible + " '" + managerBanner.Message.Text + "'");
                 Render(form, Path.Combine(Path.GetDirectoryName(f.Mods), "library-external-lock-replace-" + form.DeviceDpi + ".png"));
                 Call(form, "SetInstallMode", InstallModes.Slot, true); WaitReview(form);
+                Require(!managerBanner.Visible, "the banner stays in Extra outfit mode (only Replace original is off)");
                 Require(lockHint.Text == "· Replace off: the external mod manager has 1 mod" && lockHint.ForeColor == Palette.Accent && lockHint.PreferredWidth <= lockHint.Width, "Extra outfit hint: '" + lockHint.Text + "' " + lockHint.PreferredWidth + "/" + lockHint.Width);
                 Render(form, Path.Combine(Path.GetDirectoryName(f.Mods), "library-external-lock-extra-" + form.DeviceDpi + ".png"));
                 Call(form, "SetInstallMode", InstallModes.Replace, true); WaitReview(form);

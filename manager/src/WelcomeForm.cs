@@ -22,18 +22,22 @@ namespace SlotsInstaller
 
         internal static readonly Topic[] Topics =
         {
-            new Topic { Tab = "As companion", Title = "Use it with your mod manager", Lead = "Keep your external mod manager for replacements. Use this Manager for extra outfits.", Points = new[] {
-                "Extra outfit adds a mod as a new costume slot. The original outfit stays in the game.",
-                "Extra outfits need REFramework and Slotsloader. If one is missing, click the line under INSTALL AS to get it.",
-                "While your mod manager has mods installed, Replace original is off here. Its mods stay its own, so manage them there." } },
-            new Topic { Tab = "As standalone", Title = "Use it on its own", Lead = "Let this Manager handle every mod, replacements included.", Highlight = 2, Badge = "Automatic fixes", Points = new[] {
-                "Coming from your external mod manager? Settings → Migrate installed mods moves its mods here. Until that manager is empty, Replace original stays off.",
-                "Replace original overwrites the game's files. When two mods change the same outfit, the one higher on the Installed page wins.",
-                "Mods made for an older SF6 are fixed for you, as replacements and as extra outfits: colour files, texture tables, old file names and select-screen colour swatches. Every replacement also gets a health check first." } },
+            // 26 Nov 2026 (the user: "some people thought they have to choose between modes"): the tabs were "As companion" and
+            // "As standalone", which read as a setting to pick. Now: how installing works (INSTALL AS is per mod, one click
+            // sets the game up), then what changes with another mod manager, then repairs.
+            // The user: no "Per mod" card (the lead already said it); the choice per mod is said once, in the second point.
+            new Topic { Tab = "Start", Title = "Install mods in a few clicks", Lead = "Pick a mod, tick its options, click Install.", Points = new[] {
+                "Extra outfits need REFramework and Slotsloader. If either is missing, the line under INSTALL AS says so: one click installs everything missing.",
+                "INSTALL AS is chosen for each mod, not once for the app: Extra outfit adds a new costume slot and keeps the original, Replace original swaps the game's own files.",
+                "New outfits show on the character select screen the next time SF6 starts." } },
+            new Topic { Tab = "Other mod managers", Title = "Have another mod manager?", Lead = "Keep it if you like. This Manager works beside it.", Points = new[] {
+                "Its mods stay its own: manage them there. Close it while you install replacements here.",
+                "While it has mods installed, Replace original is off here. Extra outfits still install.",
+                "Want everything in one place? Settings → Migrate installed mods moves its mods here." } },
             new Topic { Tab = "Repair", Title = "When something breaks", Lead = "Start with the smallest fix.", Points = new[] {
-                "After an SF6 update, a \"Game files changed\" banner appears. Click Reapply to put your replacements back.",
+                "After an SF6 update, click Reapply in the \"Game files changed\" banner.",
                 "Game won't start? Gear → Restore → Remove this Manager's mods. You can undo it.",
-                "Still broken? Gear → Restore → Restore game to vanilla removes all mods, your mod manager's too. If SLM installed REFramework and Slotsloader, they stay." } },
+                "Still broken? Gear → Restore → Restore game to vanilla. REFramework, Slotsloader and Native Core stay if SLM installed them." } },
         };
 
         internal const double DimOpacity = 0.65;   // the user: the window behind faded well back
@@ -210,7 +214,9 @@ namespace SlotsInstaller
             for (int k = 0; k < t.Points.Length; k++)
             {
                 bool card = k == t.Highlight;
-                int inset = card ? Px(16) : 0, bullet = Px(22), textLeft = inset + bullet, textWidth = width - textLeft - inset;
+                // 26 Nov 2026 (the user: "misaligned text/card"): every point has the card's inset, so the bullets and the
+                // text of plain points and the card's stand in one column.
+                int inset = Px(16), bullet = Px(22), textLeft = inset + bullet, textWidth = width - textLeft - inset;
                 int top = y + (card ? Px(8) : 0), textTop = top + Px(card ? 14 : 12), badge = card ? Px(20) : 0;
                 int textHeight = TextRenderer.MeasureText(g, t.Points[k], Body, new Size(textWidth, Int32.MaxValue), Wrap).Height;
                 int bottom = textTop + badge + textHeight + Px(card ? 14 : 12);

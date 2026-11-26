@@ -181,7 +181,14 @@ namespace SlotsInstaller
                 open(pack);
                 Require(form.StageMode && toggle.Options[0] == MainForm.StageModeLabel && !Get<Panel>(form, "targetPanel").Visible && !Get<FlatButton>(form, "previewButton").Enabled, "Extra stage shown: mode " + form.StageMode + ", label " + toggle.Options[0] + ", target " + Get<Panel>(form, "targetPanel").Visible);
                 Require(Get<List<string>>(form, "selectedOrder").Count == 0 && !install.Enabled && Get<Label>(form, "planSummary").Text == "Select options", "several options start unticked: " + String.Join(",", Get<List<string>>(form, "selectedOrder")) + " / " + Get<Label>(form, "planSummary").Text);
-                Require(Get<Label>(form, "modeNotice").Text.StartsWith("Each ticked option becomes a variant", StringComparison.Ordinal), "notice: " + Get<Label>(form, "modeNotice").Text);
+                // 26 Nov 2026: without the Native Core the notice offers it (one click, RunGameSetup); with it, the usual line.
+                Label stageNotice = Get<Label>(form, "modeNotice");
+                Require(stageNotice.Text == "Stage pictures need SF6 Native Core · click to install it" && stageNotice.Cursor == Cursors.Hand, "notice without the Native Core: " + stageNotice.Text);
+                Render(form, Path.Combine(root, "extra-stage-no-core-" + form.DeviceDpi + ".png"));
+                string corePlugin = Path.Combine(game, "reframework", "plugins", "sf6core_native.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(corePlugin)); File.WriteAllBytes(corePlugin, new byte[16]);
+                form.UpdateModeUi();
+                Require(stageNotice.Text.StartsWith("Each ticked option becomes a variant", StringComparison.Ordinal) && stageNotice.Cursor == Cursors.Default, "notice: " + stageNotice.Text);
                 // Both alternatives ticked (in Extra outfit they would untick each other): both install as variants.
                 List<string> both = shown().Components.Where(c => !c.IsDummy && c.Assets.Count > 0).Select(c => c.Id).ToList();
                 var nodes = Get<Dictionary<string, OptionNode>>(form, "componentNodes");
@@ -210,6 +217,10 @@ namespace SlotsInstaller
                 GameModRow row = SelectGameRow(form, r => r.Stage != null);
                 FlatButton remove = Get<FlatButton>(form, "removeInstalledButton");
                 Require(row != null && row.Name == "Night Pack" && remove.Visible && remove.Enabled && remove.Text == "Uninstall" && Get<Label>(form, "installedTitle").Text == "Night Pack" && Get<TextBox>(form, "installedHelp").Text.Contains("• Midnight"), "stage row: " + (row == null ? "none" : row.Name) + " / " + remove.Text);
+                // 26 Nov 2026: without the Native Core the row says its pictures are missing.
+                File.Delete(corePlugin); Call(form, "ShowInstalledSelection"); Application.DoEvents();
+                Require(Get<ChipStrip>(form, "installedChips").Chips.Any(c => c.Text == "No pictures: Native Core missing"), "stage row chip without the Native Core: " + String.Join(", ", Get<ChipStrip>(form, "installedChips").Chips.Select(c => c.Text)));
+                Render(form, Path.Combine(root, "installed-stage-no-core-" + form.DeviceDpi + ".png"));
                 Kind(form, "Installed"); Application.DoEvents();
                 Require(!Get<ListView>(form, "installedList").Items.Cast<ListViewItem>().Any(i => i.Tag is GameModRow && ((GameModRow)i.Tag).Stage != null), "Installed (replacements) must not list an extra stage");
                 row = SelectGameRow(form, r => r.Stage != null);

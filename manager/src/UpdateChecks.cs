@@ -331,7 +331,7 @@ namespace SlotsInstaller
                     server.Routes["/dependencies.json"] = new LoaderChecks.LoopbackServer.Route { Body = B(LoaderChecks.ListJson("1.9.8", "v1.9.8", "SF6_SlotsLoader_v1.9.8.zip", l198.Length, Sha(l198).ToLowerInvariant(),
                         ",\"native_core\":{\"name\":\"SF6 Native Core\",\"version\":\"0.9.14\",\"release\":\"v1.37.0\",\"file\":\"SF6_NativeCore_0.9.14.zip\",\"size\":684069,\"sha256\":\"" + new string('b', 64) + "\"},\"something_new\":{\"x\":[1]}", ",\"updated\":\"2026-11-16\"")) };
                     ReleaseOffer read = UpdateCheck.ReadList(out why);
-                    Require(read != null && read.Version == "1.9.8" && read.Sha256 == Sha(l198) && why == "" && File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("not used here: native_core, something_new"), "unknown packages: " + why);
+                    Require(read != null && read.Version == "1.9.8" && read.Sha256 == Sha(l198) && why == "" && File.ReadAllText(Path.Combine(AppConfig.DataDir, "log.txt")).Contains("not used here: something_new"), "unknown packages: " + why);   // 26 Nov 2026: native_core is used now (DependencyList.Core)
                     // 1.0.21: the malformed lists themselves are the loader group's (20 lists through the same DependencyList.Parse);
                     // here one refused list for the log and the Skipped line, and the 64 KB cap of the read.
                     var bad = new Dictionary<string, string> {

@@ -40,8 +40,10 @@ namespace SlotsInstaller
             // 1.0.11 (the user): its REFramework and Slotsloader stay, as the confirmation says (KeptByVanilla).
             ReplaceState before = LoadState();
             int mine = before.Mods.Count(m => !KeptByVanilla(m));
-            bool keptRefw = before.Mods.Any(m => KeptByVanilla(m) && !LoaderCostumePak.IsLoaderMod(m)), keptLoader = before.Mods.Any(m => KeptByVanilla(m) && LoaderCostumePak.IsLoaderMod(m));
-            string restored = keptRefw || keptLoader
+            bool keptLoader = before.Mods.Any(m => KeptByVanilla(m) && LoaderCostumePak.IsLoaderMod(m));
+            bool keptCore = before.Mods.Any(m => KeptByVanilla(m) && !LoaderCostumePak.IsLoaderMod(m) && IsPlainNativeCore(m.Files.Select(f => f.Path)));   // 26 Nov 2026
+            bool keptRefw = before.Mods.Any(m => KeptByVanilla(m) && !LoaderCostumePak.IsLoaderMod(m) && !IsPlainNativeCore(m.Files.Select(f => f.Path)));
+            string restored = keptRefw || keptLoader || keptCore
                 ? Change("Restore game to vanilla", true, delegate(ReplaceState s) { s.Mods.RemoveAll(m => !KeptByVanilla(m)); return s; }, new ChangeOptions { Choice = DriftChoice.RestoreOriginal, IncludeReleased = true }, null, null)
                 : RestoreAll(DriftChoice.RestoreOriginal);
             if (mine > 0) done.Add("Removed this Manager's " + ReplacePlanner.N(mine, "mod") + ".");
@@ -80,7 +82,10 @@ namespace SlotsInstaller
 
             PakIndex basePak = File.Exists(GamePath("re_chunk_000.pak")) ? GamePaks.Cached(GamePath("re_chunk_000.pak")) : null;
             int zeroed = basePak == null ? 0 : basePak.CountZeroed();
-            string stay = keptRefw && keptLoader ? "REFramework, Slotsloader and your extra outfits stay" : keptRefw ? "REFramework and your extra outfits stay" : keptLoader ? "Slotsloader and your extra outfits stay" : "your extra outfits stay";
+            var staying = new List<string>();
+            if (keptRefw) staying.Add("REFramework"); if (keptLoader) staying.Add("Slotsloader"); if (keptCore) staying.Add("Native Core");
+            staying.Add("your extra outfits");
+            string stay = GameSetup.Join(staying) + " stay";
             done.Add(zeroed == 0 ? "The game is vanilla (" + stay + ")." : "The base PAK still has " + ReplacePlanner.N(zeroed, "invalidated entry") + ": verify SF6's files in Steam.");
             Program.LogLine("Restore to vanilla: " + String.Join(" ", done) + (String.IsNullOrEmpty(restored) ? "" : " | " + restored));
             return String.Join(" ", done);
@@ -91,7 +96,8 @@ namespace SlotsInstaller
         internal static bool KeptByVanilla(ReplaceMod m)
         {
             if (m == null || m.Files.Any(f => IsPatchPakPath(f.Path) || PakHash.Normalize(f.Path ?? "").TrimStart('/').StartsWith("natives/", StringComparison.OrdinalIgnoreCase))) return false;
-            return LoaderCostumePak.IsLoaderMod(m) || ReplacePlanner.IsPlainReFramework(m.Files.Select(f => f.Path));
+            // 26 Nov 2026: and its Native Core, installed with them by the one-click setup (GameSetup.cs).
+            return LoaderCostumePak.IsLoaderMod(m) || ReplacePlanner.IsPlainReFramework(m.Files.Select(f => f.Path)) || IsPlainNativeCore(m.Files.Select(f => f.Path));
         }
     }
 }

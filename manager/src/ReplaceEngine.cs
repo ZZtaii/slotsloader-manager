@@ -1749,6 +1749,20 @@ namespace SlotsInstaller
             "reframework/data/SF6_TitleSlots_Data/game_title.jpg",           // the user: preview of the game's own title in Title Screen
                                                                              // Selection; without it that row shows no picture (stage_loader.cpp)
         };
+        // 26 Nov 2026 (the user: "the minimum things needed to function"): the same for a package that ships SF6 Native Core
+        // (LoaderFlags.CorePlugin). The core reads neither: one is a tool run by hand after a crash, the other the text of
+        // the News tabs, which the core leaves out when the Manager installed the Slots Loader.
+        internal static readonly string[] SkippedCoreFiles =
+        {
+            "reframework/data/sf6core/SF6_CrashReport.bat",   // crash report tool run by hand (it can upload the report)
+            "reframework/data/sf6core/changelog.json",        // the News screen's OverDrive Changelog tab
+        };
+        internal static bool SkippedCoreFile(string path)
+        {
+            string p = PakHash.Normalize(path ?? "").TrimStart('/');
+            return SkippedCoreFiles.Any(s => p.Equals(s, StringComparison.OrdinalIgnoreCase));
+        }
+        internal static bool HasCorePlugin(IEnumerable<string> paths) { return (paths ?? new string[0]).Any(p => String.Equals(PakHash.Normalize(p ?? "").TrimStart('/'), LoaderFlags.CorePlugin, StringComparison.OrdinalIgnoreCase)); }
         internal static bool SkippedLoaderFile(string path)
         {
             string p = PakHash.Normalize(path ?? "").TrimStart('/');
@@ -1765,7 +1779,7 @@ namespace SlotsInstaller
             int n = fluffy == null ? 0 : fluffy.Mods.Count;
             return n == 0 ? null : "The external mod manager has " + ReplacePlanner.N(n, "mod") + ExternalLockTail;
         }
-        private const string ExternalLockTail = " installed, so only Extra outfit, Slotsloader and REFramework install here. Uninstall them there to use Replace original.";
+        private const string ExternalLockTail = " installed, so only Extra outfit, Slotsloader, Native Core and REFramework install here. Uninstall them there to use Replace original.";
         // 1.0.11: the lockout among a health check's errors, and its short form ("The external mod manager has N mods").
         internal static bool IsExternalLock(string reason) { return reason != null && reason.EndsWith(ExternalLockTail, StringComparison.Ordinal); }
         internal static string ExternalLockShort(string reason) { return IsExternalLock(reason) ? reason.Substring(0, reason.Length - ExternalLockTail.Length) : reason; }
@@ -1774,12 +1788,23 @@ namespace SlotsInstaller
         // the game folder, no PAK or natives edits), unless the external manager installed dinput8.dll: then it is updated there.
         internal const string ReFrameworkFluffyReason = "The external mod manager installed REFramework (dinput8.dll), so update it there.";
         internal static bool ReFrameworkByFluffy(FluffyInstalls fluffy) { return fluffy != null && fluffy.OwnersOf("dinput8.dll").Count > 0; }
+        internal const string NativeCoreFluffyReason = "The external mod manager installed SF6 Native Core, so update it there.";
+        // The Native Core's own files only: its plugin, and its data folder (reframework/data/sf6core/).
+        internal static bool IsPlainNativeCore(IEnumerable<string> paths)
+        {
+            List<string> list = (paths ?? new string[0]).Select(p => PakHash.Normalize(p ?? "").TrimStart('/')).ToList();
+            return list.Any(p => p.Equals(LoaderFlags.CorePlugin, StringComparison.OrdinalIgnoreCase))
+                && list.All(p => p.Equals(LoaderFlags.CorePlugin, StringComparison.OrdinalIgnoreCase) || p.StartsWith("reframework/data/sf6core/", StringComparison.OrdinalIgnoreCase));
+        }
         // The lockout for one package's or record's files: null for Slotsloader and for plain REFramework the external manager doesn't own.
         internal static string ExternalLockReason(FluffyInstalls fluffy, IEnumerable<string> files)
         {
             List<string> list = (files ?? new string[0]).ToList();
             if (list.Any(p => String.Equals(PakHash.Normalize(p ?? "").TrimStart('/'), LoaderCostumePak.PluginPath, StringComparison.OrdinalIgnoreCase))) return null;
             string locked = ExternalLockReason(fluffy);
+            // 26 Nov 2026: plain SF6 Native Core goes past it like Slotsloader (a plugin and its data folder, no PAK or
+            // natives edits), unless the external manager installed it: then it is updated there.
+            if (locked != null && IsPlainNativeCore(list)) return fluffy.OwnersOf(LoaderFlags.CorePlugin).Count > 0 ? NativeCoreFluffyReason : null;
             if (locked == null || !ReplacePlanner.IsPlainReFramework(list)) return locked;
             return ReFrameworkByFluffy(fluffy) ? ReFrameworkFluffyReason : null;
         }
