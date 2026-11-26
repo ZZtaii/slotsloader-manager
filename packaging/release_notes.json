@@ -2,6 +2,16 @@
   "format": "sf6suite-notes-1",
   "releases": [
     {
+      "version": "1.50.4",
+      "date": "2026-11-26",
+      "new": [],
+      "fixed": [
+        "[Recording Manager] Reversal Settings: rows 11 to 30 now play even when no row 1 to 10 is active in any of the three tabs.",
+        "[Recording Manager] Changing the dummy (P2) from the pause menu could move one character's reversal rows onto the other and lose them. Each character keeps its own rows."
+      ],
+      "modified": []
+    },
+    {
       "version": "1.50.3",
       "date": "2026-11-24",
       "new": [],
