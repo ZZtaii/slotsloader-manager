@@ -12,6 +12,12 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 ## What changed
 
+- 1.0.23:
+  - One click installs whatever is missing of REFramework, Slotsloader and SF6 Native Core: the line under INSTALL AS, or **Install dependencies** in Settings.
+  - Extra stage pictures: Native Core draws them; the Manager installs it, and later updates it when a newer one is approved.
+  - A banner says when your other mod manager keeps Replace original off, or must be closed first.
+  - Shorter tours; the welcome no longer reads like a mode to choose.
+
 - 1.0.22:
   - Slotsloader 1.28.1: others see an outfit or colour online only if your account owns it; Replays has a My Own costume; V-Rival, Random and Training stage fixes.
   - Extra stage: stage mods install as extra stages (UP / DOWN on stage select, original kept). Search "stage" finds `.pak` stage mods.
