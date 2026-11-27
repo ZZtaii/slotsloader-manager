@@ -151,7 +151,7 @@ namespace SlotsInstaller
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
             {
-                if (e.KeyCode == Keys.Escape && !popup.Visible) { DialogResult = DialogResult.Cancel; Close(); }
+                if (e.KeyCode == Keys.Escape && !popup.Visible && !rows.Dragging) { DialogResult = DialogResult.Cancel; Close(); }   // during a drag Escape cancels the drag
                 else if (e.KeyCode == Keys.Enter && save.Enabled && !popup.Visible) { e.Handled = true; Accept(); }
             };
             DarkTheme.Apply(this); ResumeLayout(true); PerformAutoScale();

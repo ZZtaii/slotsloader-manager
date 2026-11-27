@@ -20,7 +20,7 @@ namespace SlotsInstaller
         private static readonly Regex ReplacedModelFolder = new Regex(@"^natives/stm/(?:streaming/)?product/model/esf/(esf\d{3})/(\d{3})/", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         // The game outfits of a fighter that a Replace original mod replaces now: costume number -> the mod's name (the
-        // last one installed when several do, as it wins)
+        // enabled one highest in priority when several do, as it wins)
         private Dictionary<int, string> ReplacedOutfits(string fighterDir)
         {
             var map = new Dictionary<int, string>();
@@ -32,7 +32,8 @@ namespace SlotsInstaller
                     {
                         Match m = ReplacedModelFolder.Match((file.Path ?? "").Replace('\\', '/').TrimStart('/'));
                         if (!m.Success || m.Groups[2].Value == "000" || !String.Equals(m.Groups[1].Value, fighterDir, StringComparison.OrdinalIgnoreCase)) continue;
-                        int costume; if (tables.CostumeByFolder.TryGetValue(m.Groups[1].Value.ToLowerInvariant() + "/" + m.Groups[2].Value, out costume)) map[costume] = mod.Name;
+                        // state.Mods is in priority order, #1 first: the first mod found for an outfit is the one that wins
+                        int costume; if (tables.CostumeByFolder.TryGetValue(m.Groups[1].Value.ToLowerInvariant() + "/" + m.Groups[2].Value, out costume) && !map.ContainsKey(costume)) map[costume] = mod.Name;
                     }
             }
             catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); }
@@ -52,19 +53,20 @@ namespace SlotsInstaller
             if (busy || String.IsNullOrWhiteSpace(config.GameRoot)) return;
             string start = LastRandomListFighter;   // none yet: the window opens its fighter picker
             string game = config.GameRoot;
-            string fighterDir; RandomPlan plan;
-            bool chosen = RandomListForm.Choose(this, game, start, GridFighters(), filterPanel.Grid.Cards, OutfitOrder.Counts(game), ReplacedOutfits, out fighterDir, out plan,
+            Dictionary<string, RandomPlan> plans; List<string> names;
+            bool chosen = RandomListForm.Choose(this, game, start, GridFighters(), filterPanel.Grid.Cards, OutfitOrder.Counts(game), ReplacedOutfits, out plans, out names,
                 delegate(string shown) { if (!String.IsNullOrEmpty(shown) && shown != randomListFighter) { randomListFighter = shown; QueueViewSave(); } });
             if (!chosen) return;
-            string name; if (!Characters.ByCode.TryGetValue(fighterDir.Substring(3), out name)) name = fighterDir;
+            string who = names.Count == 1 ? names[0] + "'s" : String.Join(", ", names.Take(names.Count - 1)) + " and " + names[names.Count - 1] + "'s";
             string backups = System.IO.Path.Combine(AppConfig.DataDir, "random-list-undo");
-            Work("Saving " + name + "'s Random list…", delegate { return RandomList.Save(game, fighterDir, plan, backups); }, delegate(string backup)
+            Work("Saving " + who + " Random list" + (names.Count == 1 ? "" : "s") + "…", delegate { return RandomList.Save(game, plans, backups); }, delegate(string backup)
             {
                 if (backup == null) { SetPageStatus(installedPage, "The Random list is unchanged.", Palette.Muted); return; }
-                string done = plan == null ? name + "'s Random draws from every outfit again" : name + "'s Random list saved";
+                string done = names.Count == 1 && plans.Values.First() == null ? names[0] + "'s Random draws from every outfit again"
+                    : who + " Random list" + (names.Count == 1 ? "" : "s") + " saved";
                 OfferUndo(done, delegate
                 {
-                    Work("Putting " + name + "'s Random list back…", delegate { RandomList.Restore(game, backup); return true; },
+                    Work("Putting " + who + " Random list" + (names.Count == 1 ? "" : "s") + " back…", delegate { RandomList.Restore(game, backup); return true; },
                         delegate(bool ok) { RefreshInstalled("✓ Undone: " + done + "."); });
                 });
                 RefreshInstalled("✓ " + done + ". SF6 uses it at the next Random pick, also while it runs.");
@@ -262,31 +264,64 @@ namespace SlotsInstaller
         internal int Mode { get { return mode; } set { SetMode(value); } }
 
         // The list as the rows hold it (null: Random as before)
-        internal RandomPlan Plan
+        internal RandomPlan Plan { get { return PlanOf(rows.Entries, mode); } }
+        private static RandomPlan PlanOf(IEnumerable<RandomEntry> entries, int mode)
+        {
+            if (mode == 0) return null;
+            var plan = new RandomPlan { Shuffle = mode == 2 };
+            foreach (RandomEntry e in entries.Where(e => e.InList)) plan.Items.Add(new RandomListItem { Outfit = e.Outfit, Repeat = e.Repeat, Colours = e.Colours.OrderBy(c => c).ToList() });
+            return plan;
+        }
+        private static string SignatureOf(RandomPlan p) { return p == null ? "none" : p.Signature; }
+
+        // 1.0.24 (PR #52 review: switching fighter threw edits away): each fighter shown keeps its rows, mode and the list it
+        // was opened with while the window is open; Save writes every fighter whose list changed, in one go.
+        private sealed class FighterEdits { internal string Name; internal List<RandomEntry> Entries; internal int Mode; internal string Original; }
+        private readonly Dictionary<string, FighterEdits> shownFighters = new Dictionary<string, FighterEdits>(StringComparer.OrdinalIgnoreCase);
+        private void KeepShown()
+        {
+            if (fighterDir.Length == 0) return;
+            shownFighters[fighterDir] = new FighterEdits { Name = fighterName, Entries = rows.Entries, Mode = mode, Original = original };
+        }
+        // Every fighter whose list differs from the one it was opened with: fighter folder -> its list (null: Random as before)
+        internal Dictionary<string, RandomPlan> Plans
         {
             get
             {
-                if (mode == 0) return null;
-                var plan = new RandomPlan { Shuffle = mode == 2 };
-                foreach (RandomEntry e in rows.Entries.Where(e => e.InList)) plan.Items.Add(new RandomListItem { Outfit = e.Outfit, Repeat = e.Repeat, Colours = e.Colours.OrderBy(c => c).ToList() });
-                return plan;
+                KeepShown();
+                var plans = new Dictionary<string, RandomPlan>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in shownFighters)
+                {
+                    RandomPlan p = PlanOf(kv.Value.Entries, kv.Value.Mode);
+                    if (SignatureOf(p) != kv.Value.Original) plans[kv.Key] = p;
+                }
+                return plans;
             }
         }
-        private string Signature { get { RandomPlan p = Plan; return p == null ? "none" : p.Signature; } }
-        internal bool Changed { get { return Signature != original; } }
-        internal bool CanSave { get { return Changed && (mode == 0 || rows.Entries.Any(e => e.InList)); } }
+        // The fighters (names) with changes, the one shown first
+        internal List<string> ChangedNames { get { var plans = Plans; return shownFighters.Where(kv => plans.ContainsKey(kv.Key)).OrderBy(kv => kv.Key == fighterDir ? 0 : 1).Select(kv => kv.Value.Name).ToList(); } }
+        internal bool Changed { get { return Plans.Count > 0; } }
+        // A list In order or Shuffled with nothing ticked can't be saved
+        internal bool CanSave
+        {
+            get
+            {
+                var plans = Plans;
+                return plans.Count > 0 && plans.All(kv => kv.Value == null || kv.Value.Items.Count > 0);
+            }
+        }
 
         internal static bool Choose(IWin32Window owner, string gameRoot, string fighter, IEnumerable<KeyValuePair<string, string>> fighters, IEnumerable<FighterCard> portraits,
-            Dictionary<string, int> counts, Func<string, Dictionary<int, string>> replaced, out string fighterDir, out RandomPlan plan, Action<string> shownLast = null)
+            Dictionary<string, int> counts, Func<string, Dictionary<int, string>> replaced, out Dictionary<string, RandomPlan> plans, out List<string> names, Action<string> shownLast = null)
         {
-            fighterDir = null; plan = null;
+            plans = null; names = null;
             if (Program.Headless) return false;
             using (var form = new RandomListForm(gameRoot, fighter, fighters, portraits, counts, replaced))
             {
                 DialogResult result = form.ShowDialog(owner);
-                if (shownLast != null) shownLast(form.FighterName);   // the fighter it showed last, saved or not
+                if (shownLast != null) shownLast(form.FighterDir);   // the fighter it showed last, saved or not
                 if (result != DialogResult.OK || !form.CanSave) return false;
-                fighterDir = form.FighterDir; plan = form.Plan;
+                plans = form.Plans; names = form.ChangedNames;
                 return true;
             }
         }
@@ -355,12 +390,19 @@ namespace SlotsInstaller
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
             {
-                if (e.KeyCode == Keys.Escape && !popup.Visible) { DialogResult = DialogResult.Cancel; Close(); }
+                if (e.KeyCode == Keys.Escape && !popup.Visible && !rows.Dragging) { DialogResult = DialogResult.Cancel; Close(); }   // during a drag Escape cancels the drag
                 else if (e.KeyCode == Keys.Enter && save.Enabled && !popup.Visible) { e.Handled = true; Accept(); }
             };
             DarkTheme.Apply(this); ResumeLayout(true); PerformAutoScale();
             string dir = null, shown = fighter ?? "";
             foreach (var kv in Characters.ByCode) if (String.Equals(kv.Value, fighter, StringComparison.OrdinalIgnoreCase)) { dir = "esf" + kv.Key; shown = kv.Value; }
+            // the fighter by its folder ("esf016", what the Manager keeps since the PR #52 review), its name from the game tables
+            if (dir == null && fighter != null && fighter.Length == 6 && fighter.StartsWith("esf", StringComparison.OrdinalIgnoreCase) && fighter.Substring(3).All(Char.IsDigit))
+            {
+                string code = fighter.Substring(3), known;
+                dir = "esf" + code; shown = Characters.ByCode.TryGetValue(code, out known) ? known : FighterPortraits.DisplayName(code);
+            }
+            if (dir == null) shown = "";   // unknown: the picker opens
             Load(dir ?? "", shown);
             ActiveControl = rows;
             // 1.0.24 (the user: "if no last fighter then i guess open fighter select"): no fighter to start on: the picker opens
@@ -371,9 +413,21 @@ namespace SlotsInstaller
 
         internal void Load(string dir, string name)
         {
+            KeepShown();   // the fighter shown so far keeps its edits
             fighterDir = dir ?? ""; fighterName = name ?? "";
             fighterButton.Text = fighterName.Length == 0 ? "Choose a fighter" : fighterName;
             if (fighterDir.Length > 3) grid.SetSelected(new[] { fighterDir.Substring(3) }, false);
+            FighterEdits kept;
+            if (fighterDir.Length > 0 && shownFighters.TryGetValue(fighterDir, out kept))
+            {
+                // shown before in this window: as it was left
+                rows.SetEntries(kept.Entries);
+                rows.Height = DpiMetrics.Px(this, RandomRows.RowPixels) * Math.Max(1, kept.Entries.Count);
+                rows.FitWidth();
+                mode = kept.Mode; original = kept.Original;
+                UpdateState();
+                return;
+            }
             Dictionary<int, string> replacedBy = null;
             if (fighterDir.Length > 0 && replaced != null) { try { replacedBy = replaced(fighterDir); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.Log(ex); } }
             List<RandomOutfit> outfits = fighterDir.Length == 0 ? new List<RandomOutfit>() : RandomList.Outfits(game, fighterDir, replacedBy);
@@ -439,6 +493,8 @@ namespace SlotsInstaller
                 : (mode == 1 ? "Random plays the ticked outfits from the top. The number is a count, not a chance: at 2× an outfit comes up twice in a row, then the next one."
                              : "Random deals the ticked outfits like cards. The number is a count, not a chance: at 2× an outfit has two cards, so it comes up twice in every round, in a shuffled order.")
                   + " A round is " + ReplacePlanner.N(places, "pick") + "." + colours + " An outfit you don't own or can't see now (NSFW hidden) is skipped.";
+            List<string> others = ChangedNames.Where(n => !String.Equals(n, fighterName, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (others.Count > 0) note.Text += " Also changed, saved together: " + String.Join(", ", others) + ".";
         }
         private void Accept() { if (!save.Enabled) return; DialogResult = DialogResult.OK; Close(); }
     }

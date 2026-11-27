@@ -17,13 +17,16 @@ namespace SlotsInstaller
 
         private void WireInstalledDrag()
         {
-            installedList.AllowDrop = true;
-            installedList.ItemDrag += delegate
+            // The list is a drop target only during its own drag (PR #52 review): otherwise a ZIP dragged from Explorer onto the
+            // list goes on to the window's drop, as before; the window's drop ignores this drag (PresentDrop).
+            installedList.AllowDrop = false;
+            installedList.ItemDrag += delegate(object s, ItemDragEventArgs e)
             {
+                if (e.Button != MouseButtons.Left) return;   // a right-button drag moves nothing
                 if (MovableSelection().Count == 0 || (busy ? !MovePending : !RowChangesAllowed)) return;
-                installedDragging = true;
+                installedDragging = true; installedList.AllowDrop = true;
                 try { installedList.DoDragDrop(InstalledDragData, DragDropEffects.Move); }
-                finally { installedDragging = false; installedDropBefore = -1; installedList.Invalidate(); }
+                finally { installedDragging = false; installedList.AllowDrop = false; installedDropBefore = -1; installedList.Invalidate(); HideDropOverlay(); }
             };
             installedList.DragOver += delegate(object s, DragEventArgs e)
             {

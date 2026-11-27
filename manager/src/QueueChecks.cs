@@ -279,6 +279,19 @@ namespace SlotsInstaller
                 && ((object[])first["colours"]).Select(c => Convert.ToInt32(c)).SequenceEqual(new[] { 2, 5 }) && Convert.ToInt32(second["game"]) == 0 && !second.ContainsKey("colours")
                 && !String.IsNullOrEmpty(backup) && File.Exists(Path.Combine(backup, "random_list.json")), "the saved list: " + File.ReadAllText(listPath));
             Require(RandomList.Save(game, "esf016", RandomList.Load(game, "esf016", outfits), undo) == null, "the same list wrote the file again");
+            // EX colours (10 and up, a game outfit's extra colours) are saved and read back (PR #52 review: they were dropped)
+            string listBefore = File.ReadAllText(listPath);
+            var exPlan = new RandomPlan();
+            exPlan.Items.Add(new RandomListItem { Outfit = outfits[0], Repeat = 1, Colours = new List<int> { 3, 10, 18, 70 } });
+            RandomList.Save(game, "esf016", exPlan, undo);
+            RandomPlan exBack = RandomList.Load(game, "esf016", outfits);
+            Require(exBack != null && exBack.Items[0].Colours.SequenceEqual(new[] { 3, 10, 18 }) && File.ReadAllText(listPath).Contains("\"colours\":[3,10,18]"), "EX colours: " + File.ReadAllText(listPath));
+            File.WriteAllText(listPath, listBefore);
+            // A file it can't read as a Random list is refused, never replaced (it may hold other fighters' lists)
+            File.WriteAllText(listPath, "{\"format\":\"sf6-random-list-9\",\"fighters\":{}}");
+            bool refusedFile = false; try { RandomList.Save(game, "esf016", plan, undo); } catch (IOException) { refusedFile = true; }
+            Require(refusedFile && File.ReadAllText(listPath).Contains("list-9"), "a newer-format file was replaced");
+            File.WriteAllText(listPath, listBefore);
             // The loader numbers Gamma again: its mod finds it
             File.WriteAllText(Path.Combine(data, "registry.json"), registry("9"));
             List<RandomOutfit> renumbered = RandomList.Outfits(game, "esf016");
@@ -327,7 +340,25 @@ namespace SlotsInstaller
                 form.Mode = 2; Require(form.Plan.Shuffle, "Shuffled");
                 form.Mode = 0; Require(form.Plan == null && form.Changed && form.CanSave, "Random as before: no list");
                 using (Bitmap bmp = new Bitmap(form.Width, form.Height)) form.DrawToBitmap(bmp, new Rectangle(Point.Empty, form.Size));   // paints
+                // Another fighter shown: Juri's edits stay (also picking Juri again), and both lists are saved together (PR #52 review)
+                form.Mode = 1; string juriSig = form.Plan.Signature;
+                form.Load("esf001", "Ryu");
+                Require(form.FighterDir == "esf001" && form.Mode == 2 && form.Changed, "Ryu shown with his saved Shuffled list");
+                form.Mode = 1;   // Ryu's list In order now
+                form.Load("esf016", "Juri");
+                Require(form.Plan.Signature == juriSig && form.Mode == 1, "Juri's edits after showing Ryu: " + form.Plan.Signature);
+                form.Load("esf016", "Juri");
+                Require(form.Plan.Signature == juriSig, "picking Juri again lost the edits");
+                Dictionary<string, RandomPlan> plans = form.Plans;
+                Require(plans.Count == 2 && plans.ContainsKey("esf016") && plans.ContainsKey("esf001") && form.ChangedNames.SequenceEqual(new[] { "Juri", "Ryu" }) && form.CanSave,
+                    "changed fighters: " + String.Join(", ", form.ChangedNames));
+                RandomList.Save(game, plans, undo);
+                string both = File.ReadAllText(listPath);
+                Require(both.Contains("\"1\":{\"mode\":\"order\"") && both.Contains("\"16\":{\"mode\":\"order\""), "both fighters saved: " + both);
             }
+            // The last fighter kept by its folder opens on that fighter
+            using (var form = new RandomListForm(game, "esf016", new[] { new KeyValuePair<string, string>("016", "Juri") }, null, null))
+                Require(form.FighterDir == "esf016" && form.FighterName == "Juri", "the fighter by its folder: " + form.FighterDir + " / " + form.FighterName);
             File.Delete(Path.Combine(data, "game_swatches.json"));
             // No fighter to start on (none shown before): the fighter picker opens with the window
             using (var form = new RandomListForm(game, "", new[] { new KeyValuePair<string, string>("016", "Juri") }, null, null))

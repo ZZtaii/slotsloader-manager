@@ -98,7 +98,7 @@ namespace SlotsInstaller
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
             {
-                if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); }
+                if (e.KeyCode == Keys.Escape && !rows.Dragging) { DialogResult = DialogResult.Cancel; Close(); }   // during a drag Escape cancels the drag (DragList)
                 else if (e.KeyCode == Keys.Enter && save.Enabled) { e.Handled = true; Accept(); }
                 else if (e.KeyCode == Keys.Delete && remove.Enabled) { e.Handled = true; rows.RemoveSelected(); }
             };

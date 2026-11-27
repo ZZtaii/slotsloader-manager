@@ -3693,6 +3693,7 @@ namespace SlotsInstaller
             DragDrop += delegate(object sender, DragEventArgs e)
             {
                 HideDropOverlay();
+                if (installedDragging) return;   // 1.0.24: an Installed row dragged off the list (MainFormInstalledDrag.cs) is no mod
                 string reason; string path = DropPaths.Accept(DropPaths.FromData(e.Data), out reason);
                 if (path == null) { SetPageStatus(currentPage, reason, Palette.Red); return; }
                 if (busy) { SetPageStatus(currentPage, "Wait for the current task to finish, then drop the mod again.", Palette.Red); return; }
@@ -3702,6 +3703,8 @@ namespace SlotsInstaller
         private string lastDropKey;
         private DragDropEffects PresentDrop(IDataObject data)
         {
+            // 1.0.24 (PR #52 review): an Installed row dragged off the list shows no "Can't open this" over the page
+            if (installedDragging) { HideDropOverlay(); return DragDropEffects.None; }
             string[] paths = DropPaths.FromData(data);
             string reason; string path = DropPaths.Accept(paths, out reason);
             bool accepting = path != null && !busy;

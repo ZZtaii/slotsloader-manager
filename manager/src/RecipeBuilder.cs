@@ -495,7 +495,7 @@ namespace SlotsInstaller
             save.Click += delegate { Accept(false); };
             saveInstall.Click += delegate { Accept(true); };
             KeyPreview = true;
-            KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape && !popup.Visible) { DialogResult = DialogResult.Cancel; Close(); } };
+            KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape && !popup.Visible && !rows.Dragging) { DialogResult = DialogResult.Cancel; Close(); } };   // during a drag Escape cancels the drag
             DarkTheme.Apply(this); ResumeLayout(true); PerformAutoScale();
             previewFrame.BackColor = preview.BackColor = previewNote.BackColor = Palette.Background;
 

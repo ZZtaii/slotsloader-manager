@@ -56,6 +56,7 @@ namespace SlotsInstaller
         internal const string Relative = @"reframework\data\SF6_CostumeSlots_data\random_list.json";
         internal const string Format = "sf6-random-list-1";
         internal const int MaxRepeat = 20;   // as the plugin's rnd::kMaxRepeat
+        internal const int MaxColours = 64;  // colour numbers 0 to 63, as the plugin's rnd::kMaxColours (EX colours past 9)
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
         internal static string PathOf(string game) { return Path.Combine(game ?? "", Relative); }
@@ -187,7 +188,7 @@ namespace SlotsInstaller
                 if (outfit == null) continue;
                 var item = new RandomListItem { Outfit = outfit, Repeat = Math.Max(1, Math.Min(MaxRepeat, Int(e, "repeat", 1))) };
                 object cs; var colours = e.TryGetValue("colours", out cs) ? (cs as object[] ?? (cs is System.Collections.ArrayList ? ((System.Collections.ArrayList)cs).ToArray() : null)) : null;
-                if (colours != null) foreach (object c in colours) { int n; try { n = Convert.ToInt32(c, CultureInfo.InvariantCulture); } catch (Exception) { continue; } if (n >= 0 && n <= 9 && !item.Colours.Contains(n)) item.Colours.Add(n); }
+                if (colours != null) foreach (object c in colours) { int n; try { n = Convert.ToInt32(c, CultureInfo.InvariantCulture); } catch (Exception) { continue; } if (n >= 0 && n < MaxColours && !item.Colours.Contains(n)) item.Colours.Add(n); }
                 plan.Items.Add(item);
             }
             return plan.Items.Count == 0 ? null : plan;
@@ -197,16 +198,25 @@ namespace SlotsInstaller
         // are. Returns the folder that holds the copy for Undo ("" when there was no file), or null when nothing changed.
         internal static string Save(string game, string fighterDir, RandomPlan plan, string backupRoot)
         {
-            int fid = FighterId(fighterDir); if (fid < 0) throw new IOException("Choose a fighter.");
+            return Save(game, new Dictionary<string, RandomPlan> { { fighterDir ?? "", plan } }, backupRoot);
+        }
+        // 1.0.24 (PR #52 review): every fighter the window changed, in one write and one Undo copy.
+        internal static string Save(string game, IDictionary<string, RandomPlan> plans, string backupRoot)
+        {
+            if (plans == null || plans.Count == 0) return null;
+            if (plans.Keys.Any(d => FighterId(d) < 0)) throw new IOException("Choose a fighter.");
             string path = PathOf(game);
             Dictionary<string, object> file = ReadObject(path);
-            if (file == null || Str(file, "format") != Format) file = new Dictionary<string, object>();
+            // A file this Manager can't read as a Random list (damaged, or a newer format) holds lists it would lose: refused
+            if (File.Exists(path) && (file == null || Str(file, "format") != Format))
+                throw new IOException("random_list.json in the game's SF6_CostumeSlots_data folder can't be read as a Random list (damaged, or from a newer Slotsloader Manager). Move it away or delete it, then save again.");
+            if (file == null) file = new Dictionary<string, object>();
             object v; var fighters = file.TryGetValue("fighters", out v) ? v as Dictionary<string, object> : null;
             fighters = fighters == null ? new Dictionary<string, object>() : new Dictionary<string, object>(fighters);
-            string key = fid.ToString(CultureInfo.InvariantCulture);
-            if (plan == null || plan.Items.Count == 0) fighters.Remove(key);
-            else
+            foreach (var pair in plans)
             {
+                string key = FighterId(pair.Key).ToString(CultureInfo.InvariantCulture); RandomPlan plan = pair.Value;
+                if (plan == null || plan.Items.Count == 0) { fighters.Remove(key); continue; }
                 var items = new List<object>();
                 foreach (RandomListItem i in plan.Items)
                 {
@@ -214,7 +224,8 @@ namespace SlotsInstaller
                     if (i.Outfit.Game) e["game"] = i.Outfit.CostumeNo;
                     else { e["mod_id"] = i.Outfit.ModId; e["base"] = i.Outfit.Base; e["costume"] = i.Outfit.CostumeNo; e["name"] = i.Outfit.Label; }
                     e["repeat"] = Math.Max(1, Math.Min(MaxRepeat, i.Repeat));
-                    if (i.Colours.Count > 0) e["colours"] = i.Colours.Where(c => c >= 0 && c <= 9).Distinct().OrderBy(c => c).ToArray();
+                    // colour numbers 0 to 63, as the plugin takes them (10 and up: a game outfit's EX colours)
+                    if (i.Colours.Count > 0) e["colours"] = i.Colours.Where(c => c >= 0 && c < MaxColours).Distinct().OrderBy(c => c).ToArray();
                     items.Add(e);
                 }
                 fighters[key] = new Dictionary<string, object> { { "mode", plan.Shuffle ? "shuffle" : "order" }, { "outfits", items } };
@@ -232,7 +243,7 @@ namespace SlotsInstaller
             }
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             if (fighters.Count == 0) File.Delete(path); else Publish(path, text);
-            Program.LogLine("Random list " + (plan == null || plan.Items.Count == 0 ? "removed" : "saved") + " for " + fighterDir + (plan == null ? "" : ": " + plan.Signature) + ".");
+            Program.LogLine("Random list saved: " + String.Join("; ", plans.Select(p => p.Key + " " + (p.Value == null || p.Value.Items.Count == 0 ? "removed" : p.Value.Signature))) + ".");
             return backup;
         }
 
@@ -246,11 +257,7 @@ namespace SlotsInstaller
             Publish(path, File.ReadAllText(copy, Encoding.UTF8));
         }
 
-        private static void Publish(string path, string text)
-        {
-            string tmp = path + ".slotsinstaller-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";
-            File.WriteAllText(tmp, text, Utf8);
-            try { DurableFile.Publish(tmp, path); } finally { if (File.Exists(tmp)) File.Delete(tmp); }
-        }
+        // Through DurableFile.Write: a replace that removed the target before failing keeps the new text (PR #52 review)
+        private static void Publish(string path, string text) { DurableFile.Write(path, Utf8.GetBytes(text)); }
     }
 }
