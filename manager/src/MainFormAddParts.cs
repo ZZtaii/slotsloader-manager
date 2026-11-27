@@ -233,7 +233,7 @@ namespace SlotsInstaller
             // Outfits the Manager composed (enabled or disabled); manual drops and Install all variants copies are not rewritten.
             List<InstalledOutfit> outfits = installed.Where(o => o.Managed && String.Equals(o.Character, character, StringComparison.OrdinalIgnoreCase)).OrderByDescending(o => o.Enabled).ThenBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToList();
             InstalledOutfit target;
-            if (!AddPartsForm.Choose(this, package.Name, Installer.OptionText(selection), selection.Files.Count, character, Installer.SelectionFolders(selection), outfits, out target)) return;
+            if (!AddPartsForm.Choose(this, package.Name, Installer.OptionText(selection), selection.Files.Count, character, selection.Files.Keys.ToList(), outfits, out target)) return;
             string root = config.CostumeRoot, sevenZip = config.SevenZipPath;
             Work("Adding " + Installer.OptionText(selection) + " to " + target.Name + "…", delegate { return Installer.AddToOutfit(target, root, selection, sevenZip); }, delegate(InstallResult result)
             {
@@ -250,12 +250,14 @@ namespace SlotsInstaller
         private readonly Label summary;
         private readonly FlatButton addButton;
         internal InstalledOutfit Target { get { return rows.Selected; } }
+        internal int RowCountForTest { get { return rows.Count; } }
+        internal string RowTextForTest(int index) { return rows.RowTextForTest(index); }
 
-        internal static bool Choose(IWin32Window owner, string modName, string options, int fileCount, string character, HashSet<string> fileFolders, List<InstalledOutfit> outfits, out InstalledOutfit target)
+        internal static bool Choose(IWin32Window owner, string modName, string options, int fileCount, string character, IList<string> filePaths, List<InstalledOutfit> outfits, out InstalledOutfit target)
         {
             target = null;
             if (Program.Headless) return false;
-            using (var form = new AddPartsForm(modName, options, fileCount, character, fileFolders, outfits))
+            using (var form = new AddPartsForm(modName, options, fileCount, character, filePaths, outfits))
             {
                 if (form.ShowDialog(owner) != DialogResult.OK) return false;
                 target = form.Target;
@@ -263,7 +265,7 @@ namespace SlotsInstaller
             }
         }
 
-        internal AddPartsForm(string modName, string options, int fileCount, string character, HashSet<string> fileFolders, List<InstalledOutfit> outfits)
+        internal AddPartsForm(string modName, string options, int fileCount, string character, IList<string> filePaths, List<InstalledOutfit> outfits)
         {
             const int rowHeight = 52, visibleRows = 6;
             SuspendLayout();
@@ -279,7 +281,7 @@ namespace SlotsInstaller
             foreach (InstalledOutfit o in outfits)
             {
                 List<string> built = Installer.OutfitFolders(o);
-                string mismatch = Installer.FolderMismatch(fileFolders, built);
+                string mismatch = Installer.SlotMismatch(filePaths, built);
                 string slot = built.Count == 0 ? "No outfit body" : String.Join(", ", built.Select(f => "Outfit " + Int32.Parse(f)));
                 rows.Add(o, o.Name, slot + (o.Enabled ? "" : " · disabled") + (mismatch == null ? "" : " · these files are for " + mismatch), mismatch == null);
             }
@@ -333,6 +335,7 @@ namespace SlotsInstaller
                 TabStop = true; BackColor = Palette.Background;
             }
             internal int Count { get { return items.Count; } }
+            internal string RowTextForTest(int index) { Row r = items[index]; return r.Title + " | " + r.Detail + (r.Usable ? "" : " | muted"); }
             internal InstalledOutfit Selected { get { return selected >= 0 && selected < items.Count && items[selected].Usable ? items[selected].Outfit : null; } }
             internal void Add(InstalledOutfit outfit, string title, string detail, bool usable) { items.Add(new Row { Outfit = outfit, Title = title ?? "", Detail = detail ?? "", Usable = usable }); Invalidate(); }
             internal void SelectFirstUsable() { int i = items.FindIndex(r => r.Usable); if (i >= 0) Select(i); }

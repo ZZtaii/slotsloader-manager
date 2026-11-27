@@ -73,7 +73,11 @@ namespace SlotsInstaller
             List<string> slots = Slots();
             if (slots.Count == 0 || entry == null) return true;
             var keys = (entry.CostumeKeys ?? new List<string>()).Where(k => k != null && k.StartsWith(Code + "/", StringComparison.Ordinal)).Select(k => k.Substring(Code.Length + 1)).ToList();
-            return keys.Count == 0 || keys.Any(k => k == "000" || slots.Contains(k));
+            // 1.0.25: or files of another outfit's folder that a slot's game outfit wears; while no layer brings a body, a
+            // mod whose outfit wears what the recipe has so far (a C5 body under a hair made for Outfit 2)
+            bool bodyless = !Layers.Any(l => BringsBody(l.Files));
+            return keys.Count == 0 || keys.Any(k => k == "000" || slots.Contains(k) || slots.Any(s => SharedOutfitParts.TakesFrom(Code, s, k))
+                || (bodyless && slots.Any(s => SharedOutfitParts.TakesFrom(Code, k, s))));
         }
         // An option that could be added on its own.
         internal bool Fits(ModComponent option)
@@ -81,8 +85,26 @@ namespace SlotsInstaller
             if (option == null) return true;
             List<string> paths = option.Assets.Select(a => a.DestinationPath).ToList();
             if (WrongFighter(paths) != null) return false;
-            List<string> slots = Slots();
-            return slots.Count == 0 || Installer.FolderMismatch(Folders(paths), slots) == null;
+            return Misfit(paths, null) == null;
+        }
+        // 1.0.25: why these files don't fit the recipe, or null. A file fits an outfit slot of the recipe, the shared
+        // 000 folder, or a part or texture of another outfit's folder that the slot's game outfit wears
+        // (SharedOutfitParts: Ingrid Outfit 5 wears the head and hair of Outfit 2). The recipe's first body decides its
+        // slots: the layers so far (a hair made for Outfit 2) must then be worn by that body's outfit.
+        private string Misfit(IEnumerable<string> paths, PartGraft replacing)
+        {
+            List<string> files = paths.ToList();
+            List<string> slots = Slots(replacing);
+            if (slots.Count == 0) return null;
+            List<string> body = BodyFolders(files);
+            List<PartGraft> others = Layers.Where(l => l != replacing).ToList();
+            if (body.Count > 0 && !others.Any(l => BringsBody(l.Files)))
+            {
+                string earlier = Installer.SlotMismatch(others.SelectMany(l => l.Files), body);
+                return earlier == null ? null : "This body is for " + Installer.SlotText(body) + ", and the recipe already has files made for " + earlier + " that " + Installer.SlotText(body) + " doesn't wear. Materials point at their own outfit slot's files.";
+            }
+            string mismatch = Installer.SlotMismatch(files, slots);
+            return mismatch == null ? null : "These files are made for " + mismatch + ", and this recipe is made for " + Installer.SlotText(slots) + ". Materials point at their own outfit slot's files.";
         }
 
         // One layer: the mod with these options, or as it installs by default when none are named (its own rules
@@ -108,9 +130,7 @@ namespace SlotsInstaller
             CompositionPlan selection = Installer.SelectionFiles(package, wanted, parts, SevenZip);
             if (selection.Errors.Count > 0 || selection.Files.Count == 0) return String.Join(" ", selection.Errors.DefaultIfEmpty("These options have no outfit files."));
             string wrong = WrongFighter(selection.Files.Keys); if (wrong != null) return wrong;
-            List<string> slots = Slots(replacing);
-            string mismatch = slots.Count == 0 ? null : Installer.FolderMismatch(Folders(selection.Files.Keys), slots);
-            if (mismatch != null) return "These files are made for " + mismatch + ", and this recipe is made for " + Installer.SlotText(slots) + ". Materials point at their own outfit slot's files.";
+            string misfit = Misfit(selection.Files.Keys, replacing); if (misfit != null) return misfit;
             layer = new PartGraft { SourcePath = source, Mod = mod ?? package.Name ?? "", SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => NameOf(c, package)).ToList(), Files = selection.Files.Keys.ToList(), Parts = (selection.OnlyParts ?? new List<string>()).ToList() };
             return null;
         }
@@ -168,7 +188,7 @@ namespace SlotsInstaller
             if (why != null) return why;
             Layers[at] = layer;
             List<string> slots = Slots();
-            var dropped = Layers.Where(l => l != layer && slots.Count > 0 && Installer.FolderMismatch(Folders(l.Files), slots) != null).ToList();
+            var dropped = Layers.Where(l => l != layer && slots.Count > 0 && Installer.SlotMismatch(l.Files, slots) != null).ToList();
             foreach (PartGraft l in dropped) Layers.Remove(l);
             LastDropped = dropped.Select(Shown).ToList();
             return null;
