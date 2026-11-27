@@ -12,6 +12,12 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 ## What changed
 
+- 1.0.24:
+  - Load order is back with Wael's Slotsloader: drag a fighter's extra outfits into the order you want.
+  - Random list (the dice icon on the Installed page): what a fighter's Random outfit picks, In order or Shuffled, how many times and in which colours, with colour previews. It takes effect with the next Slotsloader release.
+  - Drag rows by their grip in Load order, the recipe builder and Added parts; drag replacements on the Installed page into their priority order.
+  - Wide lists scroll sideways with the mouse's horizontal wheel or Shift + wheel; Refresh sits next to Clear.
+
 - 1.0.23:
   - One click installs whatever is missing of REFramework, Slotsloader and SF6 Native Core: the line under INSTALL AS, or **Install dependencies** in Settings.
   - Extra stage pictures: Native Core draws them; the Manager installs it, and later updates it when a newer one is approved.
