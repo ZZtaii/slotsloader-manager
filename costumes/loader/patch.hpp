@@ -102,6 +102,10 @@ constexpr size_t TEXTURE_HEAD_MAX = 40 + 16 * 15;
 bool texture_small_level(const std::vector<uint8_t>& head, uint64_t file_size, uint64_t& off, uint64_t& size);
 bool texture_level_means(const std::vector<uint8_t>& head, uint64_t file_size, const std::vector<uint8_t>& level,
                          float out[4]);
+// That level's pixels (RGBA, rows top to bottom, w x h), from the whole file or from its parts as above
+bool texture_small_pixels(const std::vector<uint8_t>& tex, uint32_t& w, uint32_t& h, std::vector<uint8_t>& px);
+bool texture_level_pixels(const std::vector<uint8_t>& head, uint64_t file_size, const std::vector<uint8_t>& level,
+                          uint32_t& w, uint32_t& h, std::vector<uint8_t>& px);
 
 // EXPERIMENTAL. Rebuilds a mod's material file (.mdf2) on the game's own file for the same part: same
 // material names required (false otherwise, out untouched); the result is the game's file, with each

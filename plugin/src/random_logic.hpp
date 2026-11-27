@@ -46,9 +46,12 @@ struct Pool {
     int last = -1;
 };
 
-// An outfit and its colour (costume -1: none)
+// An outfit and its colour (costume -1: none). pos: the place in the character's own list it was drawn from (List below; -1:
+// drawn from the pool), stamp: that list's (a draw made on a copy of the rounds is given in the rounds themselves later)
 struct Draw {
     int costume = -1, color = -1;
+    int pos = -1;
+    std::string stamp;
     bool valid() const { return costume >= 0; }
     bool operator==(const Draw& o) const { return costume == o.costume && color == o.color; }
 };
@@ -59,6 +62,8 @@ struct Fighter {
     std::map<int, Pool> colours;   // per outfit drawn
     Draw next;
     Draw next_colour;              // Battle Settings' Random colour: its outfit and its next colour (none: not chosen)
+    Pool list;                     // the places of the player's own list given (List below), when the character has one
+    std::string list_stamp;        // the list those places are of (List::stamp): another list starts again from its top
 };
 
 // ---- the colours a draw takes: the game's numbers (0 = Color 1...) and the Color Mod's RW / MC entries ------------------
@@ -144,8 +149,162 @@ inline void refill(Fighter& f) { f.outfits.drawn.clear(); }
 // An outfit and its colour drawn on a copy of the character's rounds, given in its rounds (give)
 inline void give_draw(Fighter& f, const Draw& d) {
     if (!d.valid()) return;
-    give(f.outfits, d.costume);
+    if (d.pos >= 0) {   // drawn from the player's list: its place, not the pool's round
+        if (f.list_stamp != d.stamp) { f.list = Pool{}; f.list_stamp = d.stamp; }
+        give(f.list, d.pos);
+    } else give(f.outfits, d.costume);
     if (d.color >= 0) give(f.colours[d.costume], d.color);
+}
+
+// ---- the player's own list (random_list.json, written by the Slotsloader Manager) ----------------------------------------
+// A character with a list draws from it instead of the pool (ZZtaii 27/11: "drop/reorder random outfits via a pre-decided
+// logic that user themselves select ... how many repetitions, color"; "if the order isn't present, then it can be random"):
+//   - "order": the list from its top, each outfit `repeat` times in a row, then from the top again.
+//   - "shuffle": the list as a deck, an outfit `repeat` cards; a round gives every card once (draw(): never the last card
+//     drawn first in a new round).
+//   - An outfit's `colours` (none: any colour): its colour is drawn among those, in that outfit's colour round. Colours the
+//     draw may not take now (a mirror's) are skipped; none left: any colour.
+//   - A place whose outfit the draw may not take now (an NSFW outfit hidden, a mod gone, an outfit the Costume row does not
+//     list) is passed over. No place can be taken: the pool's draw, as without a list.
+// The places given are kept in the character's rounds (Fighter::list, state.json); the list's stamp tells another list from
+// the same one written again.
+struct ListItem {
+    int costume = -1;
+    int repeat = 1;                // 1 to kMaxRepeat
+    std::vector<int> colours;      // the game's colour numbers (0 = Color 1, below kMaxColours); empty: any
+};
+struct List {
+    bool shuffle = false;
+    std::vector<ListItem> items;
+    std::string stamp;             // made from the items and the mode (list_stamp)
+};
+constexpr int kMaxRepeat = 20;
+constexpr int kMaxColours = 64;   // a game outfit can have more than 10 colours
+
+inline std::string list_stamp(const List& l) {
+    uint32_t h = 2166136261u;
+    auto mix = [&h](int v) { for (int i = 0; i < 4; ++i) { h ^= static_cast<uint32_t>(v >> (8 * i)) & 0xFFu; h *= 16777619u; } };
+    mix(l.shuffle ? 1 : 0);
+    for (auto& it : l.items) {
+        mix(it.costume); mix(it.repeat); mix(static_cast<int>(it.colours.size()));
+        for (int c : it.colours) mix(c);
+    }
+    char b[9];
+    std::snprintf(b, sizeof b, "%08x", h);
+    return b;
+}
+// The number of places (each item `repeat` times) and the item at a place
+inline int list_places(const List& l) {
+    int n = 0;
+    for (auto& it : l.items) n += std::clamp(it.repeat, 1, kMaxRepeat);
+    return n;
+}
+inline int list_item_at(const List& l, int pos) {
+    for (size_t i = 0; i < l.items.size(); ++i) {
+        const int r = std::clamp(l.items[i].repeat, 1, kMaxRepeat);
+        if (pos < r) return static_cast<int>(i);
+        pos -= r;
+    }
+    return -1;
+}
+
+// The next place of the list `allowed_costume` accepts the outfit of, given in the character's list round. -1: none.
+inline int draw_place(Fighter& f, const List& l, const Allowed& allowed_costume, const Rng& rng) {
+    if (f.list_stamp != l.stamp) { f.list = Pool{}; f.list_stamp = l.stamp; }
+    const int n = list_places(l);
+    if (n <= 0) return -1;
+    auto ok = [&](int pos) {
+        const int i = list_item_at(l, pos);
+        return i >= 0 && (!allowed_costume || allowed_costume(l.items[static_cast<size_t>(i)].costume));
+    };
+    if (l.shuffle) {
+        std::vector<int> places;
+        for (int p = 0; p < n; ++p) places.push_back(p);
+        return draw(f.list, places, ok, rng);
+    }
+    const int last = f.list.last >= 0 && f.list.last < n ? f.list.last : -1;
+    for (int step = 1; step <= n; ++step) {
+        const int pos = (last + step) % n;
+        if (!ok(pos)) continue;
+        if (pos <= last) f.list.drawn.clear();   // from the top again
+        f.list.drawn.push_back(pos);
+        f.list.last = pos;
+        return pos;
+    }
+    return -1;
+}
+
+// An outfit from the character's list, then its colour among the item's colours (`colours_of`: every colour the outfit has, as
+// draw_outfit). Not valid: no place of the list can be taken now (the caller draws from the pool).
+inline Draw draw_listed(Fighter& f, const List& l, const Allowed& allowed, const std::function<std::vector<int>(int)>& colours_of,
+                        const Rng& rng, const std::function<bool(int, int)>& colour_allowed = nullptr) {
+    const int pos = draw_place(f, l, allowed, rng);
+    if (pos < 0) return Draw{};
+    const ListItem& it = l.items[static_cast<size_t>(list_item_at(l, pos))];
+    Draw d;
+    d.costume = it.costume;
+    d.pos = pos;
+    d.stamp = l.stamp;
+    const std::vector<int> all = colours_of ? colours_of(d.costume) : std::vector<int>{};
+    std::vector<int> cs;
+    for (int c : all)
+        if (has(it.colours, c)) cs.push_back(c);
+    const int cos = d.costume;
+    auto may = [&](int v) { return !colour_allowed || colour_allowed(cos, v); };
+    if (cs.empty() || std::none_of(cs.begin(), cs.end(), may)) cs = all;   // none of its colours now: any
+    d.color = draw_colour(f, cos, cs, colour_allowed ? Allowed(may) : Allowed(), rng);
+    return d;
+}
+
+// random_list.json:
+// { "format": "sf6-random-list-1", "fighters": { "<fighter id>": { "mode": "order" | "shuffle", "outfits": [
+//     { "mod_id": "<registry mod_id>", "base": <outfit it was made from>, "costume": <its number when written>, "repeat": 2,
+//       "colours": [0, 3] },   (colour numbers 0 to 63)
+//     { "game": <the game's outfit number, 0 = Outfit 1>, "repeat": 1 } ] } } }
+// An extra outfit is named by its mod (the loader can number it again); `resolve(fid, mod_id, costume, base)` gives its number
+// now (-1: gone, the item is left out). A character whose list holds nothing it can name has no list.
+using Resolve = std::function<int(int, const std::string&, int, int)>;
+inline std::map<int, List> parse_lists(const std::string& text, const Resolve& resolve) {
+    std::map<int, List> out;
+    Json j;
+    if (!json_parse(text, j) || j.kind != Json::Object) return out;
+    const Json* fmt = j.get("format");
+    if (!fmt || fmt->kind != Json::String || fmt->s != "sf6-random-list-1") return out;
+    const Json* fs = j.get("fighters");
+    if (!fs || fs->kind != Json::Object) return out;
+    for (auto& [k, v] : fs->obj) {
+        const int fid = std::atoi(k.c_str());
+        if (fid <= 0 || v.kind != Json::Object) continue;
+        List l;
+        const Json* mode = v.get("mode");
+        l.shuffle = mode && mode->kind == Json::String && mode->s == "shuffle";
+        const Json* os = v.get("outfits");
+        if (!os || os->kind != Json::Array) continue;
+        for (auto& e : os->arr) {
+            if (e.kind != Json::Object) continue;
+            ListItem it;
+            const Json* game = e.get("game");
+            const Json* mod = e.get("mod_id");
+            if (game && game->kind == Json::Number) it.costume = static_cast<int>(game->num);
+            else if (mod && mod->kind == Json::String && !mod->s.empty() && resolve) {
+                const Json* c = e.get("costume");
+                const Json* b = e.get("base");
+                it.costume = resolve(fid, mod->s, c && c->kind == Json::Number ? static_cast<int>(c->num) : -1,
+                                     b && b->kind == Json::Number ? static_cast<int>(b->num) : -1);
+            }
+            if (it.costume < 0) continue;
+            if (const Json* r = e.get("repeat"); r && r->kind == Json::Number) it.repeat = std::clamp(static_cast<int>(r->num), 1, kMaxRepeat);
+            if (const Json* cs = e.get("colours"); cs && cs->kind == Json::Array)
+                for (auto& c : cs->arr)
+                    if (c.kind == Json::Number && c.num >= 0 && c.num < kMaxColours && !has(it.colours, static_cast<int>(c.num)))
+                        it.colours.push_back(static_cast<int>(c.num));
+            l.items.push_back(it);
+        }
+        if (l.items.empty()) continue;
+        l.stamp = list_stamp(l);
+        out[fid] = std::move(l);
+    }
+    return out;
 }
 
 // ---- the pool ----
@@ -258,7 +417,8 @@ inline std::string state_json(const std::map<int, Fighter>& all, int indent) {
     std::string o = "{";
     bool first = true;
     for (auto& [fid, f] : all) {
-        if (f.outfits.drawn.empty() && f.outfits.last < 0 && !f.next.valid() && !f.next_colour.valid() && f.colours.empty()) continue;
+        if (f.outfits.drawn.empty() && f.outfits.last < 0 && !f.next.valid() && !f.next_colour.valid() && f.colours.empty()
+            && f.list_stamp.empty()) continue;
         o += std::string(first ? "" : ",") + "\n" + pad + "    \"" + std::to_string(fid) + "\": { \"outfits\": " + pool_json(f.outfits);
         if (f.next.valid()) o += ", \"next\": [" + std::to_string(f.next.costume) + ", " + std::to_string(f.next.color) + "]";
         if (f.next_colour.valid())
@@ -272,6 +432,9 @@ inline std::string state_json(const std::map<int, Fighter>& all, int indent) {
             }
             o += " }";
         }
+        if (!f.list_stamp.empty())
+            o += ", \"list\": { \"drawn\": " + ints_json(f.list.drawn) + ", \"last\": " + std::to_string(f.list.last) + ", \"stamp\": \""
+                 + f.list_stamp + "\" }";
         o += " }";
         first = false;
     }
@@ -309,6 +472,11 @@ inline std::map<int, Fighter> parse_state(const Json* j) {
             for (auto& [ck, cv] : cs->obj) {
                 const int cos = std::atoi(ck.c_str());
                 if (cos >= 0 && (ck == "0" || cos > 0)) f.colours[cos] = json_pool(&cv);
+            }
+        if (const Json* l = v.get("list"); l && l->kind == Json::Object)
+            if (const Json* s = l->get("stamp"); s && s->kind == Json::String && !s->s.empty()) {
+                f.list = json_pool(l);
+                f.list_stamp = s->s;
             }
         out[fid] = std::move(f);
     }

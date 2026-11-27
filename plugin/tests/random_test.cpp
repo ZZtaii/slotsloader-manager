@@ -296,6 +296,109 @@ int main() {
         check(state_json({}, 4) == "{}", "nothing to keep: {}");
     }
 
+    // ---- the player's own list (random_list.json) ----
+    auto all_colours = [](int) { return std::vector<int>{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }; };
+    auto make = [](bool shuffle, std::vector<ListItem> items) { List l; l.shuffle = shuffle; l.items = std::move(items); l.stamp = list_stamp(l); return l; };
+    {   // in order: each outfit its repeats in a row, then from the top again
+        const List l = make(false, { { 14, 2, {} }, { 0, 1, {} }, { 15, 3, {} } });
+        Fighter f;
+        Rng rng = seeded(3);
+        std::vector<int> got;
+        for (int i = 0; i < 12; ++i) got.push_back(draw_listed(f, l, nullptr, all_colours, rng).costume);
+        check(got == std::vector<int>({ 14, 14, 0, 15, 15, 15, 14, 14, 0, 15, 15, 15 }), "list in order: 14 x2, 0, 15 x3, then again");
+        check(list_places(l) == 6 && list_item_at(l, 0) == 0 && list_item_at(l, 2) == 1 && list_item_at(l, 5) == 2 && list_item_at(l, 6) == -1,
+              "places: each item its repeats");
+    }
+    {   // in order: an outfit that may not be worn now is passed over; nothing can be: no draw (the pool's then)
+        const List l = make(false, { { 14, 1, {} }, { 20, 2, {} }, { 15, 1, {} } });
+        Fighter f;
+        Rng rng = seeded(4);
+        std::vector<int> got;
+        for (int i = 0; i < 4; ++i) got.push_back(draw_listed(f, l, [](int c) { return c != 20; }, all_colours, rng).costume);
+        check(got == std::vector<int>({ 14, 15, 14, 15 }), "list in order: a hidden outfit passed over");
+        check(!draw_listed(f, l, [](int) { return false; }, all_colours, rng).valid(), "nothing in the list allowed: no draw");
+    }
+    {   // shuffled: a round gives every card once (an outfit its repeats), never the last card first in the next round
+        const List l = make(true, { { 14, 3, {} }, { 0, 1, {} }, { 15, 2, {} } });
+        bool rounds_ok = true;
+        for (uint32_t seed = 1; seed <= 200 && rounds_ok; ++seed) {
+            Fighter f;
+            Rng rng = seeded(seed);
+            for (int round = 0; round < 4; ++round) {
+                std::map<int, int> count;
+                for (int i = 0; i < 6; ++i) ++count[draw_listed(f, l, nullptr, all_colours, rng).costume];
+                if (count[14] != 3 || count[0] != 1 || count[15] != 2) rounds_ok = false;
+            }
+        }
+        check(rounds_ok, "list shuffled: each round of 6 gives 14 x3, 0 x1, 15 x2 (200 seeds, 4 rounds)");
+    }
+    {   // colours: among the item's own; a mirror refusing them all: any colour; colours unknown to the outfit: any
+        const List l = make(false, { { 14, 1, { 2, 5 } } });
+        Fighter f;
+        Rng rng = seeded(9);
+        std::set<int> seen;
+        for (int i = 0; i < 40; ++i) seen.insert(draw_listed(f, l, nullptr, all_colours, rng).color);
+        check(seen == std::set<int>({ 2, 5 }), "an item's colours: only 2 and 5 drawn");
+        Fighter g;
+        const Draw m = draw_listed(g, l, nullptr, all_colours, rng, [](int, int c) { return c != 2 && c != 5; });
+        check(m.valid() && m.color != 2 && m.color != 5, "the mirror takes both its colours: another colour");
+        const List odd = make(false, { { 14, 1, { 7 } } });
+        Fighter h;
+        const Draw o = draw_listed(h, odd, nullptr, [](int) { return std::vector<int>{ 0, 1 }; }, rng);
+        check(o.valid() && (o.color == 0 || o.color == 1), "a colour the outfit does not have: one it has");
+    }
+    {   // a draw made on a copy (a select screen), given in the rounds later: the list goes on from it
+        const List l = make(false, { { 14, 1, {} }, { 15, 1, {} }, { 16, 1, {} } });
+        Fighter real;
+        Rng rng = seeded(5);
+        draw_listed(real, l, nullptr, all_colours, rng);                 // 14
+        Fighter copy = real;
+        const Draw d = draw_listed(copy, l, nullptr, all_colours, rng);  // 15, on the copy
+        check(real.list.last == 0 && d.pos == 1 && d.stamp == l.stamp, "the copy's draw leaves the rounds as they were");
+        give_draw(real, d);
+        check(draw_listed(real, l, nullptr, all_colours, rng).costume == 16 && real.outfits.drawn.empty(), "given: the list goes on (16), the pool's round untouched");
+        Fighter fresh;   // never drawn from this list (its stamp empty): the copy's draw starts it
+        give_draw(fresh, d);
+        check(fresh.list_stamp == l.stamp && fresh.list.last == 1, "a draw given in rounds without the list: they take its stamp");
+    }
+    {   // another list starts from its top; state.json keeps the place and the stamp
+        const List a = make(false, { { 14, 1, {} }, { 15, 1, {} } });
+        const List b = make(false, { { 15, 1, {} }, { 14, 1, {} } });
+        Fighter f;
+        Rng rng = seeded(6);
+        draw_listed(f, a, nullptr, all_colours, rng);
+        check(draw_listed(f, b, nullptr, all_colours, rng).costume == 15 && a.stamp != b.stamp, "a changed list starts again from its top");
+        std::map<int, Fighter> all{ { 4, f } };
+        const std::string js = state_json(all, 4);
+        Json j;
+        const bool parsed = json_parse(js, j);
+        const auto back = parse_state(&j);
+        check(parsed && back.count(4) && back.at(4).list_stamp == b.stamp && back.at(4).list.last == 0 && back.at(4).list.drawn == std::vector<int>({ 0 }),
+              "state.json: the list's place and stamp read back");
+        Fighter g = back.at(4);
+        check(draw_listed(g, b, nullptr, all_colours, rng).costume == 14, "read back: the list goes on after a restart");
+    }
+    {   // random_list.json: mods by their mod id, the game's outfits by number, gone mods left out, bad entries skipped
+        const std::string text = R"({ "format": "sf6-random-list-1", "fighters": {
+            "4": { "mode": "shuffle", "outfits": [ { "mod_id": "aaa", "costume": 14, "base": 1, "repeat": 3, "colours": [2, 5, 2, 12, 64] },
+                                                  { "game": 0 }, { "mod_id": "gone", "costume": 9 }, { "repeat": 2 } ] },
+            "16": { "mode": "order", "outfits": [ { "mod_id": "gone" } ] },
+            "1": { "outfits": [ { "game": 2, "repeat": 99 } ] } } })";
+        int asked_base = -2;
+        const auto lists = parse_lists(text, [&](int fid, const std::string& mod, int cos, int base) {
+            if (fid == 4 && mod == "aaa") { asked_base = base; return cos + 3; }   // the loader numbered it again: now 17
+            return -1;
+        });
+        const bool four = lists.count(4) && lists.at(4).shuffle && lists.at(4).items.size() == 2;
+        check(four && lists.at(4).items[0].costume == 17 && lists.at(4).items[0].repeat == 3 && lists.at(4).items[0].colours == std::vector<int>({ 2, 5, 12 })
+              && asked_base == 1 && lists.at(4).items[1].costume == 0 && lists.at(4).items[1].repeat == 1,
+              "list read: the mod's number now, its repeats, colours 0-63 once (12 kept, 64 not); Outfit 1; the gone mod and a bare entry left out");
+        check(!lists.count(16), "a list holding only gone mods: no list (the pool)");
+        check(lists.count(1) && !lists.at(1).shuffle && lists.at(1).items[0].repeat == kMaxRepeat, "no mode: in order; repeat capped");
+        check(parse_lists(R"({ "format": "other", "fighters": { "4": { "outfits": [ { "game": 0 } ] } } })", nullptr).empty()
+              && parse_lists("not json", nullptr).empty(), "another format or no JSON: no lists");
+    }
+
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;
 }

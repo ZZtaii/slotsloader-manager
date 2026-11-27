@@ -33,6 +33,7 @@
 #include "colormod_link.hpp"
 #include "perf.hpp"
 #include "random_logic.hpp"
+#include "replay_outfits.hpp"
 #include "true_owner.hpp"
 #include "words.hpp"
 #include "wjournal.hpp"
@@ -731,11 +732,53 @@ bool rand_intent(int fid) {
     return in != g_intent.end() && is_random(fid, in->second.slot);
 }
 
+// The player's own Random lists (random_list.json, written by the Slotsloader Manager; rnd::parse_lists): read again at a draw
+// when the file changed (size and date), under g_alias_mx. An extra outfit is named by its mod in the file (registry.json).
+const char* kRandomList = "reframework/data/SF6_CostumeSlots_data/random_list.json";
+std::map<int, rnd::List> g_rand_lists;
+uint64_t g_rand_list_stamp = 0;   // size and date of the file when read (0: none)
+void rand_lists_refresh() {
+    // Manager mode only (ZZtaii 27/11): only the Slotsloader Manager writes the file; outside it every character draws from
+    // its pool, as before
+    if (!g_managed) { g_rand_lists.clear(); g_rand_list_stamp = 0; return; }
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    const uint64_t st = GetFileAttributesExA(kRandomList, GetFileExInfoStandard, &fa)
+        ? (((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime) ^ fa.nFileSizeLow) : 0;
+    if (st == g_rand_list_stamp) return;
+    g_rand_list_stamp = st;
+    if (!st) {
+        if (!g_rand_lists.empty()) logf("costumes: Random lists: random_list.json gone, every character draws from its pool");
+        g_rand_lists.clear();
+        return;
+    }
+    const std::vector<replay::RegSlot> reg = replay::parse_registry(read_file(kRegistry));
+    g_rand_lists = rnd::parse_lists(read_file(kRandomList), [&reg](int fid, const std::string& mod, int cos, int base) {
+        return replay::resolve_mod(reg, fid, mod, cos, base);
+    });
+    size_t items = 0;
+    for (auto& [fid, l] : g_rand_lists) items += l.items.size();
+    logf("costumes: Random lists: %zu character%s, %zu outfit%s (random_list.json)", g_rand_lists.size(),
+         g_rand_lists.size() == 1 ? "" : "s", items, items == 1 ? "" : "s");
+}
+
 // A draw from the character's pool into the rounds `f` (the character's own, Replays' own, or a copy of them: a select screen's,
 // rand_sel_draw), under g_alias_mx. `colour_ok(costume, colour)`: what the colour may be (a mirror's left out; none: any).
+// A character with its own list (rand_lists_refresh) draws from it; nothing in it can be taken now: from the pool.
 rnd::Draw rand_draw_on(rnd::Fighter& f, int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr) {
     const rnd::Rng rng = [] { return static_cast<uint32_t>(g_rng()); };
     const std::vector<int> outs = rand_outfits_of(fid);
+    rand_lists_refresh();
+    if (auto l = g_rand_lists.find(fid); l != g_rand_lists.end()) {
+        const rnd::Draw d = rnd::draw_listed(f, l->second, [fid, &outs](int c) { return rand_allowed(fid, c) && rnd::has(outs, c); },
+                                             [fid](int c) { return rand_draw_colours_of(fid, c); }, rng, colour_ok);
+        if (d.valid()) {
+            logf("[F%d] Random: %s %s drawn from the player's list (%s; place %d of %d, %s)", fid, rand_name(fid, d.costume).c_str(),
+                 rand_colour_name(fid, d.costume, d.color).c_str(), why, d.pos + 1, rnd::list_places(l->second),
+                 l->second.shuffle ? "shuffled" : "in order");
+            return d;
+        }
+        logf("[F%d] Random: nothing in the player's list can be worn now, drawn from the pool (%s)", fid, why);
+    }
     const rnd::Draw d = rnd::draw_outfit(f, outs, [fid](int c) { return rand_allowed(fid, c); },
                                          [fid](int c) { return rand_draw_colours_of(fid, c); }, rng, colour_ok);
     if (!d.valid()) { logf("[F%d] Random: nothing to draw, every outfit of the pool refused now (%s)", fid, why); return d; }

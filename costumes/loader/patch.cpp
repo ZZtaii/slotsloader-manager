@@ -1357,6 +1357,42 @@ static void level_means(const SmallLevel& lv, const uint8_t* data, float out[4])
     }
 }
 
+// The small level's pixels, RGBA rows top to bottom (swatch weights sample a colour mask at a triangle's UVs)
+static void level_pixels(const SmallLevel& lv, const uint8_t* data, std::vector<uint8_t>& px) {
+    px.assign(size_t(lv.mw) * lv.mh * 4, 0);
+    uint8_t p[4 * 4 * 4];
+    for (uint32_t by = 0; by < lv.bh; by++)
+        for (uint32_t bx = 0; bx < lv.bw; bx++) {
+            const uint8_t* blk = data + (uint64_t(by) * lv.bw + bx) * lv.bs;
+            memset(p, 0, sizeof p);
+            switch (lv.fmt) {
+                case 71: case 72: bcdec_bc1(blk, p, 16); break;
+                case 77: case 78: bcdec_bc3(blk, p, 16); break;
+                case 98: case 99: bcdec_bc7(blk, p, 16); break;
+                case 80: { uint8_t r[16]; bcdec_bc4(blk, r, 4); for (int k = 0; k < 16; k++) p[4 * k] = r[k]; break; }
+                case 83: { uint8_t rg[32]; bcdec_bc5(blk, rg, 8); for (int k = 0; k < 16; k++) { p[4 * k] = rg[2 * k]; p[4 * k + 1] = rg[2 * k + 1]; } break; }
+            }
+            for (uint32_t y = 0; y < 4 && by * 4 + y < lv.mh; y++)
+                for (uint32_t x = 0; x < 4 && bx * 4 + x < lv.mw; x++)
+                    memcpy(&px[(size_t(by * 4 + y) * lv.mw + bx * 4 + x) * 4], &p[(y * 4 + x) * 4], 4);
+        }
+}
+bool texture_small_pixels(const std::vector<uint8_t>& b, uint32_t& w, uint32_t& h, std::vector<uint8_t>& px) {
+    SmallLevel lv;
+    if (!small_level(b, b.size(), lv)) return false;
+    level_pixels(lv, b.data() + lv.off, px);
+    w = lv.mw; h = lv.mh;
+    return true;
+}
+bool texture_level_pixels(const std::vector<uint8_t>& head, uint64_t file_size, const std::vector<uint8_t>& level,
+                          uint32_t& w, uint32_t& h, std::vector<uint8_t>& px) {
+    SmallLevel lv;
+    if (!small_level(head, file_size, lv) || level.size() != lv.size) return false;
+    level_pixels(lv, level.data(), px);
+    w = lv.mw; h = lv.mh;
+    return true;
+}
+
 bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
     SmallLevel lv;
     if (!small_level(b, b.size(), lv)) return false;
