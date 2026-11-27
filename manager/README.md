@@ -12,6 +12,10 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 ## What changed
 
+- 1.0.25:
+  - Comes with Slotsloader 1.29.0: the Random list now works in game, variants that need their main files get them, and outfit colour squares match the outfit.
+  - Open folder on the Installed page opens the mod's archive in your library.
+
 - 1.0.24:
   - Load order is back with Wael's Slotsloader: drag a fighter's extra outfits into the order you want.
   - Random list (the dice icon on the Installed page): what a fighter's Random outfit picks, In order or Shuffled, how many times and in which colours, with colour previews. It takes effect with the next Slotsloader release.
