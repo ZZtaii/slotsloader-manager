@@ -206,6 +206,10 @@ namespace SlotsInstaller
             if (plans == null || plans.Count == 0) return null;
             if (plans.Keys.Any(d => FighterId(d) < 0)) throw new IOException("Choose a fighter.");
             string path = PathOf(game);
+            // in use right now (re-review nit: it was called damaged): try again later, nothing is lost
+            if (File.Exists(path))
+                try { using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read)) { } }
+                catch (IOException) { throw new IOException("random_list.json is in use right now. Save again in a moment."); }
             Dictionary<string, object> file = ReadObject(path);
             // A file this Manager can't read as a Random list (damaged, or a newer format) holds lists it would lose: refused
             if (File.Exists(path) && (file == null || Str(file, "format") != Format))

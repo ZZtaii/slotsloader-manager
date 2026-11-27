@@ -293,23 +293,23 @@ namespace SlotsInstaller
                 foreach (var kv in shownFighters)
                 {
                     RandomPlan p = PlanOf(kv.Value.Entries, kv.Value.Mode);
+                    // In order or Shuffled with nothing ticked can't be saved: left out (re-review: it greyed out Save for all)
+                    if (p != null && p.Items.Count == 0) continue;
                     if (SignatureOf(p) != kv.Value.Original) plans[kv.Key] = p;
                 }
                 return plans;
             }
         }
+        // The fighters (names) set to In order or Shuffled with nothing ticked: not saved, the note says so
+        internal List<string> EmptyNames
+        {
+            get { KeepShown(); return shownFighters.Where(kv => kv.Value.Mode != 0 && !kv.Value.Entries.Any(e => e.InList)).Select(kv => kv.Value.Name).ToList(); }
+        }
         // The fighters (names) with changes, the one shown first
         internal List<string> ChangedNames { get { var plans = Plans; return shownFighters.Where(kv => plans.ContainsKey(kv.Key)).OrderBy(kv => kv.Key == fighterDir ? 0 : 1).Select(kv => kv.Value.Name).ToList(); } }
         internal bool Changed { get { return Plans.Count > 0; } }
-        // A list In order or Shuffled with nothing ticked can't be saved
-        internal bool CanSave
-        {
-            get
-            {
-                var plans = Plans;
-                return plans.Count > 0 && plans.All(kv => kv.Value == null || kv.Value.Items.Count > 0);
-            }
-        }
+        // Something to save (a list In order or Shuffled with nothing ticked is left out of Plans)
+        internal bool CanSave { get { return Plans.Count > 0; } }
 
         internal static bool Choose(IWin32Window owner, string gameRoot, string fighter, IEnumerable<KeyValuePair<string, string>> fighters, IEnumerable<FighterCard> portraits,
             Dictionary<string, int> counts, Func<string, Dictionary<int, string>> replaced, out Dictionary<string, RandomPlan> plans, out List<string> names, Action<string> shownLast = null)
@@ -495,6 +495,8 @@ namespace SlotsInstaller
                   + " A round is " + ReplacePlanner.N(places, "pick") + "." + colours + " An outfit you don't own or can't see now (NSFW hidden) is skipped.";
             List<string> others = ChangedNames.Where(n => !String.Equals(n, fighterName, StringComparison.OrdinalIgnoreCase)).ToList();
             if (others.Count > 0) note.Text += " Also changed, saved together: " + String.Join(", ", others) + ".";
+            List<string> empty = EmptyNames.Where(n => !String.Equals(n, fighterName, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (empty.Count > 0) note.Text += " Nothing ticked, not saved: " + String.Join(", ", empty) + ".";
         }
         private void Accept() { if (!save.Enabled) return; DialogResult = DialogResult.OK; Close(); }
     }

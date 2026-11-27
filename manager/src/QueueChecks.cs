@@ -356,6 +356,15 @@ namespace SlotsInstaller
                 string both = File.ReadAllText(listPath);
                 Require(both.Contains("\"1\":{\"mode\":\"order\"") && both.Contains("\"16\":{\"mode\":\"order\""), "both fighters saved: " + both);
             }
+            // A fighter In order with nothing ticked is left out and named in the note; another fighter's change still saves (re-review)
+            using (var form = new RandomListForm(game, "Juri", new[] { new KeyValuePair<string, string>("016", "Juri") }, null, null))
+            {
+                form.Load("esf001", "Ryu");
+                foreach (RandomEntry e in form.RowsForTest.Entries) e.InList = false;   // Ryu: In order, nothing ticked
+                form.Load("esf016", "Juri"); form.Mode = 2;                             // Juri: Shuffled now
+                Dictionary<string, RandomPlan> some = form.Plans;
+                Require(some.Count == 1 && some.ContainsKey("esf016") && form.CanSave && form.EmptyNames.SequenceEqual(new[] { "Ryu" }), "an empty list blocked the others: " + String.Join(", ", some.Keys) + " / empty " + String.Join(", ", form.EmptyNames));
+            }
             // The last fighter kept by its folder opens on that fighter
             using (var form = new RandomListForm(game, "esf016", new[] { new KeyValuePair<string, string>("016", "Juri") }, null, null))
                 Require(form.FighterDir == "esf016" && form.FighterName == "Juri", "the fighter by its folder: " + form.FighterDir + " / " + form.FighterName);
