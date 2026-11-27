@@ -468,25 +468,26 @@ namespace SlotsInstaller
         // game's scenes: Ingrid Outfit 5 wears Outfit 2's head and hair and names Outfit 2's body textures).
         private static void SharedParts(string root)
         {
+            Func<string, string, bool> Tk = delegate(string o, string p) { return SharedOutfitParts.Takes(new SharedOutfitParts.Wear(System.Text.RegularExpressions.Regex.Match(p, @"/esf(\d{3})/").Groups[1].Value, o, null), p); };
             const string i2 = "natives/stm/product/model/esf/esf032/002/", i5 = "natives/stm/product/model/esf/esf032/005/", i1 = "natives/stm/product/model/esf/esf032/001/";
-            Require(SharedOutfitParts.Takes("005", i2 + "02/esf032_002_02.mesh.230110883") && SharedOutfitParts.Takes("005", i2 + "02/esf032_002_02_v00.mdf2.31")
-                && SharedOutfitParts.Takes("005", "natives/stm/streaming/product/model/esf/esf032/002/02/esf032_002_02_hair_albd.tex.241101895")
-                && SharedOutfitParts.Takes("005", i2 + "02/esf032_002_02_new_albd.tex.241101895") && SharedOutfitParts.Takes("005", i2 + "esf032_002_02_chain.chain.52")
-                && SharedOutfitParts.Takes("005", i2 + "01/esf032_002_01_clotha_albd.tex.241101895"), "Ingrid Outfit 5 does not take Outfit 2's hair, its physics or a body texture");
-            Require(!SharedOutfitParts.Takes("005", i2 + "01/esf032_002_01.mesh.230110883") && !SharedOutfitParts.Takes("005", i2 + "01/esf032_002_01_v00.mdf2.31")
-                && !SharedOutfitParts.Takes("005", i2 + "esf032_002_01_chain.chain.52") && !SharedOutfitParts.Takes("005", "natives/stm/product/model/esf/esf032/003/02/esf032_003_02.mesh.230110883")
-                && !SharedOutfitParts.Takes("001", i2 + "02/esf032_002_02.mesh.230110883") && !SharedOutfitParts.Takes("005", "natives/stm/product/model/esf/esf032/000/02/x.mesh.230110883"),
+            Require(Tk("005", i2 + "02/esf032_002_02.mesh.230110883") && Tk("005", i2 + "02/esf032_002_02_v00.mdf2.31")
+                && Tk("005", "natives/stm/streaming/product/model/esf/esf032/002/02/esf032_002_02_hair_albd.tex.241101895")
+                && Tk("005", i2 + "02/esf032_002_02_new_albd.tex.241101895") && Tk("005", i2 + "esf032_002_02_chain.chain.52")
+                && Tk("005", i2 + "01/esf032_002_01_clotha_albd.tex.241101895"), "Ingrid Outfit 5 does not take Outfit 2's hair, its physics or a body texture");
+            Require(!Tk("005", i2 + "01/esf032_002_01.mesh.230110883") && !Tk("005", i2 + "01/esf032_002_01_v00.mdf2.31")
+                && !Tk("005", i2 + "esf032_002_01_chain.chain.52") && !Tk("005", "natives/stm/product/model/esf/esf032/003/02/esf032_003_02.mesh.230110883")
+                && !Tk("001", i2 + "02/esf032_002_02.mesh.230110883") && !Tk("005", "natives/stm/product/model/esf/esf032/000/02/x.mesh.230110883"),
                 "a part Ingrid Outfit 5 doesn't wear, another folder or another outfit fits");
-            Require(SharedOutfitParts.Takes("005", "natives/stm/product/model/esf/esf013/001/01/esf013_001_01_clotha_albd.tex.241101895") && SharedOutfitParts.Takes("001", "natives/stm/product/model/esf/esf006/002/02/esf006_002_02.mesh.230110883")
+            Require(Tk("005", "natives/stm/product/model/esf/esf013/001/01/esf013_001_01_clotha_albd.tex.241101895") && Tk("001", "natives/stm/product/model/esf/esf006/002/02/esf006_002_02.mesh.230110883")
                 && SharedOutfitParts.TakesFrom("032", "005", "002") && !SharedOutfitParts.TakesFrom("032", "005", "003") && !SharedOutfitParts.TakesFrom("032", "001", "002"), "other fighters' shared parts");
             // A.K.I Emily Hair "C1, C2": the hair in 000/02 (C1, C2 and C5 wear it), one chain per outfit that wears it, and
             // its textures in a named folder: fits Outfits 1, 2 and 5, not Outfit 3 or 4 (their own hair, 003/02, 004/02).
             const string a = "natives/stm/product/model/esf/esf013/";
             var emily = new[] { a + "000/02/esf013_000_02.mesh.230110883", a + "000/02/esf013_000_02_v00.mdf2.31", a + "001/esf013_001_02_chain.chain.52",
                 a + "002/esf013_002_02_chain.chain.52", a + "005/esf013_005_02_chain.chain.52", a + "EHair/EHair_Albd.tex.241101895" };
-            Require(new[] { "001", "002", "005" }.All(o => Installer.SlotMismatch(emily, new[] { o }) == null) && Installer.SlotMismatch(emily, new[] { "003" }) == "Outfit 1, Outfit 2, Outfit 5"
+            Require(new[] { "001", "002", "005" }.All(o => Installer.SlotMismatch(emily, new[] { o }) == null) && Installer.SlotMismatch(emily, new[] { "003" }) == "Outfit 1, Outfit 2, Outfit 5 and the shared hair (this outfit wears its own)"
                 && Installer.SlotMismatch(emily, new[] { "004" }) != null && SharedOutfitParts.WornFolder("013", "002", "02") == "000" && SharedOutfitParts.WornFolder("013", "003", "02") == "003"
-                && !SharedOutfitParts.Takes("001", a + "002/esf013_002_01_chain.chain.52"), "A.K.I's shared hair with a chain per outfit: " + Installer.SlotMismatch(emily, new[] { "001" }) + " / " + Installer.SlotMismatch(emily, new[] { "003" }));
+                && !Tk("001", a + "002/esf013_002_01_chain.chain.52"), "A.K.I's shared hair with a chain per outfit: " + Installer.SlotMismatch(emily, new[] { "001" }) + " / " + Installer.SlotMismatch(emily, new[] { "003" }));
             var hairFiles = new[] { i2 + "02/esf032_002_02.mesh.230110883", i2 + "02/esf032_002_02_v00.mdf2.31", i2 + "02/esf032_002_02_hair_albd.tex.241101895" };
             Require(Installer.SlotMismatch(hairFiles, new[] { "005" }) == null && Installer.SlotMismatch(hairFiles, new[] { "001" }) == "Outfit 2"
                 && Installer.SlotMismatch(new[] { i2 + "01/esf032_002_01.mesh.230110883" }, new[] { "005" }) == "Outfit 2", "the per-file slot check");
@@ -534,6 +535,51 @@ namespace SlotsInstaller
                 var texts = Enumerable.Range(0, form.RowCountForTest).Select(form.RowTextForTest).ToList();
                 Require(texts.Any(t => t.StartsWith("C5 Slot") && !t.Contains("these files are for") && !t.EndsWith("muted")) && texts.Any(t => t.StartsWith("C1 Slot") && t.Contains("these files are for Outfit 2") && t.EndsWith("muted")), "the picker: " + String.Join(" / ", texts));
             }
+            // An outfit whose mod ships its own costume scene wears what that scene names (A.K.I. WT Swimwear: Outfit 2's
+            // body with Outfit 4's head and hair): the shared 000/02 hair is refused on it with the reason, Outfit 4's hair
+            // fits; the same in Add to outfit, its picker and the recipe builder.
+            Func<string[], byte[]> scene = delegate(string[] refs)
+            {
+                var bytes = new List<byte>();
+                foreach (string r in refs) { bytes.AddRange(System.Text.Encoding.Unicode.GetBytes(r)); bytes.AddRange(new byte[4]); }
+                return bytes.ToArray();
+            };
+            byte[] wtScene = scene(new[] { "@Product/Model/esf/esf013/002/01/esf013_002_01.mesh", "Product/Model/esf/esf013/002/01/esf013_002_01_v00.mdf2",
+                "@Product/Model/esf/esf013/004/00/esf013_004_00.mesh", "@Product/Model/esf/esf013/004/02/esf013_004_02.mesh", "@Product/Model/esf/esf013/000/10/esf013_000_10.mesh" });
+            string sc, body;
+            Dictionary<string, List<string>> wtParts = SharedOutfitParts.ReadScene(wtScene, out sc, out body);
+            Require(sc == "013" && body == "002" && wtParts["02"].SequenceEqual(new[] { "004" }) && wtParts["00"].SequenceEqual(new[] { "004" }), "reading a scene: " + sc + " " + body);
+            string why2 = Installer.SlotMismatch(emily, new[] { "002" }, o => o == "002" ? wtParts : null);
+            Require(why2 == "Outfit 1, Outfit 2, Outfit 5 and the shared hair (this outfit's own scene uses Outfit 4's)" || why2 == "Outfit 1, Outfit 5 and the shared hair (this outfit's own scene uses Outfit 4's)", "the shared hair on an outfit whose scene uses Outfit 4's: " + why2);
+            var c4Hair = new[] { a + "004/02/esf013_004_02.mesh.230110883", a + "004/02/esf013_004_02_v00.mdf2.31", a + "004/esf013_004_02_chain.chain.52" };
+            Require(Installer.SlotMismatch(c4Hair, new[] { "002" }, o => wtParts) == null && Installer.SlotMismatch(c4Hair, new[] { "002" }) == "Outfit 4", "Outfit 4's hair on that outfit, and not on the game's Outfit 2");
+            const string scenePath = "natives/stm/product/charparam/esf/esf013/esf013v01.scn.20";
+            string wtMod = Path.Combine(root, "AKI WT Like.zip"), emilyMod = Path.Combine(root, "AKI Emily Like.zip");
+            Zip(wtMod, new Dictionary<string, string> { { "W/modinfo.ini", "name=AKI WT Like\r\n" }, { "W/" + a + "002/01/esf013_002_01.mesh.230110883", "wt body" }, { "W/" + a + "002/01/esf013_002_01_v00.mdf2.31", "wt body material" } },
+                new Dictionary<string, byte[]> { { "W/" + scenePath, wtScene } });
+            var emilyTexts = new Dictionary<string, string> { { "E/modinfo.ini", "name=AKI Emily Like\r\n" } };
+            foreach (string f in emily) emilyTexts["E/" + f] = "emily " + Path.GetFileName(f);
+            Zip(emilyMod, emilyTexts);
+            ModPackage wtPkg = PackageReader.Load(wtMod, ""), emilyPkg = PackageReader.Load(emilyMod, "");
+            Installer.Install(Composer.Plan(wtPkg, Composer.DefaultSelection(wtPkg)), costumes, "A.K.I", "WT Like", "", false);
+            InstalledOutfit wt = Installer.ListInstalled(costumes).Single(o => o.Name == "WT Like");
+            Require(File.Exists(Path.Combine(wt.Folder, scenePath.Replace('/', '\\'))) && SharedOutfitParts.OwnScene(wt.Folder, "002") != null, "the installed outfit's own scene");
+            CompositionPlan emilySel = Installer.SelectionFiles(emilyPkg, emilyPkg.Components.Where(c => c.Assets.Count > 0).Select(c => c.Id));
+            refused = false; string refusal = "";
+            try { Installer.AddToOutfit(wt, costumes, emilySel, ""); } catch (IOException ex) { refusal = ex.Message; refused = ex.Message.Contains("the shared hair (this outfit's own scene uses Outfit 4's)"); }
+            Require(refused && read(wt, a + "000/02/esf013_000_02.mesh.230110883") == null, "the shared hair was added to an outfit that wears Outfit 4's: " + refusal);
+            using (var form = new AddPartsForm("AKI Emily Like", Installer.OptionText(emilySel), emilySel.Files.Count, "A.K.I", emilySel.Files.Keys.ToList(), Installer.ListInstalled(costumes).Where(o => o.Managed && o.Character == "A.K.I").ToList()))
+            {
+                string row = form.RowTextForTest(0);
+                Require(row.StartsWith("WT Like") && row.Contains("own scene uses Outfit 4's") && row.EndsWith("muted"), "the picker for that outfit: " + row);
+            }
+            var wtRecipe = new RecipeDraft("A.K.I", "013", "");
+            Require(wtRecipe.AddLayer(wtMod, "AKI WT Like", null) == null, "the WT-like body");
+            why2 = wtRecipe.AddLayer(emilyMod, "AKI Emily Like", null);
+            Require(why2 != null && why2.Contains("own scene uses Outfit 4's") && wtRecipe.Layers.Count == 1, "the shared hair on the WT-like recipe: " + why2);
+            var emilyFirst = new RecipeDraft("A.K.I", "013", "");
+            why2 = emilyFirst.AddLayer(emilyMod, "AKI Emily Like", null); why2 = why2 ?? emilyFirst.AddLayer(wtMod, "AKI WT Like", null);
+            Require(why2 != null && why2.Contains("doesn't wear") && emilyFirst.Layers.Count == 1, "the WT-like body under the shared hair: " + why2);
         }
 
         private static void AddPart(string root)

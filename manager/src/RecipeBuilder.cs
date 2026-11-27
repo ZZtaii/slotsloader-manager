@@ -91,7 +91,44 @@ namespace SlotsInstaller
         // 000 folder, or a part or texture of another outfit's folder that the slot's game outfit wears
         // (SharedOutfitParts: Ingrid Outfit 5 wears the head and hair of Outfit 2). The recipe's first body decides its
         // slots: the layers so far (a hair made for Outfit 2) must then be worn by that body's outfit.
-        private string Misfit(IEnumerable<string> paths, PartGraft replacing)
+        // The costume scene a layer ships (its file in the layer's mod), read once.
+        private readonly Dictionary<string, byte[]> sceneFiles = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        private byte[] LayerFile(PartGraft layer, string path)
+        {
+            string key = layer.SourcePath + "|" + path;
+            byte[] data;
+            if (sceneFiles.TryGetValue(key, out data)) return data;
+            ModPackage package = PackageReader.Load(layer.SourcePath, SevenZip, false);
+            NativeAsset asset = layer.SelectedIds.Select(id => package.Find(id)).Where(c => c != null).SelectMany(c => c.Assets)
+                .LastOrDefault(a => String.Equals(a.DestinationPath, path, StringComparison.OrdinalIgnoreCase));
+            if (asset != null) using (var reader = new SourceReader(layer.SourcePath, SevenZip)) data = reader.ReadBytes(asset.EntryPath, 16 << 20);
+            sceneFiles[key] = data;
+            return data;
+        }
+        // 1.0.25: what the recipe's outfit wears, as an outfit's own scene says: the top layer that ships a costume scene
+        // for that body (A.K.I. WT Swimwear takes Outfit 4's head and hair); null = the game's outfit.
+        private Func<string, Dictionary<string, List<string>>> SceneOf(IEnumerable<PartGraft> layers, IEnumerable<string> more = null, Func<string, byte[]> readMore = null)
+        {
+            List<PartGraft> list = layers.ToList();
+            return o =>
+            {
+                if (more != null && readMore != null)
+                {
+                    var own = SharedOutfitParts.OwnScene(more, readMore, o);
+                    if (own != null) return own;
+                }
+                foreach (PartGraft l in list)
+                {
+                    PartGraft layer = l;
+                    var own = SharedOutfitParts.OwnScene((layer.Files ?? new List<string>()).Where(SharedOutfitParts.IsScene), p => LayerFile(layer, p), o);
+                    if (own != null) return own;
+                }
+                return null;
+            };
+        }
+        private string Misfit(IEnumerable<string> paths, PartGraft replacing) { return Misfit(paths, replacing, null); }
+        // readNew: reads a file of the new layer (its own scene counts when it brings the recipe's first body).
+        private string Misfit(IEnumerable<string> paths, PartGraft replacing, Func<string, byte[]> readNew)
         {
             List<string> files = paths.ToList();
             List<string> slots = Slots(replacing);
@@ -100,10 +137,10 @@ namespace SlotsInstaller
             List<PartGraft> others = Layers.Where(l => l != replacing).ToList();
             if (body.Count > 0 && !others.Any(l => BringsBody(l.Files)))
             {
-                string earlier = Installer.SlotMismatch(others.SelectMany(l => l.Files), body);
+                string earlier = Installer.SlotMismatch(others.SelectMany(l => l.Files), body, SceneOf(others, readNew == null ? null : files.Where(SharedOutfitParts.IsScene), readNew));
                 return earlier == null ? null : "This body is for " + Installer.SlotText(body) + ", and the recipe already has files made for " + earlier + " that " + Installer.SlotText(body) + " doesn't wear. Materials point at their own outfit slot's files.";
             }
-            string mismatch = Installer.SlotMismatch(files, slots);
+            string mismatch = Installer.SlotMismatch(files, slots, SceneOf(others));
             return mismatch == null ? null : "These files are made for " + mismatch + ", and this recipe is made for " + Installer.SlotText(slots) + ". Materials point at their own outfit slot's files.";
         }
 
@@ -130,7 +167,7 @@ namespace SlotsInstaller
             CompositionPlan selection = Installer.SelectionFiles(package, wanted, parts, SevenZip);
             if (selection.Errors.Count > 0 || selection.Files.Count == 0) return String.Join(" ", selection.Errors.DefaultIfEmpty("These options have no outfit files."));
             string wrong = WrongFighter(selection.Files.Keys); if (wrong != null) return wrong;
-            string misfit = Misfit(selection.Files.Keys, replacing); if (misfit != null) return misfit;
+            string misfit = Misfit(selection.Files.Keys, replacing, p => { using (var reader = new SourceReader(source, SevenZip)) return reader.ReadBytes(selection.Files[p].Asset.EntryPath, 16 << 20); }); if (misfit != null) return misfit;
             layer = new PartGraft { SourcePath = source, Mod = mod ?? package.Name ?? "", SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => NameOf(c, package)).ToList(), Files = selection.Files.Keys.ToList(), Parts = (selection.OnlyParts ?? new List<string>()).ToList() };
             return null;
         }
@@ -188,7 +225,7 @@ namespace SlotsInstaller
             if (why != null) return why;
             Layers[at] = layer;
             List<string> slots = Slots();
-            var dropped = Layers.Where(l => l != layer && slots.Count > 0 && Installer.SlotMismatch(l.Files, slots) != null).ToList();
+            var dropped = Layers.Where(l => l != layer && slots.Count > 0 && Installer.SlotMismatch(l.Files, slots, SceneOf(Layers.Where(x => x != l))) != null).ToList();
             foreach (PartGraft l in dropped) Layers.Remove(l);
             LastDropped = dropped.Select(Shown).ToList();
             return null;

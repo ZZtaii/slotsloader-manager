@@ -281,7 +281,7 @@ namespace SlotsInstaller
             foreach (InstalledOutfit o in outfits)
             {
                 List<string> built = Installer.OutfitFolders(o);
-                string mismatch = Installer.SlotMismatch(filePaths, built);
+                string mismatch = Installer.SlotMismatch(filePaths, built, Installer.SceneOn(o.Folder));
                 string slot = built.Count == 0 ? "No outfit body" : String.Join(", ", built.Select(f => "Outfit " + Int32.Parse(f)));
                 rows.Add(o, o.Name, slot + (o.Enabled ? "" : " · disabled") + (mismatch == null ? "" : " · these files are for " + mismatch), mismatch == null);
             }

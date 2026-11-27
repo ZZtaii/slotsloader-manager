@@ -86,7 +86,7 @@ namespace SlotsInstaller
             { "033/002", new[] { "tex:001/02" } },
             { "033/005", new[] { "001/02", "tex:001/01" } },
         };
-        // "<fighter>/<outfit folder>" -> "<part>:<folder>": the folder each part's mesh comes from (000 = shared).
+        // "<fighter>/<outfit folder>" -> "<part>:<folder>": the folders each part's meshes come from (000 = shared).
         private static readonly Dictionary<string, string[]> Worn = new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
             { "001/001", new[] { "00:001", "01:001", "02:001", "10:000" } },
