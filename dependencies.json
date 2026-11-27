@@ -4,18 +4,18 @@
   "packages": {
     "slots_loader": {
       "name": "SF6 Slots Loader",
-      "version": "1.29.0",
-      "release": "v1.51.0",
-      "file": "SF6_SlotsLoader_v1.29.0.zip",
-      "size": 5947327,
-      "sha256": "e8078d6b6eefa53e658ed98411e98299d8881b0dabbcc0d05da27b6ed22472ef",
+      "version": "1.29.1",
+      "release": "v1.51.1",
+      "file": "SF6_SlotsLoader_v1.29.1.zip",
+      "size": 5946943,
+      "sha256": "b365577225adae773080a1ca5d050b5c9c4dedde2884868f84a219a2ce667b87",
       "slim": {
         "repository": "ZZtaii/slotsloader-manager",
-        "release": "slotsloader-v1.29.0",
-        "file": "SF6_SlotsLoader_v1.29.0-manager.zip",
-        "size": 3312201,
-        "sha256": "b2feec698a8b40db381477998b242aae34ebcc0cc843b99277da444a39d04627",
-        "from_sha256": "e8078d6b6eefa53e658ed98411e98299d8881b0dabbcc0d05da27b6ed22472ef",
+        "release": "slotsloader-v1.29.1",
+        "file": "SF6_SlotsLoader_v1.29.1-manager.zip",
+        "size": 3311913,
+        "sha256": "05187faf00ada1690c162fa4fc7243904834a89d84fde7362722eb62639db116",
+        "from_sha256": "b365577225adae773080a1ca5d050b5c9c4dedde2884868f84a219a2ce667b87",
         "skip": [
           "SF6_SlotsClean.exe",
           "reframework/data/SF6_CostumeSlots_data/slots_loader_cover.jpg",
@@ -30,11 +30,11 @@
     },
     "native_core": {
       "name": "SF6 Native Core",
-      "version": "0.9.35",
-      "release": "v1.51.0",
-      "file": "SF6_NativeCore_0.9.35.zip",
-      "size": 846850,
-      "sha256": "e2f7cba93f7f9c956aa9d9c894d23d9bc922661b7c7fda4fd572e4b95d41fcc6"
+      "version": "0.9.36",
+      "release": "v1.51.1",
+      "file": "SF6_NativeCore_0.9.36.zip",
+      "size": 846817,
+      "sha256": "80ea90be28efe9c53251064096fde55d07939fe2c1146a87503244137f2bb838"
     }
   }
 }

@@ -506,8 +506,13 @@ bool ticker(const std::string& text, double seconds) {
         std::string notes;
         if (!call(init, req, { arg_i32(112), nullptr }, &r)) notes += " Init raised;";
         set_int(req, "TickerId", 1);
-        if (TD* util = type("app.TickerUtil"))       // its static constructor, as the Recording Manager's ticker runs it
-            if (Method* cctor = util->find_method(".cctor")) call(cctor, nullptr, {}, &r);
+        // TickerUtil's static constructor is NOT run here any more. The Lua this comes from called it only to reach its own hook
+        // on it (which made the request); the request is made above, so the call did nothing useful, and a static constructor
+        // run again from a frame callback crashed the game: its objects are born in the thread's LocalHeap pages (the VM
+        // context's table of pages went from 1 to 3 entries on that call alone), and within about 70 ms the game's own code on
+        // that thread read a temporary whose page had been taken back (System.Enum.HasFlag, exe+0x6f84560 on 20/11, 21/11 and
+        // 27/11/2026). In game on 27/11 with the install's real code stopped after its first download: 3 crashes in 16 installs
+        // with the call (twice that very address), none in 13 without it.
         Strip s{};
         if (!request_id(req, s.id)) { req->release(); return no("the request has no RequestId"); }
         Obj* manager = call(get_mgr, nullptr, {}, &r) ? static_cast<Obj*>(r.ptr) : nullptr;

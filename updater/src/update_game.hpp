@@ -43,9 +43,10 @@ bool box_is_open();
 // last text given, here or by ticker_text: a download's percentage stays the one of the moment. False: no strip (the game's types
 // or the hook are not there), nothing else changes.
 bool ticker(const std::string& text, double seconds);
-// The hook the strips need (TickerRequestData.GetMessage), placed now: to call once at the game's start, on the game thread. A hook
-// added later, while the game runs its menus, crashed the game once in the very millisecond it was added (20/11/2026, the method
-// already hooked by another plugin; not reproduced): no hook is added after the start any more. False: no hook, ticker() says why.
+// The hook the strips need (TickerRequestData.GetMessage), placed now: to call once at the game's start, on the game thread. It was
+// moved to the start after the crash of 20/11/2026, then blamed on a hook added while the game runs its menus; that crash came back
+// with the hook placed at the start (27/11) and was TickerUtil's static constructor run again by ticker() (see there). The hook stays
+// at the start: nothing is gained by adding it later. False: no hook, ticker() says why.
 bool ticker_prepare();
 void ticker_text(const std::string& text);
 // The last strip asked for, kept on screen and saying `text`, to call every frame while it must stay: Shown = the game shows it (its
