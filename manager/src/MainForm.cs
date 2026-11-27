@@ -949,7 +949,7 @@ namespace SlotsInstaller
             copyPathButton = Button("Copy path", false, 92, delegate { CopyInstalledPath(); }); copyPathButton.Dock = DockStyle.Right; copyPathButton.Font = Palette.Small; copyPathButton.Margin = Padding.Empty;
             installedPathRow.Controls.Add(installedDetail); installedPathRow.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); installedPathRow.Controls.Add(copyPathButton);
             installedActions = new Panel { Dock = DockStyle.Top, Height = 92, Padding = new Padding(0, 12, 0, 0) };
-            openInstalledButton = Button("Open folder", false, 200, delegate { GameModRow row = GetGameRowSelection(); if (row != null) { OpenPath(row.Fluffy != null ? row.Fluffy.Root : row.Stage != null ? row.Stage.Folder : config.GameRoot); return; } InstalledOutfit outfit = GetInstalledSelection(); OutfitGroup group = GetGroupSelection(); if (group != null) outfit = group.Slots[0]; if (outfit != null) OpenPath(File.Exists(outfit.Folder) ? Path.GetDirectoryName(outfit.Folder) : outfit.Folder); });
+            openInstalledButton = Button("Open folder", false, 200, delegate { GameModRow row = GetGameRowSelection(); if (row != null) { OpenPath(GameRowFolder(row)); return; } InstalledOutfit outfit = GetInstalledSelection(); OutfitGroup group = GetGroupSelection(); if (group != null) outfit = group.Slots[0]; if (outfit != null) OpenPath(OutfitFolder(outfit)); });
             editInstalledButton = Button("Edit options", false, 200, delegate { EditOutfit(); });
             toggleInstalledButton = Button("Health", false, 200, InspectOrToggleInstalled);
             // 1.0.15: Health took the Enable/Disable button's place (read-only, Enable for a disabled entry); Disable is its own action.
@@ -3810,6 +3810,38 @@ namespace SlotsInstaller
                 case ShortcutAction.ToggleNames: if (currentPage != libraryPage) return false; SetLibraryFileNames(!libraryFileNames, true); return true;   // 1.0.6
             }
             return false;
+        }
+
+        // Open folder on a replacement/tool mod shows its library archive selected, like the Mod library's
+        // "Open in Explorer" (it opened the game folder before). A moved or deleted archive falls back to the
+        // folder it was in, then the game folder.
+        internal string GameRowFolder(GameModRow row)
+        {
+            if (row.Fluffy != null) return row.Fluffy.Root;
+            if (row.Stage != null) return row.Stage.Folder;
+            return ExistingPlace(row.Mod != null ? row.Mod.SourcePath : row.Leftover != null ? row.Leftover.Path : null) ?? config.GameRoot;
+        }
+        // The same for an extra outfit: its library archive (the user: "have it be its archive source"). A manual
+        // drop has no source, and a gone source with no folder left, opens the installed copy as before.
+        internal string OutfitFolder(InstalledOutfit outfit)
+        {
+            string source = ExistingPlace(outfit.SourcePath);
+            if (source != null) return source;
+            return File.Exists(outfit.Folder) ? Path.GetDirectoryName(outfit.Folder) : outfit.Folder;
+        }
+        // The path itself when it is there, else the folder it was in when that is there, else null.
+        private static string ExistingPlace(string path)
+        {
+            if (String.IsNullOrEmpty(path)) return null;
+            try
+            {
+                if (File.Exists(path) || Directory.Exists(path)) return path;
+                string parent = Path.GetDirectoryName(path);
+                if (!String.IsNullOrEmpty(parent) && Directory.Exists(parent)) return parent;
+            }
+            catch (ArgumentException) { }
+            catch (NotSupportedException) { }
+            return null;
         }
 
         private void OpenPath(string path)

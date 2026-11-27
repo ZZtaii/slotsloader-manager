@@ -384,6 +384,30 @@ namespace SlotsInstaller
                     Require(copied == f.Mod("modA"), "Copy path on a replacement row: '" + copied + "', expected " + f.Mod("modA") + " / status " + Get<Label>(form, "statusText").Text);
                 }
                 finally { MainForm.CopyText = realCopy; }
+                // 27 Nov 2026: Open folder on a replacement shows its library archive (it opened the game folder);
+                // a gone archive falls back to its folder, then the game folder.
+                GameModRow openRow = row("modA");
+                string opens = (string)Call(form, "GameRowFolder", openRow);
+                Require(opens == f.Mod("modA"), "Open folder on a replacement opens '" + opens + "', expected " + f.Mod("modA"));
+                string realSource = openRow.Mod.SourcePath;
+                try
+                {
+                    openRow.Mod.SourcePath = Path.Combine(Path.GetDirectoryName(realSource), "gone-away.zip");
+                    opens = (string)Call(form, "GameRowFolder", openRow);
+                    Require(opens == Path.GetDirectoryName(realSource), "Open folder on a moved archive opens '" + opens + "'");
+                    openRow.Mod.SourcePath = Path.Combine(f.Game, "no-such-dir", "gone.zip");
+                    opens = (string)Call(form, "GameRowFolder", openRow);
+                    Require(opens == Get<AppConfig>(form, "config").GameRoot, "Open folder with no archive folder opens '" + opens + "'");
+                }
+                finally { openRow.Mod.SourcePath = realSource; }
+                // Extra outfits: the library archive too; a manual drop (no source) opens its installed copy.
+                string installedCopy = Path.Combine(f.Game, "installed-copy");
+                var managedOutfit = new InstalledOutfit { Name = "x", Folder = installedCopy, Managed = true, SourcePath = f.Mod("modA") };
+                opens = (string)Call(form, "OutfitFolder", managedOutfit);
+                Require(opens == f.Mod("modA"), "Open folder on an extra outfit opens '" + opens + "', expected its archive " + f.Mod("modA"));
+                var manualOutfit = new InstalledOutfit { Name = "y", Folder = installedCopy, Managed = false, SourcePath = "" };
+                opens = (string)Call(form, "OutfitFolder", manualOutfit);
+                Require(opens == installedCopy, "Open folder on a manual outfit opens '" + opens + "', expected " + installedCopy);
                 // 1.0.18: the row moves at once (the list follows the priority) and clicks before the save are one save:
                 // down and back up again saves nothing new and offers no Undo.
                 foreach (ListViewItem item in list.Items) item.Selected = item.Tag is GameModRow && ((GameModRow)item.Tag).Mod != null && ((GameModRow)item.Tag).Mod.SourcePath == f.Mod("modA");
