@@ -432,9 +432,9 @@ namespace SlotsInstaller
             // 1.0.18: take only some parts of the selected mod (its hair, say), OutfitParts.cs.
             layerParts = new FlatButton("Parts", false) { Dock = DockStyle.Left, Width = 72, Font = Palette.Small, Name = "recipeLayerParts", AccessibleName = "Take only some parts of the selected mod: body, hair, head" };
             layerParts.Click += delegate { PickLayerParts(); };
-            var down = new FlatButton("Move down", false) { Dock = DockStyle.Left, Width = 96, Font = Palette.Small }; down.Click += delegate { rows.MoveSelected(1); };
-            var up = new FlatButton("Move up", false) { Dock = DockStyle.Left, Width = 84, Font = Palette.Small }; up.Click += delegate { rows.MoveSelected(-1); };
-            partButtons.Controls.Add(remove); partButtons.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); partButtons.Controls.Add(layerParts); partButtons.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); partButtons.Controls.Add(layerOptions); partButtons.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); partButtons.Controls.Add(down); partButtons.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); partButtons.Controls.Add(up);
+            // 1.0.24 (the user): the layers are dragged by their grip; Move up / Move down are gone (Alt+Up / Alt+Down still move one)
+
+            partButtons.Controls.Add(remove); partButtons.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); partButtons.Controls.Add(layerParts); partButtons.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); partButtons.Controls.Add(layerOptions);
             notes = new Label { UseMnemonic = false, Dock = DockStyle.Fill, ForeColor = Palette.Muted, Font = Palette.Small, Padding = new Padding(0, 10, 0, 0) };
             right.Controls.Add(notes); right.Controls.Add(partButtons); right.Controls.Add(listHost); right.Controls.Add(partsCaption);
 
@@ -495,7 +495,7 @@ namespace SlotsInstaller
             save.Click += delegate { Accept(false); };
             saveInstall.Click += delegate { Accept(true); };
             KeyPreview = true;
-            KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape && !popup.Visible) { DialogResult = DialogResult.Cancel; Close(); } };
+            KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape && !popup.Visible && !rows.Dragging) { DialogResult = DialogResult.Cancel; Close(); } };   // during a drag Escape cancels the drag
             DarkTheme.Apply(this); ResumeLayout(true); PerformAutoScale();
             previewFrame.BackColor = preview.BackColor = previewNote.BackColor = Palette.Background;
 

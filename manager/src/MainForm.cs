@@ -49,6 +49,8 @@ namespace SlotsInstaller
         // 1.0.11: where Help resumes: the topic's title and the article's scroll offset (logical pixels).
         public string HelpTopic = "";
         public int HelpOffset;
+        // 1.0.24 (the user: "by default just open last opened fighter"): the fighter the Random list showed last; missing = none.
+        public string RandomListFighter = "";
         internal static ViewPreferences Load(string file)
         {
             try
@@ -387,7 +389,8 @@ namespace SlotsInstaller
                 FiltersOnly=CustomIds(CustomFilterState.Only),FiltersHidden=CustomIds(CustomFilterState.Hide),
                 WelcomeSeen=viewPreferences!=null && viewPreferences.WelcomeSeen,
                 ToursSeen=viewPreferences!=null && viewPreferences.ToursSeen!=null ? viewPreferences.ToursSeen : new List<string>(),
-                HelpTopic=HelpResumeTopic ?? "",HelpOffset=HelpResumeOffset
+                HelpTopic=HelpResumeTopic ?? "",HelpOffset=HelpResumeOffset,
+                RandomListFighter=LastRandomListFighter
             };
         }
         // Older builds read one character name; keep it meaningful when exactly one fighter is selected.
@@ -926,13 +929,13 @@ namespace SlotsInstaller
             installedList.Resize += delegate { sizeInstalled(); }; dpiLayouts.Add(sizeInstalled);
             installedList.SelectedIndexChanged += delegate {if(!fillingInstalled)ShowInstalledSelection();};
             installedList.KeyDown+=delegate(object sender,KeyEventArgs e) {if(e.Control && e.KeyCode==Keys.A && !busy) {SelectInstalledRows(true);e.Handled=true;e.SuppressKeyPress=true;}};
-            split.Panel1.Controls.Add(installedList); WireGroupRows();   // 2.5.0 (MainFormSlots.cs)
+            split.Panel1.Controls.Add(installedList); WireGroupRows(); WireInstalledDrag();   // 2.5.0 (MainFormSlots.cs); 1.0.24 drag (MainFormInstalledDrag.cs)
             Panel selectionRow=new Panel {Dock=DockStyle.Top,Height=34};
             installedSelectionCount=new Label {UseMnemonic=false,Dock=DockStyle.Fill,Text="0 selected",TextAlign=ContentAlignment.MiddleLeft,Font=Palette.Small,ForeColor=Palette.Muted,AutoEllipsis=true};
-            FlowLayoutPanel selectionActions=new FlowLayoutPanel {Dock=DockStyle.Right,Width=172,WrapContents=false,Padding=Padding.Empty,Margin=Padding.Empty};
+            FlowLayoutPanel selectionActions=new FlowLayoutPanel {Dock=DockStyle.Right,Width=211,WrapContents=false,Padding=Padding.Empty,Margin=Padding.Empty};
             selectAllInstalledButton=Button("Select all",false,100,delegate {SelectInstalledRows(true);});
             clearInstalledSelectionButton=Button("Clear",false,62,delegate {ClearInstalledFilters();SelectInstalledRows(false);});   // 2.5.4: also the three filters
-            foreach(var action in new[]{selectAllInstalledButton,clearInstalledSelectionButton}) {action.Height=28;action.Font=Palette.Small;action.Margin=new Padding(5,0,0,0);selectionActions.Controls.Add(action);}
+            foreach(var action in new[]{selectAllInstalledButton,clearInstalledSelectionButton,refreshInstalledButton}) {action.Height=28;action.Font=Palette.Small;action.Margin=new Padding(5,0,0,0);selectionActions.Controls.Add(action);}   // 1.0.24: Refresh after Clear (MainFormHistory.cs)
             selectionRow.Controls.Add(installedSelectionCount);selectionRow.Controls.Add(BuildInstalledSortStrip());selectionRow.Controls.Add(new Panel {Dock=DockStyle.Right,Width=10});selectionRow.Controls.Add(selectionActions);split.Panel1.Controls.Add(selectionRow);
             // Detail hierarchy: wrapped title, chips, compact copyable path,
             // aligned actions, then the loader result/help card.
@@ -1377,7 +1380,7 @@ namespace SlotsInstaller
 
         private void DrawInstalledItem(object sender, DrawListViewSubItemEventArgs e)
         {
-            GameModRow gameRow = e.Item.Tag as GameModRow; if (gameRow != null) { DrawGameRow(e, gameRow); return; }
+            GameModRow gameRow = e.Item.Tag as GameModRow; if (gameRow != null) { DrawGameRow(e, gameRow); DrawInstalledDropLine(e, gameRow); return; }   // 1.0.24: a drag's drop line (MainFormInstalledDrag.cs)
             OutfitGroup group = e.Item.Tag as OutfitGroup; if (group != null) { DrawGroupRow(e, group); return; }   // 2.5.0 (MainFormSlots.cs)
             InstalledOutfit outfit = e.Item.Tag as InstalledOutfit; if (outfit == null) return;
             bool selected = e.Item.Selected; Rectangle r = e.Bounds;
@@ -3215,7 +3218,7 @@ namespace SlotsInstaller
             editInstalledButton.Visible = toggleInstalledButton.Visible = outfit != null && outfit.Managed;removeInstalledButton.Visible=selected.Count>0;
             reinstallButton.Visible = outfit != null && outfit.Managed && SourceChanged(outfit.SourcePath); reinstallButton.Enabled = !busy;
             removePartButton.Visible = InstalledActionShown(removePartButton); removePartButton.Enabled = !busy;   // 1.0.18
-            loadOrderButton.Visible = !LoaderFlags.SuiteLoaderInstalled && InstalledActionShown(loadOrderButton); loadOrderButton.Enabled = !busy;   // 1.0.19: not on a suite-line loader (LoaderFlags.cs)
+            loadOrderButton.Visible = InstalledActionShown(loadOrderButton); loadOrderButton.Enabled = !busy;   // 1.0.18; on suite-line loaders again since 1.0.24 (OutfitOrder.cs)
             removeInstalledButton.Text=selected.Count>1 ? "Uninstall selection" : "Uninstall outfit";
             if (outfit != null) toggleInstalledButton.Text = outfit.Enabled ? "Health" : "Enable outfit";
             disableInstalledButton.Visible = outfit != null && outfit.Managed && outfit.Enabled && selected.Count == 1; disableInstalledButton.Enabled = !busy; disableInstalledButton.Text = "Disable outfit";
@@ -3690,6 +3693,7 @@ namespace SlotsInstaller
             DragDrop += delegate(object sender, DragEventArgs e)
             {
                 HideDropOverlay();
+                if (installedDragging) return;   // 1.0.24: an Installed row dragged off the list (MainFormInstalledDrag.cs) is no mod
                 string reason; string path = DropPaths.Accept(DropPaths.FromData(e.Data), out reason);
                 if (path == null) { SetPageStatus(currentPage, reason, Palette.Red); return; }
                 if (busy) { SetPageStatus(currentPage, "Wait for the current task to finish, then drop the mod again.", Palette.Red); return; }
@@ -3699,6 +3703,8 @@ namespace SlotsInstaller
         private string lastDropKey;
         private DragDropEffects PresentDrop(IDataObject data)
         {
+            // 1.0.24 (PR #52 review): an Installed row dragged off the list shows no "Can't open this" over the page
+            if (installedDragging) { HideDropOverlay(); return DragDropEffects.None; }
             string[] paths = DropPaths.FromData(data);
             string reason; string path = DropPaths.Accept(paths, out reason);
             bool accepting = path != null && !busy;

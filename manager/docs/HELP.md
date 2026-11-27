@@ -94,7 +94,7 @@ Changing the method converts installed replacements; **Undo** converts them back
 An extra outfit is made from one of the fighter's outfits and uses that outfit's own files wherever it doesn't bring its own. A replacement over that outfit shows on those extra outfits too. The Health report warns and names them; to leave them as they are, install the mod as an Extra outfit instead.
 
 ### Priority and conflicts
-- On the Installed page, the **Installed** type lists replacements and tool mods in priority order: **#1** is on top and wins files that several mods share, like the mod loaded last in other mod managers. What you install last goes to #1; **Move up** and **Move down** change the order (the row moves at once and the order is saved a moment after your last click).
+- On the Installed page, the **Installed** type lists replacements and tool mods in priority order: **#1** is on top and wins files that several mods share, like the mod loaded last in other mod managers. What you install last goes to #1; drag a row, or use **Move up** and **Move down** (the row moves at once and the order is saved a moment after your last click).
 - Before you install, **REPLACES** in the inspector and the footer name any installed mod for the same outfit. The link **Uninstall 'name'** removes that other mod.
 - The **N shared files** chip on the Installed page shows which mods share files and which one wins.
 - Installing another option set of a mod you already installed replaces it and puts it at the top. **Reinstall** after the source changed keeps its place.
@@ -174,6 +174,9 @@ On the Installed page, select an outfit and click **Edit options**. It opens in 
 
 ### Load order
 Select an extra outfit and click **Load order**. Drag the fighter's outfits into place and click **Save order**. It applies when SF6 starts next; close SF6 first. Outfits SF6 has not loaded yet get a slot after one start.
+
+### Random list
+The dice icon (**Random list**) sets what Random picks: **In order** or **Shuffled**, with repeats and the colours each outfit may wear (none ticked: any). Drag rows into order. **Random** keeps the usual draw.
 
 ### Outfit recipes
 A recipe writes down one outfit: its mod, its options and the parts added on top, in order. On the Installed page, the **Recipes** icon (or **Recipes** on an outfit) lists them: **Install as extra outfit** makes a new outfit from one, and **New recipe** opens the builder, filled with the selected outfit and its added parts. Searching "recipes" or "rc" finds outfits that match one.

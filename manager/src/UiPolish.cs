@@ -11,7 +11,7 @@ namespace SlotsInstaller
 {
     // Vector glyphs drawn with anti-aliased GDI+ at the control's device DPI.
     // Font glyphs such as "⌄" fall back to a plain letter in Segoe UI.
-    internal enum ButtonGlyph { None, Gear, Coffee, Bug, Chat, GitHub, Patreon, Nexus, ColorSync, History, Presets, Refresh, Recipes }
+    internal enum ButtonGlyph { None, Gear, Coffee, Bug, Chat, GitHub, Patreon, Nexus, ColorSync, History, Presets, Refresh, Recipes, Dice }
     internal enum ChevronDirection { Right, Down, Up }
 
     internal static class Glyphs
@@ -127,6 +127,18 @@ namespace SlotsInstaller
                         graphics.DrawLine(pen, x - 0.6F * s, y + dy, x + 3.6F * s, y + dy);   // the line
                     }
                 }
+                graphics.SmoothingMode = previous;
+            }
+            else if (glyph == ButtonGlyph.Dice)
+            {
+                // 1.0.24 Installed-page Random list icon: a die showing five, History's size.
+                SmoothingMode previous = graphics.SmoothingMode; graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                float s = scale, x = center.X, y = center.Y, half = 7.2F * s, d = 1.9F * s, off = 3.4F * s;
+                using (var pen = new Pen(color, stroke) { LineJoin = LineJoin.Round })
+                using (GraphicsPath die = Rounded(new RectangleF(x - half, y - half, half * 2, half * 2), 2.6F * s)) graphics.DrawPath(pen, die);
+                using (Brush dot = new SolidBrush(color))
+                    foreach (var p in new[] { new PointF(-off, -off), new PointF(off, -off), new PointF(0, 0), new PointF(-off, off), new PointF(off, off) })
+                        graphics.FillEllipse(dot, x + p.X - d / 2, y + p.Y - d / 2, d, d);
                 graphics.SmoothingMode = previous;
             }
             else if (glyph == ButtonGlyph.Presets)

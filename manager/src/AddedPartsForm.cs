@@ -8,7 +8,7 @@ namespace SlotsInstaller
 {
     // 1.0.18 (user request): "Added parts" on the Installed page. The parts other mods added to one outfit, the
     // winner on top (as "#1 wins" on the Installed page): a part overwrites the files it shares with the parts below
-    // it, and the outfit's own files are always underneath. Drag a row (or Move up / Move down, Alt+Up / Alt+Down)
+    // it, and the outfit's own files are always underneath. Drag a row by its grip (or Alt+Up / Alt+Down)
     // to change which one wins; Remove takes the selected part off. Nothing is written until Save.
     // The install record keeps the parts in the order they are applied (the last one wins), so the list here is that
     // order reversed.
@@ -16,7 +16,7 @@ namespace SlotsInstaller
     {
         private readonly PartRows rows;
         private readonly Label note;
-        private readonly FlatButton save, up, down, remove;
+        private readonly FlatButton save, remove;
         private readonly List<PartGraft> original;
         // The parts to keep, in the order they are applied (the last one wins): Installer.SetParts' input.
         internal List<PartGraft> Wanted { get { List<PartGraft> list = rows.Parts; list.Reverse(); return list; } }
@@ -85,11 +85,11 @@ namespace SlotsInstaller
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(0, 14, 0, 0) };
             save = new FlatButton("Save", true) { Width = 110, Dock = DockStyle.Right, Font = Palette.Small, Name = "addedPartsSave" }; save.Click += delegate { Accept(); };
             var cancel = new FlatButton("Cancel", false) { Width = 96, Dock = DockStyle.Right, Font = Palette.Small }; cancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
-            up = new FlatButton("Move up", false) { Width = 96, Dock = DockStyle.Left, Font = Palette.Small, Name = "addedPartsUp" }; up.Click += delegate { rows.MoveSelected(-1); rows.Focus(); };
-            down = new FlatButton("Move down", false) { Width = 104, Dock = DockStyle.Left, Font = Palette.Small, Name = "addedPartsDown" }; down.Click += delegate { rows.MoveSelected(1); rows.Focus(); };
+            // 1.0.24 (the user): dragging is the way; Move up / Move down are gone (Alt+Up / Alt+Down still move a row)
+
             remove = new FlatButton("Remove", false) { Width = 92, Dock = DockStyle.Left, Font = Palette.Small, Name = "addedPartsRemove", Danger = true }; remove.Click += delegate { rows.RemoveSelected(); rows.Focus(); };
             footer.Controls.Add(new Panel { Dock = DockStyle.Fill });
-            footer.Controls.Add(remove); footer.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); footer.Controls.Add(down); footer.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); footer.Controls.Add(up);
+            footer.Controls.Add(remove);
             footer.Controls.Add(cancel); footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 }); footer.Controls.Add(save);
             Controls.Add(footer); Controls.Add(recipeRow); Controls.Add(baseRow); Controls.Add(listHost); Controls.Add(note); Controls.Add(title);
             ClientSize = new Size(600, Padding.Vertical + title.Height + note.Height + listHost.Height + baseRow.Height + recipeRow.Height + footer.Height);
@@ -98,7 +98,7 @@ namespace SlotsInstaller
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
             {
-                if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); }
+                if (e.KeyCode == Keys.Escape && !rows.Dragging) { DialogResult = DialogResult.Cancel; Close(); }   // during a drag Escape cancels the drag (DragList)
                 else if (e.KeyCode == Keys.Enter && save.Enabled) { e.Handled = true; Accept(); }
                 else if (e.KeyCode == Keys.Delete && remove.Enabled) { e.Handled = true; rows.RemoveSelected(); }
             };
@@ -110,7 +110,7 @@ namespace SlotsInstaller
         private void UpdateState()
         {
             save.Enabled = Changed;
-            up.Enabled = rows.CanMove(-1); down.Enabled = rows.CanMove(1); remove.Enabled = rows.SelectedIndex >= 0;
+            remove.Enabled = rows.SelectedIndex >= 0;
             int removed = original.Count - rows.Count;
             note.Text = said != null ? said : removed > 0 ? ReplacePlanner.N(removed, "part") + " will be removed. Save puts the outfit together again from its own mod with the parts listed here."
                 : Changed ? "Save puts the outfit together again from its own mod with the parts in this order."

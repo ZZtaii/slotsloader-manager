@@ -351,6 +351,27 @@ namespace SlotsInstaller
                 Application.DoEvents(); Call(form, "MoveGameRow", 1); WaitIdle(form); refresh();
                 Require(order() != start && form.UndoLabel.Contains("moved"), "move: " + order());
                 undo(); Require(order() == start, "Undo of Move: " + order() + " (was " + start + ")");
+                // 1.0.24 (the user): a row dragged in the Installed list to another place saves that order, with Undo; dropped
+                // on its own place, nothing changes. The drop place follows the rows under the pointer.
+                foreach (ListViewItem item in list.Items) item.Selected = item.Tag is GameModRow && ((GameModRow)item.Tag).Mod != null && ((GameModRow)item.Tag).Mod.SourcePath == f.Mod("modA");
+                Application.DoEvents(); int dragFrom = row("modA").Priority - 1;
+                ListViewItem firstRow = list.Items.Cast<ListViewItem>().First(i => i.Tag is GameModRow && ((GameModRow)i.Tag).Mod != null);
+                Require((int)Call(form, "InstalledDropPlace", firstRow.Bounds.Top + 2) == 0 && (int)Call(form, "InstalledDropPlace", firstRow.Bounds.Bottom - 2) == 1, "drop places over the first row");
+                form.MoveGameRowsTo(dragFrom); form.MoveGameRowsTo(dragFrom + 1); WaitIdle(form);
+                Require(order() == start && !form.Working, "dropped on its own place: " + order());
+                form.MoveGameRowsTo(dragFrom == 0 ? 2 : 0); WaitIdle(form); refresh();
+                Require(order() != start && form.UndoLabel.Contains("moved"), "drag: " + order());
+                undo(); Require(order() == start, "Undo of a drag: " + order() + " (was " + start + ")");
+                // PR #52 review: the list takes drops only during its own drag (a ZIP from Explorer goes on to the window), and that
+                // drag dropped off the list shows no "Can't open this" over the page
+                Require(!list.AllowDrop, "the Installed list takes drops outside its own drag");
+                var archiveDrop = new DataObject(DataFormats.FileDrop, new[] { Path.Combine(f.Game, "some.zip") });
+                Set(form, "installedDragging", true);
+                try
+                {
+                    Require((DragDropEffects)Call(form, "PresentDrop", (object)archiveDrop) == DragDropEffects.None && !Get<Control>(form, "dropOverlay").Visible, "a row drag showed the drop overlay");
+                }
+                finally { Set(form, "installedDragging", false); Call(form, "HideDropOverlay"); }
                 // 26 Nov 2026: Copy path on a replacement row copies the path the row shows (it used to do nothing).
                 foreach (ListViewItem item in list.Items) item.Selected = item.Tag is GameModRow && ((GameModRow)item.Tag).Mod != null && ((GameModRow)item.Tag).Mod.SourcePath == f.Mod("modA");
                 Application.DoEvents();
