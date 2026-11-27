@@ -2,6 +2,20 @@
   "format": "sf6suite-notes-1",
   "releases": [
     {
+      "version": "1.51.0",
+      "date": "2026-11-27",
+      "new": [
+        "[Slots Loader] Installed by the Slotsloader Manager: Random can follow your own list of outfits, repeats and colours, made in the Manager."
+      ],
+      "fixed": [
+        "[Slots Loader] A mod whose variants each need its main files (Requirement= in modinfo.ini) now gives every variant those files. Such an outfit could lack its textures."
+      ],
+      "modified": [
+        "[Slots Loader] The two colour squares of a mod outfit's colours are measured on the outfit's surface and on its textures. Outfits that had no squares now get them.",
+        "[Slots Loader] The first start after this update writes the loader's files again, once. It can take a minute or two with many mods."
+      ]
+    },
+    {
       "version": "1.50.5",
       "date": "2026-11-27",
       "new": [],

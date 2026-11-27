@@ -141,7 +141,10 @@ static const int   N_OLD_TEX = 1;
 // static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
 static const char* LOADER_PAK_ID = "2026-11-10-random-outfit";
-static const char* LOADER_META_ID = "2026-10-20-fastpak";
+static const char* LOADER_META_ID = "2026-11-27-swatch-area";   // was "2026-10-20-fastpak"; swatches weigh by triangles
+// The rules of game_swatches.json, in its key after the meta id: another value makes it again at the next launch, the pak
+// kept ("|ccvd|": a game outfit's colours in its colour list's order, Ex / Dx files included, 27/11)
+static const char* GAME_SWATCH_RULES = "|ccvd|";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
@@ -5959,6 +5962,13 @@ static int report_cloth(Ctx& c, const SlotInfo& slot) {
 // of a material cluster in the colour file (cmd_001..010 = colours 1 to 10); its size is the mean of its
 // channel in the material's colour mask (CustomizeColor_Mask: tints 1-4, CustomizeColor_Mask2: 5-8), on
 // a small mip level. Skin, eyes and the like are left out; close tints add up; the two squares differ.
+// (ZZtaii 27/11: a mask is often shared by many materials, and its mean over the whole texture gave each of
+// them the same weight: Delta Red's leotard, straps, pouch and gauntlets share one mask, and the many
+// near-black straps outweighed the green leotard. When the outfit's meshes can be read, a zone's size is
+// instead its surface: each triangle of a material, by its area, takes the mask's channel where its UVs
+// fall. And a tint every colour has alike ranks lower, so the squares show what tells the colours apart.)
+struct UvTri { float area; float u[3], v[3]; };
+static bool mesh_uv_tris(const std::vector<uint8_t>& b, std::map<std::string, std::vector<UvTri>>& out);   // with mesh_shape
 
 namespace swatch {
 
@@ -5980,7 +5990,7 @@ static std::string u16_at(const std::vector<uint8_t>& b, uint64_t o) {
 }
 
 // Materials of a material file (.mdf2.31) with their two colour masks (resource paths, may be empty)
-struct MatMasks { std::string name, mask1, mask2; };
+struct MatMasks { std::string name, mask1, mask2, albedo; };
 static void mdf2_masks(const std::vector<uint8_t>& b, std::vector<MatMasks>& out) {
     if (b.size() < 16 || memcmp(b.data(), "MDF\0", 4) != 0) return;
     int16_t count; memcpy(&count, b.data() + 6, 2);
@@ -5995,6 +6005,7 @@ static void mdf2_masks(const std::vector<uint8_t>& b, std::vector<MatMasks>& out
             const std::string type = u16_at(b, type_off);
             if (type == "CustomizeColor_Mask") m.mask1 = u16_at(b, path_off);
             else if (type == "CustomizeColor_Mask2") m.mask2 = u16_at(b, path_off);
+            else if ((type == "BaseDielectricMap" || type == "BaseMetalMap") && m.albedo.empty()) m.albedo = u16_at(b, path_off);
         }
         out.push_back(std::move(m));
     }
@@ -6012,6 +6023,38 @@ static bool mask_means(slotcheck::GameFiles& gf, const std::string& p, float mea
     }
     return texture_channel_means(gf.load(p), mean);
 }
+// The same small level's pixels
+static bool mask_pixels(slotcheck::GameFiles& gf, const std::string& p, uint32_t& w, uint32_t& h, std::vector<uint8_t>& px) {
+    const uint64_t hh = pak_path_hash(std::string_view(p));
+    uint64_t size = 0, off = 0, len = 0;
+    std::vector<uint8_t> head, level;
+    if (gf.writer->find(hh) && gf.writer->range(hh, 0, 0, head, &size)) {
+        return gf.writer->head(hh, TEXTURE_HEAD_MAX, head) && texture_small_level(head, size, off, len)
+            && gf.writer->range(hh, off, size_t(len), level) && texture_level_pixels(head, size, level, w, h, px);
+    }
+    return texture_small_pixels(gf.load(p), w, h, px);
+}
+
+// A game outfit's colour files in colour order, from its colour variation list (<fd>_<folder>_ccvd.user): the names it
+// lists, CMD_000 (the outfit's own) left out, up to the list's second copy. Juri's Outfit 1 (27/11): 001-010, Ex_001,
+// Dx_001-008 (19 colours); Chun-Li's: 001-010, Dx_001-003, Ex_001-002, Dx_004-008. Empty when it can't be read.
+static std::vector<std::string> ccvd_colour_files(slotcheck::GameFiles& gf, const std::string& fd, const std::string& folder,
+                                                  const std::string& user_ver) {
+    std::vector<std::string> out;
+    const std::string base = "natives/stm/product/model/esf/" + fd + "/" + folder + "/";
+    const auto b = gf.load(base + fd + "_" + folder + "_ccvd.user." + user_ver);
+    const std::string head = str_lower(fd + "_" + folder + "_cmd_");
+    for (auto& s : slotcheck::utf16_strings(b)) {
+        std::string low = str_lower(s);
+        const size_t at = low.find(head);
+        if (at == std::string::npos) continue;
+        std::string name = low.substr(at);
+        if (!str_ends_with(name, ".user")) continue;
+        if (name == head + "000.user") { if (!out.empty()) break; continue; }   // the outfit's own; its second copy ends the list
+        out.push_back(base + name + "." + user_ver);
+    }
+    return out;
+}
 
 // "[[c0,c1],...]" for colours 1 to 10 (null where the colour file is missing), each square an RGBA
 // value as via.Color stores it (R in the low byte)
@@ -6020,10 +6063,51 @@ static bool mask_means(slotcheck::GameFiles& gf, const std::string& p, float mea
 static std::string compute(slotcheck::GameFiles& gf, const std::string& scene_p, const std::string& fd,
                            const std::string& folder, const std::string& name_folder,
                            const std::unordered_map<std::string, std::string>& suffixes,
-                           int* colours_done = nullptr) {
+                           int* colours_done = nullptr, int count = 10, const std::vector<std::string>* files = nullptr) {
+    // files: the colour files in colour order (a game outfit's colour list, ccvd_colour_files); none: _cmd_001 to _cmd_<count>
+    if (files && !files->empty()) count = int(files->size());
     auto scene = gf.load(scene_p);
     std::map<std::string, std::array<float, 8>> cov;
     std::set<std::string> seen;
+    // Each material's triangles in the outfit's meshes (their first level of detail), with their area and UVs
+    std::map<std::string, std::vector<UvTri>> tris;
+    double area_all = 0;
+    bool all_read = true;   // one mesh not readable so (a game mesh streamed, often): the whole outfit as before
+    for (auto& s : slotcheck::utf16_strings(scene)) {
+        std::string p = slotcheck::resource_path(s, suffixes);
+        if (p.empty() || p.find(".mesh.") == std::string::npos || !seen.insert(p).second) continue;
+        std::map<std::string, std::vector<UvTri>> got;
+        if (!mesh_uv_tris(gf.load(p), got)) { all_read = false; continue; }
+        for (auto& [name, ts] : got) {
+            for (auto& t : ts) area_all += t.area;
+            auto& d = tris[name];
+            d.insert(d.end(), ts.begin(), ts.end());
+        }
+    }
+    if (!all_read) { tris.clear(); area_all = 0; }
+    // the masks' small levels, read once each
+    struct Px { bool ok = false; uint32_t w = 0, h = 0; std::vector<uint8_t> px; };
+    std::map<std::string, Px> masks;
+    auto mask_of = [&](const std::string& ref) -> const Px* {
+        if (ref.empty()) return nullptr;
+        const std::string p = scene_ref_pak_path(ref, suffixes);
+        auto it = masks.find(p);
+        if (it == masks.end()) {
+            Px x;
+            x.ok = mask_pixels(gf, p, x.w, x.h, x.px) && x.w && x.h;
+            it = masks.emplace(p, std::move(x)).first;
+        }
+        return it->second.ok ? &it->second : nullptr;
+    };
+    auto sample = [](const Px& m, float u, float v, int ch) {
+        u -= std::floor(u); v -= std::floor(v);
+        const uint32_t x = std::min(m.w - 1, uint32_t(u * float(m.w))), y = std::min(m.h - 1, uint32_t(v * float(m.h)));
+        return float(m.px[(size_t(y) * m.w + x) * 4 + ch]) / 255.f;
+    };
+    // What a material's surface shows where no tint applies (its zone's tint switched off, or no mask over it): its
+    // texture's own colour there (mods often paint their colours in the texture); per mask channel, and the rest
+    struct Tex { double w = 0, rgb[3] = {0, 0, 0}; };
+    std::map<std::string, std::array<Tex, 9>> texcol;   // [0..7]: under mask channel k, [8]: under no mask
     for (auto& s : slotcheck::utf16_strings(scene)) {
         std::string p = slotcheck::resource_path(s, suffixes);
         if (p.empty() || !str_ends_with(p, ".mdf2.31") || !seen.insert(p).second) continue;
@@ -6032,12 +6116,52 @@ static std::string compute(slotcheck::GameFiles& gf, const std::string& scene_p,
         for (auto& m : mats) {
             if (is_skin(m.name)) continue;
             std::array<float, 8> v{};
-            for (int j = 0; j < 2; j++) {
-                const std::string& ref = j ? m.mask2 : m.mask1;
-                float mean[4];
-                if (!ref.empty() && mask_means(gf, scene_ref_pak_path(ref, suffixes), mean))
-                    for (int k = 0; k < 4; k++) v[j * 4 + k] = mean[k];
-            }
+            if (area_all > 0) {
+                // its surface under each mask channel (a material in no mesh read: none)
+                auto t = tris.find(m.name);
+                if (t != tris.end()) {
+                    const Px* mp[2] = {mask_of(m.mask1), mask_of(m.mask2)};
+                    const Px* ap = mask_of(m.albedo);
+                    std::array<Tex, 9> tc{};
+                    double acc[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+                    for (auto& tri : t->second) {
+                        const float cu = (tri.u[0] + tri.u[1] + tri.u[2]) / 3.f, cv = (tri.v[0] + tri.v[1] + tri.v[2]) / 3.f;
+                        double here[8] = {0, 0, 0, 0, 0, 0, 0, 0}, sum = 0;
+                        for (int j = 0; j < 2; j++) {
+                            if (!mp[j]) continue;
+                            for (int k = 0; k < 4; k++) {
+                                const float s4 = sample(*mp[j], cu, cv, k) + sample(*mp[j], tri.u[0], tri.v[0], k)
+                                               + sample(*mp[j], tri.u[1], tri.v[1], k) + sample(*mp[j], tri.u[2], tri.v[2], k);
+                                here[j * 4 + k] = s4 / 4.0;
+                                acc[j * 4 + k] += double(tri.area) * here[j * 4 + k];
+                                sum += here[j * 4 + k];
+                            }
+                        }
+                        if (ap) {
+                            double rgb[3];
+                            for (int c = 0; c < 3; c++) rgb[c] = sample(*ap, cu, cv, c);
+                            for (int k = 0; k < 9; k++) {
+                                const double w = double(tri.area) * (k < 8 ? here[k] : std::max(0.0, 1.0 - sum));
+                                if (w <= 0) continue;
+                                tc[k].w += w;
+                                for (int c = 0; c < 3; c++) tc[k].rgb[c] += w * rgb[c];
+                            }
+                        }
+                    }
+                    for (int k = 0; k < 8; k++) v[k] = float(acc[k] / area_all);
+                    if (ap) {
+                        for (auto& x : tc) if (x.w > 0) { for (int c = 0; c < 3; c++) x.rgb[c] /= x.w; x.w /= area_all; }
+                        texcol[m.name] = tc;
+                    }
+                }
+            } else
+                // no mesh read: the mask's mean over the whole texture, as before
+                for (int j = 0; j < 2; j++) {
+                    const std::string& ref = j ? m.mask2 : m.mask1;
+                    float mean[4];
+                    if (!ref.empty() && mask_means(gf, scene_ref_pak_path(ref, suffixes), mean))
+                        for (int k = 0; k < 4; k++) v[j * 4 + k] = mean[k];
+                }
             cov[m.name] = v;
         }
     }
@@ -6047,42 +6171,82 @@ static std::string compute(slotcheck::GameFiles& gf, const std::string& scene_p,
         for (int c = 0; c < 3; c++) { double d = double((a >> (8 * c)) & 0xFF) - double((b >> (8 * c)) & 0xFF); s += d * d; }
         return std::sqrt(s);
     };
-    std::string json = "[";
-    for (int idx = 0; idx < 10; idx++) {
+    // Each colour's tints, close ones added up, by the size of their zones
+    struct G { uint32_t c; double w; };
+    std::vector<std::vector<G>> per(size_t(std::max(1, count)));
+    std::vector<bool> has(per.size(), false);
+    for (int idx = 0; idx < int(per.size()); idx++) {
         char tail[48]; snprintf(tail, sizeof tail, "_cmd_%03d.user.", idx + 1);
         std::vector<CmdCluster> clusters;
         const std::string dir = "natives/stm/product/model/esf/" + fd + "/" + folder + "/" + fd + "_";
-        auto cmd = gf.load(dir + name_folder + tail + user_ver);
-        if (cmd.empty() && name_folder != folder) cmd = gf.load(dir + folder + tail + user_ver);
-        cmd_tints(cmd, clusters);
-        struct G { uint32_t c; double w; };
-        std::vector<G> groups;
+        auto cmd = files && !files->empty() ? gf.load((*files)[size_t(idx)]) : gf.load(dir + name_folder + tail + user_ver);
+        if (cmd.empty() && !(files && !files->empty()) && name_folder != folder) cmd = gf.load(dir + folder + tail + user_ver);
+        if (!cmd_tints(cmd, clusters)) continue;
+        auto& groups = per[idx];
+        auto add = [&](uint32_t c, double w) {
+            if (w <= 0) return;
+            c |= 0xFF000000u;
+            for (auto& g : groups) if (dist(g.c, c) < 25) { g.w += w; return; }
+            groups.push_back({c, w});
+        };
+        auto tex = [](const Tex& t) {
+            uint32_t c = 0;
+            for (int k = 0; k < 3; k++) c |= uint32_t(std::lround(std::clamp(t.rgb[k], 0.0, 1.0) * 255.0)) << (8 * k);
+            return c;
+        };
+        std::set<std::string> named;
         for (auto& cl : clusters) {
             auto it = cov.find(cl.name);
-            if (it == cov.end()) continue;
-            for (size_t k = 0; k < cl.colors.size() && k < 8; k++) {
-                const double w = it->second[k];
-                if (!cl.colors[k].first || w <= 0) continue;
-                const uint32_t c = cl.colors[k].second | 0xFF000000u;
-                bool merged = false;
-                for (auto& g : groups) if (dist(g.c, c) < 25) { g.w += w; merged = true; break; }
-                if (!merged) groups.push_back({c, w});
+            if (it == cov.end() || !named.insert(cl.name).second) continue;   // a material named twice: its first entry
+            auto tc = texcol.find(cl.name);
+            for (size_t k = 0; k < 8; k++) {
+                const bool tinted = k < cl.colors.size() && cl.colors[k].first;
+                if (tinted) add(cl.colors[k].second, it->second[k]);
+                else if (tc != texcol.end()) add(tex(tc->second[k]), tc->second[k].w);   // its zone shows the texture
             }
+            if (tc != texcol.end()) add(tex(tc->second[8]), tc->second[8].w);
         }
-        std::stable_sort(groups.begin(), groups.end(), [](const G& a, const G& b) { return a.w > b.w; });
+        // a material the colour file does not name: its texture everywhere
+        for (auto& [name, tc] : texcol)
+            if (!named.count(name)) for (auto& t : tc) add(tex(t), t.w);
+        has[idx] = !groups.empty();
+    }
+    // A tint every colour has (a close one in each): it tells no colour from another, so it ranks lower
+    const int present = int(std::count(has.begin(), has.end(), true));
+    auto everywhere = [&](uint32_t c) {
+        if (present < 2) return false;
+        for (int j = 0; j < int(per.size()); j++) {
+            if (!has[j]) continue;
+            bool found = false;
+            for (auto& g : per[j]) if (dist(g.c, c) < 25) { found = true; break; }
+            if (!found) return false;
+        }
+        return true;
+    };
+    // (count past 10, the game's own outfits: the colours after the last one that has a file are left out)
+    std::vector<std::string> items;
+    int last = -1;
+    for (int idx = 0; idx < int(per.size()); idx++) {
+        auto& groups = per[idx];
+        std::vector<std::pair<double, uint32_t>> ranked;
+        for (auto& g : groups) ranked.push_back({g.w * (everywhere(g.c) ? 0.3 : 1.0), g.c});
+        std::stable_sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
         std::vector<uint32_t> pick;
-        for (auto& g : groups) {
+        for (auto& [w, c] : ranked) {
             bool distinct = true;
-            for (uint32_t p : pick) if (dist(p, g.c) <= 40) { distinct = false; break; }
-            if (distinct) pick.push_back(g.c);
+            for (uint32_t p : pick) if (dist(p, c) <= 40) { distinct = false; break; }
+            if (distinct) pick.push_back(c);
             if (pick.size() == 2) break;
         }
-        if (idx) json += ",";
-        if (pick.empty()) { json += "null"; continue; }
+        if (pick.empty()) { items.push_back("null"); continue; }
         if (pick.size() == 1) pick.push_back(pick[0]);
-        json += "[" + std::to_string(pick[0]) + "," + std::to_string(pick[1]) + "]";
+        items.push_back("[" + std::to_string(pick[0]) + "," + std::to_string(pick[1]) + "]");
+        last = idx;
         if (colours_done) (*colours_done)++;
     }
+    if (count > 10) items.resize(size_t(last + 1));
+    std::string json = "[";
+    for (size_t i = 0; i < items.size(); i++) json += (i ? "," : "") + items[i];
     return json + "]";
 }
 
@@ -6581,6 +6745,7 @@ struct UnitFiles {
     int joined_from = 0;                 // its own source, when its archive is an add-on of another mod's tree (join_addon_archives)
     std::string name, addonfor, bundle;  // from modinfo.ini (Fluffy), may be empty
     std::string description;             // modinfo.ini, may be empty
+    std::string requirement;             // modinfo.ini "Requirement": an option installed under this one, may be empty
     std::string mod_id, info_path;
     std::unordered_map<std::string, ModFileRef> files;
     std::vector<ModCostume> costumes;    // empty: partial option, candidate add-on
@@ -6620,7 +6785,7 @@ static uint64_t fnv1a64(const std::string& s) {
     return h;
 }
 
-struct ModInfoFields { std::string name, addonfor, bundle, description; };
+struct ModInfoFields { std::string name, addonfor, bundle, description, requirement; };
 
 // modinfo.ini's fields (descriptions: from ZZtaii's Slotsloader fork (1.9.7-custom), MIT)
 static ModInfoFields read_modinfo_fields(const std::string& dir) {
@@ -6640,6 +6805,7 @@ static ModInfoFields read_modinfo_fields(const std::string& dir) {
         else if (k == "addonfor") mi.addonfor = v;
         else if (k == "nameasbundle") mi.bundle = v;
         else if (k == "description") mi.description = v;
+        else if (k == "requirement") mi.requirement = v;
     }
     fclose(f);
     return mi;
@@ -6651,6 +6817,7 @@ static void read_modinfo(const std::string& dir, UnitFiles& uf) {
     uf.addonfor = mi.addonfor;
     uf.bundle = mi.bundle;
     uf.description = mi.description;
+    uf.requirement = mi.requirement;
 }
 
 static void print_costumes(const std::vector<ModCostume>& costumes) {
@@ -8966,6 +9133,90 @@ static MeshShape mesh_shape(const std::vector<uint8_t>& b) {
     s.ok = true;
     return s;
 }
+// Each material's triangles in a mesh's first level of detail with their area and UVs (swatch::compute); empty when the
+// mesh cannot be read so (its faces or vertices in a streaming buffer, no position or UV stream).
+// (SF6 mesh, as mesh_shape: buffer header at +72: vertex element list at +0, vertex buffer at +8, its size at +28, element
+// count at +34; an element is type (0 position, 3 floats; 2 first UV, 2 half floats), stride, start in the vertex buffer.
+// A submesh: material, index count at +4, first index at +8, first vertex at +12; its indices count from that vertex.)
+static float half_to_float(uint16_t h) {
+    const uint32_t s = uint32_t(h & 0x8000) << 16, e = (h >> 10) & 0x1F, m = h & 0x3FF;
+    uint32_t f;
+    if (e == 0) {
+        if (!m) f = s;
+        else { int ee = -1; uint32_t mm = m; do { ee++; mm <<= 1; } while (!(mm & 0x400)); f = s | uint32_t(127 - 15 - ee) << 23 | (mm & 0x3FF) << 13; }
+    } else if (e == 31) f = s | 0x7F800000u | m << 13;
+    else f = s | (e + 127 - 15) << 23 | m << 13;
+    float r; memcpy(&r, &f, 4);
+    return r;
+}
+static bool mesh_uv_tris(const std::vector<uint8_t>& b, std::map<std::string, std::vector<UvTri>>& got) {
+    got.clear();
+
+    std::vector<std::string> mats, names;
+    if (!slotcheck::mesh_materials(b, mats, &names)) return false;
+    auto r64 = [&](size_t o, int64_t& v) { if (o + 8 > b.size()) return false; memcpy(&v, b.data() + o, 8); return true; };
+    auto r32 = [&](size_t o, int32_t& v) { if (o + 4 > b.size()) return false; memcpy(&v, b.data() + o, 4); return true; };
+    int64_t mo = 0, veo = 0, vbo = 0, lods = 0, los = 0, l0 = 0, ho = 0;
+    int32_t vbs = 0;
+    if (!r64(72, mo) || mo <= 0 || !r64(size_t(mo), veo) || !r64(size_t(mo) + 8, vbo) || !r32(size_t(mo) + 28, vbs) || vbo <= 0 || vbs <= 0
+        || size_t(mo) + 36 > b.size() || uint64_t(vbo) + uint32_t(vbs) > b.size()) return false;
+    uint16_t ec = 0;
+    memcpy(&ec, b.data() + size_t(mo) + 34, 2);
+    int64_t pos_at = -1, uv_at = -1;
+    for (uint16_t k = 0; k < ec && veo > 0 && size_t(veo) + 8ull * (k + 1) <= b.size(); ++k) {
+        uint16_t type = 0, stride = 0; uint32_t start = 0;
+        memcpy(&type, b.data() + size_t(veo) + 8ull * k, 2); memcpy(&stride, b.data() + size_t(veo) + 8ull * k + 2, 2);
+        memcpy(&start, b.data() + size_t(veo) + 8ull * k + 4, 4);
+        if (type == 0 && stride == 12 && pos_at < 0) pos_at = vbo + start;
+        if (type == 2 && stride == 4 && uv_at < 0) uv_at = vbo + start;
+    }
+    if (pos_at < 0 || uv_at < 0) return false;
+    const uint64_t vend = uint64_t(vbo) + uint32_t(vbs), fbo = vend;
+    if (!r64(32, lods) || lods <= 0 || size_t(lods) + 64 > b.size()) return false;
+    const size_t isz = b[size_t(lods) + 6] ? 4 : 2;
+    if (!r64(size_t(lods) + 56, los) || los <= 0 || !r64(size_t(los), l0) || l0 <= 0 || size_t(l0) + 16 > b.size()) return false;
+    const uint8_t groups = b[size_t(l0)];
+    if (!r64(size_t(l0) + 8, ho) || ho <= 0) return false;
+
+    for (uint8_t g = 0; g < groups; ++g) {
+        int64_t go = 0;
+        if (!r64(size_t(ho) + 8ull * g, go) || go <= 0 || size_t(go) + 16 > b.size()) return false;
+        const uint8_t sc = b[size_t(go) + 1];
+        for (uint8_t n = 0; n < sc; ++n) {
+            const size_t so = size_t(go) + 16 + 24ull * n;
+            int32_t ic = 0, fio = 0, vsi = 0;
+            if (so + 24 > b.size() || !r32(so + 4, ic) || !r32(so + 8, fio) || !r32(so + 12, vsi) || ic < 0 || fio < 0 || vsi < 0) return false;
+            const uint8_t mi = b[so];
+            if (mi >= mats.size() || b[so + 2] != 0) return false;   // another vertex buffer: not read
+            const uint64_t at = fbo + uint64_t(fio) * isz;
+            if (at + uint64_t(ic) * isz > b.size()) return false;     // faces elsewhere (a streaming buffer)
+            auto& list = got[mats[mi]];
+            for (size_t t = 0; t + 2 < size_t(ic); t += 3) {
+                uint32_t ix[3] = {0, 0, 0};
+                for (int c = 0; c < 3; c++) memcpy(&ix[c], b.data() + at + (t + c) * isz, isz);
+                if (ix[0] == ix[1] || ix[1] == ix[2] || ix[0] == ix[2]) continue;
+                float p[3][3]; UvTri tri{};
+                bool ok = true;
+                for (int c = 0; c < 3 && ok; c++) {
+                    const uint64_t v = uint64_t(vsi) + ix[c];
+                    const uint64_t pp = uint64_t(pos_at) + 12 * v, up = uint64_t(uv_at) + 4 * v;
+                    if (pp + 12 > vend || up + 4 > vend) { ok = false; break; }
+                    memcpy(p[c], b.data() + pp, 12);
+                    uint16_t hu, hv; memcpy(&hu, b.data() + up, 2); memcpy(&hv, b.data() + up + 2, 2);
+                    tri.u[c] = half_to_float(hu); tri.v[c] = half_to_float(hv);
+                }
+                if (!ok) return false;
+                const float ax = p[1][0] - p[0][0], ay = p[1][1] - p[0][1], az = p[1][2] - p[0][2];
+                const float bx = p[2][0] - p[0][0], by = p[2][1] - p[0][1], bz = p[2][2] - p[0][2];
+                const float cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+                tri.area = 0.5f * std::sqrt(cx * cx + cy * cy + cz * cz);
+                if (!(tri.area > 0) || !std::isfinite(tri.area) || !std::isfinite(tri.u[0] + tri.u[1] + tri.u[2] + tri.v[0] + tri.v[1] + tri.v[2])) continue;
+                list.push_back(tri);
+            }
+        }
+    }
+    return true;
+}
 
 // A game mesh as the subset test compares it, read once per scan
 struct GameMesh { std::string md5; MeshShape shape; };
@@ -10455,6 +10706,37 @@ static void finalize_units(ScanOutputs& o) {
             }
             for (auto i : tree) modular.insert(i);
             for (auto& [k, p] : kids) modular.insert(k);
+            // Options that need another option of their group (Fluffy "Requirement"): "Main files" and the variants
+            // beside it under one menu entry, each variant naming the main files as its requirement and shipping its
+            // own body mesh. Fluffy installs the main files first and the variant over them; read as alternatives of
+            // one group, each outfit had the variant's files alone and lost the main files' textures (Chun-Li
+            // Sleeveless C2: the barefoot outfits named skin textures that only the main files ship, and the game
+            // crashed while loading them, 26/11). Such a variant is made with the files of the option it requires
+            // under its own (its own win). Only complete options (own body mesh) that name an option of their own
+            // group with files: an add-on without a mesh keeps the add-on rules.
+            for (auto i : tree) {
+                const auto& u = g_units[i];
+                const std::string want = trim_ws(u.requirement);
+                if (want.empty() || u.costumes.empty() || !unit_has_mesh(u)) continue;
+                size_t base = SIZE_MAX;
+                for (auto j : tree)
+                    if (j != i && !g_units[j].files.empty() && eq_ci(g_units[j].name, want)
+                        && eq_ci(g_units[j].addonfor, u.addonfor)) { base = j; break; }
+                if (base == SIZE_MAX) continue;
+                auto merged = g_units[base].files;
+                const size_t own = u.files.size();
+                size_t replaced = 0;
+                for (auto& [p, mf] : g_units[i].files) { if (merged.count(p)) replaced++; merged[p] = mf; }
+                auto origin = g_units[base].origin;
+                for (auto& [np, op] : g_units[i].origin) origin[np] = op;
+                auto& w = g_units[i];
+                w.files = std::move(merged);
+                w.origin = std::move(origin);
+                w.targets.insert(g_units[base].targets.begin(), g_units[base].targets.end());
+                w.costumes = detect_mod_costumes(w.files, o.inv);
+                printf("\n  %s: requires %s (Requirement): made with its %zu files under its own %zu (%zu replaced)\n",
+                       unit_label(w).c_str(), unit_label(g_units[base]).c_str(), g_units[base].files.size(), own, replaced);
+            }
             std::vector<size_t> made;
             build_modular(tree, o, kids, &made);
             modular.insert(made.begin(), made.end());
@@ -12658,8 +12940,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 for (auto& ci : inv.costumes) {
                     if (ci.model_dir.empty() || ci.scene.empty()) continue;
                     std::string folder = ci.model_dir.substr(ci.model_dir.rfind('/') + 1);
-                    fprintf(tf, "%s %d %s\n", ci.fighter_dir.c_str(), ci.costume_no,
-                            swatch::compute(gf, ci.scene, ci.fighter_dir, folder, folder, inv.suffixes).c_str());
+                    // as game_swatches.json: the colours in the colour list's order
+                    const std::string uv = inv.suffixes.count("user") ? inv.suffixes.at("user") : std::string("2");
+                    const std::vector<std::string> cf = swatch::ccvd_colour_files(gf, ci.fighter_dir, folder, uv);
+                    fprintf(tf, "%s %d %zu %s\n", ci.fighter_dir.c_str(), ci.costume_no, cf.size(),
+                            swatch::compute(gf, ci.scene, ci.fighter_dir, folder, folder, inv.suffixes, nullptr, 30, &cf).c_str());
                 }
                 fclose(tf);
             }
@@ -12952,9 +13237,18 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         }
         // variants.json (read by the Slotsloader Manager) is written by a build only: missing, the same mods are
         // built again like for another meta id, the pak in place kept. From ZZtaii's Slotsloader fork 1.10.0, MIT.
-        const bool variants_missing = GetFileAttributesA(variants_path.c_str()) == INVALID_FILE_ATTRIBUTES;
+        // The same for game_swatches.json (the Slotsloader Manager's Random list; ZZtaii 27/11: a loader installed over the
+        // same mods said "Up to date" and kept the old file): missing, or made by other swatch rules (its key's start).
+        // Manager mode only: only the Manager reads the file.
+        bool swatches_stale = false;
+        if (g_manager_mode) {
+            const std::string had = read_text_file(registry_dir + "\\game_swatches.json");
+            swatches_stale = had.find(std::string("\"key\": \"") + LOADER_META_ID + GAME_SWATCH_RULES) == std::string::npos;
+        }
+        const bool variants_missing = GetFileAttributesA(variants_path.c_str()) == INVALID_FILE_ATTRIBUTES || swatches_stale;
         if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && meta_same && variants_missing)
-            logf("  variants.json missing: rebuilding\n");
+            logf(swatches_stale ? "  game_swatches.json missing or from other rules: rebuilding (the pak in place kept)\n"
+                                : "  variants.json missing: rebuilding\n");
         if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && (!meta_same || variants_missing)) {
             uint32_t target_entries = 0;
             std::string why;
@@ -13336,6 +13630,45 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             printf("  colour swatches: %d colours for %d slots\n", colours, with);
         }
         log_step("colour swatches made");
+
+        // The game's own outfits' swatches, as they are now (a mod that replaces an outfit's files in a patch pak
+        // included), for the Slotsloader Manager's Random list (ZZtaii 27/11): game_swatches.json, made again only when
+        // the game's paks or this loader's swatch rules change (about 8 s for 137 outfits). Manager mode only (ZZtaii 27/11:
+        // "Since the manager can read it, it should be under manager mode"): outside it no file and no time spent.
+        if (g_manager_mode) {
+            std::string key = std::string(LOADER_META_ID) + GAME_SWATCH_RULES + game_fp;
+            for (auto& [num, r] : game_patch_readers) {
+                char pn[64]; snprintf(pn, sizeof pn, "re_chunk_000.pak.patch_%03d.pak", num);
+                WIN32_FILE_ATTRIBUTE_DATA fa{};
+                if (GetFileAttributesExA((out_dir + "\\" + pn).c_str(), GetFileExInfoStandard, &fa))
+                    key += "|" + std::to_string(num) + ":" + std::to_string((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow) + ":"
+                         + std::to_string((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime);
+            }
+            const std::string gs_path = registry_dir + "\\game_swatches.json";
+            const std::string had = read_text_file(gs_path);
+            if (had.find("\"key\": \"" + json_escape(key) + "\"") == std::string::npos) {
+                std::string js = "{\n  \"format\": \"sf6-game-swatches-1\",\n  \"key\": \"" + json_escape(key) + "\",\n  \"outfits\": [";
+                int n = 0;
+                for (auto& ci : inv.costumes) {
+                    if (ci.model_dir.empty() || ci.scene.empty()) continue;
+                    const std::string folder = ci.model_dir.substr(ci.model_dir.rfind('/') + 1);
+                    const std::string uv = inv.suffixes.count("user") ? inv.suffixes.at("user") : std::string("2");
+                    const std::vector<std::string> cf = swatch::ccvd_colour_files(ctx.gf, ci.fighter_dir, folder, uv);
+                    const std::string sw = swatch::compute(ctx.gf, ci.scene, ci.fighter_dir, folder, folder, inv.suffixes, nullptr, 30, &cf);
+                    js += std::string(n++ ? "," : "") + "\n    {\"fighter_dir\": \"" + ci.fighter_dir + "\", \"costume_no\": "
+                        + std::to_string(ci.costume_no) + ", \"swatches\": " + sw + "}";
+                }
+                js += "\n  ]\n}\n";
+                const std::string tmp = gs_path + ".tmp";
+                FILE* f = fopen(tmp.c_str(), "wb");
+                bool ok = f && fwrite(js.data(), 1, js.size(), f) == js.size();
+                if (f) ok = (fclose(f) == 0) && ok;
+                if (ok) ok = MoveFileExA(tmp.c_str(), gs_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+                if (!ok) { DeleteFileA(tmp.c_str()); logf("  WARN: could not write %s\n", gs_path.c_str()); }
+                else printf("  game outfits' colour swatches: %d outfits (game_swatches.json)\n", n);
+                log_step("game outfits' swatches made");
+            }
+        }
 
         // Every slot number the static scenes declare gets a scene. A choice saved by the game, or a
         // replay, can still name the number of a removed or left-out outfit; with no scene there,
