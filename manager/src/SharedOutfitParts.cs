@@ -23,13 +23,32 @@ namespace SlotsInstaller
             Match m = ModelPath.Match((path ?? "").Replace('\\', '/'));
             if (!m.Success) return false;
             string code = m.Groups[1].Value, folder = m.Groups[2].Value, part = m.Groups[3].Value, name = m.Groups[4].Value.ToLowerInvariant();
+            if (folder == "000" || folder == outfitFolder) return false;
             string[] list;
-            if (folder == "000" || folder == outfitFolder || !Borrowed.TryGetValue(code + "/" + outfitFolder, out list)) return false;
+            if (!Borrowed.TryGetValue(code + "/" + outfitFolder, out list)) list = new string[0];
             if (part.Length == 0)
-                return list.Any(e => !e.StartsWith("tex:", StringComparison.Ordinal) && e.StartsWith(folder + "/", StringComparison.Ordinal)
-                    && name.StartsWith("esf" + code + "_" + folder + "_" + e.Substring(4, 2) + "_", StringComparison.Ordinal));
+            {
+                // A file of that folder's own part NN ("002/esf013_002_02_chain.chain.52": Outfit 2's chain for its hair)
+                string prefix = "esf" + code + "_" + folder + "_";
+                if (!name.StartsWith(prefix, StringComparison.Ordinal) || name.Length < prefix.Length + 3 || name[prefix.Length + 2] != '_') return false;
+                string nn = name.Substring(prefix.Length, 2);
+                if (list.Any(e => !e.StartsWith("tex:", StringComparison.Ordinal) && e == folder + "/" + nn)) return true;
+                // 1.0.25 (A.K.I Emily Hair "C1, C2": the hair in 000/02 and a chain for each outfit that wears it, 001, 002,
+                // 005): the other outfit wears the same part as this one, so it is that part's physics for the other
+                // outfit; this outfit loads its own and leaves it be.
+                string mine = WornFolder(code, outfitFolder, nn), theirs = WornFolder(code, folder, nn);
+                return mine != null && mine == theirs;
+            }
             string key = folder + "/" + part;
             return list.Contains(key) || (name.Contains(".tex.") && list.Contains("tex:" + key));
+        }
+        // The folder the game outfit in `outfitFolder` takes part `part` from ("000" for a shared one), or null.
+        internal static string WornFolder(string code, string outfitFolder, string part)
+        {
+            string[] list;
+            if (!Worn.TryGetValue(code + "/" + outfitFolder, out list)) return null;
+            string hit = list.FirstOrDefault(e => e.StartsWith(part + ":", StringComparison.Ordinal));
+            return hit == null ? null : hit.Substring(part.Length + 1);
         }
 
         // Whether that outfit takes anything from `folder` (a library mod's costume folder, before it is opened).

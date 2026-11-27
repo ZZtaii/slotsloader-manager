@@ -479,6 +479,14 @@ namespace SlotsInstaller
                 "a part Ingrid Outfit 5 doesn't wear, another folder or another outfit fits");
             Require(SharedOutfitParts.Takes("005", "natives/stm/product/model/esf/esf013/001/01/esf013_001_01_clotha_albd.tex.241101895") && SharedOutfitParts.Takes("001", "natives/stm/product/model/esf/esf006/002/02/esf006_002_02.mesh.230110883")
                 && SharedOutfitParts.TakesFrom("032", "005", "002") && !SharedOutfitParts.TakesFrom("032", "005", "003") && !SharedOutfitParts.TakesFrom("032", "001", "002"), "other fighters' shared parts");
+            // A.K.I Emily Hair "C1, C2": the hair in 000/02 (C1, C2 and C5 wear it), one chain per outfit that wears it, and
+            // its textures in a named folder: fits Outfits 1, 2 and 5, not Outfit 3 or 4 (their own hair, 003/02, 004/02).
+            const string a = "natives/stm/product/model/esf/esf013/";
+            var emily = new[] { a + "000/02/esf013_000_02.mesh.230110883", a + "000/02/esf013_000_02_v00.mdf2.31", a + "001/esf013_001_02_chain.chain.52",
+                a + "002/esf013_002_02_chain.chain.52", a + "005/esf013_005_02_chain.chain.52", a + "EHair/EHair_Albd.tex.241101895" };
+            Require(new[] { "001", "002", "005" }.All(o => Installer.SlotMismatch(emily, new[] { o }) == null) && Installer.SlotMismatch(emily, new[] { "003" }) == "Outfit 1, Outfit 2, Outfit 5"
+                && Installer.SlotMismatch(emily, new[] { "004" }) != null && SharedOutfitParts.WornFolder("013", "002", "02") == "000" && SharedOutfitParts.WornFolder("013", "003", "02") == "003"
+                && !SharedOutfitParts.Takes("001", a + "002/esf013_002_01_chain.chain.52"), "A.K.I's shared hair with a chain per outfit: " + Installer.SlotMismatch(emily, new[] { "001" }) + " / " + Installer.SlotMismatch(emily, new[] { "003" }));
             var hairFiles = new[] { i2 + "02/esf032_002_02.mesh.230110883", i2 + "02/esf032_002_02_v00.mdf2.31", i2 + "02/esf032_002_02_hair_albd.tex.241101895" };
             Require(Installer.SlotMismatch(hairFiles, new[] { "005" }) == null && Installer.SlotMismatch(hairFiles, new[] { "001" }) == "Outfit 2"
                 && Installer.SlotMismatch(new[] { i2 + "01/esf032_002_01.mesh.230110883" }, new[] { "005" }) == "Outfit 2", "the per-file slot check");
