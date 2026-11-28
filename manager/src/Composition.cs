@@ -30,6 +30,8 @@ namespace SlotsInstaller
         internal Dictionary<string,string> GuessedChoices=new Dictionary<string,string>();
         // 1.0.18: only these parts of the selection were kept (OutfitParts.Keep); empty = all of it.
         internal List<string> OnlyParts=new List<string>();
+        // 27 Nov 2026: models whose material file sits in a group the selection left out (FindMaterialGroups).
+        internal HashSet<string> MaterialModels=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
     // 1.0.19 (the user, 13 Nov 2026: "i also want to relax requirements. when a mod has some files tagged as requirement
     // or guessed etc. then we should show a popup (less annoying though) around the image that it may not work without x
@@ -248,7 +250,7 @@ namespace SlotsInstaller
                 else if (SharedTexturesOnly(p.Files.Keys)) p.Errors.Add(SharedTexturesHint);
                 else p.Errors.Add("The selection has no outfit mesh. Add the main mesh option; textures alone don't make an outfit.");
             }
-            foreach (string body in bodies) if (!materials.Contains(body)) p.Warnings.Add("The mod has no body material for esf"+body+": Slotsloader may use the vanilla one. Check it in game after restarting SF6.");
+            foreach (string body in bodies) if (!materials.Contains(body) && !p.MaterialModels.Any(m=>m.IndexOf("/esf"+body+"/01/",StringComparison.OrdinalIgnoreCase)>=0)) p.Warnings.Add("The mod has no body material for esf"+body+": Slotsloader may use the vanilla one. Check it in game after restarting SF6.");
             if (bodies.Count>1) p.Warnings.Add("The selection has several body meshes: Slotsloader may show more than one outfit. Review the files.");
             int ignored=p.Files.Keys.Count(x=>!KnownLoaderRoute(x));
             if (ignored>0) p.Warnings.Add((ignored==1 ? "1 file is" : ignored+" files are")+" outside outfit folders: installed, but Slotsloader may ignore "+(ignored==1 ? "it." : "them."));
@@ -284,6 +286,51 @@ namespace SlotsInstaller
                 if (!group.RequiresChoice) continue;
                 if (!ScopeIsActive(package,group.ParentId,p.Layers) && !p.Layers.Any(c=>IsDescendant(package,c,group))) continue;
                 if (ChoicesIn(package,group,p.Layers)==0) add(group,null,"This selection may not work without an option from '"+group.Name+"'.","Choose an option in '"+group.Name+"'.");
+            }
+            FindMaterialGroups(p,add);
+        }
+        // 27 Nov 2026 (eight outfits the Assistant installed as "1) Main Files" + "3) Outfit Style" with "2) Skin Options"
+        // left out; only the skin options carry the outfit's material file, so the new model wore the game's own material
+        // and looked wrong in game): a model the selection installs without a material file of its own, where every option
+        // of one group (two or more) brings that material file, needs an option from that group. A group of alternatives
+        // that all carry it is the author's way of saying "pick one"; a lone optional extra (painted nails) is not.
+        // A note like the others; the Assistant refuses on it.
+        private static readonly Regex ModelPath=new Regex(@"\.mesh\.\d+$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
+        private static bool IsMaterialOf(string path,string stem)
+        {
+            string p=(path ?? "").Replace('\\','/');
+            return p.StartsWith(stem,StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(p.Substring(stem.Length),@"^(_v\d+)?\.mdf2\.\d+$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
+        }
+        private static void FindMaterialGroups(CompositionPlan p,Action<ModComponent,ModComponent,string,string> add)
+        {
+            ModPackage package=p.Package; bool replaceMode=p.ReplaceMode;
+            var picked=p.Layers.SelectMany(c=>replaceMode ? c.Assets.Concat(c.RootAssets) : c.Assets).Select(a=>(a.DestinationPath ?? "").Replace('\\','/')).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var models=new Dictionary<ModComponent,List<string>>();
+            foreach (string model in picked.Where(x=>ModelPath.IsMatch(x)))
+            {
+                string stem=ModelPath.Replace(model,"");
+                if (picked.Any(x=>IsMaterialOf(x,stem))) continue;
+                foreach (ModComponent group in package.Components.Where(g=>g.IsDummy))
+                {
+                    var options=package.Components.Where(c=>String.Equals(c.ParentId,group.Id,StringComparison.OrdinalIgnoreCase) && !c.IsDummy && c.HasFiles(replaceMode)).ToList();
+                    if (options.Count<2 || options.Any(p.Layers.Contains)) continue;
+                    if (!options.All(o=>o.Assets.Any(a=>IsMaterialOf(a.DestinationPath,stem)))) continue;
+                    if (!ScopeIsActive(package,group.ParentId,p.Layers) && !p.Layers.Any(c=>IsDescendant(package,c,group))) continue;
+                    List<string> list; if (!models.TryGetValue(group,out list)) models[group]=list=new List<string>();
+                    list.Add(model);
+                }
+            }
+            foreach (var pair in models)
+            {
+                ModComponent group=pair.Key;
+                p.MaterialModels.UnionWith(pair.Value);
+                List<string> names=pair.Value.Select(m=>ModelPath.Replace(m.Substring(m.LastIndexOf('/')+1),".mesh")).ToList();
+                string files=String.Join(" and ",names.Take(2))+(names.Count>2 ? " and "+(names.Count-2)+" more" : "");
+                List<string> options=package.Components.Where(c=>String.Equals(c.ParentId,group.Id,StringComparison.OrdinalIgnoreCase) && !c.IsDummy && c.HasFiles(replaceMode)).Select(c=>"'"+c.Name+"'").ToList();
+                string choices=String.Join(", ",options.Take(6))+(options.Count>6 ? " and "+(options.Count-6)+" more" : "");
+                add(group,null,
+                    "This selection may not look right without an option from '"+group.Name+"': its options hold the material file of "+files+". Without one, the outfit uses the game's own material.",
+                    "Choose an option in '"+group.Name+"': each of its options ("+choices+") holds the material file of "+files+", which this selection installs without one.");
             }
         }
         // How many branches of a choose-one group the layers pick.

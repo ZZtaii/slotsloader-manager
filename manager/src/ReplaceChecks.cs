@@ -175,6 +175,7 @@ namespace SlotsInstaller
                 });
                 full("Fluffy preset files parse and map to library entries and options", delegate { PresetImport(Path.Combine(run, "preset")); });
                 check("CLI: replace-plan, replace-install (PAK and loose), replace-status, replace-method, replace-uninstall and replace-restore-all on a fixture game", delegate { CommandLineFlow(Path.Combine(run, "cli")); });
+                check("CLI: replace-list, replace-enable/-disable, replace-move and replace-install --update (keeps its place)", delegate { CommandLineOrder(Path.Combine(run, "cli-order")); });
                 full("conflicts (2.0.1): same outfit with shared files names the mod with counts, same outfit without shared files stacks, disabled mods, other-area overrides, unknown loose files, an external mod blocks with the lockout (1.0.1); installs never remove other mods", delegate { Conflicts(Path.Combine(run, "conflicts")); });
                 check("recoverable uninstall (2.0.1): the removed replacement is kept and Undo restores files, enabled state and priority byte for byte; test reverts keep nothing", delegate { RecoverableUninstall(Path.Combine(run, "removed")); });
                 full("Source archive deleted: intact files kept as the copy, notice names the mod; covered, moved, twin, locked, same-name and disabled cases (1.0.18)", delegate { SourceGone(Path.Combine(run, "source-gone")); });
@@ -2094,6 +2095,51 @@ namespace SlotsInstaller
             try { code = ReplaceCommandLine.Run(args); }
             finally { Console.SetOut(previousOut); Console.SetError(previousError); }
             return code + "\n" + output + error;
+        }
+
+        // 27 Nov 2026 (the user: "update command line tool appropriately to add more features"): replace-list,
+        // replace-enable/-disable, replace-move and replace-install --update, which keeps the record's place.
+        private static void CommandLineOrder(string root)
+        {
+            Fixture f = Create(root, true, ReplaceMethods.Pak);
+            var cli = new ReplaceEngine(f.Game, AppConfig.DataDir, ReplaceSettings.Load());   // the CLI's own Data
+            try
+            {
+                Require(Cli("replace-install", f.Mod("modA"), "--game", f.Game, "--method", "pak", "--name", "Cammy Colors").StartsWith("0\n"), "install A");
+                Require(Cli("replace-install", f.Mod("modB"), "--game", f.Game, "--name", "Cammy Alt").StartsWith("0\n"), "install B");
+                Func<string[]> order = () => cli.LoadState().Mods.Select(m => m.Name).ToArray();
+                Require(order().SequenceEqual(new[] { "Cammy Alt", "Cammy Colors" }), "a new install goes on top: " + String.Join(", ", order()));
+                string list = Cli("replace-list", "--game", f.Game);
+                Require(list.StartsWith("0\n") && list.Contains("#1  on ") && list.Contains("Cammy Alt") && list.Contains("#2  on ") && list.Contains("2 replacements"), "replace-list: " + list);
+                Require(Cli("replace-list", "--game", f.Game, "--character", "Ryu").Contains("0 replacements"), "replace-list --character filters");
+                // An unclear name lists the candidates and changes nothing.
+                string unclear = Cli("replace-disable", "Cammy", "--game", f.Game);
+                Require(unclear.StartsWith("1\n") && unclear.Contains("matches 2 replacements") && cli.LoadState().Mods.All(m => m.Enabled), "an unclear name: " + unclear);
+                Require(Cli("replace-move", "Nobody", "--top", "--game", f.Game).Contains("No installed replacement matches"), "unknown name");
+                Require(Cli("replace-move", "Cammy Colors", "--top", "--up", "1", "--game", f.Game).StartsWith("2\n"), "two ways to move at once must be refused");
+                string top = Cli("replace-move", "Cammy Colors", "--top", "--game", f.Game);
+                Require(top.StartsWith("0\n") && top.Contains("from #2 to #1") && order().SequenceEqual(new[] { "Cammy Colors", "Cammy Alt" }), "--top: " + top);
+                Require(Cli("replace-move", "Cammy Colors", "--below", "Cammy Alt", "--game", f.Game).StartsWith("0\n") && order().SequenceEqual(new[] { "Cammy Alt", "Cammy Colors" }), "--below: " + String.Join(", ", order()));
+                Require(Cli("replace-move", "Cammy Colors", "--above", "Cammy Alt", "--game", f.Game).StartsWith("0\n") && order().SequenceEqual(new[] { "Cammy Colors", "Cammy Alt" }), "--above: " + String.Join(", ", order()));
+                Require(Cli("replace-move", "Cammy Colors", "--to", "9", "--game", f.Game).StartsWith("0\n") && order().SequenceEqual(new[] { "Cammy Alt", "Cammy Colors" }), "--to past the end goes last");
+                Require(Cli("replace-move", "Cammy Colors", "--bottom", "--game", f.Game).Contains("already #2"), "already there");
+                // Off and on: both at once, by name and by id start; the files leave the game and come back.
+                string idA = cli.LoadState().Mods.Single(m => m.Name == "Cammy Colors").Id;
+                string off = Cli("replace-disable", "Cammy Alt", idA.Substring(0, 6), "--game", f.Game);
+                Require(off.StartsWith("0\n") && off.Contains("Turned off 'Cammy Alt'") && off.Contains("Turned off 'Cammy Colors'") && cli.LoadState().Mods.All(m => !m.Enabled) && !File.Exists(GameFile(f, V1)), "replace-disable: " + off);
+                Require(Cli("replace-disable", "Cammy Alt", "--game", f.Game).Contains("already off"), "already off");
+                string on = Cli("replace-enable", "Cammy Colors", "--game", f.Game);
+                Require(on.StartsWith("0\n") && cli.LoadState().Mods.Single(m => m.Name == "Cammy Colors").Enabled && !cli.LoadState().Mods.Single(m => m.Name == "Cammy Alt").Enabled && File.Exists(GameFile(f, V1)), "replace-enable: " + on);
+                Cli("replace-enable", "Cammy Alt", "--game", f.Game);
+                // --update without a source or options: the same archive and options again, in the same place, one record.
+                string update = Cli("replace-install", "--update", "Cammy Colors", "--game", f.Game);
+                ReplaceState s = cli.LoadState();
+                Require(update.StartsWith("0\n") && update.Contains("Updated 'Cammy Colors'") && update.Contains("#2 in the load order") && s.Mods.Count == 2 && s.Mods[1].Name == "Cammy Colors" && ReplacePlanner.SameSource(s.Mods[1].SourcePath, f.Mod("modA")), "replace-install --update: " + update + " / " + String.Join(", ", order()));
+                Require(Cli("replace-uninstall", "--update", "x", "--game", f.Game).StartsWith("2\n"), "--update only goes with replace-install");
+                string json = Path.Combine(root, "list.json");
+                Require(Cli("replace-list", "--game", f.Game, "--json", json).StartsWith("0\n") && File.ReadAllText(json).Contains("sf6-replace-list-v1") && File.ReadAllText(json).Contains("Cammy Colors"), "replace-list --json");
+            }
+            finally { try { cli.RestoreAll(); } catch (Exception ex) { if (ex is OutOfMemoryException) throw; } }
         }
 
         private static void CommandLineFlow(string root)

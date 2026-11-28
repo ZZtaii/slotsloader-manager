@@ -11,7 +11,7 @@ namespace SlotsInstaller
     // Data folder (beside the executable) and safety checks as the app window.
     internal static class ReplaceCommandLine
     {
-        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "replace-keep-changes", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "setup-tools","loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "loader-flags", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
+        internal static readonly string[] Commands = { "replace-plan", "replace-install", "replace-status", "replace-list", "replace-enable", "replace-disable", "replace-move", "replace-restore-all", "replace-vanilla", "replace-method", "replace-uninstall", "replace-reapply", "replace-keep-changes", "preset-map", "replace-restore-original", "manager-status", "manager-uninstall", "manager-restore", "loader-fetch", "setup-tools","loader-pak-remove", "update-check", "update-install", "update-rollback", "pak-repair", "variants", "loader-flags", "fluffy-status", "fluffy-uninstall", "fluffy-restore" };
         // 2.5.1: the fluffy-* names keep working (left out of the help).
         internal static readonly Dictionary<string, string> Aliases = new Dictionary<string, string> { { "fluffy-status", "manager-status" }, { "fluffy-uninstall", "manager-uninstall" }, { "fluffy-restore", "manager-restore" } };
 
@@ -21,6 +21,11 @@ namespace SlotsInstaller
             internal bool All, CheckAgain;   // 1.0.22: replace-keep-changes
             internal List<string> Selected = new List<string>(), Libraries = new List<string>();
             internal bool HasSelection, Yes, NoLoader, RestoreOriginals, KeepCurrent, NoDownload, IncludePrereleases;
+            // 27 Nov 2026: replace-install --update, replace-enable/-disable (several targets), replace-move, replace-list --character.
+            internal string Update, Above, Below, Character;
+            internal int To, Up, Down;
+            internal bool Top, Bottom;
+            internal List<string> Targets = new List<string>();
         }
 
         internal static int Run(string[] raw)
@@ -50,11 +55,14 @@ namespace SlotsInstaller
             string renamed; if (Aliases.TryGetValue(a.Command, out renamed)) a.Command = renamed;
             int i = 1;
             if ((a.Command == "replace-plan" || a.Command == "replace-install" || a.Command == "preset-map") && args.Length > 1 && !args[1].StartsWith("--")) { a.Source = Path.GetFullPath(args[1]); i = 2; }
-            if ((a.Command == "replace-uninstall" || a.Command == "update-install" || a.Command == "manager-uninstall" || a.Command == "manager-restore" || a.Command == "replace-restore-original" || a.Command == "replace-keep-changes") && args.Length > 1 && !args[1].StartsWith("--")) { a.Target = args[1]; i = 2; }
+            if ((a.Command == "replace-uninstall" || a.Command == "update-install" || a.Command == "manager-uninstall" || a.Command == "manager-restore" || a.Command == "replace-restore-original" || a.Command == "replace-keep-changes" || a.Command == "replace-move") && args.Length > 1 && !args[1].StartsWith("--")) { a.Target = args[1]; i = 2; }
+            if (a.Command == "replace-enable" || a.Command == "replace-disable") for (; i < args.Length && !args[i].StartsWith("--"); i++) a.Targets.Add(args[i]);
             for (; i < args.Length; i++)
             {
                 string key = args[i];
                 if (key == "--yes") { a.Yes = true; continue; }
+                if (key == "--top") { a.Top = true; continue; }
+                if (key == "--bottom") { a.Bottom = true; continue; }
                 if (key == "--no-loader") { a.NoLoader = true; continue; }
                 if (key == "--restore-originals") { a.RestoreOriginals = true; continue; }
                 if (key == "--keep-current") { a.KeepCurrent = true; continue; }
@@ -77,15 +85,30 @@ namespace SlotsInstaller
                     case "--sevenzip": a.SevenZip = Path.GetFullPath(value); break;
                     case "--root": a.Root = Path.GetFullPath(value); break;
                     case "--library": a.Libraries.Add(Path.GetFullPath(value)); break;
+                    case "--update": a.Update = value; break;
+                    case "--above": a.Above = value; break;
+                    case "--below": a.Below = value; break;
+                    case "--character": a.Character = value; break;
+                    case "--to": a.To = Count(key, value); break;
+                    case "--up": a.Up = Count(key, value); break;
+                    case "--down": a.Down = Count(key, value); break;
                     default: throw new ArgumentException("Unknown option: " + key);
                 }
             }
-            if ((a.Command == "replace-plan" || a.Command == "replace-install" || a.Command == "preset-map") && a.Source == null) throw new ArgumentException(a.Command + " requires a mod archive/folder (or a .prt preset for preset-map).");
+            if ((a.Command == "replace-plan" || a.Command == "replace-install" || a.Command == "preset-map") && a.Source == null && a.Update == null) throw new ArgumentException(a.Command + " requires a mod archive/folder (or a .prt preset for preset-map).");
             if (a.Command == "replace-uninstall" && a.Target == null) throw new ArgumentException("replace-uninstall requires a replacement id or name (see replace-status).");
             if (a.Command == "manager-uninstall" && a.Target == null) throw new ArgumentException("manager-uninstall requires the name or installed.ini section of a mod an external mod manager installed (see manager-status).");
             if (a.Command == "manager-restore" && a.Target == null) throw new ArgumentException("manager-restore requires the name or folder of a mod uninstalled with manager-uninstall (see manager-status).");
             if (a.Command == "replace-restore-original" && a.Target == null) throw new ArgumentException("replace-restore-original requires a kept game file path (see replace-status).");
             if (a.Command == "replace-keep-changes" && (a.Target != null ? 1 : 0) + (a.Mod != null ? 1 : 0) + (a.All ? 1 : 0) > 1) throw new ArgumentException("Give one of: a file path, --mod <id or name>, or --all.");
+            if ((a.Command == "replace-enable" || a.Command == "replace-disable") && a.Targets.Count == 0) throw new ArgumentException(a.Command + " requires one or more replacement ids or names (see replace-list).");
+            if (a.Command == "replace-move")
+            {
+                if (a.Target == null) throw new ArgumentException("replace-move requires a replacement id or name (see replace-list).");
+                int ways = (a.To > 0 ? 1 : 0) + (a.Up > 0 ? 1 : 0) + (a.Down > 0 ? 1 : 0) + (a.Top ? 1 : 0) + (a.Bottom ? 1 : 0) + (a.Above != null ? 1 : 0) + (a.Below != null ? 1 : 0);
+                if (ways != 1) throw new ArgumentException("replace-move takes one of --to <#>, --up <n>, --down <n>, --top, --bottom, --above <id|name>, --below <id|name>.");
+            }
+            if (a.Update != null && a.Command != "replace-install") throw new ArgumentException("--update goes with replace-install.");
             if (a.RestoreOriginals && a.KeepCurrent) throw new ArgumentException("Use either --restore-originals or --keep-current, not both.");
             if (a.Method != null && a.Method != ReplaceMethods.Loose && a.Method != ReplaceMethods.Pak) throw new ArgumentException("--method must be loose or pak.");
             if (a.Set != null && a.Set != ReplaceMethods.Loose && a.Set != ReplaceMethods.Pak && a.Set != "auto") throw new ArgumentException("--set must be loose, pak or auto.");
@@ -112,7 +135,7 @@ namespace SlotsInstaller
             if (a.Command == "update-install" && !String.Equals(a.Target, "loader", StringComparison.OrdinalIgnoreCase)) return UpdateInstallManager(a);
             ReplaceEngine engine = Engine(a, out config);
             // A moved app folder: corrected Data paths are saved before a change (replace-status stays read-only).
-            if (new[] { "replace-install", "replace-uninstall", "replace-reapply", "replace-restore-all", "replace-vanilla", "replace-restore-original", "manager-uninstall", "manager-restore" }.Contains(a.Command) || (a.Command == "replace-method" && a.Set != null))
+            if (new[] { "replace-install", "replace-uninstall", "replace-enable", "replace-disable", "replace-move", "replace-reapply", "replace-restore-all", "replace-vanilla", "replace-restore-original", "manager-uninstall", "manager-restore" }.Contains(a.Command) || (a.Command == "replace-method" && a.Set != null))
             { string moved = engine.PersistRelocation(); if (moved != null) Console.WriteLine(moved); }
             switch (a.Command)
             {
@@ -136,6 +159,14 @@ namespace SlotsInstaller
                 {
                     ReplaceState state = engine.LoadState();
                     if (a.Method != null && (state.Mods.Count > 0 || state.Deployed.Count > 0) && engine.CurrentMethod(state) != a.Method) throw new IOException("Installed replacements use the " + ReplaceMethods.Label(engine.CurrentMethod(state)) + ". Switch with replace-method --set " + a.Method + " first.");
+                    ReplaceMod old = a.Update == null ? null : Find(state, a.Update);
+                    if (old != null)
+                    {
+                        if (old.OnlyParts != null && old.OnlyParts.Count > 0) throw new IOException("'" + old.Name + "' keeps only some parts of its options; update it in the window, which keeps those parts.");
+                        if (a.Source == null) { if (String.IsNullOrEmpty(old.SourcePath)) throw new IOException("'" + old.Name + "' has no source recorded; give the archive or folder."); a.Source = old.SourcePath; }
+                        // Without --select, the options it has now.
+                        if (!a.HasSelection && a.SelectionFile == null && old.SelectedIds.Count > 0) { a.HasSelection = true; a.Selected.AddRange(old.SelectedIds); }
+                    }
                     string method = engine.CurrentMethod(state);
                     if (a.Yes && a.NoLoader) throw new ArgumentException("Use either --yes (turn the loose file loader on) or --no-loader (install with it off), not both.");
                     CompositionPlan composition = Compose(a);
@@ -148,12 +179,57 @@ namespace SlotsInstaller
                         else RequireLoader(engine, a.Yes);
                     }
                     ReplacePlan plan;
-                    string name = String.IsNullOrWhiteSpace(a.Name) ? composition.Package.Name : a.Name.Trim();
-                    ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, a.SevenZip, engine, name, false, null, out plan);
+                    string name = String.IsNullOrWhiteSpace(a.Name) ? (old != null ? old.Name : composition.Package.Name) : a.Name.Trim();
+                    // 27 Nov 2026: --update replaces that record in place and keeps its priority, like the window's Update.
+                    ReplaceMod mod = ReplacePlanner.PrepareAndInstall(composition, a.SevenZip, engine, name, false, old == null ? null : old.Id, old != null, out plan);
                     if (LoaderCostumePak.IsLoaderMod(mod)) UnownedSlotsFlag.Ensure(engine.GameRoot);
                     Console.WriteLine(ReplacePlanner.Report(plan));
-                    Console.WriteLine("Installed '" + mod.Name + "' (id " + mod.Id.Substring(0, 8) + ") with the " + ReplaceMethods.Label(method) + ": " + ReplacePlanner.N(mod.Files.Count, "file") + ".");
+                    Console.WriteLine((old != null ? "Updated '" : "Installed '") + mod.Name + "' (id " + mod.Id.Substring(0, 8) + ") with the " + ReplaceMethods.Label(method) + ": " + ReplacePlanner.N(mod.Files.Count, "file") + (old != null ? ", #" + Position(engine.LoadState(), mod) + " in the load order" : "") + ".");
+                    WindowNote();
                     return Status(engine, config);
+                }
+                case "replace-list": return List(engine.LoadState(), a);
+                case "replace-enable":
+                case "replace-disable":
+                {
+                    bool on = a.Command == "replace-enable";
+                    ReplaceState state = engine.LoadState();
+                    List<ReplaceMod> mods = a.Targets.Select(t => Find(state, t)).Distinct().ToList();
+                    List<ReplaceMod> change = mods.Where(m => m.Enabled != on).ToList();
+                    foreach (ReplaceMod m in mods.Except(change)) Console.WriteLine("'" + m.Name + "' is already " + (on ? "on" : "off") + ".");
+                    if (change.Count == 0) return 0;
+                    string message = engine.SetEnabled(change.Select(m => m.Id).ToList(), on);
+                    foreach (ReplaceMod m in change) Console.WriteLine((on ? "Turned on '" : "Turned off '") + m.Name + "' (#" + Position(engine.LoadState(), m) + ").");
+                    if (!String.IsNullOrWhiteSpace(message)) Console.WriteLine(message);
+                    WindowNote();
+                    return 0;
+                }
+                case "replace-move":
+                {
+                    ReplaceState state = engine.LoadState();
+                    ReplaceMod mod = Find(state, a.Target);
+                    int at = state.Mods.IndexOf(mod), last = state.Mods.Count - 1, to;
+                    if (a.Top) to = 0;
+                    else if (a.Bottom) to = last;
+                    else if (a.To > 0) to = a.To - 1;
+                    else if (a.Up > 0) to = at - a.Up;
+                    else if (a.Down > 0) to = at + a.Down;
+                    else
+                    {
+                        ReplaceMod other = Find(state, a.Above ?? a.Below);
+                        if (other == mod) throw new ArgumentException("A replacement cannot move next to itself.");
+                        int there = state.Mods.IndexOf(other);
+                        // Removing the record first shifts the ones after it up by one.
+                        if (a.Above != null) to = there > at ? there - 1 : there;
+                        else to = there > at ? there : there + 1;
+                    }
+                    to = Math.Max(0, Math.Min(last, to));
+                    if (to == at) { Console.WriteLine("'" + mod.Name + "' is already #" + (at + 1) + "."); return 0; }
+                    string message = engine.Move(mod.Id, to - at);
+                    Console.WriteLine("Moved '" + mod.Name + "' from #" + (at + 1) + " to #" + Position(engine.LoadState(), mod) + " (#1 wins shared files).");
+                    if (!String.IsNullOrWhiteSpace(message)) Console.WriteLine(message);
+                    WindowNote();
+                    return 0;
                 }
                 case "replace-uninstall":
                 {
@@ -253,6 +329,55 @@ namespace SlotsInstaller
                 }
             }
             throw new ArgumentException("Unknown command.");
+        }
+
+        // 27 Nov 2026: one replacement by id (or an id start of 4+ characters), exact name, or a name start that only one
+        // record has; an unclear target lists the candidates instead of guessing.
+        private static ReplaceMod Find(ReplaceState state, string target)
+        {
+            string t = (target ?? "").Trim();
+            if (t.Length == 0) throw new ArgumentException("Empty replacement id or name.");
+            Func<IEnumerable<ReplaceMod>, ReplaceMod> one = delegate(IEnumerable<ReplaceMod> found)
+            {
+                var list = found.ToList();
+                if (list.Count == 1) return list[0];
+                if (list.Count > 1) throw new IOException("'" + t + "' matches " + list.Count + " replacements: " + String.Join("; ", list.Take(8).Select(m => "#" + (state.Mods.IndexOf(m) + 1) + " " + m.Name + " (id " + m.Id.Substring(0, Math.Min(8, m.Id.Length)) + ")")) + ". Use the id.");
+                return null;
+            };
+            ReplaceMod hit = one(state.Mods.Where(m => String.Equals(m.Id, t, StringComparison.OrdinalIgnoreCase)))
+                ?? (t.Length >= 4 ? one(state.Mods.Where(m => m.Id.StartsWith(t, StringComparison.OrdinalIgnoreCase))) : null)
+                ?? one(state.Mods.Where(m => String.Equals(m.Name, t, StringComparison.OrdinalIgnoreCase)))
+                ?? one(state.Mods.Where(m => m.Name.StartsWith(t, StringComparison.OrdinalIgnoreCase)));
+            if (hit == null) throw new IOException("No installed replacement matches '" + t + "' (see replace-list).");
+            return hit;
+        }
+        private static int Position(ReplaceState state, ReplaceMod mod) { return state.Mods.FindIndex(m => String.Equals(m.Id, mod.Id, StringComparison.OrdinalIgnoreCase)) + 1; }
+        private static int Count(string key, string value)
+        {
+            int n;
+            if (!Int32.TryParse(value, out n) || n < 1) throw new ArgumentException(key + " needs a whole number of 1 or more.");
+            return n;
+        }
+        // The window keeps its own copy of the list: a change made here shows there after Refresh.
+        private static void WindowNote()
+        {
+            try { if (System.Diagnostics.Process.GetProcessesByName("Slotsloader Manager").Length > 0) Console.WriteLine("Slotsloader Manager is open: press Refresh there (or restart it) before changing replacements in the window."); }
+            catch (Exception ex) { if (ex is OutOfMemoryException) throw; }
+        }
+        // replace-list: the load order as the Installed page shows it (#1 wins files shared with lower ones).
+        private static int List(ReplaceState state, Args a)
+        {
+            var rows = new List<Dictionary<string, object>>();
+            for (int i = 0; i < state.Mods.Count; i++)
+            {
+                ReplaceMod m = state.Mods[i];
+                if (a.Character != null && (m.Affects ?? "").IndexOf(a.Character, StringComparison.OrdinalIgnoreCase) < 0 && m.Name.IndexOf(a.Character, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (a.Json == null) Console.WriteLine("#" + (i + 1) + "  " + (m.Enabled ? "on " : "off") + "  " + m.Id.Substring(0, Math.Min(8, m.Id.Length)) + "  " + m.Name + (String.IsNullOrEmpty(m.Affects) ? "" : "  · " + m.Affects) + "  · " + ReplacePlanner.N(m.Files.Count, "file"));
+                rows.Add(new Dictionary<string, object> { { "position", i + 1 }, { "id", m.Id }, { "name", m.Name }, { "enabled", m.Enabled }, { "kind", m.Kind }, { "affects", m.Affects ?? "" }, { "files", m.Files.Count }, { "source", m.SourcePath ?? "" }, { "selected", m.SelectedIds } });
+            }
+            if (a.Json != null) WriteJson(a.Json, new Dictionary<string, object> { { "format", "sf6-replace-list-v1" }, { "replacements", rows } });
+            else Console.WriteLine(ReplacePlanner.N(rows.Count, "replacement") + (a.Character != null ? " for '" + a.Character + "'" : "") + " · #1 wins files shared with lower ones.");
+            return 0;
         }
 
         private static string SafeFull(string path) { try { return Path.GetFullPath(path).TrimEnd('\\'); } catch { return path ?? ""; } }
@@ -537,7 +662,11 @@ namespace SlotsInstaller
             Console.WriteLine("Replace original commands (the same engine and safety checks as the app window):");
             Console.WriteLine("  replace-plan <source> [--select <id> ...] [--game <SF6>] [--method loose|pak] [--json <new.json|->]   read-only health check");
             Console.WriteLine("  replace-install <source> [--select <id> ...] [--name <name>] --game <SF6> [--method loose|pak] [--yes | --no-loader]   loose method, loader off, natives files: --yes turns it on, --no-loader installs without; tool-only mods need neither");
+            Console.WriteLine("  replace-install --update <id|name> [<source>] [--select <id> ...]   update that replacement in place (keeps its place in the load order); without --select it keeps its options, without <source> its archive");
             Console.WriteLine("  replace-status [--game <SF6>]        read-only: base PAK table hash, zeroed entries, natives folder, installed replacements, missing backups, moved-folder paths");
+            Console.WriteLine("  replace-list [--character <name>] [--json <new.json|->]   read-only: the load order (#1 wins shared files), on/off, ids, what each replaces");
+            Console.WriteLine("  replace-enable <id|name> [...] / replace-disable <id|name> [...]   turn replacements on or off (they stay installed)");
+            Console.WriteLine("  replace-move <id|name> --to <#> | --up <n> | --down <n> | --top | --bottom | --above <id|name> | --below <id|name>   change the load order");
             Console.WriteLine("  replace-uninstall <id|name> --game <SF6> [--restore-originals | --keep-current]   when another tool changed its files");
             Console.WriteLine("  replace-reapply --game <SF6>         after a game update or a Steam file check");
             Console.WriteLine("  replace-keep-changes [<path> | --all | --mod <id or name>] [--check-again]   keep a changed installed file as it is (not natives files)");

@@ -32,7 +32,8 @@ namespace SlotsInstaller
             Check("a pack of base textures outside outfit folders points to Replace original",delegate { SharedTextures(Path.Combine(run,"shared-textures")); },ref failures);
             Check("'choose one variant' wording never makes main files an alternative or refuses an install",delegate { ChooseOneWording(Path.Combine(run,"choose-one-wording")); },ref failures);
             Check("a choose-one group in the branch not taken asks for nothing",delegate { BranchNotTaken(Path.Combine(run,"branch-not-taken")); },ref failures);
-            Console.WriteLine("Composition regression checks: "+(12-failures)+" passed, "+failures+" failed.");
+            Check("a model whose material is only in a left-out group of options names that group",delegate { MaterialGroup(Path.Combine(run,"material-group")); },ref failures);
+            Console.WriteLine("Composition regression checks: "+(13-failures)+" passed, "+failures+" failed.");
             return failures;
         }
 
@@ -302,6 +303,47 @@ namespace SlotsInstaller
             Require(missing.StrictErrors().Count>0 && missing.StrictErrors().All(e=>e.IndexOf("B skin",StringComparison.OrdinalIgnoreCase)<0),"Strict errors for the Assistant: "+String.Join(" | ",missing.StrictErrors()));
             // 1.0.18: A's required skin group gets its option ticked too; nothing of Bundle B.
             Require(Composer.DefaultSelection(package).SequenceEqual(new[]{"A-main","A-skin"}),"Default selection crossed bundle branches: "+String.Join(",",Composer.DefaultSelection(package)));
+        }
+        // 27 Nov 2026: the layout of "Chun-Li - Volleyball Girl" and seven bundles like it. The model is in "1) Main Files"
+        // and "3) Outfit Style"; its material file only in "2) Skin Options" (Default has the body one only).
+        private static void MaterialGroup(string root)
+        {
+            const string head="natives/stm/product/model/esf/esf032/001/00/esf032_001_00.mesh.230110883", headMaterial="natives/stm/product/model/esf/esf032/001/00/esf032_001_00_v00.mdf2.31";
+            string bodyMaterial="natives/stm/product/model/esf/esf032/001/01/esf032_001_01_v00.mdf2.31";
+            Put(root,"1! Outfit/modinfo.ini","name=Outfit\ndummymod=true\n");
+            Put(root,"1) Main Files/modinfo.ini","name=1) Main files\naddonfor=Outfit\n"); Put(root,"1) Main Files/"+head,"head"); Put(root,"1) Main Files/natives/stm/product/model/esf/esf032/001/volley/a_albd.tex.241101895","tex");
+            Put(root,"2! Skin/modinfo.ini","name=2) Skin Options\naddonfor=Outfit\ndummymod=true\n");
+            Put(root,"2) Default/modinfo.ini","name=Default\naddonfor=2) Skin Options\n"); Put(root,"2) Default/"+bodyMaterial,"default body");
+            foreach (string look in new[]{"Oily","Sweaty"}) { Put(root,"2) "+look+"/modinfo.ini","name="+look+"\naddonfor=2) Skin Options\n"); Put(root,"2) "+look+"/"+bodyMaterial,look+" body"); Put(root,"2) "+look+"/"+headMaterial,look+" head"); }
+            Put(root,"3! Style/modinfo.ini","name=3) Outfit Style\naddonfor=Outfit\ndummymod=true\n");
+            foreach (string style in new[]{"Shoes","Barefeet"}) { Put(root,"3) "+style+"/modinfo.ini","name="+style+"\naddonfor=3) Outfit Style\n"); Put(root,"3) "+style+"/"+Mesh,style+" mesh"); }
+            Put(root,"4! Extra/modinfo.ini","name=4) Optional\naddonfor=Outfit\ndummymod=true\n");
+            Put(root,"4) Nails/modinfo.ini","name=Painted nails\naddonfor=4) Optional\n"); Put(root,"4) Nails/"+bodyMaterial,"nails body");
+            ModPackage package=Load(root);
+            string main=Named(package,"1) Main files").Id, bare=Named(package,"Barefeet").Id, skin=Named(package,"Default").Id, nails=Named(package,"Painted nails").Id;
+            foreach (bool replace in new[]{true,false})
+            {
+                CompositionPlan left=Composer.Plan(package,new[]{main,bare},replace);
+                Require(left.CanInstall,"Left-out skin blocked the install: "+Errors(left));
+                Require(left.Needs.Any(n=>n.Needed.Name=="2) Skin Options") && left.Warnings.Any(w=>w.Contains("'2) Skin Options'") && w.Contains("esf032_001_01.mesh")),"No note for the left-out material: "+String.Join(" / ",left.Warnings));
+                // Default holds only the body material, so the head model is not named (its stock material is the author's choice).
+                Require(!left.Warnings.Any(w=>w.Contains("esf032_001_00.mesh")),"The head model was named: "+String.Join(" / ",left.Warnings));
+                Require(left.StrictErrors().Any(e=>e.StartsWith("Choose an option in '2) Skin Options'") && e.Contains("'Default', 'Oily', 'Sweaty'")),"The Assistant was not stopped: "+String.Join(" | ",left.StrictErrors()));
+                Require(!left.Warnings.Any(w=>w.Contains("has no body material")),"The extra-outfit note says the mod has no material: "+String.Join(" / ",left.Warnings));
+                CompositionPlan full=Composer.Plan(package,new[]{main,bare,skin},replace);
+                Require(full.Needs.All(n=>n.Needed.Name!="2) Skin Options") && full.StrictErrors().Count==0,"A picked skin still asks: "+String.Join(" | ",full.StrictErrors()));
+                // A lone optional extra with the material (painted nails) gives the model its material and asks for nothing.
+                CompositionPlan withNails=Composer.Plan(package,new[]{main,bare,nails},replace);
+                Require(withNails.Needs.All(n=>n.Needed.Name!="2) Skin Options"),"The nails option did not count as the model's material.");
+            }
+            // The same model without the skin group: the lone optional extra is no reason to ask.
+            Put(root+"-lone","1! Outfit/modinfo.ini","name=Outfit\ndummymod=true\n");
+            Put(root+"-lone","1) Barefoot/modinfo.ini","name=Barefoot\naddonfor=Outfit\n"); Put(root+"-lone","1) Barefoot/"+Mesh,"mesh");
+            Put(root+"-lone","4! Extra/modinfo.ini","name=4) Optional\naddonfor=Outfit\ndummymod=true\n");
+            Put(root+"-lone","4) Nails/modinfo.ini","name=Painted nails\naddonfor=4) Optional\n"); Put(root+"-lone","4) Nails/"+bodyMaterial,"nails body");
+            ModPackage lone=Load(root+"-lone");
+            CompositionPlan barefoot=Composer.Plan(lone,new[]{Named(lone,"Barefoot").Id},true);
+            Require(barefoot.Needs.Count==0 && barefoot.StrictErrors().Count==0,"A barefoot mesh with a lone optional material was flagged: "+String.Join(" | ",barefoot.StrictErrors()));
         }
         private static void NestedBranches(string root)
         {
