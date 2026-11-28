@@ -195,6 +195,7 @@ namespace SlotsInstaller
             Require(File.Exists(settings) && LoaderFlags.Read(settings, "menu_outfit_options") == true, "costume options set by hand: the settings file is not the Manager's alone and stays at the uninstall");
             File.Delete(settings); Directory.Delete(Path.GetDirectoryName(settings)); Directory.Delete(Path.Combine(f.Game, "reframework", "data")); Directory.Delete(Path.Combine(f.Game, "reframework"));
             ReplaceChecks.SameSnapshot(original, ReplaceChecks.Snapshot(f.Game), "nothing else left behind after the hand-set file");
+            ReplayOwnChecks(f, original);
 
             // the Native Core alone (beside the Manager's own Slotsloader): its updater is told, the plugin's settings are not touched
             ReplaceChecks.Put(f.Mods, "core/Native Core/modinfo.ini", Encoding.UTF8.GetBytes("name=SF6 Native Core\r\nauthor=Wael3rd\r\nversion=0.9.13\r\n"));
@@ -203,6 +204,104 @@ namespace SlotsInstaller
             Require(LoaderFlags.Read(state, LoaderFlags.UpdateKey) == false && !File.Exists(settings) && !LoaderFlags.SuiteLoaderInstalled, "Native Core alone: update check off, no menu setting");
             f.Engine.Uninstall(core.Id);
             ReplaceChecks.SameSnapshot(original, ReplaceChecks.Snapshot(f.Game), "Native Core uninstalled");
+        }
+
+        // 28 Nov 2026 (the user: ticking the Replays tab sets every character to My Own, each one can then be changed in the
+        // game): ReplayOwn.cs. Starts and ends with the suite loader uninstalled, nothing chosen, the game folder as `original`.
+        private static void ReplayOwnChecks(ReplaceChecks.Fixture f, Dictionary<string, string> original)
+        {
+            string file = ReplayOwn.PathOf(f.Game), stateFile = Path.Combine(f.Data, ReplayOwn.StateFile);
+            string registry = Path.Combine(f.Game, OutfitOrder.DataRelative, "registry.json");
+            if (File.Exists(stateFile)) File.Delete(stateFile);
+            LoaderMenu replays = LoaderMenu.ById("replays");
+            Action<bool> tick = delegate(bool on) { LoaderFlagChoices c = LoaderFlags.Load(f.Data); replays.Set(c, on); LoaderFlags.Save(f.Data, c); LoaderFlags.Sync(f.Engine); };
+            Func<Dictionary<string, object>> fighters = delegate { return Obj(File.ReadAllText(file))["fighters"] as Dictionary<string, object>; };
+            Func<string, Dictionary<string, object>> entry = delegate(string fid) { object e; return fighters().TryGetValue(fid, out e) ? e as Dictionary<string, object> : null; };
+            Func<string, string> mode = delegate(string fid) { var e = entry(fid); return e == null ? null : e["mode"] as string; };
+            Action prune = delegate
+            {
+                foreach (string start in new[] { Path.GetDirectoryName(file), Path.GetDirectoryName(registry) })
+                    for (string dir = start; dir.Length > f.Game.Length && Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any(); dir = Path.GetDirectoryName(dir)) Directory.Delete(dir);
+            };
+            int all = Characters.ByCode.Count;
+
+            // ticked with no loader: nothing in the game folder
+            tick(true);
+            Require(!File.Exists(file), "no loader: no replay_outfits.json");
+            // a character newer than this Manager, named by the loader's registry
+            ReplaceChecks.Put(f.Game, OutfitOrder.DataRelative + "\\registry.json", Encoding.UTF8.GetBytes("{\"possession\":[{\"fighter\":99,\"costume_no\":5,\"random\":true},{\"fighter\":13,\"costume_no\":0}],\"slots\":[]}"));
+            ReplaceMod suite = ReplaceChecks.Install(f, "tool", "Suite loader");
+            Require(File.Exists(file) && fighters().Count == all + 1 && fighters().Keys.All(k => mode(k) == "own") && mode("99") == "own" && mode("13") == "own" && ReplayOwn.OnlyOwn(file),
+                "installed with the box ticked: every character on My Own, the registry's newer one too: " + File.ReadAllText(file));
+            Require(File.ReadAllText(file).StartsWith("{\n    \"version\": 1,\n    \"fighters\": {\n        \"1\": {\"mode\":\"own\"},\n        \"2\": {\"mode\":\"own\"},") && File.ReadAllText(file).EndsWith("\"99\": {\"mode\":\"own\"}\n    }\n}\n"),
+                "laid out as the tab writes it, by fighter id: " + File.ReadAllText(file));
+            DateTime at = File.GetLastWriteTimeUtc(file);
+            Require(!LoaderFlags.Sync(f.Engine) && File.GetLastWriteTimeUtc(file) == at, "a second sync writes nothing");
+
+            // the player changes some in the game (the tab writes the whole file): Ryu on Outfit 3 colour 02, Ken Off (no entry),
+            // Juri Off with her costume options kept, a stage and the music. Later syncs keep it.
+            const string inGame = "{\n    \"version\": 1,\n    \"fighters\": {\n        \"1\": {\"mode\": \"forced\", \"costume\": 2, \"color\": 1},\n        \"16\": {\"mode\": \"off\", \"options\": {\"0\": {\"hat\": 1}}}\n    },\n    \"stage\": {\"mode\": \"forced\", \"id\": 20000},\n    \"bgm\": {\"mode\": \"character\"}\n}\n";
+            File.WriteAllText(file, inGame);
+            Require(!LoaderFlags.Sync(f.Engine) && File.ReadAllText(file) == inGame, "the choices made in the game stay");
+            // unticked: the file stays (the loader still dresses replays from it)
+            tick(false);
+            Require(File.ReadAllText(file) == inGame, "unticked: the file is left as it is");
+            // ticked again: every character Off goes to My Own; Ryu keeps his outfit, Juri her options; the stage and the music stay
+            tick(true);
+            Dictionary<string, object> after = Obj(File.ReadAllText(file)), ryu = entry("1"), juri = entry("16");
+            Require(fighters().Count == all + 1 && (string)ryu["mode"] == "forced" && Convert.ToInt32(ryu["costume"]) == 2 && Convert.ToInt32(ryu["color"]) == 1 && ryu.Count == 3
+                && (string)juri["mode"] == "own" && juri.ContainsKey("options") && mode("10") == "own" && after.ContainsKey("stage") && after.ContainsKey("bgm") && !ReplayOwn.OnlyOwn(file),
+                "ticked again: Off to My Own, the rest kept: " + File.ReadAllText(file));
+            // a file this Manager can't read is left alone
+            tick(false);
+            File.WriteAllText(file, "garbage");
+            tick(true);
+            Require(File.ReadAllText(file) == "garbage", "a damaged file is not replaced");
+            tick(false);
+            File.WriteAllText(file, "{\"version\": 2, \"fighters\": {}}");
+            tick(true);
+            Require(File.ReadAllText(file) == "{\"version\": 2, \"fighters\": {}}", "a newer format is not replaced");
+
+            // the uninstall: a file the player changed stays, and a loader installed again keeps it
+            File.Delete(file); tick(false); tick(true);
+            Require(ReplayOwn.OnlyOwn(file) && fighters().Count == all + 1, "written again from nothing");
+            string changed = File.ReadAllText(file).Replace("\"1\": {\"mode\":\"own\"}", "\"1\": {\"mode\":\"forced\",\"costume\":2,\"color\":0}");
+            File.WriteAllText(file, changed);
+            f.Engine.Uninstall(suite.Id);
+            Require(File.ReadAllText(file) == changed, "uninstall: a file with the player's choices stays");
+            suite = ReplaceChecks.Install(f, "tool", "Suite loader");
+            Require(File.ReadAllText(file) == changed, "installed again: the player's choices are not overwritten");
+            // the tick's own file goes with the loader; installed again with the box ticked, it comes back
+            File.Delete(file); tick(false); tick(true);
+            f.Engine.Uninstall(suite.Id);
+            Require(!File.Exists(file), "uninstall: the tick's own My Own goes");
+            suite = ReplaceChecks.Install(f, "tool", "Suite loader");
+            Require(ReplayOwn.OnlyOwn(file), "installed again with the box ticked: My Own written again");
+            // a file removed by hand while the loader is gone: written again at the next install
+            f.Engine.Uninstall(suite.Id);
+            Require(!File.Exists(file), "uninstalled again");
+            suite = ReplaceChecks.Install(f, "tool", "Suite loader");
+            File.Delete(file);
+            f.Engine.Uninstall(suite.Id);
+            suite = ReplaceChecks.Install(f, "tool", "Suite loader");
+            Require(ReplayOwn.OnlyOwn(file), "removed by hand while installed, then reinstalled: written again");
+
+            // ends as it began: nothing chosen, nothing left behind (the registry is the loader's: gone before the uninstall,
+            // as it would be with the loader's own files)
+            File.Delete(registry);
+            LoaderFlags.Save(f.Data, new LoaderFlagChoices());
+            f.Engine.Uninstall(suite.Id);
+            Require(!File.Exists(file), "the last uninstall takes the tick's file");
+            // the fake registry made the loader's data folder, so the Manager kept its own records there (ManagerInstalls,
+            // SwapRepairs write into it whenever it exists): the loader's folder, not this check's to judge
+            foreach (string own in new[] { ManagerInstalls.FileName, SwapRepairFlag.FileName })
+            {
+                string p = Path.Combine(Path.GetDirectoryName(registry), own);
+                if (File.Exists(p)) File.Delete(p);
+            }
+            prune();
+            if (File.Exists(stateFile)) File.Delete(stateFile);
+            ReplaceChecks.SameSnapshot(original, ReplaceChecks.Snapshot(f.Game), "My Own checks leave nothing behind");
         }
 
         // 13 Nov 2026: the seventh switch, the in-game costume options ("menu_outfit_options"; only true turns it on).

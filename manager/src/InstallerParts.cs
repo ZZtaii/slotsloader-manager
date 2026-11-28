@@ -24,7 +24,8 @@ namespace SlotsInstaller
     // Manager installed: their natives files, later options winning, overwrite the outfit's files of the same path;
     // nothing else is added or removed. The selection needs no main files (a bundle's hair option alone is fine).
     // Materials name their textures by path, so files made for another outfit slot are refused: every model file must be
-    // in a costume folder the outfit is built on, or the shared 000 folder.
+    // in a costume folder the outfit is built on, or the shared 000 folder, or (1.0.25) be a part or texture of another
+    // outfit's folder that the game's outfit wears (SharedOutfitParts).
     public static partial class Installer
     {
         private static readonly Regex ModelFolder = new Regex(@"^natives/stm/(?:streaming/)?product/model/esf/esf(\d{3})/(\d{3})/", RegexOptions.IgnoreCase);
@@ -90,6 +91,38 @@ namespace SlotsInstaller
             var other = fileFolders.Where(f => f != "000" && !outfitFolders.Contains(f)).Distinct().OrderBy(f => f, StringComparer.Ordinal).ToList();
             return other.Count == 0 ? null : SlotText(other);
         }
+        // 1.0.25: the same per file, as the outfit wears its parts (SharedOutfitParts): a file of another outfit's folder
+        // fits when the outfit takes that part or texture from there (Ingrid Outfit 5 takes Outfit 2's head and hair), a
+        // shared (000) head or hair only when the outfit wears the shared one. `sceneOf`: an outfit's own costume scene
+        // (its parts per folder) when its mod ships one, else null; without it the game's outfit counts. Returns the
+        // text that follows "these files are made for", or null.
+        internal static string SlotMismatch(IEnumerable<string> paths, IList<string> outfitFolders, Func<string, Dictionary<string, List<string>>> sceneOf = null)
+        {
+            var other = new SortedSet<string>(StringComparer.Ordinal); var shared = new List<string>(); SharedOutfitParts.Wear sharedWear = null;
+            var wears = new Dictionary<string, SharedOutfitParts.Wear>(StringComparer.Ordinal);
+            foreach (string p in paths ?? new string[0])
+            {
+                Match m = ModelFolder.Match(p.Replace('\\', '/'));
+                if (!m.Success || outfitFolders.Contains(m.Groups[2].Value)) continue;
+                string code = m.Groups[1].Value;
+                List<SharedOutfitParts.Wear> list = outfitFolders.Select(o =>
+                {
+                    SharedOutfitParts.Wear w;
+                    if (!wears.TryGetValue(code + "/" + o, out w)) wears[code + "/" + o] = w = new SharedOutfitParts.Wear(code, o, sceneOf == null ? null : sceneOf(o));
+                    return w;
+                }).ToList();
+                if (list.Count == 0 ? m.Groups[2].Value == "000" : list.Any(w => SharedOutfitParts.Takes(w, p))) continue;
+                if (m.Groups[2].Value != "000") { other.Add(m.Groups[2].Value); continue; }
+                Match part = Regex.Match(p.Replace('\\', '/'), @"/000/(\d{2})/", RegexOptions.IgnoreCase);
+                if (part.Success) { shared.Add(part.Groups[1].Value); sharedWear = sharedWear ?? list.FirstOrDefault(); }
+            }
+            var texts = new List<string>();
+            if (other.Count > 0) texts.Add(SlotText(other));
+            if (shared.Count > 0) texts.Add(SharedOutfitParts.SharedText(shared, sharedWear));
+            return texts.Count == 0 ? null : String.Join(" and ", texts);
+        }
+        // The costume scene of an installed (or staged) outfit, when its mod ships one: what SlotMismatch reads.
+        internal static Func<string, Dictionary<string, List<string>>> SceneOn(string folder) { return o => SharedOutfitParts.OwnScene(folder, o); }
         internal static string SlotText(IEnumerable<string> folders) { return String.Join(", ", folders.Select(f => "Outfit " + Int32.Parse(f))); }
         internal static string OptionText(CompositionPlan plan) { return String.Join(" + ", plan.Layers.Select(c => c.Name)); }
 
@@ -106,7 +139,7 @@ namespace SlotsInstaller
             var codes = SelectionCodes(selection);
             if (codes.Any(c => c != code)) throw new IOException("These files belong to " + String.Join(", ", codes.Where(c => c != code).Select(c => Characters.ByCode.ContainsKey(c) ? Characters.ByCode[c] : "esf" + c)) + ", not " + m.Character + "; the Manager can't retarget mods.");
             List<string> folders = OutfitFolders(outfit);
-            string mismatch = FolderMismatch(SelectionFolders(selection), folders);
+            string mismatch = SlotMismatch(selection.Files.Keys, folders, SceneOn(outfit.Folder));
             if (mismatch != null) throw new IOException("Can't add to " + m.Name + ": these files are made for " + mismatch + (folders.Count == 0 ? "" : " and it is built on " + SlotText(folders)) + ". Materials point at their own outfit slot's files.");
 
             string parent = Path.GetDirectoryName(root);
@@ -163,7 +196,7 @@ namespace SlotsInstaller
                 if (selection.Files.Count == 0 || selection.Errors.Count > 0) throw new IOException(from + ": " + String.Join(" ", selection.Errors.DefaultIfEmpty("Tick the options to add.")));
                 var codes = SelectionCodes(selection);
                 if (codes.Any(c => c != code)) throw new IOException(from + ": these files belong to " + String.Join(", ", codes.Where(c => c != code).Select(c => Characters.ByCode.ContainsKey(c) ? Characters.ByCode[c] : "esf" + c)) + "; the Manager can't retarget mods.");
-                string mismatch = FolderMismatch(SelectionFolders(selection), folders);
+                string mismatch = SlotMismatch(selection.Files.Keys, folders, SceneOn(stage));
                 if (mismatch != null) throw new IOException("Can't add " + OptionText(selection) + " from " + from + ": these files are made for " + mismatch + (folders.Count == 0 ? "" : " and the outfit is built on " + SlotText(folders)) + ". Materials point at their own outfit slot's files.");
                 var graft = new PartGraft { SourcePath = selection.Package.SourcePath, Mod = selection.Package.Name ?? "", AddedUtc = DateTime.UtcNow.ToString("o"), SelectedIds = selection.Layers.Select(c => c.Id).ToList(), Options = selection.Layers.Select(c => c.Name).ToList(), Parts = (selection.OnlyParts ?? new List<string>()).ToList() };
                 ApplyGraft(stage, hashes, graft, transaction, sevenZipPath, selection);
@@ -268,7 +301,7 @@ namespace SlotsInstaller
                 try
                 {
                     if (!File.Exists(graft.SourcePath) && !Directory.Exists(graft.SourcePath)) throw new IOException("its mod is gone");
-                    string mismatch = FolderMismatch((graft.Files ?? new List<string>()).Select(p => ModelFolder.Match(p)).Where(x => x.Success).Select(x => x.Groups[2].Value), folders);
+                    string mismatch = SlotMismatch(graft.Files ?? new List<string>(), folders, SceneOn(stage));
                     if (mismatch != null) throw new IOException("made for " + mismatch);
                     ApplyGraft(stage, hashes, graft, transaction, sevenZipPath, null);
                     kept.Add(graft);
