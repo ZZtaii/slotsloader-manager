@@ -12,6 +12,13 @@ A Windows mod manager for Street Fighter 6. It installs mods from your ZIP, RAR,
 
 ## What changed
 
+- 1.0.26:
+  - Comes with Slotsloader 1.29.1 (a fix in its updater; the Manager keeps updating it as before).
+  - Ticking Settings > Slotsloader > "Settings tab in the Replays menu" sets every character to My Own: your replays show the outfit you really wore. Change any character in that tab in the game.
+  - Add to outfit and recipes accept parts an outfit borrows from another one: most Outfit 5s wear Outfit 1's hair, Ingrid Outfit 5 wears Outfit 2's head and hair. On extra outfits these parts show with the next Slotsloader.
+  - Bundles whose material is only in a Skin Options group: the Assistant asks for that group (or takes its Default) instead of leaving the outfit on the game's material.
+  - Command line: replace-list, replace-enable, replace-disable, replace-move and replace-install --update.
+
 - 1.0.25:
   - Comes with Slotsloader 1.29.0: the Random list now works in game, variants that need their main files get them, and outfit colour squares match the outfit.
   - Open folder on the Installed page opens the mod's archive in your library.
