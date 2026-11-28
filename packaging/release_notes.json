@@ -2,6 +2,17 @@
   "format": "sf6suite-notes-1",
   "releases": [
     {
+      "version": "1.51.1",
+      "date": "2026-11-27",
+      "new": [],
+      "fixed": [
+        "[Native Core] The game could close at the start of an update accepted in the game's offer box: nothing was installed and a second try worked. Fixed for the updates after this one; this update itself is still installed by the previous code.",
+        "[Slots Loader] The same fix, for an install without the Native Core.",
+        "[Recording Manager] The same fault is removed from its short on-screen messages."
+      ],
+      "modified": []
+    },
+    {
       "version": "1.51.0",
       "date": "2026-11-27",
       "new": [
