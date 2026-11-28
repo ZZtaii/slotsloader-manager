@@ -18,6 +18,13 @@ size_t ZSTD_decompress(void* dst, size_t dstCapacity,
                        const void* src, size_t compressedSize);
 unsigned    ZSTD_isError(size_t code);
 const char* ZSTD_getErrorName(size_t code);
+// streaming, for read_head()
+typedef struct ZSTD_DCtx_s ZSTD_DCtx;
+typedef struct { const void* src; size_t size; size_t pos; } ZSTD_inBuffer;
+typedef struct { void* dst; size_t size; size_t pos; } ZSTD_outBuffer;
+ZSTD_DCtx*  ZSTD_createDCtx(void);
+size_t      ZSTD_freeDCtx(ZSTD_DCtx* dctx);
+size_t      ZSTD_decompressStream(ZSTD_DCtx* zds, ZSTD_outBuffer* output, ZSTD_inBuffer* input);
 }
 
 // miniz (miniz.h / miniz.c)
@@ -223,6 +230,32 @@ std::vector<const PakEntry*> PakReader::turned_off_candidates(uint64_t hash) con
     return out;
 }
 
+std::vector<const PakEntry*> PakReader::turned_off_between(uint64_t hash, uint64_t& after, uint64_t& before) const {
+    std::vector<const PakEntry*> out;
+    after = 0; before = UINT64_MAX;
+    if (hash == 0 || entries_.count(hash)) return out;
+    for (auto& t : turned_off_)
+        if (t.after < hash && hash < t.before) { out.push_back(&t.e); after = t.after; before = t.before; }
+    return out;
+}
+
+std::vector<PakReader::TurnedOffPlace> PakReader::turned_off_places() const {
+    std::vector<TurnedOffPlace> out;
+    for (auto& t : turned_off_) {   // in the table's order: the rows of one place follow each other
+        if (!out.empty() && out.back().after == t.after && out.back().before == t.before) out.back().rows++;
+        else out.push_back({t.after, t.before, 1});
+    }
+    return out;
+}
+
+bool PakReader::overlay_turned_off(uint64_t hash) const {
+    for (auto* o : over_) {
+        uint64_t a, b;
+        if (!o->turned_off_between(hash, a, b).empty() || o->overlay_turned_off(hash)) return true;
+    }
+    return false;
+}
+
 const PakEntry* PakReader::find(uint64_t hash) const {
     auto it = entries_.find(hash);
     if (asked_ && !asked_->quiet) asked_->found.emplace(hash, it != entries_.end());
@@ -262,6 +295,54 @@ std::vector<uint8_t> PakReader::read_raw(const PakEntry& e) {
 
 std::vector<uint8_t> PakReader::read(const PakEntry& e) {
     return pak_decompress(read_raw(e), e.compression(), e.decompressed_size);
+}
+
+std::vector<uint8_t> PakReader::read_head(const PakEntry& e, size_t n) {
+    if (auto* o = owner_of(e)) return o->read_head(e, n);
+    if (!fp_ || e.compressed_size <= 0 || e.decompressed_size <= 0 || n == 0) return {};
+    const int comp = e.compression();
+    const bool stored = comp == 0 || e.compressed_size == e.decompressed_size;
+    if (int64_t(n) > e.decompressed_size) n = size_t(e.decompressed_size);
+    // The start of the stored data: the bytes themselves, or enough of the stream for its first block (a zstd block
+    // is 128 KB at most, a deflate one gives its first bytes long before that)
+    const int64_t want = stored ? int64_t(n) : int64_t(256 * 1024);
+    std::vector<uint8_t> raw(size_t(e.compressed_size < want ? e.compressed_size : want));
+    if (_fseeki64(fp_, e.offset, SEEK_SET) != 0) return {};
+    raw.resize(std::fread(raw.data(), 1, raw.size(), fp_));
+    if (stored) { if (raw.size() > n) raw.resize(n); return raw; }
+    std::vector<uint8_t> out(n);
+    if (comp == 2 || (comp & 0xF) == 2) {
+        ZSTD_DCtx* d = ZSTD_createDCtx();
+        if (!d) return {};
+        ZSTD_inBuffer in{raw.data(), raw.size(), 0};
+        ZSTD_outBuffer to{out.data(), out.size(), 0};
+        bool bad = false;
+        while (to.pos < to.size && in.pos < in.size) {
+            const size_t r = ZSTD_decompressStream(d, &to, &in);
+            if (ZSTD_isError(r)) { bad = true; break; }
+            if (r == 0) break;   // the end of the frame
+        }
+        ZSTD_freeDCtx(d);
+        if (bad) return {};
+        out.resize(to.pos);
+        return out;
+    }
+    if (comp == 1 || (comp & 0xF) == 1) {
+        for (int bits : { -MZ_DEFAULT_WINDOW_BITS, MZ_DEFAULT_WINDOW_BITS }) {   // raw deflate, then with a zlib header
+            mz_stream strm{};
+            strm.next_in   = raw.data();
+            strm.avail_in  = static_cast<unsigned int>(raw.size());
+            strm.next_out  = out.data();
+            strm.avail_out = static_cast<unsigned int>(out.size());
+            if (mz_inflateInit2(&strm, bits) != MZ_OK) continue;
+            const int rc = mz_inflate(&strm, MZ_SYNC_FLUSH);
+            const size_t got = size_t(strm.total_out);
+            mz_inflateEnd(&strm);
+            if ((rc == MZ_OK || rc == MZ_STREAM_END || rc == MZ_BUF_ERROR) && got == out.size()) return out;
+        }
+        return {};
+    }
+    return {};
 }
 
 std::vector<uint8_t> pak_decompress(std::vector<uint8_t> raw, int comp, int64_t decompressed_size) {

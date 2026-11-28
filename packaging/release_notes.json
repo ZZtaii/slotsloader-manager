@@ -2,6 +2,19 @@
   "format": "sf6suite-notes-1",
   "releases": [
     {
+      "version": "1.51.2",
+      "date": "2026-11-28",
+      "new": [],
+      "fixed": [
+        "[Slots Loader] An extra outfit made from a game outfit now keeps its own look when a Replace original mod is installed over that outfit: the textures it ships are used, and its parts no longer show black or take the replacement's material.",
+        "[Slots Loader] An extra outfit also takes the parts its outfit borrows from another outfit's folder (a hair, a head): the mod's version of them now shows instead of the game's."
+      ],
+      "modified": [
+        "[Slots Loader] Slotsloader Manager installs: extra outfits ignore the replacements installed over the game and keep the game's own files for everything their mod does not ship.",
+        "[Slots Loader] The first start after this update builds the extra outfits again, once. It can take a few minutes with many mods."
+      ]
+    },
+    {
       "version": "1.51.1",
       "date": "2026-11-27",
       "new": [],

@@ -140,7 +140,7 @@ static const int   N_OLD_TEX = 1;
 // (apply_outfit_labels), "Outfit VII" when it has none. Id of the static table's first name message ("Outfit I"),
 // static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_PAK_ID = "2026-11-10-random-outfit";
+static const char* LOADER_PAK_ID = "2026-11-28-own-material";   // was "2026-11-10-random-outfit"; PR #5: extra outfits under replacements, borrowed parts
 static const char* LOADER_META_ID = "2026-11-27-swatch-area";   // was "2026-10-20-fastpak"; swatches weigh by triangles
 // The rules of game_swatches.json, in its key after the meta id: another value makes it again at the next launch, the pak
 // kept ("|ccvd|": a game outfit's colours in its colour list's order, Ex / Dx files included, 27/11)
@@ -1095,6 +1095,176 @@ static bool loose_file_there(const std::string& pak_path) {
     return !p.empty() && file_stat_long(p, sz, mt);
 }
 
+// ---- Extra outfits ignore the replacements installed over the game (Manager mode) ----
+// The rule (ZZtaii, 28 Nov 2026): an extra outfit is the game's own outfit plus what its mod ships, whatever Replace original
+// mod is installed over that outfit. Ingrid Stockings Barefoot C1 (a body mesh alone) wore the hair, the hair physics and
+// the colours of the Ingrid C.C. replacement installed over Ingrid's Outfit 1.
+// The PAK method turns a replaced file's row of the base pak off (zeros over its hash) and puts the replacement's file in
+// the game's natives folder, where the game reads it instead; the row keeps its data. own_find() is the game's own file
+// of a path: the base pak's row (or a DLC pak's), else the row a replacement's file turned off. Which row that is, is
+// never guessed from the path alone (a path the base pak never had can find a turned-off row of its kind between the
+// two rows around its hash, which is another file's):
+//   - a replacement's file must sit at that very path (own_scan: the loose files of natives\ no pak has a row for). A
+//     path no replacement is installed over has nothing under it: a file only a mod names, a streaming twin the game never
+//     shipped, a file of a DLC that is not installed;
+//   - a file one of the game's patch paks holds is the game's there, not under a replacement: never looked for;
+//   - the table is sorted by hash and a turned-off row keeps its place, so the rows turned off between two rows of the
+//     table are those of the replacement files whose paths hash between the same two, in the same order. Every way to
+//     give each of those rows one of those files, in order, the row starting like a file of that kind (the files left
+//     over being ones a replacement adds), is tried, and the answer is the row every way gives the path. As many files
+//     as rows, the usual case, is one way. A path two ways give different rows, or none, has no answer (nullptr: the
+//     slot follows the replacement there, as before, and detach_from_replacements says so in the log);
+//   - all of this holds while the folder accounts for every turned-off row of the base pak: as many files as rows, or
+//     more, in every place (own_scan counts). A row turned off with no file there (a replacement's file deleted by
+//     hand, rows turned off by something else) and a file a replacement adds, of the same kind, between the same two
+//     rows would pass for a file and its row. So with one such row anywhere nothing is read from turned-off rows at
+//     all: the slots follow the replacements, as before this rule, and the log says how many rows and why;
+//   - rows of the base pak alone: when a DLC pak has turned-off rows there too, which pak held the path is not known;
+//   - a streaming twin only with its texture: the texture's own row is turned off as well and found the same way.
+// What a row holds is told by its first bytes (read_head: the start of its data, a big file is not unpacked for it).
+struct OwnKind { const char* magic; uint8_t at; };
+struct OverFile { uint64_t hash; OwnKind kind; std::string path; };   // kind.magic nullptr: a kind not known here
+static bool g_ignore_replacements = false;
+static std::vector<OverFile> g_over_files;                          // the replacements' files, by the hash of their path
+static std::unordered_map<uint64_t, const PakEntry*> g_own_rows;    // paths looked for (nullptr: no row told)
+static std::unordered_map<const PakEntry*, std::array<uint8_t, 8>> g_own_heads;   // a row's first bytes (zeros: not read)
+static size_t g_own_taken = 0;
+static size_t g_own_off = 0, g_own_orphans = 0;   // turned-off rows of the base pak; those no replacement file accounts for
+static bool own_kind_of(const std::string& low, OwnKind& k) {
+    auto has = [&](const char* ext) { return low.find(ext) != std::string::npos; };
+    if (has(".mesh.")) k = {"MESH", 0};
+    else if (has(".mdf2.")) k = {"MDF", 0};
+    else if (has(".tex.")) k = {"TEX", 0};
+    else if (has(".user.")) k = {"USR", 0};
+    else if (has(".scn.")) k = {"SCN", 0};
+    else if (has(".pfb.")) k = {"PFB", 0};
+    else if (has(".chain.")) k = {"chan", 4};
+    else if (has(".havokcloth.")) k = {"TAG0", 4};
+    else return false;
+    return true;
+}
+// The replacements' files: every loose file of the game's natives folder that no pak has a row for, whether its row was
+// turned off or a replacement adds it. A file whose row is on is not one (the game reads its own), nor is a file a patch
+// pak holds.
+static void own_scan(PakReader& base_pak, const std::vector<PakReader*>& patch_paks) {
+    g_over_files.clear();
+    if (g_game_dir.empty()) return;
+    AskQuiet quiet;
+    std::vector<std::string> dirs{"natives"};
+    while (!dirs.empty()) {
+        const std::string rel = dirs.back();
+        dirs.pop_back();
+        std::string abs = g_game_dir + "\\" + rel;
+        for (auto& c : abs) if (c == '/') c = '\\';
+        WIN32_FIND_DATAW fd;
+        HANDLE fh = FindFirstFileW((make_wide_path(abs) + L"\\*").c_str(), &fd);
+        if (fh == INVALID_HANDLE_VALUE) continue;
+        do {
+            std::string name;
+            bool plain = true;   // a pak path is plain ASCII
+            for (const wchar_t* w = fd.cFileName; *w; w++) {
+                if (*w >= 0x80) { plain = false; break; }
+                name += (char)tolower((int)*w);
+            }
+            if (!plain || name == "." || name == "..") continue;
+            const std::string p = rel + "/" + name;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) dirs.push_back(p);
+                continue;
+            }
+            const uint64_t ph = pak_path_hash(std::string_view(p));
+            if (base_pak.find(ph)) continue;   // the game's row is on, in the base pak or a DLC pak
+            bool patched = false;
+            for (auto* pk : patch_paks) if (pk->has_own(ph)) { patched = true; break; }
+            if (patched) continue;
+            OverFile f{ph, {nullptr, 0}, p};
+            own_kind_of(p, f.kind);
+            g_over_files.push_back(std::move(f));
+        } while (FindNextFileW(fh, &fd));
+        FindClose(fh);
+    }
+    std::sort(g_over_files.begin(), g_over_files.end(), [](const OverFile& a, const OverFile& b) { return a.hash < b.hash; });
+    // Every turned-off row should have its replacement's file between the same two rows
+    g_own_off = g_own_orphans = 0;
+    for (auto& pl : base_pak.turned_off_places()) {
+        const auto lo = std::upper_bound(g_over_files.begin(), g_over_files.end(), pl.after,
+                                         [](uint64_t v, const OverFile& f) { return v < f.hash; });
+        const auto hi = std::lower_bound(lo, g_over_files.end(), pl.before, [](const OverFile& f, uint64_t v) { return f.hash < v; });
+        g_own_off += pl.rows;
+        if (size_t(hi - lo) < pl.rows) g_own_orphans += pl.rows - size_t(hi - lo);
+    }
+}
+static const std::array<uint8_t, 8>& own_head(PakReader& base_pak, const PakEntry* e) {
+    auto it = g_own_heads.find(e);
+    if (it != g_own_heads.end()) return it->second;
+    std::array<uint8_t, 8> a{};
+    const auto d = base_pak.read_head(*e, a.size());
+    if (!d.empty()) memcpy(a.data(), d.data(), d.size() < a.size() ? d.size() : a.size());
+    return g_own_heads.emplace(e, a).first->second;
+}
+static const PakEntry* own_find(PakReader& base_pak, uint64_t h);
+static const PakEntry* own_row(PakReader& base_pak, uint64_t h) {
+    static const bool debug = GetEnvironmentVariableA("SF6_COSTUME_TEST_OWN_DEBUG", nullptr, 0) > 0;
+    const auto by_hash = [](const OverFile& f, uint64_t v) { return f.hash < v; };
+    const auto me = std::lower_bound(g_over_files.begin(), g_over_files.end(), h, by_hash);
+    if (me == g_over_files.end() || me->hash != h) return nullptr;   // no replacement's file at that path
+    auto no = [&](const char* why) {
+        if (debug) printf("      own %s: %s\n", me->path.c_str(), why);
+        return (const PakEntry*)nullptr;
+    };
+    if (!me->kind.magic) return no("a kind not known here");
+    if (me->path.compare(0, strlen(STREAM_PFX), STREAM_PFX) == 0) {
+        const uint64_t th = pak_path_hash(std::string_view(std::string(BASE_PFX) + me->path.substr(strlen(STREAM_PFX))));
+        { AskQuiet quiet; if (base_pak.find(th)) return no("a streaming twin whose texture's row is on"); }
+        if (!own_find(base_pak, th)) return no("a streaming twin whose texture's own row is not told");
+    }
+    uint64_t after = 0, before = 0;
+    const auto rows = base_pak.turned_off_between(h, after, before);
+    base_pak.turned_off_candidates(h);   // noted with what the build asked the table (game_lookups.tsv, "o")
+    if (rows.empty()) return no("no turned-off row can have held it (a file the replacement adds)");
+    if (base_pak.overlay_turned_off(h)) return no("a DLC pak has turned-off rows there too");
+    // the replacement files whose paths hash between the same two rows, in order
+    const auto lo = std::upper_bound(g_over_files.begin(), g_over_files.end(), after,
+                                     [](uint64_t v, const OverFile& f) { return v < f.hash; });
+    const auto hi = std::lower_bound(lo, g_over_files.end(), before, by_hash);
+    const size_t n = size_t(hi - lo), m = rows.size(), mine = size_t(me - lo);
+    if (n < m) return no("a row is turned off there that no file of the game's natives folder accounts for");   // (own_find stops before)
+    if (n > 24) return no("too many turned-off rows there to tell");
+    auto fits = [&](size_t fi, size_t ri) {
+        const OwnKind& k = lo[fi].kind;
+        return !k.magic || memcmp(own_head(base_pak, rows[ri]).data() + k.at, k.magic, strlen(k.magic)) == 0;
+    };
+    // Every way to give each row a file, in order (the files left over are ones a replacement adds)
+    const PakEntry* answer = nullptr;
+    size_t ways = 0;
+    bool same = true;
+    std::vector<int> row_of(n, -1);
+    auto go = [&](auto&& self, size_t fi, size_t ri) -> void {
+        if (ways > 4096) return;
+        const size_t files_left = n - fi, rows_left = m - ri;
+        if (!rows_left) {
+            const PakEntry* e = row_of[mine] >= 0 ? rows[size_t(row_of[mine])] : nullptr;
+            if (!ways++) answer = e; else if (answer != e) same = false;
+            return;
+        }
+        if (fits(fi, ri)) { row_of[fi] = int(ri); self(self, fi + 1, ri + 1); row_of[fi] = -1; }
+        if (files_left > rows_left) self(self, fi + 1, ri);   // a file the replacement adds
+    };
+    go(go, 0, 0);
+    if (debug) printf("      own %s: %zu replacement files and %zu turned-off rows between the same rows, %zu ways: %s\n",
+                      me->path.c_str(), n, m, ways, ways && ways <= 4096 && same && answer ? "taken" : "not taken");
+    return ways && ways <= 4096 && same ? answer : nullptr;
+}
+static const PakEntry* own_find(PakReader& base_pak, uint64_t h) {
+    if (auto* e = base_pak.find(h)) return e;
+    if (!g_ignore_replacements) return nullptr;
+    if (g_own_orphans) return nullptr;   // the folder does not account for every turned-off row: no row is told
+    if (auto it = g_own_rows.find(h); it != g_own_rows.end()) return it->second;
+    const PakEntry* e = own_row(base_pak, h);
+    if (e) g_own_taken++;
+    return g_own_rows[h] = e;
+}
+
 struct ModFileRef {
     PakReader* pak = nullptr;
     uint64_t hash = 0;
@@ -1264,7 +1434,7 @@ static int write_streaming_twin(PakWriter& writer,
         return 1;
     }
     uint64_t sh = pak_path_hash(std::string_view(s_orig));
-    auto* se = base_pak.find(sh);
+    auto* se = own_find(base_pak, sh);
     if (se) {
         put_game_raw(writer, pak_path_hash(std::string_view(s_new)), base_pak, *se);
         written.insert(s_new);
@@ -1708,7 +1878,8 @@ static std::vector<ModCostume> detect_mod_costumes(
             for (auto& [p, mf] : mc.files_in_folder)
                 if (str_ends_with(str_lower(p), ".mesh.230110883")
                     && p.find("/" + mc.original_folder + "/01/") != std::string::npos) body = true;
-            if (!body) donors.insert(mc.files_in_folder.begin(), mc.files_in_folder.end());
+            // with their streaming twins (named by that folder, so in its files_other): borrow_parts moves them
+            if (!body) { donors.insert(mc.files_in_folder.begin(), mc.files_in_folder.end()); donors.insert(mc.files_other.begin(), mc.files_other.end()); }
         }
     // Athena for Ingrid: 24 files for Outfit 2 and one mesh for Drive Tech: that second entry would be
     // the Drive Tech outfit with a barely changed body. When a mod has a real costume (ten files or more),
@@ -2758,7 +2929,7 @@ static std::string scene_version_problem(const std::vector<uint8_t>& mdata, PakR
         std::set<std::string> seen;
         for (auto& ci : inv.costumes) {
             if (ci.scene.empty() || !seen.insert(ci.scene).second) continue;
-            auto* e = base_pak.find(pak_path_hash(std::string_view(ci.scene)));
+            auto* e = own_find(base_pak, pak_path_hash(std::string_view(ci.scene)));
             if (!e) continue;
             for (uint64_t t : scene_instance_table(base_pak.read(*e)))
                 if (uint32_t(t)) game_types.emplace(uint32_t(t), uint32_t(t >> 32));
@@ -2963,6 +3134,31 @@ static std::vector<PakReader*> g_game_patch_paks;
 // part may name a material no file defines, on purpose: the game then draws nothing for it)
 static std::unordered_set<std::string> g_donated_meshes;
 
+// The game's own material file of a costume part: its entry in the base pak, else, when a replacement installed over the
+// game turned that entry off (the PAK method), the one turned-off row that can have held it and reads as a material file.
+// False: neither (none, or two such rows). An extra outfit is made on the game's outfit, never on a replacement installed
+// over it: a part the mod gives no material gets the game's own, as it always did with a replacement installed as loose
+// files (the base pak's entry stays on then). turned_off: the material came from a turned-off row.
+static bool game_own_material(PakReader& base_pak, uint64_t h, std::vector<uint8_t>& out, bool* turned_off = nullptr) {
+    if (turned_off) *turned_off = false;
+    if (auto* e = base_pak.find(h)) { out = base_pak.read(*e); return true; }
+    int n = 0;
+    std::vector<uint8_t> found;
+    for (auto* e : base_pak.turned_off_candidates(h)) {
+        if (e->decompressed_size <= 0 || e->decompressed_size > (16 << 20)) continue;
+        std::vector<uint8_t> d;
+        try { d = base_pak.read(*e); }
+        catch (const std::exception&) { continue; }   // another file's data that does not decompress: not this one
+        std::vector<std::string> mats;
+        if (!slotcheck::mdf2_materials(d, mats) || mats.empty()) continue;
+        if (n++ == 0) found = std::move(d);
+    }
+    if (n != 1) return false;
+    out = std::move(found);
+    if (turned_off) *turned_off = true;
+    return true;
+}
+
 // A mod made for an older layout of the game puts a part where the game used to keep it. Ingrid's Aria
 // hides her face and hair with a reduced mesh in 000/00 and 001/02, the head and hair of Outfit 1; the
 // Drive Tech scene now takes them from Outfit 2 (002/00, 002/02), so the mod's part was never shown.
@@ -3020,8 +3216,8 @@ static int donate_parts(PakWriter& writer, std::unordered_set<std::string>& writ
         const std::string old_mesh = "natives/stm/" + low + "." + mesh_suf;
         const std::string old_mdf = "natives/stm/" + str_lower(mdf_text) + "." + mdf_suf;
         // the part keeps the material file of the place it replaces (the mod was made against it)
-        auto* me = base_pak.find(pak_path_hash(std::string_view(donor_mdf)));
-        if (!me) me = base_pak.find(pak_path_hash(std::string_view(old_mdf)));
+        auto* me = own_find(base_pak, pak_path_hash(std::string_view(donor_mdf)));
+        if (!me) me = own_find(base_pak, pak_path_hash(std::string_view(old_mdf)));
         if (!me) continue;
         const std::string new_mesh = relocate_path(old_mesh, fd, folder, new_f);
         const std::string new_mdf = relocate_path(old_mdf, fd, folder, new_f);
@@ -3072,6 +3268,180 @@ static int donate_parts(PakWriter& writer, std::unordered_set<std::string>& writ
         n++;
     }
     return n;
+}
+
+// A resource reference as scenes and material files write it: no natives/stm/, no version, lowercase
+// ("product/model/esf/esf032/002/02/esf032_002_02_hair_albd.tex").
+static std::string ref_key_of(const std::string& pak_path) {
+    std::string low = str_lower(pak_path);
+    if (low.compare(0, 12, "natives/stm/") == 0) low.erase(0, 12);
+    const size_t dot = low.find_last_of('.');
+    if (dot != std::string::npos && dot + 1 < low.size()
+        && low.find_first_not_of("0123456789", dot + 1) == std::string::npos) low.resize(dot);
+    return low;
+}
+// Every UTF-16 reference in `d` whose key is in `moved` gets the folder of the move: "<fd>/<old>/" -> "<fd>/<new>/",
+// same length, in place, the rest of the text as it was. Returns how many were changed.
+static size_t repoint_moved_refs(std::vector<uint8_t>& d, const std::unordered_map<std::string, std::string>& moved,
+                                 const std::string& fd) {
+    size_t n = 0;
+    for (size_t i = 0; i + 1 < d.size(); i += 2) {
+        size_t j = i;
+        std::string s;
+        while (j + 1 < d.size() && d[j + 1] == 0 && d[j] >= 0x20 && d[j] < 0x7f) { s += (char)d[j]; j += 2; }
+        if (s.size() < 8) continue;
+        const size_t lead = s.find_first_not_of("@ ");
+        if (lead != std::string::npos) {
+            auto it = moved.find(str_lower(s.substr(lead)));
+            if (it != moved.end()) {
+                const std::string mid = "/" + fd + "/";
+                const size_t at = str_lower(s).find(mid, lead);
+                if (at != std::string::npos && it->second.size() == 3) {
+                    for (size_t c = 0; c < 3; c++) d[i + 2 * (at + mid.size() + c)] = (uint8_t)it->second[c];
+                    n++;
+                }
+            }
+        }
+        i = j;
+    }
+    return n;
+}
+
+// Parts the outfit takes from another costume folder of its fighter, that the mod ships there. The game builds
+// many outfits from others' parts (Ingrid Outfit 5 wears the head and hair of Outfit 2, most Outfit 5s the hair
+// of Outfit 1, and outfits name other outfits' body and hair textures). An extra outfit made from one of them
+// with that part changed (a hair made for Outfit 2 on Ingrid Outfit 5) left those files in Outfit 2's folder,
+// which belongs to the game's Outfit 2: the slot still loaded the game's part. Taken into the slot here:
+//   - every file of a part (<fd>/<folder>/<part>/) whose mesh or material file the scene names;
+//   - a texture of another folder that a material file the slot loads names.
+// They move into the slot's folder under their own names (only the folder in the path changes: they can't meet
+// the slot's own files, which carry the slot's number), and the scene and the slot's material files point at
+// them. A material file of such a part the mod does not ship, that names one of the moved textures, gets a copy
+// in the slot too. Physics files of the part stay the game's. Runs after donate_parts (a part it took over is
+// in the slot's folder already).
+static int borrow_parts(PakWriter& writer, std::unordered_set<std::string>& written_paths,
+                        std::vector<uint8_t>& scene, const ModCostume& mc, const SlotInfo& slot,
+                        PakReader& base_pak, const std::unordered_map<std::string, ModFileRef>& all_mod,
+                        const std::unordered_map<std::string, std::string>& suffixes) {
+    const std::string& fd = slot.fighter_dir;
+    const std::string& old_f = slot.original_folder;
+    const std::string& new_f = slot.new_folder;
+    if (new_f.size() != 3) return 0;
+    auto other_folder = [&](const std::string& pak_path, std::string& folder) {
+        std::string pf;
+        return parse_model_folder(pak_path, pf, folder) && pf == fd && folder != old_f && folder != "000";
+    };
+    const std::string mdf_suf = suffixes.count("mdf2") ? suffixes.at("mdf2") : "31";
+    // The parts of other folders the scene names (their folder "natives/stm/product/model/esf/<fd>/<f>/<part>/"),
+    // and the scene's material files (key -> folder) whose textures count.
+    std::set<std::string> part_dirs;
+    std::vector<std::string> scene_mdfs;
+    for (auto& r : scene_model_refs(scene)) {
+        const std::string key = str_lower(r.text);
+        const bool mesh = str_ends_with(key, ".mesh"), mdf = str_ends_with(key, ".mdf2");
+        if (!mesh && !mdf) continue;
+        if (mdf) scene_mdfs.push_back(key);
+        std::string folder;
+        const std::string as_path = "natives/stm/" + key + ".x";
+        if (!other_folder(as_path, folder)) continue;
+        const size_t at = as_path.find("/" + fd + "/" + folder + "/");
+        if (at == std::string::npos || as_path.size() < at + fd.size() + 9) continue;
+        part_dirs.insert(as_path.substr(0, at + fd.size() + 9));   // ".../<fd>/<folder>/<part>/"
+    }
+    // Textures of other folders that the slot's material files name: the slot's copies first, else the game's.
+    std::unordered_set<std::string> named;
+    auto collect = [&](const std::vector<uint8_t>& d) {
+        for (size_t i = 0; i + 1 < d.size(); i += 2) {
+            size_t j = i; std::string s;
+            while (j + 1 < d.size() && d[j + 1] == 0 && d[j] >= 0x20 && d[j] < 0x7f) { s += (char)d[j]; j += 2; }
+            if (s.size() > 4 && str_ends_with(str_lower(s), ".tex")) named.insert(str_lower(s));
+            i = j;
+        }
+    };
+    std::unordered_map<std::string, std::string> mdf_paths;   // scene key -> the pak path the slot loads it from now
+    for (const std::string& key : scene_mdfs) {
+        const std::string vp = "natives/stm/" + key + "." + mdf_suf;
+        std::string pf, folder;
+        std::string path = vp;
+        if (parse_model_folder(vp, pf, folder) && pf == fd && (folder == old_f || folder == "000")) {
+            const std::string mine = relocate_path(vp, fd, folder, new_f);
+            if (written_paths.count(mine)) path = mine;
+        }
+        mdf_paths[key] = path;
+        const uint64_t h = pak_path_hash(std::string_view(path));
+        if (written_paths.count(path)) collect(writer.get(h));
+        else if (auto* e = own_find(base_pak, h)) { auto v = base_pak.read(*e); collect(std::vector<uint8_t>(v.begin(), v.end())); }
+    }
+    // The mod's files of those parts and textures, in the folders no outfit of the mod is made from.
+    std::unordered_map<std::string, std::string> moved;   // reference key -> slot folder (always new_f)
+    std::unordered_map<std::string, std::string> moved_path;   // mod pak path -> slot pak path
+    for (auto* files : {&mc.files_donor, &mc.files_other})
+        for (auto& [path, mf] : *files) {
+            const std::string low = str_lower(path);
+            std::string folder;
+            if (!other_folder(low, folder)) continue;
+            bool take = false;
+            for (auto& dir : part_dirs) if (low.compare(0, dir.size(), dir) == 0) { take = true; break; }
+            if (!take && low.find(".tex.") != std::string::npos && named.count(ref_key_of(low))) take = true;
+            if (!take) continue;
+            const std::string old_dir = "/" + fd + "/" + folder + "/";
+            std::string np = low;
+            np.replace(np.find(old_dir), old_dir.size(), "/" + fd + "/" + new_f + "/");
+            if (written_paths.count(np) || moved_path.count(low)) continue;
+            moved_path[low] = np;
+            moved[ref_key_of(low)] = new_f;
+        }
+    if (moved_path.empty()) return 0;
+    const ModFileMaps own = {&mc.files_in_folder, &mc.files_other, &mc.files_donor, &mc.files_shared};
+    int files = 0, twins = 0, mdf_copies = 0;
+    for (auto& [low, np] : moved_path) {
+        const ModFileRef* mf = nullptr;
+        for (auto* m : own) { auto it = m->find(low); if (it != m->end()) { mf = &it->second; break; } }
+        if (!mf) continue;
+        const uint64_t h = pak_path_hash(std::string_view(np));
+        if (low.find(".mdf2.") != std::string::npos) {
+            std::vector<uint8_t> d = mf->read_data();
+            repoint_moved_refs(d, moved, fd);
+            writer.add_uncompressed(h, std::move(d));
+        } else put_mod_raw(writer, h, *mf);
+        written_paths.insert(np);
+        files++;
+        twins += write_streaming_twin(writer, written_paths, low, np, all_mod, base_pak, &own);
+    }
+    // Material files of the scene that name a moved texture and are not the mod's (the game's, or the slot's own
+    // copies): the slot's copy points at the moved textures. A game one of another folder is copied in the slot
+    // under its own name; one of the outfit's folder or 000/ under the slot's name, as the slot's own files.
+    for (auto& [key, path] : mdf_paths) {
+        const std::string lowp = str_lower(path);
+        std::string folder;
+        const bool other = other_folder(lowp, folder);
+        if (other && moved_path.count(lowp)) continue;   // the mod's own, done above
+        std::vector<uint8_t> d;
+        const uint64_t h = pak_path_hash(std::string_view(lowp));
+        if (written_paths.count(lowp)) d = writer.get(h);
+        else if (auto* e = own_find(base_pak, h)) { auto v = base_pak.read(*e); d.assign(v.begin(), v.end()); }
+        else continue;
+        if (repoint_moved_refs(d, moved, fd) == 0) continue;
+        std::string target = lowp;
+        if (!written_paths.count(lowp)) {
+            std::string pf, f2;
+            if (!parse_model_folder(lowp, pf, f2) || pf != fd) continue;
+            if (other) {
+                const std::string old_dir = "/" + fd + "/" + f2 + "/";
+                target.replace(target.find(old_dir), old_dir.size(), "/" + fd + "/" + new_f + "/");
+                moved[key] = new_f;
+            } else target = relocate_path(lowp, fd, f2, new_f);   // the scene follows it (patch_scene_minimal)
+        }
+        const uint64_t th = pak_path_hash(std::string_view(target));
+        if (writer.find(th)) writer.replace(th, std::move(d)); else writer.add_uncompressed(th, std::move(d));
+        written_paths.insert(target);
+        mdf_copies++;
+    }
+    const size_t in_scene = repoint_moved_refs(scene, moved, fd);
+    printf("      %d files of parts and textures this outfit takes from other folders of %s moved into the slot "
+           "(%d streaming twins, %d material copies), %zu scene references\n",
+           files, fd.c_str(), twins, mdf_copies, in_scene);
+    return files + mdf_copies;
 }
 
 static void add_slot_files(PakWriter& writer,
@@ -3248,7 +3618,7 @@ static void add_slot_files(PakWriter& writer,
             // A material file made for an older layout of the material (every material one parameter short
             // of the game's) is rebuilt on the game's file for that part, keeping the mod's textures
             if (!is_streaming) {
-                if (auto* ve = base_pak.find(pak_path_hash(std::string_view(path)))) {
+                if (auto* ve = own_find(base_pak, pak_path_hash(std::string_view(path)))) {
                     auto van = base_pak.read(*ve);
                     std::vector<uint8_t> rebuilt; int rb = 0;
                     if (modernize_mdf2(vdata, std::vector<uint8_t>(van.begin(), van.end()), rebuilt, &rb)) {
@@ -3324,12 +3694,15 @@ static void add_slot_files(PakWriter& writer,
                         // Found a vanilla mdf2 in this costume's folder
                         std::string new_path = relocate_path(vp, fd, old_f, new_f);
                         if (written_paths.count(new_path)) continue;
-                        auto* ve = base_pak.find(vh);
-                        if (!ve) continue;
-                        auto mdf_data = base_pak.read(*ve);
+                        // the game's own, also when a replacement installed over the game turned it off
+                        std::vector<uint8_t> mdf_data;
+                        bool off = false;
+                        if (!game_own_material(base_pak, vh, mdf_data, &off)) continue;
                         // Point the vanilla material at the textures the mod ships (by path:
                         // folder mods have no pak hash, so matching by hash never fired)
-                        patch_material(mdf_data);
+                        const size_t bound = patch_material(mdf_data);
+                        if (off) printf("      material of %s: the game's own from its turned-off entry (a replacement installed over "
+                                        "it), %zu texture references bound to the mod's\n", vp.c_str(), bound);
                         uint64_t nh = pak_path_hash(std::string_view(new_path));
                         writer.add_uncompressed(nh, std::move(mdf_data));
                         written_paths.insert(new_path);
@@ -3350,10 +3723,12 @@ static void add_slot_files(PakWriter& writer,
                 std::string vp = low.substr(0, mpos) + "_v00.mdf2.31";
                 std::string new_path = relocate_path(vp, fd, old_f, new_f);
                 if (written_paths.count(new_path)) continue;
-                auto* ve = base_pak.find(pak_path_hash(std::string_view(vp)));
-                if (!ve) continue;
-                auto mdf_data = base_pak.read(*ve);
-                patch_material(mdf_data);
+                std::vector<uint8_t> mdf_data;
+                bool off = false;
+                if (!game_own_material(base_pak, pak_path_hash(std::string_view(vp)), mdf_data, &off)) continue;
+                const size_t bound = patch_material(mdf_data);
+                if (off) printf("      material of %s: the game's own from its turned-off entry (a replacement installed over "
+                                "it), %zu texture references bound to the mod's\n", vp.c_str(), bound);
                 writer.add_uncompressed(pak_path_hash(std::string_view(new_path)), std::move(mdf_data));
                 written_paths.insert(new_path);
                 note_target(vp, new_path);
@@ -3385,7 +3760,7 @@ static void add_slot_files(PakWriter& writer,
                 ccvd_data = amf.at(ccvd_orig).read_data();
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(ccvd_orig));
-                auto* oe = base_pak.find(oh);
+                auto* oe = own_find(base_pak, oh);
                 if (oe) ccvd_data = base_pak.read(*oe);
             }
             if (!ccvd_data.empty()) {
@@ -3478,7 +3853,7 @@ static void add_slot_files(PakWriter& writer,
                 written_paths.insert(cmd_target); count++;
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(cmd_orig));
-                auto* oe = base_pak.find(oh);
+                auto* oe = own_find(base_pak, oh);
                 ask_strict(oh);   // Manager mode: a replacement installed over this colour file, or removed, builds again
                 if (oe) {
                     put_game_raw(writer, th, base_pak, *oe);
@@ -3501,7 +3876,7 @@ static void add_slot_files(PakWriter& writer,
                             if (from_own_mod(p)) return amf.at(p).read_data();
                             const uint64_t ph = pak_path_hash(std::string_view(p));
                             ask_strict(ph);   // the colour standing in is one the slot takes too
-                            if (auto* fe = base_pak.find(ph)) return base_pak.read(*fe);
+                            if (auto* fe = own_find(base_pak, ph)) return base_pak.read(*fe);
                             if (g_manager_mode) probe_loose(p);
                             return read_loose_game_file(p);
                         };
@@ -3544,7 +3919,7 @@ static void add_slot_files(PakWriter& writer,
                 written_paths.insert(chain_target); count++;
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(chain_orig));
-                auto* oe = base_pak.find(oh);
+                auto* oe = own_find(base_pak, oh);
                 if (oe) {
                     put_game_raw(writer, th, base_pak, *oe);
                     written_paths.insert(chain_target); count++;
@@ -3594,7 +3969,7 @@ static void add_slot_files(PakWriter& writer,
                 cu_data = mfit->second.read_data();
             else {
                 uint64_t oh = pak_path_hash(std::string_view(cu_orig));
-                auto* oe = base_pak.find(oh);
+                auto* oe = own_find(base_pak, oh);
                 if (oe) cu_data = base_pak.read(*oe);
             }
             if (cu_data.empty()) continue;
@@ -3635,7 +4010,7 @@ static void add_slot_files(PakWriter& writer,
             std::vector<uint8_t> hu_data;
             auto mfit = mc->files_in_folder.find(hu_orig);
             if (mfit != mc->files_in_folder.end()) hu_data = mfit->second.read_data();
-            else if (auto* oe = base_pak.find(pak_path_hash(std::string_view(hu_orig)))) hu_data = base_pak.read(*oe);
+            else if (auto* oe = own_find(base_pak, pak_path_hash(std::string_view(hu_orig)))) hu_data = base_pak.read(*oe);
             if (hu_data.empty()) continue;
             size_t repointed = patch_resource_references(hu_data, physics_resources);
             if (!repointed) continue;   // the cloth did not follow: the game's file stays in use
@@ -3704,7 +4079,7 @@ static void add_slot_files(PakWriter& writer,
     bool shared_material_given = false;   // the scene's 000/ pass below must run
     if (!mod_tex_keys.empty() || !shared_tex_keys.empty()) {
         auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
-        const PakEntry* se0 = (oc && !oc->scene.empty()) ? base_pak.find(pak_path_hash(std::string_view(oc->scene))) : nullptr;
+        const PakEntry* se0 = (oc && !oc->scene.empty()) ? own_find(base_pak, pak_path_hash(std::string_view(oc->scene))) : nullptr;
         if (se0) {
             auto sd = base_pak.read(*se0);
             for (auto& r : scene_model_refs(std::vector<uint8_t>(sd.begin(), sd.end()))) {
@@ -3714,7 +4089,7 @@ static void add_slot_files(PakWriter& writer,
                 if (folder != old_f && folder != "000") continue;
                 std::string new_path = relocate_path(vp, fd, folder, new_f);
                 if (new_path == vp || written_paths.count(new_path)) continue;
-                auto* ve = base_pak.find(pak_path_hash(std::string_view(vp)));
+                auto* ve = own_find(base_pak, pak_path_hash(std::string_view(vp)));
                 if (!ve) continue;
                 auto md = base_pak.read(*ve);
                 if (patch_material(md) == 0) continue;
@@ -3771,7 +4146,7 @@ static void add_slot_files(PakWriter& writer,
         auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
         if (mod_jcns && oc && !oc->scene.empty()) {
             std::vector<std::vector<uint8_t>> scenes;
-            if (auto* se0 = base_pak.find(pak_path_hash(std::string_view(oc->scene)))) scenes.push_back(base_pak.read(*se0));
+            if (auto* se0 = own_find(base_pak, pak_path_hash(std::string_view(oc->scene)))) scenes.push_back(base_pak.read(*se0));
             for (auto& [sp, smf] : mc->files_scene) scenes.push_back(smf.read_data());
             std::string user_ver = "2";
             { auto it = inv.suffixes.find("user"); if (it != inv.suffixes.end()) user_ver = it->second; }
@@ -3795,7 +4170,7 @@ static void add_slot_files(PakWriter& writer,
                 std::string ju_target = relocate_dir_only(ju_orig);
                 if (ju_target == ju_orig || written_paths.count(ju_target)) continue;   // the mod's own copy
                 if (mc->files_in_folder.count(ju_orig)) continue;
-                auto* je = base_pak.find(pak_path_hash(std::string_view(ju_orig)));
+                auto* je = own_find(base_pak, pak_path_hash(std::string_view(ju_orig)));
                 if (!je) continue;
                 auto ju_data = base_pak.read(*je);
                 size_t n = patch_resource_references(ju_data, physics_resources);
@@ -3822,7 +4197,7 @@ static void add_slot_files(PakWriter& writer,
     {
         auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
         const PakEntry* se0 = (oc && !oc->scene.empty())
-            ? base_pak.find(pak_path_hash(std::string_view(oc->scene))) : nullptr;
+            ? own_find(base_pak, pak_path_hash(std::string_view(oc->scene))) : nullptr;
         if (se0) {
             auto sd = base_pak.read(*se0);
             std::string needle = fd + "/battle_ud/" + fd + "v";
@@ -3848,7 +4223,7 @@ static void add_slot_files(PakWriter& writer,
             std::string user_ver = "2";
             { auto it = inv.suffixes.find("user"); if (it != inv.suffixes.end()) user_ver = it->second; }
             const PakEntry* me = mp_rel.empty() ? nullptr
-                : base_pak.find(pak_path_hash(std::string_view("natives/stm/" + mp_rel + "." + user_ver)));
+                : own_find(base_pak, pak_path_hash(std::string_view("natives/stm/" + mp_rel + "." + user_ver)));
             if (me) {
                 auto mdata = base_pak.read(*me);
                 // The documented C. Viper C1 -> C2 swap has its own model-parts USER. Use it
@@ -3912,7 +4287,7 @@ static void add_slot_files(PakWriter& writer,
     if (!shared_parts.empty()) {
         auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
         const PakEntry* se0 = (oc && !oc->scene.empty())
-            ? base_pak.find(pak_path_hash(std::string_view(oc->scene))) : nullptr;
+            ? own_find(base_pak, pak_path_hash(std::string_view(oc->scene))) : nullptr;
         if (se0) {
             auto sd = base_pak.read(*se0);
             std::string pfb_ver = "17";
@@ -3951,7 +4326,7 @@ static void add_slot_files(PakWriter& writer,
 
             for (auto& pfb_rel : pfb_refs) {
                 std::string pfb_pak = "natives/stm/" + pfb_rel + "." + pfb_ver;
-                auto* pe = base_pak.find(pak_path_hash(std::string_view(pfb_pak)));
+                auto* pe = own_find(base_pak, pak_path_hash(std::string_view(pfb_pak)));
                 if (!pe) continue;
                 auto praw = base_pak.read(*pe);
                 auto pdata = std::vector<uint8_t>(praw.begin(), praw.end());
@@ -4077,7 +4452,7 @@ static void add_slot_files(PakWriter& writer,
     auto* orig_costume = inv.get_costume(slot.fighter, slot.original_costume_no);
     if (orig_costume && !orig_costume->scene.empty()) {
         uint64_t sh = pak_path_hash(std::string_view(orig_costume->scene));
-        auto* se = base_pak.find(sh);
+        auto* se = own_find(base_pak, sh);
         std::vector<uint8_t> vdata;
         if (!se && mc->files_scene.empty()) {
             // A replacement installed over the pak turned the game's scene off (Ingrid C1 with its own scene as a
@@ -4132,6 +4507,7 @@ static void add_slot_files(PakWriter& writer,
         }
         if (!vdata.empty()) {
             patched += donate_parts(writer, written_paths, vdata, *mc, slot, base_pak, inv.suffixes);
+            patched += borrow_parts(writer, written_paths, vdata, *mc, slot, base_pak, all_mod, inv.suffixes);
             patch_scene_minimal(vdata, fd, old_f, new_f,
                                 &written_paths, &inv.suffixes);
             // Second pass: patch 000/ references for parts we relocated
@@ -4389,12 +4765,12 @@ static void add_slot_files(PakWriter& writer,
             if (!outfit_loads(inv, slot.fighter, slot.original_costume_no, low)) return {};
             if (writer.find(h)) return writer.get(h);
             for (auto* pk : slotcheck::g_game_patch_paks) if (auto* e = pk->find(h)) return pk->read(*e);
-            if (auto* e = base_pak.find(h)) return base_pak.read(*e);
+            if (auto* e = own_find(base_pak, h)) return base_pak.read(*e);
             return {};
         };
         // A material file as this slot stores it: the mod's (mf) or the game's, pointing at the slot's textures
         auto material_data = [&](const std::string& orig, const ModFileRef* mf) {
-            const PakEntry* ve = base_pak.find(pak_path_hash(std::string_view(orig)));   // the game's file
+            const PakEntry* ve = own_find(base_pak, pak_path_hash(std::string_view(orig)));   // the game's file
             std::vector<uint8_t> d = mf ? mf->read_data() : base_pak.read(*ve);
             patch_material(d);
             if (mf && ve) {
@@ -4409,7 +4785,7 @@ static void add_slot_files(PakWriter& writer,
             const std::string low = str_lower(orig), target = target_of(orig), path = stored_of(id, target);
             const uint64_t h = pak_path_hash(std::string_view(path));
             if (!writer.find(h)) {
-                const PakEntry* ve = base_pak.find(pak_path_hash(std::string_view(orig)));   // the game's file
+                const PakEntry* ve = own_find(base_pak, pak_path_hash(std::string_view(orig)));   // the game's file
                 if (str_ends_with(low, ".mdf2.31")) {
                     std::vector<uint8_t> d = material_data(orig, mf);
                     if (!rebind.empty()) mdf2_rebind_textures(d, rebind);
@@ -4512,7 +4888,7 @@ static void add_slot_files(PakWriter& writer,
                 const uint64_t h = pak_path_hash(std::string_view(low));
                 if (writer.find(h)) return writer.get(h);
                 for (auto* pk : slotcheck::g_game_patch_paks) if (auto* e = pk->find(h)) return pk->read(*e);
-                if (auto* e = base_pak.find(h)) return base_pak.read(*e);
+                if (auto* e = own_find(base_pak, h)) return base_pak.read(*e);
                 return {};
             };
             std::set<std::string> slot_mats;   // materials of every material file the slot's scene loads
@@ -4644,7 +5020,7 @@ static void add_slot_files(PakWriter& writer,
             auto it = loose_under.find(low);
             if (it == loose_under.end()) {
                 ModFileRef mf;
-                if (!base_pak.find(pak_path_hash(std::string_view(low))) && loose_file_there(low)) {
+                if (!own_find(base_pak, pak_path_hash(std::string_view(low))) && loose_file_there(low)) {
                     probe_loose(low);
                     mf.disk_path = loose_file_path(low);
                     mf.pak_path = low;
@@ -4657,10 +5033,10 @@ static void add_slot_files(PakWriter& writer,
             return it->second.is_disk() ? &it->second : nullptr;
         };
         auto game_has = [&](const std::string& p) {
-            return base_pak.find(pak_path_hash(std::string_view(p))) != nullptr || loose_of(p) != nullptr;
+            return own_find(base_pak, pak_path_hash(std::string_view(p))) != nullptr || loose_of(p) != nullptr;
         };
         auto game_file = [&](const std::string& p) {
-            const PakEntry* e = base_pak.find(pak_path_hash(std::string_view(p)));
+            const PakEntry* e = own_find(base_pak, pak_path_hash(std::string_view(p)));
             if (e) return base_pak.read(*e);
             if (const ModFileRef* lf = loose_of(p)) return lf->read_data();
             return std::vector<uint8_t>{};
@@ -5629,11 +6005,211 @@ static std::string addon_fit(PakWriter& writer, PakReader& base_pak, const std::
 }
 
 // Checks one slot, repairing what can be repaired. Returns an empty string when the slot is loadable.
+// Manager mode, "extra outfits ignore the replacements installed over the game" (own_find): what the slot still names at
+// the game's path. A part its mod does not ship (the hair of a body-only mod), a texture the game's material names, a chain:
+// the game reads the replacement's loose file there once a Replace original mod is installed over it (its row of the base
+// pak turned off). The slot then takes the game's own file from the turned-off row, in its own folder under the file's own
+// name (only the folder changes, so it never meets the slot's renamed files), and the references follow, same length, in
+// place. A file of the game that names such a file (a material naming a replaced texture) comes into the slot with it.
+// Every path the slot keeps at the game's path is asked "strict": a replacement installed over it later, or removed, builds
+// again. Not followed: the first reference of a user file whose copy the slot has (report_outside), files of other fighters
+// and outside the model folders, and a replacement installed as loose files only (its row stays on).
+static int detach_from_replacements(Ctx& c, const SlotInfo& slot) {
+    if (!g_ignore_replacements || c.gf.paks.empty() || slot.new_folder.size() != 3) return 0;
+    PakReader& base = *c.gf.paks.back();
+    const std::string& fd = slot.fighter_dir;
+    const std::string& new_f = slot.new_folder;
+    const std::string slot_dir = "/" + fd + "/" + new_f + "/", slot_stem = fd + "_" + new_f + "_",
+                      slot_ud = "/battle" + new_f + "/", old_dir = "/" + fd + "/" + slot.original_folder + "/";
+    auto is_slot = [&](const std::string& p) {
+        return p.find(slot_dir) != std::string::npos || p.find(slot_stem) != std::string::npos
+            || p.find(slot_ud) != std::string::npos;
+    };
+    const std::string scene_p = "natives/stm/product/charparam/esf/" + fd + "/" + slot.scene_name + ".scn.20";
+    const std::string model_pfx = std::string(BASE_PFX) + "model/esf/" + fd + "/";
+    auto hash_of = [](const std::string& p) { return pak_path_hash(std::string_view(p)); };
+    // a path of this fighter's model folders, "<fd>/<3 digits>/...": the only ones that can come into the slot
+    auto movable = [&](const std::string& p) {
+        if (p.compare(0, model_pfx.size(), model_pfx) != 0 || p.size() < model_pfx.size() + 4) return false;
+        for (int k = 0; k < 3; k++) if (!isdigit((unsigned char)p[model_pfx.size() + k])) return false;
+        return p[model_pfx.size() + 3] == '/';
+    };
+    // A file outside the model folders that carries the outfit's own name: the wind and pose chains its scene names
+    // (product/weather/wind/mode/<n>/<fd>_<folder>_01_chain.chain). It comes into the slot under the slot's number in its
+    // name, same length, where the scene rename looks for a mod's own copy of it.
+    const std::string old_stem = fd + "_" + slot.original_folder + "_";
+    auto named = [&](const std::string& p) {
+        const size_t sl = p.rfind('/');
+        return p.compare(0, strlen(BASE_PFX), BASE_PFX) == 0 && p.compare(0, model_pfx.size(), model_pfx) != 0
+            && sl != std::string::npos && p.compare(sl + 1, old_stem.size(), old_stem) == 0;
+    };
+    auto in_slot = [&](const std::string& p) {   // the path in the slot: its folder (the name kept), or its number in the name
+        if (movable(p)) return model_pfx + new_f + p.substr(model_pfx.size() + 3);
+        const size_t sl = p.rfind('/');
+        return p.substr(0, sl + 1) + slot_stem + p.substr(sl + 1 + old_stem.size());
+    };
+    // a user file of the original folder whose copy the slot has: the scene's first reference, kept on the original
+    auto has_twin = [&](const std::string& p) {
+        if (p.find(".user.") == std::string::npos) return false;
+        auto k = p.find(old_dir);
+        if (k == std::string::npos) return false;
+        std::string t = p;
+        t.replace(k, old_dir.size(), slot_dir);
+        if (c.gf.writer->find(hash_of(t))) return true;
+        if (auto q = t.rfind(old_stem); q != std::string::npos) {
+            t.replace(q, old_stem.size(), slot_stem);
+            if (c.gf.writer->find(hash_of(t))) return true;
+        }
+        return false;
+    };
+    auto row_off = [&](const std::string& p) { AskQuiet quiet; return base.find(hash_of(p)) == nullptr; };
+    auto can_come = [&](const std::string& p) { return movable(p) || named(p); };
+    // the game's own file of a path the slot names (own_find: only under a replacement's file at that very path), or nullptr
+    auto own_of = [&](const std::string& p) -> const PakEntry* { return own_find(base, hash_of(p)); };
+    // the game would read a replacement's file there (own_of() says whether the game's own is under it)
+    auto replaced = [&](const std::string& p) {
+        if (!row_off(p)) { ask_strict(hash_of(p)); return false; }   // the game's own row, read at its path
+        return true;
+    };
+    // the file as the slot will have it: its own copy, else the game's own (never the replacement's loose file)
+    auto content = [&](const std::string& p) -> std::vector<uint8_t> {
+        try {
+            if (c.gf.writer->find(hash_of(p))) return c.gf.writer->get(hash_of(p));
+            if (auto* e = own_find(base, hash_of(p))) return base.read(*e);
+        } catch (const std::exception&) {}   // a row that does not read is not followed
+        return {};
+    };
+    int taken = 0;
+    std::set<std::string> taken_paths;
+    std::set<std::string> leaks;    // a file of the game a replacement is installed over, its own not found
+    std::set<std::string> unread;   // a row that was found and could not be read: left where it is
+    for (int round = 0; round < 8; round++) {
+        std::vector<std::string> todo{scene_p};
+        std::set<std::string> seen{scene_p};
+        std::vector<std::pair<std::string, std::string>> edges;   // a followed file -> a file it names
+        for (size_t i = 0; i < todo.size() && i < 8000; i++) {
+            const std::string p = todo[i];
+            const bool follow = i == 0 || p.find(".mdf2.") != std::string::npos
+                             || (p.find(".user.") != std::string::npos && (is_slot(p) || (movable(p) && !has_twin(p))));
+            if (!follow) continue;
+            for (auto& s : utf16_strings(content(p))) {
+                std::string r = resource_path(s, *c.suffixes);
+                if (r.empty()) continue;
+                edges.push_back({p, r});
+                if (seen.insert(r).second) todo.push_back(r);
+            }
+        }
+        // what must come into the slot: a replaced file it names, and a game file that names one of those
+        std::set<std::string> need;
+        for (auto& p : seen) {
+            if (p == scene_p || is_slot(p) || !can_come(p) || has_twin(p) || unread.count(p)) continue;
+            if (!replaced(p)) continue;
+            if (own_of(p)) need.insert(p);
+            else if (loose_file_there(p)) leaks.insert(p);   // the replacement's file is what the game reads there
+        }
+        for (bool more = true; more; ) {
+            more = false;
+            for (auto& [from, to] : edges)
+                if (need.count(to) && from != scene_p && !is_slot(from) && movable(from) && !has_twin(from) && !need.count(from)
+                    && !unread.count(from) && own_of(from)) { need.insert(from); more = true; }
+        }
+        if (need.empty()) break;
+        std::unordered_map<std::string, std::string> moved;
+        std::unordered_set<std::string> renamed;   // reference keys of the files that took the slot's number in their name
+        std::set<std::string> touched;   // files of the slot whose references may have to follow
+        size_t done = 0;
+        for (auto& p : need) {
+            const std::string np = in_slot(p);
+            const uint64_t nh = hash_of(np);
+            const PakEntry* e = own_of(p);
+            // A row that reads in own_find() (its first bytes) and not as a whole: the file stays where it is, the slot
+            // reading the replacement's there, and the build goes on
+            try {
+                if (c.gf.writer->find(nh)) {
+                    // the slot has a file of that name already (its copy of a chain or a colour file): followed only when
+                    // it is the game's own file, never a mod's file of that name that the slot left unused on purpose
+                    if (c.gf.writer->get(nh) != base.read(*e)) continue;
+                } else {
+                    put_game_raw(*c.gf.writer, nh, base, *e);
+                    taken++;
+                    taken_paths.insert(p);
+                }
+            } catch (const std::exception& ex) {
+                printf("      WARN: slot %s/%s (%s): %s could not be read from its turned-off row (%s), the slot reads the "
+                       "replacement's\n", fd.c_str(), new_f.c_str(), mod_label(slot.mod_id).c_str(), p.c_str(), ex.what());
+                unread.insert(p);
+                continue;
+            }
+            if (taken_paths.count(p) && p.find(".tex.") != std::string::npos) {   // the texture's streaming twin, when the game has one
+                const std::string sp = std::string(STREAM_PFX) + p.substr(strlen(BASE_PFX));
+                const std::string snp = std::string(STREAM_PFX) + np.substr(strlen(BASE_PFX));
+                try {
+                    if (auto* se = own_find(base, hash_of(sp)); se && !c.gf.writer->find(hash_of(snp)))
+                        put_game_raw(*c.gf.writer, hash_of(snp), base, *se);
+                } catch (const std::exception&) {}   // without its twin the texture shows at its own resolution
+            }
+            if (movable(p)) moved[ref_key_of(p)] = new_f; else renamed.insert(ref_key_of(p));
+            touched.insert(np);
+            done++;
+        }
+        if (!done) break;   // nothing more can follow
+        touched.insert(scene_p);
+        for (auto& [from, to] : edges) if (is_slot(from) && need.count(to)) touched.insert(from);
+        // a reference to a renamed file: the three digits of the folder in its name, in place
+        auto repoint_renamed = [&](std::vector<uint8_t>& d) {
+            size_t n = 0;
+            for (size_t i = 0; i + 1 < d.size(); i += 2) {
+                size_t j = i;
+                std::string s;
+                while (j + 1 < d.size() && d[j + 1] == 0 && d[j] >= 0x20 && d[j] < 0x7f) { s += (char)d[j]; j += 2; }
+                const size_t lead = s.size() < 8 ? std::string::npos : s.find_first_not_of("@ ");
+                if (lead != std::string::npos && renamed.count(str_lower(s.substr(lead)))) {
+                    const size_t at = s.rfind('/') + 1 + fd.size() + 1;   // "<fd>_" then the folder
+                    for (size_t k = 0; k < 3; k++) d[i + 2 * (at + k)] = (uint8_t)new_f[k];
+                    n++;
+                }
+                i = j;
+            }
+            return n;
+        };
+        for (auto& p : touched) {
+            if (p.find(".mesh.") != std::string::npos || p.find(".tex.") != std::string::npos) continue;   // name no file
+            auto d = c.gf.writer->get(hash_of(p));
+            if (d.empty()) continue;
+            const size_t n = repoint_moved_refs(d, moved, fd) + (renamed.empty() ? 0 : repoint_renamed(d));
+            if (n) put_file(*c.gf.writer, p, std::move(d));
+        }
+    }
+    if (taken) {
+        static const bool all_names = GetEnvironmentVariableA("SF6_COSTUME_TEST_OWN_DEBUG", nullptr, 0) > 0;
+        std::string names;
+        size_t n = 0;
+        for (auto& p : taken_paths) {
+            if (!all_names && n == 6) { names += ", and " + std::to_string(taken_paths.size() - n) + " more"; break; }
+            names += (n++ ? ", " : "") + (all_names ? p.substr(strlen(BASE_PFX)) : p.substr(p.rfind('/') + 1));
+        }
+        printf("      slot %s/%s (%s): %d files of the game taken into the slot from under replacements installed over the "
+               "game, the slot shows the game's own (%s)\n", fd.c_str(), new_f.c_str(), mod_label(slot.mod_id).c_str(), taken,
+               names.c_str());
+    }
+    int shown = 0;
+    for (auto& p : leaks)
+        if (!c.gf.writer->find(hash_of(in_slot(p))) && shown++ < 6)
+            printf("      WARN: slot %s/%s (%s) reads %s from a replacement installed over the game (the game's own file was "
+                   "not found in the pak)\n", fd.c_str(), new_f.c_str(), mod_label(slot.mod_id).c_str(), p.c_str());
+    return taken;
+}
+
 static std::string check_slot(Ctx& c, const SlotInfo& slot) {
     const std::string& fd = slot.fighter_dir;
     const std::string& old_f = slot.original_folder;
     const std::string& new_f = slot.new_folder;
     const std::string scene_p = "natives/stm/product/charparam/esf/" + fd + "/" + slot.scene_name + ".scn.20";
+    try { detach_from_replacements(c, slot); }
+    catch (const std::exception& ex) {   // the slot is checked as it stands
+        printf("      WARN: slot %s/%s (%s): the game's own files could not all be taken from under the replacements "
+               "installed over the game (%s)\n", fd.c_str(), new_f.c_str(), mod_label(slot.mod_id).c_str(), ex.what());
+    }
     auto scene = c.gf.writer->get(pak_path_hash(std::string_view(scene_p)));
     if (scene.empty()) return "slot scene missing";
     const std::string slot_dir = "/" + fd + "/" + new_f + "/", slot_stem = fd + "_" + new_f + "_",
@@ -5804,6 +6380,81 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
             printf("      check: part %s (%s) rebuilt from %s\n", part.c_str(), why.c_str(), k.label);
             fixed = true;
             break;
+        }
+        // The game's own material file of the part, when a replacement installed over the game took its place (its row
+        // in the base pak turned off) and the mod ships none of its own: the outfit was made against the game's. A.K.I.
+        // Childhood Barefoot, an extra outfit of Outfit 1 with its own body mesh and no material file, came out black
+        // once a Replace original mod for Outfit 1 put a material file there that defines other materials. Only when
+        // the game's file defines every material of the mod's mesh; its textures are the game's at their paths.
+        if (!fixed && !c.gf.paks.empty()) {
+            const std::string orig_mdf = mdf_is_slot ? model_path(old_f, part, "_v00.mdf2." + mdf_suf) : mdf_p;
+            const bool mod_has = slot.mod_costume && mod_file(slot.mod_costume->files_in_folder, model_path(old_f, part, "_v00.mdf2." + mdf_suf));
+            PakReader* base = c.gf.paks.back();
+            if (!mod_has) {
+                auto mesh_now = c.gf.load(mesh_p);
+                for (auto* e : base->turned_off_candidates(pak_path_hash(std::string_view(orig_mdf)))) {
+                    if (e->decompressed_size <= 0 || e->decompressed_size > (16 << 20)) continue;
+                    std::vector<uint8_t> od;
+                    try { auto v = base->read(*e); od.assign(v.begin(), v.end()); }
+                    catch (const std::exception&) { continue; }   // another file's data: not this one
+                    std::vector<std::string> dm;
+                    if (!mdf2_materials(od, dm) || !pair_problem(c, mesh_now, od).empty()) continue;
+                    // Bound to the textures the mod ships, as phase 1b binds the game's material of a part the mod gives
+                    // none (the mod's textures of the costume folder and of 000/ were relocated into the slot): A.K.I.
+                    // Childhood Barefoot showed the game's Outfit 1 cloth with its own jacket and jeans textures unused
+                    // ("the slot loads ...clotha_*.tex from the game, not the mod's version of it"). Kept unbound when the
+                    // bound file would not pair with the mesh.
+                    size_t bound = 0;
+                    if (auto* mc = slot.mod_costume) {
+                        auto keys_of = [&](const std::unordered_map<std::string, ModFileRef>& files, const std::string& folder) {
+                            std::unordered_set<std::string> keys;
+                            const std::string base = std::string(BASE_PFX) + "model/esf/" + fd + "/" + folder + "/";
+                            for (auto& [pth, mf] : files) {
+                                std::string low = str_lower(pth);
+                                auto dot = low.find(".tex.", base.size());
+                                if (low.compare(0, base.size(), base) == 0 && dot != std::string::npos)
+                                    keys.insert(low.substr(base.size(), dot + 4 - base.size()));
+                            }
+                            return keys;
+                        };
+                        std::vector<uint8_t> b = od;
+                        const auto own_keys = keys_of(mc->files_in_folder, old_f), shared_keys = keys_of(mc->files_shared, "000");
+                        size_t n = own_keys.empty() ? 0 : patch_mdf2_minimal(b, fd, old_f, new_f, own_keys);
+                        if (!shared_keys.empty()) n += patch_mdf2_minimal(b, fd, "000", new_f, shared_keys);
+                        if (n && pair_problem(c, mesh_now, b).empty()) { od = std::move(b); bound = n; }
+                    }
+                    std::string dst = mdf_p;
+                    if (!mdf_is_slot) {
+                        // The scene names the game's path (the outfit ships no material file): the game's own goes into
+                        // the slot folder and the scene's reference follows it (same length), as above
+                        std::string src_f, sfd;
+                        if (!parse_model_folder(mdf_p, sfd, src_f) || sfd != fd) continue;
+                        dst = relocate_path(mdf_p, fd, src_f, new_f);
+                        std::string oref = mdf_p.substr(strlen("natives/stm/"));
+                        oref = oref.substr(0, oref.rfind('.'));
+                        const std::string nref = relocate_path(oref, fd, src_f, new_f);
+                        int moved = 0;
+                        for (size_t i = 0; i + 2 * oref.size() <= scene.size(); i += 2) {
+                            bool eq = true;
+                            for (size_t k = 0; k < oref.size() && eq; k++)
+                                eq = scene[i + 2 * k + 1] == 0 && tolower(scene[i + 2 * k]) == oref[k];
+                            if (!eq) continue;
+                            for (size_t k = 0; k < nref.size(); k++)
+                                if (tolower(scene[i + 2 * k]) != nref[k]) scene[i + 2 * k] = (uint8_t)nref[k];
+                            moved++;
+                        }
+                        if (!moved) continue;
+                        put_file(*c.gf.writer, scene_p, scene);
+                        moved_mdf[mdf_p] = dst;
+                    }
+                    put_file(*c.gf.writer, dst, std::move(od));
+                    printf("      check: part %s (%s) given the game's own material file (a replacement installed over the game "
+                           "put another there), %zu texture references bound to the mod's\n", part.c_str(), why.c_str(), bound);
+                    fixed = true;
+                    break;
+                }
+            }
+            if (fixed) continue;
         }
         if (!fixed && !undefined_everywhere.empty()) {
             printf("      check: part %s kept as the mod made it (%s defined by no material file of the outfit)\n",
@@ -13193,7 +13844,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 8: with the options chosen in game, the variants of complete add-ons that all replace the same files are made (as
     // without them), an outfit with too many add-ons to combine is kept when its add-ons cannot be options, and an added
     // part's file must have the date of the outfit folder's copy as well as its size.
-    if (g_manager_mode) new_fp += ";manager_mode8";
+    // 9: extra outfits ignore the replacements installed over the game (own_find, detach_from_replacements): a pak built
+    // before that has slots that follow them. Only Manager mode builds again; LOADER_PAK_ID and LOADER_META_ID are kept.
+    if (g_manager_mode) new_fp += ";manager_mode9";
     if (!g_outfit_labels) new_fp += ";names=outfit";   // Manager mode's "menu_outfit_names": false: turning it on or off rebuilds
     if (g_swap_repairs) new_fp += "|swap_repairs";    // turning them on or off rebuilds
     if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_PAK_ID)
@@ -13528,6 +14181,26 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 7. Build output pak
     log_step("slots assigned");
     printf("\nAssembling output pak (minimal)...\n");
+    // Manager mode: extra outfits ignore the replacements installed over the game (own_find, detach_from_replacements).
+    // Tests: SF6_COSTUME_TEST_FOLLOW_REPLACEMENTS=1 builds as before (a slot follows the replacement).
+    {
+        char v[8];
+        const DWORD n = GetEnvironmentVariableA("SF6_COSTUME_TEST_FOLLOW_REPLACEMENTS", v, sizeof v);
+        g_ignore_replacements = g_manager_mode && !(n > 0 && n < sizeof v && v[0] == '1');
+        g_over_files.clear(); g_own_rows.clear(); g_own_heads.clear(); g_own_taken = 0;
+        if (g_ignore_replacements) {
+            std::vector<PakReader*> patch_paks;
+            for (auto& [num, r] : game_patch_readers) patch_paks.push_back(r);
+            own_scan(base_pak, patch_paks);
+            printf("  extra outfits ignore the replacements installed over the game: the game's own files are read from the "
+                   "rows a replacement turned off (%zu turned-off rows, %zu files of replacements in the game's natives folder)\n",
+                   g_own_off, g_over_files.size());
+            if (g_own_orphans)
+                printf("  WARN: %zu turned-off rows of the base pak have no file in the game's natives folder that accounts for "
+                       "them (a replacement's file deleted by hand, or rows turned off by something else): which row is whose "
+                       "cannot be told, the extra outfits follow the replacements as before\n", g_own_orphans);
+        }
+    }
     PakWriter writer;
     // The big files wait in a scratch file beside the pak, past what the free memory holds without
     // paging (half of what is free beyond 4 GB, the game itself still to load; 8 GB at most)
@@ -13602,6 +14275,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                    mod_label(sl.mod_id).c_str(), why.c_str());
         }
         printf("  %zu slots checked, %d left out\n", slots.size(), left_out);
+        if (g_ignore_replacements)
+            printf("  replacements installed over the game: %zu of the game's own files read from turned-off rows for the slots\n",
+                   g_own_taken);
         if (left_out) {
             std::vector<Possession> pos;
             for (auto& p : registry.possession)
