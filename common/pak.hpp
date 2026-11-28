@@ -97,6 +97,16 @@ public:
     // table is not sorted, or when this pak has the hash. read() reads them like any other entry.
     // From ZZtaii's Slotsloader fork (1.10.6), MIT.
     std::vector<const PakEntry*> turned_off_candidates(uint64_t hash) const;
+    // The same for this pak's own table alone, with the hashes of the two entries around the hash (0 / UINT64_MAX at
+    // the table's ends): every path whose row was turned off there hashes between those two, and the rows are in the
+    // order of the hashes they had. Nothing is noted.
+    std::vector<const PakEntry*> turned_off_between(uint64_t hash, uint64_t& after, uint64_t& before) const;
+    // An added pak has turned-off entries that can have held this hash. Nothing is noted.
+    bool overlay_turned_off(uint64_t hash) const;
+    // Every place of this pak's own table that holds turned-off entries: the hashes of the two entries around them and
+    // how many there are. Nothing is noted.
+    struct TurnedOffPlace { uint64_t after, before; size_t rows; };
+    std::vector<TurnedOffPlace> turned_off_places() const;
 
     // What was asked of this pak's own table (the added paks are not concerned): each hash find() was given, with
     // whether the table had it, and each hash turned_off_candidates() was asked for, with the offsets of the rows it
@@ -118,6 +128,10 @@ public:
 
     // Returns decompressed data.  Handles zstd / deflate / raw.
     std::vector<uint8_t> read(const PakEntry& e);
+
+    // The first n bytes of an entry's data (fewer when it is shorter), reading and decompressing only its start: what a
+    // file is can be told from them without unpacking a big one. Empty when they cannot be read; never throws.
+    std::vector<uint8_t> read_head(const PakEntry& e, size_t n);
 
     using EntryMap = std::unordered_map<uint64_t, PakEntry>;
     const EntryMap& entries() const { return entries_; }

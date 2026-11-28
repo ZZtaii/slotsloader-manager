@@ -193,6 +193,34 @@ Everything of contract 1, and:
      whole even when it names a file found nowhere, as the fork takes it (1.10.3): Swimsuit Sakura as Ryu C2 names
      `sakura_001_01_havok.user`, which it does not ship, and was sent back to the game's scene, on Ryu's skeleton. The
      game-version check of such a scene is unchanged;
+   - an extra outfit is the game's own outfit plus what its mod ships, whatever replacement is installed over that outfit
+     (`own_find`, `detach_from_replacements`). The game's own file of a path is the base pak's row (or a DLC pak's), else
+     the row a replacement's file turned off, and that row is never guessed from the path alone: a replacement's file must
+     sit at that very path in the game's `natives` folder (a file only a mod names, a streaming twin the game never
+     shipped or a file of a DLC that is not installed has nothing under it), a file one of the game's patch paks holds is
+     never looked for, and a streaming twin is taken only with its texture. Which row: the table is sorted by hash and a
+     turned-off row keeps its place, so the rows turned off between two rows of the table are those of the replacement
+     files whose paths hash between the same two, in the same order. Every way to give each of those rows one of those
+     files in order, the row starting like a file of that kind (`read_head`: the first bytes, a big file is not unpacked),
+     is tried, and the path gets the row every way gives it; as many files as rows, the usual case, is one way. No answer
+     (two ways that differ, fewer files than rows there, a DLC pak with turned-off rows there too) leaves the slot on the
+     replacement's file, as before, and the log names it. The log also says how many rows are turned off and, as a
+     `WARN`, how many of them no file of the `natives` folder accounts for (none on a healthy install). With one such row
+     anywhere the folder is not the whole story (that row and a file a replacement adds beside it would pass for a file
+     and its row): nothing is read from turned-off rows at all, and the extra outfits follow the replacements as before. The lookups of a game file for a slot go through it (parts, materials, textures,
+     colour files, physics, the scene). What a slot still names at a game path of its fighter's model folders whose row a
+     replacement turned off (a part its mod does not ship, a texture the game's material names, a chain) comes into the
+     slot from that row under its own name, only the folder changed, and the references follow in place, same length; the
+     wind and pose chains the scene names take the slot's number in their name. A path the slot keeps at the game's path
+     while its row is on is kept as `s` below: a replacement installed over it later builds again. Not covered: a
+     replacement installed as loose files only (its row stays on), files outside the fighter's model folders that do not
+     carry the outfit's name (animations, effects, sounds), and a file whose turned-off row cannot be told, which the log
+     names (`WARN: slot ... reads ... from a replacement installed over the game`). The log says per slot what was taken
+     (`slot esf032/010 (...): 7 files of the game taken into the slot from under replacements installed over the game`)
+     and how many files were read from turned-off rows. A pak built before this rule is built again once, in Manager mode
+     only (`;manager_mode9` in the fingerprint; `LOADER_PAK_ID` and `LOADER_META_ID` are kept, so nobody else rebuilds).
+     `SF6_COSTUME_TEST_FOLLOW_REPLACEMENTS=1` builds as before, for tests, and `SF6_COSTUME_TEST_OWN_DEBUG=1` logs each
+     lookup under a replacement with how it was decided;
    - the costume pak in place is kept after a replacement is installed over the game, or removed, when no outfit was built
      from the files it touches (as ZZtaii's Slotsloader fork keeps it). The Manager's "Replace original" turns rows of
      `re_chunk_000.pak` off, puts its files in the game's `natives` folder and writes `manager_installs.json` again; the
@@ -200,8 +228,9 @@ Everything of contract 1, and:
      the list's date) and builds again each time. In Manager mode those three are not in the fingerprint, and the fork's
      rule takes their place. Each build keeps what decides in `game_lookups.tsv` beside the registry, and the next launch
      asks again from the base pak's index, which is read for the game-inputs digest anyway:
-     - `s`, the colour files a slot took from the game (the fork's `game_colours.tsv`): a replacement installed over one,
-       or removed, builds the pak again, since the slot holds a copy of that file. The loose colour files a slot took and
+     - `s`, the colour files a slot took from the game (the fork's `game_colours.tsv`) and the game files a slot reads
+       at their own path (the rule above): a replacement installed over one, or removed, builds the pak again, since the
+       slot holds a copy of that file or would read the replacement's. The loose colour files a slot took and
        the mod-only dependencies left to a loose file are watched by content (`loose_probes.tsv`), as before;
      - `e`, the files the slot check and the swatches asked for, kept as "the game has it, as a row of the base pak or
        as a loose file": a replacement of one keeps the pak, the file gone altogether (or one that was nowhere
@@ -217,7 +246,7 @@ Everything of contract 1, and:
      The log names the first files when the pak is built again. What the rule accepts, as the fork did: a slot holds what
      it was built with. An outfit made while a game file was there keeps its copy of it (the material file a mesh-only
      mod is given, a scene) after a replacement is installed over that file, and one made while the replacement was
-     installed refers to the replacement; the slot check's verdict, its repairs and the swatches are those of the last
+     installed refers to the replacement only for the files the rule above does not cover; the slot check's verdict, its repairs and the swatches are those of the last
      build. Any rebuild brings everything up to date. The base pak's size, header and index (path hashes left out) are
      still in the game-inputs digest, so a game update rebuilds;
    - Report a bug (`report_mod.dll`, when it is installed) stays off: `"report_a_bug": true` in the same `settings.json` turns
