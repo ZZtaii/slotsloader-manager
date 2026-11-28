@@ -60,7 +60,7 @@ namespace SlotsInstaller
             new LoaderMenu("online-outfit", "menu_online_outfit_row", "Outfit Others See", "Adds the row \"Outfit Others See\" to the game's Options, under Interface, Other Settings, so it can be changed inside the game. The choice below sets the same thing from here.", c => c.OnlineOutfitRow, (c, v) => c.OnlineOutfitRow = v),
             new LoaderMenu("title-screen", "menu_title_screen", "Title Screen Selection", "Adds the \"Title Screen Selection\" section and the \"Skip intro screens\" row to the game's Options. Both need a title pack in the game's title_mods folder.", c => c.TitleScreen, (c, v) => c.TitleScreen = v),
             new LoaderMenu("interface-packs", "menu_interface_packs", "Interface Packs", "Adds the \"Interface Packs\" section and its editor to the game's Options, for packs in the game's ui_mods folder.", c => c.InterfacePacks, (c, v) => c.InterfacePacks = v),
-            new LoaderMenu("replays", "menu_replay_settings", "Settings tab in the Replays menu", "Adds a settings tab to the game's Replays menu.", c => c.ReplaySettings, (c, v) => c.ReplaySettings = v),
+            new LoaderMenu("replays", "menu_replay_settings", "Settings tab in the Replays menu", "Adds a settings tab to the game's Replays menu. Ticking it sets every character there to My Own: a replay of your online match shows the outfit and colour you really wore. Change any character in the tab.", c => c.ReplaySettings, (c, v) => c.ReplaySettings = v),
         };
         // The outfit other players see (LoaderFlags.OthersSee): not a menu addition, but shown the same way.
         internal const string OthersSeeId = "others-see", OthersSeeLabel = "Outfit other players see";
@@ -166,6 +166,10 @@ namespace SlotsInstaller
                 if (partsLater) ManagerParts.ApplyLater(gameRoot, partsWanted);
                 else changed = ManagerParts.Apply(gameRoot, partsWanted);
                 if (GameProcesses.Probe.IsGameRunning()) return changed;   // the settings: applied at the next refresh
+                // 28 Nov 2026: the Replays tab ticked sets every character to My Own (ReplayOwn.cs). Before the settings below:
+                // at an uninstall its file goes first, so the folder it shares with settings.json can go with that one.
+                try { changed |= ReplayOwn.Apply(gameRoot, dataDir, loader, want.ReplaySettings); }
+                catch (Exception ex) { if (ex is OutOfMemoryException) throw; Program.LogLine("Replays: My Own not written (" + ex.GetType().Name + ": " + ex.Message + ")."); }
                 // The update check: always off, never a choice.
                 changed |= Sync(Path.Combine(gameRoot, UpdateStateRelative), gameRoot, loader || core,
                     new[] { new KeyValuePair<string, bool>(UpdateKey, false), new KeyValuePair<string, bool>(UpdateManagedKey, false) });

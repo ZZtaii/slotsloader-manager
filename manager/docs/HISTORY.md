@@ -2,6 +2,12 @@
 
 ## Next
 
+### Replays tab ticked: every character on My Own (28 Nov 2026)
+
+- The user: "let's try to have it that ticking it would turn it to "own" costume for all characters", "user can then configure it selectively if they want, ingame". Since loader 1.28.0 a character left alone in Replays > Settings is Off (what the replay recorded: Outfit 1 / DriveTech for the player's own fighter online), so a replay of a match in an extra outfit showed the carrier until each character was set to My Own by hand.
+- `ReplayOwn` (called by `LoaderFlags.Apply`, SF6 closed, before the plugin settings) writes the loader's `reframework\data\SF6_CostumeSlots_data\replay_outfits.json` (plugin `replay_logic.hpp` format, version 1) once per tick of "Settings tab in the Replays menu": every fighter of `Characters.ByCode` and of registry.json "possession" gets `{"mode":"own"}`. A character on an outfit (`"forced"`) keeps it, one Off with costume options keeps them, the stage and music stay. Unticked, the file is left (the loader still dresses replays from it); ticked again, Off characters go to My Own again. An unreadable or other-version file is left alone. `Data\replay-own.json` keeps the tick and the SHA-256 of what it wrote: uninstalled, the file goes only while it is still that and holds nothing but My Own; a file the player changed stays, and an install keeps it. A choices file that had the box ticked before this build gets it once.
+- Check: `loader settings` (`LoaderFlagChecks.ReplayOwnChecks`).
+
 ### Random list (27 Nov 2026)
 
 - The user: "i would love to be able to drop/reorder random outfits via a pre-decided logic that user themselves select. and how many repeatitions, color etc. we could even show a little preview for colors"; "if the order isn't present, then well it can be raandom". Picked: In order and Shuffled per fighter; ticked colours, one of them at random; plugin built and tested here, a PR to the suite decided later.
